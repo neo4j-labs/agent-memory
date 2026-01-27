@@ -529,6 +529,9 @@ async def infer_preferences_from_history(user_id: str):
         MATCH (c:Customer {id: $user_id})-[:PURCHASED]->(p:Product)
               -[:IN_CATEGORY]->(cat:Category)
         MATCH (p)-[:MADE_BY]->(brand:Brand)
+
+image::diagrams/learn-from-behavior-patterns.png[Learn from Behavior Patterns]
+
         WHERE c.purchase_date > datetime() - duration('P90D')
         RETURN brand.name as brand, cat.name as category, count(*) as count
         ORDER BY count DESC
@@ -592,6 +595,9 @@ async def get_preference_filtered_products(
     query = """
     MATCH (p:Product)-[:IN_CATEGORY]->(c:Category {name: $category})
     MATCH (p)-[:MADE_BY]->(b:Brand)
+
+image::diagrams/filter-products-by-preferences.png[Filter Products by Preferences]
+
     WITH p, b,
          CASE WHEN b.name IN $preferred_brands THEN 1.5 ELSE 1.0 END as brand_boost
     RETURN p, b, brand_boost

@@ -35,6 +35,9 @@ a|
 │              │   for LLM Response  │               │
 │              └─────────────────────┘               │
 └─────────────────────────────────────────────────────┘
+
+image::diagrams/overview.png[Overview]
+
                           │
                           ▼
 ┌─────────────────────────────────────────────────────┐
@@ -411,6 +414,9 @@ def get_client_profile(client_id: str) -> str:
             """
             MATCH (c:Client {id: $client_id})-[:HAS_ACCOUNT]->(a:Account)
                   -[:HOLDS]->(p:Position)-[:IN]->(s:Security)
+
+image::diagrams/financial-document-assistant.png[Financial Document Assistant]
+
             RETURN a.type as account_type, s.name as security,
                    s.ticker as ticker, p.shares as shares
             """,

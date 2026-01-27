@@ -67,6 +67,9 @@ The extraction pipeline supports three extraction engines that can be used indiv
             │    Merge Results      │  Combine using strategy:
             │    (CONFIDENCE)       │  union/intersection/
             └───────────────────────┘  confidence/cascade
+
+image::diagrams/pipeline-architecture.png[Pipeline Architecture]
+
                         │
                         ▼
               ExtractionResult

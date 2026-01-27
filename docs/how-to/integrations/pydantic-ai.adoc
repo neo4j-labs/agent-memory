@@ -607,6 +607,9 @@ async def get_client_profile(ctx: RunContext[AdvisoryDeps]) -> str:
         MATCH (c:Client {id: $client_id})
         OPTIONAL MATCH (c)-[:HAS_ACCOUNT]->(a:Account)
         OPTIONAL MATCH (a)-[:HOLDS]->(p:Position)-[:IN]->(s:Security)
+
+image::diagrams/financial-advisory-agent.png[Financial Advisory Agent]
+
         RETURN c, collect(DISTINCT a) as accounts,
                collect(DISTINCT {security: s, shares: p.shares}) as holdings
         """,

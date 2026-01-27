@@ -39,6 +39,9 @@ a|
 ----
 |===
 
+image::diagrams/memory-architecture.png[Memory Architecture]
+
+
 === Short-Term Memory: What Happened
 
 Short-term memory stores *experiences* - the conversations, messages, and interactions your agent has with users.
@@ -156,6 +159,9 @@ a|
 ----
 |===
 
+image::diagrams/graph-schema.png[Graph Schema]
+
+
 === Messages → Entities
 
 When you store a message, entity extraction can automatically identify and link entities mentioned in the text. This populates long-term memory from short-term interactions.
@@ -190,6 +196,9 @@ Find how entities connect across memory types:
 // Find entities mentioned in messages that triggered successful reasoning
 MATCH (m:Message)-[:MENTIONS]->(e:Entity)
 MATCH (t:ReasoningTrace)-[:INITIATED_BY]->(m)
+
+image::diagrams/relationship-traversal.png[Relationship Traversal]
+
 WHERE t.success = true
 RETURN e.name, count(*) as mentions
 ORDER BY mentions DESC

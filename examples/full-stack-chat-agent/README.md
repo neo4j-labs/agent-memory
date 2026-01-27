@@ -54,6 +54,18 @@ A complete example demonstrating **neo4j-agent-memory** integration with a Pydan
 │ - Preferences   │             │ - People        │
 │ - Traces        │             │ - Organizations │
 └─────────────────┘             └─────────────────┘
+
+![Architecture](docs/assets/images/diagrams/architecture.png)
+
+![Memory Context Panel](docs/assets/images/diagrams/memory-context-panel.png)
+
+![Memory Context Panel](docs/assets/images/diagrams/memory-context-panel.png)
+
+![Memory Context Panel](docs/assets/images/diagrams/memory-context-panel.png)
+
+
+
+
 ```
 
 ## Prerequisites
@@ -148,6 +160,9 @@ Relationships:
 - (Article)-[:ABOUT_ORGANIZATION]->(Organization)
 - (Article)-[:ABOUT_GEO]->(Geo)
 - (Article)-[:HAS_PHOTO]->(Photo)
+
+![News Graph Setup](docs/assets/images/diagrams/news-graph-setup.png)
+
 ```
 
 You can load sample data or connect to an existing news graph database.

@@ -1,4 +1,4 @@
-.PHONY: help install install-all install-dev lint format typecheck test test-unit test-integration test-all test-docker test-ci test-no-docker test-quick test-file test-match coverage coverage-all coverage-ci test-examples test-examples-quick test-examples-no-neo4j test-docs test-docs-syntax test-docs-build test-docs-links neo4j-start neo4j-stop neo4j-logs clean build publish docs docs-diagrams-list docs-diagrams-status docs-diagrams-missing docs-diagrams-manifest docs-diagrams-add-refs docs-diagrams-generate example-basic example-resolution example-langchain example-pydantic examples chat-agent-install chat-agent-backend chat-agent-frontend chat-agent
+.PHONY: help install install-all install-dev lint format typecheck test test-unit test-integration test-all test-docker test-ci test-no-docker test-quick test-file test-match coverage coverage-all coverage-ci test-examples test-examples-quick test-examples-no-neo4j test-docs test-docs-syntax test-docs-build test-docs-links neo4j-start neo4j-stop neo4j-logs clean build publish docs docs-diagrams-list docs-diagrams-status docs-diagrams-missing docs-diagrams-manifest docs-diagrams-add-refs docs-diagrams-generate docs-diagrams-help example-basic example-resolution example-langchain example-pydantic examples chat-agent-install chat-agent-backend chat-agent-frontend chat-agent
 
 # Default target
 help:
@@ -71,8 +71,9 @@ help:
 	@echo "Diagram Management:"
 	@echo "  make docs-diagrams-status   Show status of all diagram placeholders"
 	@echo "  make docs-diagrams-missing  Show diagrams missing Excalidraw files"
-	@echo "  make docs-diagrams-generate Instructions for generating diagrams"
+	@echo "  make docs-diagrams-generate Generate conversion prompts for missing diagrams"
 	@echo "  make docs-diagrams-add-refs Add image references to AsciiDoc files"
+	@echo "  make docs-diagrams-help     Show full diagram workflow instructions"
 
 # =============================================================================
 # Setup
@@ -362,40 +363,53 @@ docs-clean:
 
 # List all diagram placeholders in documentation
 docs-diagrams-list:
-	@python scripts/manage_diagrams.py list
+	@uv run python scripts/manage_diagrams.py list
 
 # Show status of all diagrams (which have Excalidraw files)
 docs-diagrams-status:
-	@python scripts/manage_diagrams.py status
+	@uv run python scripts/manage_diagrams.py status
 
 # Show only diagrams missing Excalidraw files
 docs-diagrams-missing:
-	@python scripts/manage_diagrams.py missing
+	@uv run python scripts/manage_diagrams.py missing
 
 # Generate manifest JSON of all diagrams
 docs-diagrams-manifest:
-	@python scripts/manage_diagrams.py manifest
+	@uv run python scripts/manage_diagrams.py manifest
 
 # Add image references to AsciiDoc files for diagrams that have Excalidraw files
 docs-diagrams-add-refs:
-	@python scripts/manage_diagrams.py add-refs
+	@uv run python scripts/manage_diagrams.py add-refs
 
-# Generate diagrams using Claude with Excalidraw skill
+# Generate Excalidraw conversion prompts for missing diagrams
 # Usage: make docs-diagrams-generate
-# This target outputs instructions for generating missing diagrams
+# This outputs structured prompts that can be used with the docs-excalidraw skill
 docs-diagrams-generate:
-	@echo "Diagram Generation Instructions"
-	@echo "================================"
+	@uv run python scripts/manage_diagrams.py generate
+
+# Show instructions for diagram generation workflow
+docs-diagrams-help:
+	@echo "Diagram Generation Workflow"
+	@echo "==========================="
 	@echo ""
-	@echo "To generate missing Excalidraw diagrams, use Claude with the excalidraw skill:"
+	@echo "To generate missing Excalidraw diagrams:"
 	@echo ""
-	@echo "1. Run: make docs-diagrams-missing"
-	@echo "2. For each missing diagram, ask Claude:"
-	@echo "   'Generate an Excalidraw diagram for [TITLE] based on this ASCII art: ...'"
+	@echo "1. Run: make docs-diagrams-generate"
+	@echo "   This outputs structured prompts for each missing diagram"
+	@echo ""
+	@echo "2. For each diagram, use the docs-excalidraw skill to generate JSON"
+	@echo ""
 	@echo "3. Save the JSON to: docs/assets/images/diagrams/excalidraw/[slug].excalidraw"
-	@echo "4. Run: make docs-diagrams-add-refs"
 	@echo ""
-	@python scripts/manage_diagrams.py missing --json 2>/dev/null || python scripts/manage_diagrams.py status
+	@echo "4. Export PNG from Excalidraw.com and save to: docs/assets/images/diagrams/[slug].png"
+	@echo ""
+	@echo "5. Run: make docs-diagrams-add-refs"
+	@echo "   This adds image references to the documentation files"
+	@echo ""
+	@echo "Other commands:"
+	@echo "  make docs-diagrams-status   - Show all diagrams and their status"
+	@echo "  make docs-diagrams-missing  - Show only diagrams missing Excalidraw files"
+	@echo "  make docs-diagrams-list     - List all detected ASCII diagrams"
 
 # =============================================================================
 # Development Shortcuts

@@ -315,6 +315,9 @@ asyncio.run(main())
                          │        Neo4j Graph Database                  │
                          │   Nodes · Relationships · Vectors · Spatial │
                          └─────────────────────────────────────────────┘
+
+image::diagrams/architecture-pipeline.png[Architecture Pipeline]
+
 ----
 
 == Documentation

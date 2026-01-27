@@ -22,6 +22,9 @@ POLE+O stands for **Person, Object, Location, Event + Organization**. Originally
 │ & people    │ digital     │ geographic  │ happen or   │ pan-│
 │ mentioned   │ items       │ areas       │ occurred    │ ies │
 └─────────────┴─────────────┴─────────────┴─────────────┴─────┘
+
+image::diagrams/person-object-location-event-organization.png[Person, Object, Location, Event + Organization]
+
 ----
 
 == Entity Types & Subtypes
@@ -320,6 +323,9 @@ Entities can have relationships to other entities:
 
 // Person participated in event
 (:Person)-[:PARTICIPATED_IN]->(:Event)
+
+image::diagrams/relationships.png[Relationships]
+
 ----
 
 === Message Links

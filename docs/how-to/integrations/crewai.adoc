@@ -404,6 +404,9 @@ class GetClientProfileTool(BaseTool):
                 """
                 MATCH (c:Client {id: $client_id})-[:HAS_ACCOUNT]->(a:Account)
                       -[:HOLDS]->(p:Position)-[:IN]->(s:Security)
+
+image::diagrams/financial-services-multi-agent-system.png[Financial Services Multi-Agent System]
+
                 RETURN a.type as account, s.name as security, s.ticker as ticker,
                        p.shares as shares, s.sector as sector
                 """,

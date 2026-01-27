@@ -1,0 +1,480 @@
+= Diagram Inventory
+:description: Catalog of all ASCII diagrams in the repository with their Excalidraw status
+:keywords: diagrams, excalidraw, ascii-art, documentation
+
+This page catalogs all ASCII art diagrams found in the repository and tracks their conversion to Excalidraw format.
+
+== Overview
+
+The documentation uses Excalidraw diagrams to visualize:
+
+* **Architecture**: System components and their relationships
+* **Pipelines**: Data flow and processing stages
+* **Graph Schemas**: Neo4j node types and relationships (Cypher notation)
+* **Memory Types**: Short-term, long-term, and reasoning memory structures
+
+=== Diagram Workflow
+
+[source,bash]
+----
+# List all diagram placeholders in documentation
+make docs-diagrams-list
+
+# Check status of diagrams (which are implemented, missing, etc.)
+make docs-diagrams-status
+
+# Show only missing diagrams that need to be created
+make docs-diagrams-missing
+
+# Generate Excalidraw conversion prompts
+make docs-diagrams-generate
+
+# Add image references to source files
+make docs-diagrams-add-refs
+----
+
+=== File Locations
+
+* **Excalidraw JSON**: `docs/assets/images/diagrams/excalidraw/{slug}.excalidraw`
+* **Exported PNG**: `docs/assets/images/diagrams/{slug}.png`
+* **Management script**: `scripts/manage_diagrams.py`
+
+== Neo4j Brand Color Palette
+
+All diagrams should use the Neo4j brand colors for consistency:
+
+[cols="2,2,2,3", options="header"]
+|===
+| Category | Background | Stroke | Usage
+
+| Short-Term Memory
+| `#b2f2bb`
+| `#2f9e44`
+| Conversations, messages
+
+| Long-Term Memory
+| `#ffec99`
+| `#F79767`
+| Entities, preferences, facts
+
+| Reasoning Memory
+| `#d0bfff`
+| `#C990C0`
+| Traces, tool calls
+
+| Neo4j/Database
+| `#e6f7f7`
+| `#009999`
+| Neo4j components, storage
+
+| Neo4j Labs
+| `#e6e6ff`
+| `#6366F1`
+| Labs branding
+
+| Person Entities
+| `#ffc9c9`
+| `#DA7194`
+| Person nodes
+
+| Default/Neutral
+| `#e5e7eb`
+| `#A5ABB6`
+| Generic components
+|===
+
+== Diagram Inventory
+
+=== Documentation Files (AsciiDoc)
+
+[cols="3,1,2,1,1", options="header"]
+|===
+| File | Line | Title | Type | Excalidraw
+
+| `docs/index.adoc`
+| 304
+| Architecture Pipeline
+| Architecture
+| icon:check[role="green"]
+
+| `docs/entity-extraction.adoc`
+| 66
+| Pipeline Architecture
+| Flowchart
+| icon:check[role="green"]
+
+| `docs/explanation/memory-types.adoc`
+| 25
+| Memory Architecture
+| Architecture
+| icon:check[role="green"]
+
+| `docs/explanation/memory-types.adoc`
+| 35
+| A Three-Layer Solution
+| Architecture
+| icon:check[role="green"]
+
+| `docs/explanation/memory-types.adoc`
+| 147
+| Graph Schema
+| Cypher
+| icon:check[role="green"]
+
+| `docs/explanation/memory-types.adoc`
+| 152
+| How They Connect
+| Cypher
+| icon:check[role="green"]
+
+| `docs/explanation/memory-types.adoc`
+| 197
+| Relationship Traversal
+| Cypher
+| icon:check[role="green"]
+
+| `docs/explanation/extraction-pipeline.adoc`
+| 24
+| Extraction Pipeline
+| Flowchart
+| icon:check[role="green"]
+
+| `docs/explanation/extraction-pipeline.adoc`
+| 31
+| Three Extraction Approaches Pipeline
+| Flowchart
+| icon:check[role="green"]
+
+| `docs/explanation/extraction-pipeline.adoc`
+| 49
+| Three Extraction Approaches
+| Flowchart
+| icon:check[role="green"]
+
+| `docs/explanation/graph-architecture.adoc`
+| 64
+| Natural Relationship Modeling
+| Cypher
+| icon:check[role="green"]
+
+| `docs/explanation/graph-architecture.adoc`
+| 192
+| The Three-Layer Memory Architecture
+| Architecture
+| icon:check[role="green"]
+
+| `docs/explanation/graph-architecture.adoc`
+| 250
+| Data Model
+| Cypher
+| icon:check[role="green"]
+
+| `docs/explanation/graph-architecture.adoc`
+| 345
+| Example Queries
+| Cypher
+| icon:check[role="green"]
+
+| `docs/explanation/graph-architecture.adoc`
+| 365
+| Inventory-Aware Recommendations
+| Cypher
+| icon:check[role="green"]
+
+| `docs/explanation/poleo-model.adoc`
+| 16
+| POLE+O Model
+| Table
+| icon:check[role="green"]
+
+| `docs/explanation/poleo-model.adoc`
+| 313
+| Relationships
+| Cypher
+| icon:check[role="green"]
+
+| `docs/explanation/resolution-deduplication.adoc`
+| 62
+| Relationship Integrity
+| Cypher
+| icon:check[role="green"]
+
+| `docs/explanation/resolution-deduplication.adoc`
+| 128
+| Embedding-Based Similarity
+| Flowchart
+| icon:check[role="green"]
+
+| `docs/explanation/resolution-deduplication.adoc`
+| 268
+| Keep Primary (Default)
+| Cypher
+| icon:check[role="green"]
+
+| `docs/explanation/resolution-deduplication.adoc`
+| 452
+| Subsidiary Relationships
+| Cypher
+| icon:check[role="green"]
+
+| `docs/how-to/integrations/llamaindex.adoc`
+| 22
+| Overview
+| Architecture
+| icon:check[role="green"]
+
+| `docs/how-to/integrations/llamaindex.adoc`
+| 415
+| Financial Document Assistant
+| Cypher
+| icon:check[role="green"]
+
+| `docs/how-to/integrations/crewai.adoc`
+| 405
+| Financial Services Multi-Agent System
+| Cypher
+| icon:check[role="green"]
+
+| `docs/how-to/integrations/pydantic-ai.adoc`
+| 608
+| Financial Advisory Agent
+| Cypher
+| icon:check[role="green"]
+
+| `docs/how-to/preferences.adoc`
+| 529
+| Learn from Behavior Patterns
+| Cypher
+| icon:check[role="green"]
+
+| `docs/how-to/preferences.adoc`
+| 596
+| Filter Products by Preferences
+| Cypher
+| icon:check[role="green"]
+|===
+
+=== Example README Files (Markdown)
+
+[cols="3,1,2,1,1", options="header"]
+|===
+| File | Line | Title | Type | Excalidraw
+
+| `examples/lennys-memory/README.md`
+| 165
+| Architecture Overview
+| Architecture
+| icon:check[role="green"]
+
+| `examples/lennys-memory/README.md`
+| 387
+| Background Entity Enrichment
+| Flowchart
+| icon:check[role="green"]
+
+| `examples/lennys-memory/README.md`
+| 657
+| Key Relationships
+| Cypher
+| icon:check[role="green"]
+
+| `examples/full-stack-chat-agent/README.md`
+| 26
+| Memory Context Panel
+| Architecture
+| icon:check[role="green"]
+
+| `examples/full-stack-chat-agent/README.md`
+| 48
+| Architecture
+| Architecture
+| icon:check[role="green"]
+
+| `examples/full-stack-chat-agent/README.md`
+| 152
+| News Graph Setup
+| Cypher
+| icon:check[role="green"]
+|===
+
+=== Project Root Files (Markdown)
+
+[cols="3,1,2,1,1", options="header"]
+|===
+| File | Line | Title | Type | Excalidraw
+
+| `README.md`
+| 1058
+| Short-term Memory
+| Cypher
+| icon:check[role="green"]
+
+| `CLAUDE.md`
+| 225
+| Structure (Diataxis Framework)
+| Tree
+| icon:check[role="green"]
+
+| `CLAUDE.md`
+| 1536
+| Documentation Structure Pipeline
+| Tree
+| icon:check[role="green"]
+|===
+
+== Existing Excalidraw Files
+
+All Excalidraw source files are stored in `docs/assets/images/diagrams/excalidraw/`:
+
+[cols="2,3", options="header"]
+|===
+| Filename | Description
+
+| `a-three-layer-solution.excalidraw`
+| Three-layer memory architecture overview
+
+| `architecture-overview.excalidraw`
+| Full system architecture (Lenny's Memory)
+
+| `architecture-pipeline.excalidraw`
+| MemoryClient pipeline architecture
+
+| `architecture.excalidraw`
+| Full-stack chat agent architecture
+
+| `background-entity-enrichment.excalidraw`
+| Wikipedia enrichment workflow
+
+| `data-model.excalidraw`
+| Financial services data model
+
+| `embedding-based-similarity.excalidraw`
+| Entity similarity scoring visualization
+
+| `example-queries.excalidraw`
+| Cypher query patterns
+
+| `extraction-pipeline.excalidraw`
+| Entity extraction pipeline stages
+
+| `filter-products-by-preferences.excalidraw`
+| Preference-based filtering
+
+| `financial-advisory-agent.excalidraw`
+| Pydantic AI financial agent
+
+| `financial-document-assistant.excalidraw`
+| LlamaIndex financial assistant
+
+| `financial-services-multi-agent-system.excalidraw`
+| CrewAI multi-agent system
+
+| `graph-schema.excalidraw`
+| Core graph schema relationships
+
+| `how-they-connect.excalidraw`
+| Memory type connections
+
+| `inventory-aware-recommendations.excalidraw`
+| E-commerce recommendation patterns
+
+| `keep-primary-default.excalidraw`
+| Entity merge behavior
+
+| `key-relationships.excalidraw`
+| Neo4j relationship patterns
+
+| `learn-from-behavior-patterns.excalidraw`
+| Behavioral preference learning
+
+| `memory-architecture.excalidraw`
+| MemoryClient component diagram
+
+| `memory-context-panel.excalidraw`
+| Frontend memory panel
+
+| `news-graph-setup.excalidraw`
+| News article graph schema
+
+| `overview.excalidraw`
+| LlamaIndex integration overview
+
+| `person-object-location-event-organization.excalidraw`
+| POLE+O model table
+
+| `pipeline-architecture.excalidraw`
+| Extraction pipeline with merge
+
+| `relationship-traversal.excalidraw`
+| Cypher traversal patterns
+
+| `relationships.excalidraw`
+| POLE+O relationship types
+
+| `short-term-memory.excalidraw`
+| Short-term memory schema
+
+| `structure-diataxis-framework.excalidraw`
+| Documentation structure
+
+| `subsidiary-relationships.excalidraw`
+| Organization hierarchy patterns
+
+| `the-three-layer-memory-architecture.excalidraw`
+| Detailed three-layer diagram
+
+| `three-extraction-approaches-pipeline.excalidraw`
+| spaCy + GLiNER + LLM stages
+
+| `three-extraction-approaches.excalidraw`
+| Merge and filter stage
+
+| `1-natural-relationship-modeling.excalidraw`
+| Graph relationship examples
+
+| `1-relationship-integrity.excalidraw`
+| Entity resolution benefits
+|===
+
+== Statistics
+
+* **Total diagrams detected**: 36
+* **With Excalidraw files**: 36
+* **Missing Excalidraw**: 0
+* **Missing image references**: 3
+
+== Creating New Diagrams
+
+To create a new Excalidraw diagram:
+
+1. Identify the ASCII art diagram in the source file
+2. Use the `docs-excalidraw` Claude skill to generate JSON
+3. Follow the Neo4j brand color palette above
+4. Save to `docs/assets/images/diagrams/excalidraw/{slug}.excalidraw`
+5. Export PNG from https://excalidraw.com
+6. Run `make docs-diagrams-add-refs` to update source files
+
+=== Memory Type Colors Reference
+
+[source]
+----
+Short-Term Memory:
+  Background: #b2f2bb (light green)
+  Stroke: #2f9e44 (forest green)
+
+Long-Term Memory:
+  Background: #ffec99 (light yellow)
+  Stroke: #F79767 (Neo4j orange)
+
+Reasoning Memory:
+  Background: #d0bfff (light purple)
+  Stroke: #C990C0 (Neo4j node purple)
+
+Neo4j/Database:
+  Background: #e6f7f7 (light teal)
+  Stroke: #009999 (Baltic teal)
+
+Neo4j Labs:
+  Background: #e6e6ff (light labs purple)
+  Stroke: #6366F1 (Labs purple)
+----

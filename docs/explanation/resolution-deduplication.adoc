@@ -73,6 +73,9 @@ With Resolution:
 (Customer)-[:MENTIONED_PREFERENCE]->(Nike)
 (Customer)-[:VIEWED]->(Product)-[:MADE_BY]->(Nike)
 
+image::diagrams/1-relationship-integrity.png[1. Relationship Integrity]
+
+
 Result: Single Nike node with all relationships connected
 ----
 
@@ -129,6 +132,9 @@ New Entity: "JP Morgan Chase"
 │   JP Morgan: 0.94       │  ← Flag for review
 │   Morgan Stanley: 0.72  │  ← Different entity
 └─────────────────────────┘
+
+image::diagrams/embedding-based-similarity.png[Embedding-Based Similarity]
+
 ----
 |===
 
@@ -265,6 +271,9 @@ Keep the existing entity, transfer all relationships from the duplicate:
 // After merge (Nike Inc is primary)
 (Customer)-[:MENTIONED]->(Nike:Organization {name: "Nike Inc"})
 (Customer)-[:PURCHASED]->(Product)-[:MADE_BY]->(Nike)
+
+image::diagrams/keep-primary-default.png[Keep Primary (Default)]
+
 
 // Duplicate node deleted, relationships transferred
 ----
@@ -443,6 +452,9 @@ Distinguish between same entity vs. related entities:
 (JPMorgan:Organization)-[:OWNS]->(Chase:Organization)
 (Alphabet:Organization)-[:OWNS]->(Google:Organization)
 (LVMH:Organization)-[:OWNS]->(LouisVuitton:Organization)
+
+image::diagrams/subsidiary-relationships.png[Subsidiary Relationships]
+
 ----
 
 == Monitoring and Quality

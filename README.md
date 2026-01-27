@@ -1063,6 +1063,9 @@ The package automatically creates the following schema:
 - `(ReasoningTrace)-[:INITIATED_BY]->(Message)` - Trace triggered by message
 - `(ToolCall)-[:TRIGGERED_BY]->(Message)` - Tool call triggered by message
 
+![Short-term memory:](docs/assets/images/diagrams/short-term-memory.png)
+
+
 ### Indexes
 - Unique constraints on all ID fields
 - Vector indexes for semantic search (requires Neo4j 5.11+)

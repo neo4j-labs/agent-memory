@@ -32,6 +32,9 @@ Input Text
 │ Stage 1: spaCy (Statistical NER)    │
 │   Fast, free, limited types         │
 └─────────────────────────────────────┘
+
+image::diagrams/three-extraction-approaches-pipeline.png[Three Extraction Approaches Pipeline]
+
     ↓
 ┌─────────────────────────────────────┐
 │ Stage 2: GLiNER (Zero-shot NER)     │
@@ -51,6 +54,9 @@ Input Text
 Knowledge Graph
 ----
 |===
+
+image::diagrams/extraction-pipeline.png[Extraction Pipeline]
+
 
 === spaCy: Statistical NER
 

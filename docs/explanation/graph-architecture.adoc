@@ -66,6 +66,9 @@ Memory is inherently about connections. In an ecommerce retail agent:
 (Customer)-[:VIEWED]->(Product)
 (Product)-[:FREQUENTLY_BOUGHT_WITH]->(Product)
 (Customer)-[:HAS_PREFERENCE]->(Brand)
+
+image::diagrams/1-natural-relationship-modeling.png[1. Natural Relationship Modeling]
+
 ----
 
 These relationships are first-class citizens in Neo4j, not afterthoughts requiring join tables.
@@ -183,6 +186,9 @@ a|
 └───────────────────┴───────────────────┴─────────────────────┘
                               │
                               ▼
+
+image::/diagrams/the-three-layer-memory-architecture.png[The Three-Layer Memory Architecture]
+
 ┌─────────────────────────────────────────────────────────────┐
 │                    Neo4j Graph Database                     │
 │                                                             │
@@ -196,6 +202,8 @@ a|
 └─────────────────────────────────────────────────────────────┘
 ----
 |===
+
+image::diagrams/the-three-layer-memory-architecture.png[The Three-Layer Memory Architecture]
 
 === Why One Database?
 
@@ -255,6 +263,9 @@ Consider a wealth management agent that helps advisors serve clients:
 // Compliance and risk
 (Transaction)-[:FLAGGED_BY]->(ComplianceRule)
 (Client)-[:HAS_RISK_PROFILE]->(RiskProfile)
+
+image::diagrams/data-model.png[Data Model]
+
 ----
 
 === Example Queries
@@ -338,6 +349,9 @@ WITH customer, recentlyViewed, collect(pref) as preferences
 // Find similar products not yet viewed
 UNWIND recentlyViewed as viewed
 MATCH (viewed)-[:FREQUENTLY_BOUGHT_WITH]->(recommended:Product)
+
+image::diagrams/example-queries.png[Example Queries]
+
 WHERE NOT recommended IN recentlyViewed
 RETURN DISTINCT recommended, count(*) as relevanceScore
 ORDER BY relevanceScore DESC
@@ -356,6 +370,9 @@ WHERE product.category = $category
 
 // Boost products matching preferences
 OPTIONAL MATCH (customer)-[:HAS_PREFERENCE]->(pref)
+
+image::diagrams/inventory-aware-recommendations.png[Inventory-Aware Recommendations]
+
 WHERE product.brand = pref.value OR product.style = pref.value
 WITH product, warehouse, count(pref) as prefMatch
 RETURN product, warehouse.estimated_delivery, prefMatch
