@@ -394,11 +394,8 @@ async def create_agent(memory: Neo4jMicrosoftMemory) -> ChatAgent:
 
     # Get memory tools
     memory_tools = create_memory_tools(
-        include_search=True,
-        include_preferences=True,
-        include_knowledge=True,
-        include_traces=False,  # Don't expose trace search to user
-        include_gds=True,  # Include graph algorithm tools
+        memory=memory,
+        include_gds_tools=True,  # Include graph algorithm tools
     )
 
     # Get product tools
