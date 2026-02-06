@@ -94,10 +94,12 @@ class TestVertexAIEmbedder:
 
         assert len(result) == 768
         assert result == [0.1] * 768
-        mock_model.get_embeddings.assert_called_once_with(
-            ["Hello, world!"],
-            task_type="RETRIEVAL_DOCUMENT",
-        )
+        # Verify get_embeddings was called once with a list of TextEmbeddingInput
+        mock_model.get_embeddings.assert_called_once()
+        call_args = mock_model.get_embeddings.call_args[0][0]
+        assert len(call_args) == 1
+        assert call_args[0].text == "Hello, world!"
+        assert call_args[0].task_type == "RETRIEVAL_DOCUMENT"
 
     @pytest.mark.asyncio
     async def test_embed_batch(self):
