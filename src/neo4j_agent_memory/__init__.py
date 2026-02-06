@@ -112,17 +112,33 @@ from neo4j_agent_memory.graph.schema import SchemaManager
 try:
     from neo4j_agent_memory.embeddings.vertex_ai import VertexAIEmbedder
 except ImportError:
-    VertexAIEmbedder = None  # type: ignore[misc, assignment]
+
+    class VertexAIEmbedder:  # type: ignore[no-redef]
+        """Placeholder when Vertex AI is not installed."""
+
+        def __init__(self, *args: Any, **kwargs: Any):
+            raise ImportError(
+                "Vertex AI package not installed. "
+                "Install with: pip install neo4j-agent-memory[vertex-ai]"
+            )
+
 
 try:
     from neo4j_agent_memory.integrations.google_adk import Neo4jMemoryService
 except ImportError:
-    Neo4jMemoryService = None  # type: ignore[misc, assignment]
 
-try:
-    from neo4j_agent_memory.mcp.server import Neo4jMemoryMCPServer
-except ImportError:
-    Neo4jMemoryMCPServer = None  # type: ignore[misc, assignment]
+    class Neo4jMemoryService:  # type: ignore[no-redef]
+        """Placeholder when Google ADK is not installed."""
+
+        def __init__(self, *args: Any, **kwargs: Any):
+            raise ImportError(
+                "Google ADK package not installed. "
+                "Install with: pip install neo4j-agent-memory[google-adk]"
+            )
+
+
+# MCP server - already has proper stub class in mcp/server.py
+from neo4j_agent_memory.mcp.server import Neo4jMemoryMCPServer
 from neo4j_agent_memory.memory.long_term import (
     Entity,
     EntityType,
