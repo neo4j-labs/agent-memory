@@ -62,6 +62,13 @@ fuzzy = ["rapidfuzz>=3.0.0"]
 # CLI tools
 cli = ["click>=8.0.0", "rich>=13.0.0"]
 
+# HTTP API server
+server = [
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "sse-starlette>=1.6.0",
+]
+
 # Observability
 opentelemetry = [
     "opentelemetry-api>=1.20.0",

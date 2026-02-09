@@ -665,6 +665,65 @@ def stats(format: str, uri: str, user: str, password: str | None):
             console.print(table)
 
 
+@cli.command()
+@click.option("--host", default="0.0.0.0", help="Host to bind to.")
+@click.option("--port", default=8000, type=int, help="Port to bind to.")
+@click.option("--reload", is_flag=True, help="Enable auto-reload for development.")
+@click.option("--api-key", default=None, help="API key for authentication.")
+@click.option("--cors-origins", default="*", help="Comma-separated CORS origins.")
+def serve(host: str, port: int, reload: bool, api_key: str | None, cors_origins: str):
+    """Start the memory API server.
+
+    Requires the [server] extra: pip install neo4j-agent-memory[server]
+
+    Examples:
+
+        neo4j-memory serve
+
+        neo4j-memory serve --port 8321 --api-key mykey
+
+        neo4j-memory serve --reload --cors-origins "http://localhost:3000"
+    """
+    try:
+        import uvicorn
+    except ImportError:
+        error_console.print(
+            "[red]Error:[/red] Server dependencies not installed. "
+            "Install with: pip install neo4j-agent-memory[server]"
+        )
+        sys.exit(1)
+
+    import os
+
+    # Pass config via environment so create_app() can pick them up
+    os.environ.setdefault("NAM_SERVER__HOST", host)
+    os.environ.setdefault("NAM_SERVER__PORT", str(port))
+    if api_key:
+        os.environ["NAM_SERVER__API_KEY"] = api_key
+        os.environ["NAM_SERVER__AUTH_ENABLED"] = "true"
+    if cors_origins != "*":
+        os.environ["NAM_SERVER__CORS_ORIGINS"] = cors_origins
+
+    console.print(
+        Panel(
+            f"[cyan]Host:[/cyan] {host}\n"
+            f"[cyan]Port:[/cyan] {port}\n"
+            f"[cyan]Auth:[/cyan] {'enabled' if api_key else 'disabled'}\n"
+            f"[cyan]CORS:[/cyan] {cors_origins}\n"
+            f"[cyan]Reload:[/cyan] {'enabled' if reload else 'disabled'}",
+            title="Neo4j Agent Memory API Server",
+        )
+    )
+
+    uvicorn.run(
+        "neo4j_agent_memory.server:create_app",
+        factory=True,
+        host=host,
+        port=port,
+        reload=reload,
+    )
+
+
 def main():
     """Entry point for the CLI."""
     cli()

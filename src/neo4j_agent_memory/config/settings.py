@@ -365,6 +365,24 @@ class EnrichmentConfig(BaseModel):
     )
 
 
+class ServerConfig(BaseModel):
+    """Configuration for the HTTP API server.
+
+    Only used when running ``neo4j-memory serve`` or the FastAPI app directly.
+    """
+
+    host: str = Field(default="0.0.0.0", description="Host to bind to")
+    port: int = Field(default=8000, description="Port to bind to")
+    cors_origins: list[str] = Field(default=["*"], description="Allowed CORS origins")
+    cors_origin_regex: str | None = Field(
+        default=None, description="Regex pattern for allowed CORS origins"
+    )
+    auth_enabled: bool = Field(default=False, description="Enable API key authentication")
+    api_key: SecretStr | None = Field(default=None, description="API key for authentication")
+    api_prefix: str = Field(default="/api/v1", description="API route prefix")
+    debug: bool = Field(default=False, description="Enable debug mode")
+
+
 class MemorySettings(BaseSettings):
     """
     Main configuration class for neo4j-agent-memory.
@@ -398,6 +416,9 @@ class MemorySettings(BaseSettings):
     search: SearchConfig = Field(default_factory=SearchConfig)
     geocoding: GeocodingConfig = Field(default_factory=GeocodingConfig)
     enrichment: EnrichmentConfig = Field(default_factory=EnrichmentConfig)
+
+    # Server configuration (only used when running the HTTP API server)
+    server: ServerConfig | None = Field(default=None, description="HTTP API server configuration")
 
     @classmethod
     def from_dict(cls, config: dict[str, Any]) -> "MemorySettings":

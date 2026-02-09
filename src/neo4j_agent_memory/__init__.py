@@ -104,6 +104,29 @@ class MemoryGraph(BaseModel):
     )
 
 
+class StructuredContext(BaseModel):
+    """Structured context combining all memory types with both formatted text and raw data."""
+
+    context_text: str = Field(
+        default="", description="Pre-formatted context string for LLM prompt injection"
+    )
+    messages: list[Any] = Field(
+        default_factory=list, description="Raw Message objects from short-term memory"
+    )
+    entities: list[Any] = Field(
+        default_factory=list, description="Raw Entity objects from long-term memory"
+    )
+    preferences: list[Any] = Field(
+        default_factory=list, description="Raw Preference objects from long-term memory"
+    )
+    traces: list[Any] = Field(
+        default_factory=list, description="Raw ReasoningTrace objects from reasoning memory"
+    )
+    stats: dict[str, int] = Field(default_factory=dict, description="Counts per memory type")
+
+    model_config = {"arbitrary_types_allowed": True}
+
+
 from neo4j_agent_memory.graph.client import Neo4jClient
 from neo4j_agent_memory.graph.schema import SchemaManager
 from neo4j_agent_memory.memory.long_term import (
@@ -192,6 +215,8 @@ __all__ = [
     "GraphNode",
     "GraphRelationship",
     "MemoryGraph",
+    # Structured Context
+    "StructuredContext",
     # Exceptions
     "MemoryError",
     "ConnectionError",
@@ -456,6 +481,86 @@ class MemoryClient:
                 parts.append(f"## Similar Past Tasks\n{reasoning_context}")
 
         return "\n\n".join(parts)
+
+    async def get_context_structured(
+        self,
+        query: str,
+        *,
+        session_id: str | None = None,
+        include_short_term: bool = True,
+        include_long_term: bool = True,
+        include_reasoning: bool = True,
+        max_items: int = 10,
+    ) -> StructuredContext:
+        """
+        Get structured context from all memory types for an API response.
+
+        Unlike ``get_context()`` which returns only a formatted string, this method
+        returns both the formatted text and the raw data objects from each memory type.
+        Designed for the HTTP API's POST /context endpoint.
+
+        Args:
+            query: The query to search for relevant context
+            session_id: Optional session ID for short-term filtering
+            include_short_term: Whether to include conversation history
+            include_long_term: Whether to include entities and preferences
+            include_reasoning: Whether to include similar task traces
+            max_items: Maximum items per memory type
+
+        Returns:
+            StructuredContext with formatted text and raw data from each memory type
+        """
+        messages: list = []
+        entities: list = []
+        preferences: list = []
+        traces: list = []
+
+        if include_short_term:
+            if session_id:
+                conversation = await self.short_term.get_conversation(
+                    session_id=session_id, limit=max_items
+                )
+                messages = list(conversation.messages[-max_items:])
+            if query:
+                searched = await self.short_term.search_messages(
+                    query, session_id=session_id, limit=max_items
+                )
+                # Merge: add searched messages not already in conversation messages
+                existing_ids = {m.id for m in messages}
+                for msg in searched:
+                    if msg.id not in existing_ids:
+                        messages.append(msg)
+
+        if include_long_term:
+            entities = await self.long_term.search_entities(query, limit=max_items)
+            preferences = await self.long_term.search_preferences(query, limit=max_items)
+
+        if include_reasoning:
+            traces = await self.reasoning.get_similar_traces(query, limit=max(1, max_items // 2))
+
+        # Build the formatted text using the existing get_context() method
+        context_text = await self.get_context(
+            query,
+            session_id=session_id,
+            include_short_term=include_short_term,
+            include_long_term=include_long_term,
+            include_reasoning=include_reasoning,
+            max_items=max_items,
+        )
+
+        return StructuredContext(
+            context_text=context_text,
+            messages=messages,
+            entities=entities,
+            preferences=preferences,
+            traces=traces,
+            stats={
+                "messages": len(messages),
+                "entities": len(entities),
+                "preferences": len(preferences),
+                "traces": len(traces),
+            },
+        )
 
     async def get_stats(self) -> dict:
         """

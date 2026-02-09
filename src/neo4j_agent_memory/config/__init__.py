@@ -15,6 +15,7 @@ from neo4j_agent_memory.config.settings import (
     ResolutionConfig,
     ResolverStrategy,
     SearchConfig,
+    ServerConfig,
 )
 
 __all__ = [
@@ -32,4 +33,5 @@ __all__ = [
     "LLMProvider",
     "ExtractorType",
     "ResolverStrategy",
+    "ServerConfig",
 ]
