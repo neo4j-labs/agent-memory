@@ -58,6 +58,40 @@ from neo4j_agent_memory.graph.schema import SchemaManager
 load_dotenv(Path(__file__).parent.parent / "backend" / ".env")
 
 
+def check_openai_api_key() -> bool:
+    """Check if OpenAI API key is set.
+    
+    Returns:
+        True if API key is set, False otherwise
+    """
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    return bool(api_key and api_key != "" and not api_key.startswith("sk-..."))
+
+
+def validate_openai_api_key() -> None:
+    """Validate that OpenAI API key is set, exit if not."""
+    if not check_openai_api_key():
+        print()
+        print(color("=" * 70, Colors.RED))
+        print(color("  ERROR: OPENAI_API_KEY is required but not set", Colors.RED))
+        print(color("=" * 70, Colors.RED))
+        print()
+        print("This script requires an OpenAI API key for:")
+        print("  • Text embeddings (semantic search)")
+        print("  • LLM-based entity extraction and enrichment")
+        print()
+        print("To fix this:")
+        print("  1. Get an API key from https://platform.openai.com/api-keys")
+        print("  2. Set it in backend/.env:")
+        print("       OPENAI_API_KEY=sk-your-key-here")
+        print("  3. Or set it as an environment variable:")
+        print("       export OPENAI_API_KEY=sk-your-key-here")
+        print()
+        print(color("=" * 70, Colors.RED))
+        print()
+        sys.exit(1)
+
+
 # ANSI color codes for terminal output
 class Colors:
     RESET = "\033[0m"
@@ -991,6 +1025,9 @@ Performance Tips:
 
     # Set up logging to prevent disruption of progress bars
     setup_logging(verbose=args.verbose)
+
+    # Validate OpenAI API key is set (required for embeddings and extraction)
+    validate_openai_api_key()
 
     # Validate data directory
     if not args.data_dir.exists():

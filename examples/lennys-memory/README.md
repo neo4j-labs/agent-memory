@@ -107,7 +107,7 @@ The right sidebar displays static agent configuration info:
 - Python 3.11+ and [uv](https://docs.astral.sh/uv/)
 - Node.js 18+
 - Docker (for Neo4j)
-- OpenAI API key
+- **OpenAI API key** (required) - Get one at [platform.openai.com/api-keys](https://platform.openai.com/api-keys)
 
 ### 1. Start Neo4j
 
@@ -125,14 +125,19 @@ make install
 
 ### 3. Configure Environment
 
-Backend:
+**Backend** (⚠️ OPENAI_API_KEY is required):
 ```bash
 cd backend
 cp .env.example .env
 # Edit .env and add your OPENAI_API_KEY
 ```
 
-Frontend:
+The application requires an OpenAI API key for:
+- Text embeddings (semantic search over conversations and entities)
+- LLM-based entity extraction and enrichment
+- Agent reasoning and tool use
+
+**Frontend:**
 ```bash
 cd frontend
 cp .env.example .env
@@ -140,7 +145,13 @@ cp .env.example .env
 
 ### 4. Load Podcast Transcripts
 
-Load a sample (5 transcripts) for quick testing:
+The transcripts are automatically downloaded from S3 when you first run a load command. You can also download them manually:
+
+```bash
+make download-transcripts
+```
+
+Then load a sample (5 transcripts) for quick testing:
 ```bash
 make load-sample
 ```
@@ -162,6 +173,8 @@ make load-resume
 # Preview what would be loaded without actually loading
 make load-dry-run
 ```
+
+**Note:** The first load command will automatically download the transcript files from S3 if they're not already present. This is a ~50MB download that extracts to 299 text files.
 
 **Post-processing options:**
 

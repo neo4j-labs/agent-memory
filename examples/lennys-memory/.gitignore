@@ -1,0 +1,10 @@
+# Transcript data files (downloaded from S3)
+data/
+
+# Temporary files
+tmp/
+
+# Environment files
+.env
+backend/.env
+frontend/.env.local

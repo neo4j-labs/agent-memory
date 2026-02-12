@@ -1,5 +1,7 @@
 """Async Neo4j client wrapper."""
 
+import logging
+import warnings
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -8,6 +10,17 @@ from neo4j.exceptions import AuthError, ServiceUnavailable
 
 from neo4j_agent_memory.config.settings import Neo4jConfig
 from neo4j_agent_memory.core.exceptions import ConnectionError
+
+# Suppress Neo4j driver warnings
+# The driver can emit various warnings about deprecated features, connection pooling, etc.
+# We suppress these to keep the output clean for users
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="neo4j")
+warnings.filterwarnings("ignore", message=".*verify_connectivity.*")
+
+# Configure Neo4j driver logging to WARNING level
+logging.getLogger("neo4j").setLevel(logging.WARNING)
+logging.getLogger("neo4j.io").setLevel(logging.WARNING)
+logging.getLogger("neo4j.pool").setLevel(logging.WARNING)
 
 
 class Neo4jClient:

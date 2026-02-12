@@ -5,8 +5,9 @@ help:
 	@echo "Lenny's Memory - Development Commands"
 	@echo ""
 	@echo "Setup:"
-	@echo "  make install        Install all dependencies (backend + frontend)"
-	@echo "  make neo4j          Start Neo4j in Docker"
+	@echo "  make install              Install all dependencies (backend + frontend)"
+	@echo "  make neo4j                Start Neo4j in Docker"
+	@echo "  make download-transcripts Download podcast transcript files from S3"
 	@echo ""
 	@echo "Data Loading:"
 	@echo "  make load-sample    Load 5 sample transcripts (for testing)"
@@ -52,34 +53,53 @@ neo4j:
 # Environment variables to suppress warnings during loading
 LOAD_ENV = PYTHONWARNINGS="ignore" HF_HUB_DISABLE_PROGRESS_BARS=1 TOKENIZERS_PARALLELISM=false
 
+# Download podcast transcript files from S3
+download-transcripts:
+	@python scripts/download_transcripts.py
+	@echo ""
+	@echo "✓ Transcripts downloaded successfully!"
+	@echo "  You can now run 'make load-sample' or 'make load-full'"
+
 # Load sample transcripts (5 files for quick testing)
-load-sample:
+# Automatically downloads transcripts if not present
+load-sample: check-transcripts
 	cd backend && $(LOAD_ENV) uv run python ../scripts/load_transcripts.py \
 		--data-dir ../data \
 		--sample 5
 
 # Load all transcripts (full dataset)
-load-full:
+# Automatically downloads transcripts if not present
+load-full: check-transcripts
 	cd backend && $(LOAD_ENV) uv run python ../scripts/load_transcripts.py \
 		--data-dir ../data
 
 # Load all transcripts without entity extraction (faster)
-load-fast:
+# Automatically downloads transcripts if not present
+load-fast: check-transcripts
 	cd backend && $(LOAD_ENV) uv run python ../scripts/load_transcripts.py \
 		--data-dir ../data \
 		--no-entities
 
 # Resume loading (skip already loaded transcripts)
-load-resume:
+# Automatically downloads transcripts if not present
+load-resume: check-transcripts
 	cd backend && $(LOAD_ENV) uv run python ../scripts/load_transcripts.py \
 		--data-dir ../data \
 		--resume
 
 # Preview what would be loaded (dry run)
-load-dry-run:
+# Automatically downloads transcripts if not present
+load-dry-run: check-transcripts
 	cd backend && $(LOAD_ENV) uv run python ../scripts/load_transcripts.py \
 		--data-dir ../data \
 		--dry-run
+
+# Internal target: check if transcripts exist, download if not
+check-transcripts:
+	@if [ ! -d "data" ] || [ -z "$$(find data -name '*.txt' 2>/dev/null)" ]; then \
+		echo "Transcripts not found. Downloading..."; \
+		python scripts/download_transcripts.py || exit 1; \
+	fi
 
 # Extract entities from already loaded sessions (post-processing)
 extract-entities:
