@@ -356,12 +356,7 @@ class MemoryClient:
         )
         self._enrichment_service = await self._create_enrichment_service()
 
-        # Create memory instances
-        self._short_term = ShortTermMemory(
-            self._client,
-            self._embedder,
-            self._extractor,
-        )
+        # Create memory instances (long_term created first so short_term can reference it)
         self._long_term = LongTermMemory(
             self._client,
             self._embedder,
@@ -369,6 +364,12 @@ class MemoryClient:
             self._resolver,
             self._geocoder,
             self._enrichment_service,
+        )
+        self._short_term = ShortTermMemory(
+            self._client,
+            self._embedder,
+            self._extractor,
+            long_term=self._long_term,
         )
         self._reasoning = ReasoningMemory(
             self._client,

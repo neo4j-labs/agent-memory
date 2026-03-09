@@ -154,15 +154,33 @@ When multiple extractors find entities, how do we combine results?
 
 === CONFIDENCE (Default)
 
-Keep the entity with the highest confidence score:
+Keep the entity with the highest *weighted* confidence score. Source weights compensate for extractors like spaCy that assign fixed confidence values:
+
+[cols="1,1"]
+|===
+|Extractor |Weight
+
+|LLM
+|1.0
+
+|GLiNER
+|0.9
+
+|spaCy
+|0.7
+|===
 
 [source,python]
 ----
-# If spaCy finds "John" (no confidence) and GLiNER finds "John Smith" (0.95)
-# Result: "John Smith" with confidence 0.95
+# spaCy finds "John Smith" (confidence=0.85, weighted=0.85*0.7=0.595)
+# GLiNER finds "John Smith" (confidence=0.70, weighted=0.70*0.9=0.630)
+# Result: GLiNER's version wins (higher weighted score)
+
+# Entities found by 2+ extractors get a +0.05 cross-extractor consensus boost
+# per additional source, increasing confidence in confirmed entities
 ----
 
-*Best for*: General use, when you trust confidence scores.
+*Best for*: General use, multi-extractor pipelines.
 
 === UNION
 
@@ -258,6 +276,18 @@ result = await extractor.extract("Marc works at a16z in San Francisco")
 ----
 
 Relationship extraction finds typed connections between entities, building richer knowledge graphs.
+
+== Extraction-to-Storage Pipeline
+
+When entity extraction is triggered via `add_message(extract_entities=True)` or `extract_entities_from_session()`, extracted entities are automatically routed through the long-term memory pipeline:
+
+1. **Deduplication within result**: `ExtractionResult.deduplicate_entities()` removes duplicate entities (same normalized name and type) within the extraction, keeping the highest confidence.
+2. **Embedding generation**: Each entity name is embedded via the configured embedder (using `embed_batch()` for efficiency).
+3. **Duplicate detection**: Embeddings are compared against existing entities using vector similarity + optional fuzzy string matching.
+4. **Entity resolution**: The configured resolver (exact → fuzzy → semantic) canonicalizes entity names with type-awareness.
+5. **Storage**: New entities are created; duplicates are merged or flagged for review.
+
+This ensures that entities extracted from conversations have the same quality and consistency as entities added directly via `add_entity()`.
 
 == Automatic Relationship Storage
 

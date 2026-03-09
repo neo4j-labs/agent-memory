@@ -127,7 +127,7 @@ New Entity: "JP Morgan Chase"
 ┌─────────────────────────┐
 │   Similarity Scores     │
 │                         │
-│   JPMorgan: 0.97        │  ← Auto-merge (>0.95)
+│   JPMorgan: 0.97        │  ← Auto-merge (>0.92)
 │   JP Morgan: 0.94       │  ← Flag for review
 │   Morgan Stanley: 0.72  │  ← Different entity
 └─────────────────────────┘
@@ -343,8 +343,8 @@ config = DeduplicationConfig(
 ----
 # Balance precision and recall for product catalog
 config = DeduplicationConfig(
-    auto_merge_threshold=0.95,    # Standard confidence
-    flag_threshold=0.85,          # Flag likely duplicates
+    auto_merge_threshold=0.92,    # Standard confidence
+    flag_threshold=0.80,          # Flag likely duplicates
     match_same_type_only=True,
     use_fuzzy_matching=True,
 )
@@ -506,8 +506,8 @@ config = DeduplicationConfig(
 
 # After validating quality, can relax
 config = DeduplicationConfig(
-    auto_merge_threshold=0.95,
-    flag_threshold=0.85,
+    auto_merge_threshold=0.92,
+    flag_threshold=0.80,
 )
 ----
 

@@ -39,8 +39,8 @@ client = MemoryClient(
 
 # Configure deduplication
 dedup_config = DeduplicationConfig(
-    auto_merge_threshold=0.95,  # Auto-merge above 95% similarity
-    flag_threshold=0.85,         # Flag for review between 85-95%
+    auto_merge_threshold=0.92,  # Auto-merge above 92% similarity
+    flag_threshold=0.80,         # Flag for review between 80-92%
     use_fuzzy_matching=True,     # Also use string similarity
     match_same_type_only=True,   # Only match within same entity type
 )
@@ -82,8 +82,8 @@ financial_config = DeduplicationConfig(
 ----
 # Standard settings for product catalog
 ecommerce_config = DeduplicationConfig(
-    auto_merge_threshold=0.95,
-    flag_threshold=0.85,
+    auto_merge_threshold=0.92,
+    flag_threshold=0.80,
     use_fuzzy_matching=True,
     match_same_type_only=True,
 )
@@ -300,8 +300,8 @@ config = DeduplicationConfig(
 
 # After validating quality, relax if needed
 config = DeduplicationConfig(
-    auto_merge_threshold=0.95,
-    flag_threshold=0.85,
+    auto_merge_threshold=0.92,
+    flag_threshold=0.80,
 )
 ----
 

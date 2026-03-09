@@ -359,6 +359,39 @@ class ExtractionResult(BaseModel):
         """Get entities of a specific type."""
         return [e for e in self.entities if e.type.upper() == entity_type.upper()]
 
+    def deduplicate_entities(self) -> "ExtractionResult":
+        """Return a new ExtractionResult with duplicate entities removed.
+
+        Deduplicates by normalized name + type, keeping the entity with the
+        highest confidence score. Also filters relations that reference
+        removed entities.
+
+        Returns:
+            New ExtractionResult with deduplicated entities and relations
+        """
+        seen: dict[str, ExtractedEntity] = {}
+        for entity in self.entities:
+            key = f"{entity.normalized_name}::{entity.type}"
+            if key not in seen or entity.confidence > seen[key].confidence:
+                seen[key] = entity
+
+        deduped_entities = list(seen.values())
+
+        # Filter relations to only reference surviving entities
+        valid_names = {e.normalized_name for e in deduped_entities}
+        valid_relations = [
+            r
+            for r in self.relations
+            if r.source.lower().strip() in valid_names and r.target.lower().strip() in valid_names
+        ]
+
+        return ExtractionResult(
+            entities=deduped_entities,
+            relations=valid_relations,
+            preferences=self.preferences,
+            source_text=self.source_text,
+        )
+
     def filter_invalid_entities(self) -> "ExtractionResult":
         """Return a new ExtractionResult with invalid entities filtered out.
 

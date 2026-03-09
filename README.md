@@ -633,9 +633,11 @@ When combining results from multiple extractors:
 |----------|-------------|
 | `union` | Keep all unique entities from all stages |
 | `intersection` | Only keep entities found by multiple extractors |
-| `confidence` | Keep highest confidence result per entity |
+| `confidence` | Keep highest confidence result per entity (with source weighting) |
 | `cascade` | Use first extractor's results, fill gaps with others |
 | `first_success` | Stop at first stage that returns results |
+
+The `confidence` strategy applies source weights (LLM=1.0, GLiNER=0.9, spaCy=0.7) to prevent extractors with fixed confidence values from dominating. Entities found by multiple extractors get a cross-extractor consensus boost (+0.05 per additional source).
 
 ### Individual Extractors
 
@@ -767,7 +769,7 @@ if is_glirel_available():
 
 ### Automatic Relationship Storage
 
-When adding messages with entity extraction enabled, extracted relationships are automatically stored as `RELATED_TO` relationships in Neo4j:
+When adding messages with entity extraction enabled, extracted relationships are automatically stored as `RELATED_TO` relationships in Neo4j. Extracted entities are automatically routed through the long-term memory pipeline for embedding generation, deduplication, and entity resolution:
 
 ```python
 # Relationships are stored automatically when adding messages
@@ -808,8 +810,8 @@ Automatic duplicate detection when adding entities:
 from neo4j_agent_memory.memory import LongTermMemory, DeduplicationConfig
 
 config = DeduplicationConfig(
-    auto_merge_threshold=0.95,  # Auto-merge above 95% similarity
-    flag_threshold=0.85,        # Flag for review above 85%
+    auto_merge_threshold=0.92,  # Auto-merge above 92% similarity
+    flag_threshold=0.80,        # Flag for review above 80%
     use_fuzzy_matching=True,
 )
 
@@ -1179,7 +1181,7 @@ settings = MemorySettings(
 
 ## Entity Resolution
 
-The package includes multiple strategies for resolving duplicate entities:
+The package includes multiple strategies for resolving duplicate entities. All resolvers support type-aware resolution — entities of different types (e.g., PERSON vs LOCATION) are never merged even if they have similar names:
 
 ```python
 from neo4j_agent_memory.resolution import (
@@ -1198,7 +1200,7 @@ resolver = FuzzyMatchResolver(threshold=0.85)
 # Semantic matching using embeddings
 resolver = SemanticMatchResolver(embedder, threshold=0.8)
 
-# Composite: tries exact -> fuzzy -> semantic
+# Composite: tries exact -> fuzzy -> semantic (type-aware)
 resolver = CompositeResolver(
     embedder=embedder,
     fuzzy_threshold=0.85,

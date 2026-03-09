@@ -46,6 +46,7 @@ class EntityResolver(Protocol):
         entity_type: str,
         *,
         existing_entities: list[str] | None = None,
+        existing_entity_types: dict[str, str] | None = None,
     ) -> ResolvedEntity:
         """
         Resolve an entity to its canonical form.
@@ -54,6 +55,8 @@ class EntityResolver(Protocol):
             entity_name: The entity name to resolve
             entity_type: The entity type
             existing_entities: Optional list of existing entity names to match against
+            existing_entity_types: Optional mapping of entity names to their types
+                for type-aware resolution (prevents cross-type merges)
 
         Returns:
             ResolvedEntity with canonical name
@@ -105,6 +108,7 @@ class BaseResolver(ABC):
         entity_type: str,
         *,
         existing_entities: list[str] | None = None,
+        existing_entity_types: dict[str, str] | None = None,
     ) -> ResolvedEntity:
         """Resolve an entity to its canonical form."""
         pass
