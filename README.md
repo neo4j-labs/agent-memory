@@ -1062,7 +1062,7 @@ agent = ChatAgent(
 
 ### MCP Server
 
-Expose memory capabilities via Model Context Protocol for AI platforms:
+Expose memory capabilities via Model Context Protocol for AI platforms. See the **[MCP Server Quick Start](QUICKSTART.md)** to get up and running in under a minute.
 
 ```bash
 # Run the MCP server

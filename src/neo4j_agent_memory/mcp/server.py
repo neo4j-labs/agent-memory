@@ -16,6 +16,31 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+def _build_cors_middleware(allow_origins: list[str] | None = None) -> list[Any]:
+    """Build Starlette CORS middleware list for FastMCP.
+
+    Args:
+        allow_origins: Allowed origins. Defaults to ["*"].
+
+    Returns:
+        List of Starlette Middleware instances.
+    """
+    from starlette.middleware import Middleware
+    from starlette.middleware.cors import CORSMiddleware
+
+    origins = allow_origins or ["*"]
+    return [
+        Middleware(
+            CORSMiddleware,
+            allow_origins=origins,
+            allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+            allow_headers=["*"],
+            expose_headers=["Mcp-Session-Id"],
+        )
+    ]
+
+
 try:
     from fastmcp import FastMCP
 
@@ -130,14 +155,50 @@ try:
             """Run the MCP server using stdio transport."""
             await self._mcp.run_async(transport="stdio")
 
-        async def run_sse(self, host: str = "127.0.0.1", port: int = 8080) -> None:
+        async def run_sse(
+            self,
+            host: str = "127.0.0.1",
+            port: int = 8080,
+            allow_origins: list[str] | None = None,
+        ) -> None:
             """Run the MCP server using SSE transport.
 
             Args:
                 host: Host to bind to.
                 port: Port to listen on.
+                allow_origins: CORS allowed origins (defaults to ["*"]).
             """
-            await self._mcp.run_async(transport="sse", host=host, port=port)
+            middleware = _build_cors_middleware(allow_origins)
+            await self._mcp.run_async(transport="sse", host=host, port=port, middleware=middleware)
+
+        async def run_http(
+            self,
+            host: str = "127.0.0.1",
+            port: int = 8080,
+            allow_origins: list[str] | None = None,
+            stateless_http: bool = False,
+        ) -> None:
+            """Run the MCP server using HTTP transport.
+
+            Clients POST JSON-RPC messages and receive responses as JSON
+            or SSE streams.
+
+            Args:
+                host: Host to bind to.
+                port: Port to listen on.
+                allow_origins: CORS allowed origins (defaults to ["*"]).
+                stateless_http: If True, disable session ID tracking.
+                    Required for browser-based MCP clients that don't
+                    forward the Mcp-Session-Id header.
+            """
+            middleware = _build_cors_middleware(allow_origins)
+            await self._mcp.run_async(
+                transport="http",
+                host=host,
+                port=port,
+                middleware=middleware,
+                stateless_http=stateless_http,
+            )
 
     async def run_server(
         neo4j_uri: str,
@@ -147,6 +208,8 @@ try:
         transport: str = "stdio",
         host: str = "127.0.0.1",
         port: int = 8080,
+        allow_origins: list[str] | None = None,
+        stateless_http: bool = False,
     ) -> None:
         """Run the MCP server with Neo4j connection.
 
@@ -160,6 +223,9 @@ try:
             transport: Transport type (stdio, sse, or http).
             host: Host for network transports.
             port: Port for network transports.
+            allow_origins: CORS allowed origins for HTTP transports.
+            stateless_http: If True, disable session ID tracking for HTTP
+                transport. Required for browser-based MCP clients.
         """
         from pydantic import SecretStr
 
@@ -177,10 +243,15 @@ try:
 
         server = create_mcp_server(settings, server_name="neo4j-agent-memory")
 
-        if transport == "sse":
-            await server.run_async(transport="sse", host=host, port=port)
-        elif transport == "http":
-            await server.run_async(transport="http", host=host, port=port)
+        if transport in ("sse", "http"):
+            middleware = _build_cors_middleware(allow_origins)
+            await server.run_async(
+                transport=transport,
+                host=host,
+                port=port,
+                middleware=middleware,
+                stateless_http=stateless_http,
+            )
         else:
             await server.run_async(transport="stdio")
 
@@ -235,7 +306,7 @@ def main() -> None:
         "--transport",
         choices=["stdio", "sse", "http"],
         default="stdio",
-        help="MCP transport type",
+        help="MCP transport type (http uses Streamable HTTP, recommended for browser clients)",
     )
     parser.add_argument(
         "--host",
@@ -248,8 +319,31 @@ def main() -> None:
         default=8080,
         help="Port for network transports",
     )
+    parser.add_argument(
+        "--allow-origin",
+        action="append",
+        dest="allow_origins",
+        help="Allowed CORS origin (repeatable, defaults to '*'). "
+        "Example: --allow-origin https://example.com --allow-origin https://app.example.com",
+    )
+    parser.add_argument(
+        "--stateless",
+        action="store_true",
+        default=False,
+        help="Disable session ID tracking for HTTP transport. "
+        "Required for browser-based MCP clients that "
+        "don't forward the Mcp-Session-Id header.",
+    )
+    parser.add_argument(
+        "--openai-api-key",
+        default=os.environ.get("OPENAI_API_KEY", ""),
+        help="OpenAI API key (for embeddings/extraction)",
+    )
 
     args = parser.parse_args()
+
+    if args.openai_api_key:
+        os.environ["OPENAI_API_KEY"] = args.openai_api_key
 
     asyncio.run(
         run_server(
@@ -260,6 +354,8 @@ def main() -> None:
             transport=args.transport,
             host=args.host,
             port=args.port,
+            allow_origins=args.allow_origins,
+            stateless_http=args.stateless,
         )
     )
 
