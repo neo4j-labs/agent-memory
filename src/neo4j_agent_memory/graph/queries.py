@@ -246,7 +246,10 @@ RETURN e
 
 GET_ENTITY_BY_NAME = """
 MATCH (e:Entity)
-WHERE e.name = $name OR e.canonical_name = $name OR $name IN COALESCE(e.aliases, [])
+WHERE e.name = $name
+   OR toLower(e.name) = toLower($name)
+   OR e.canonical_name = toLower($name)
+   OR $name IN COALESCE(e.aliases, [])
 RETURN e
 LIMIT 1
 """
@@ -420,6 +423,36 @@ MATCH (p:Preference {id: $preference_id})
 MATCH (e:Entity {id: $entity_id})
 MERGE (p)-[r:ABOUT]->(e)
 RETURN r
+"""
+
+LINK_FACT_TO_ENTITY = """
+MATCH (f:Fact {id: $fact_id})
+MATCH (e:Entity {id: $entity_id})
+MERGE (f)-[r:ABOUT]->(e)
+ON CREATE SET r.role = $role
+RETURN r
+"""
+
+MERGE_ENTITY_BY_NAME = """
+MERGE (e:Entity {name: $name})
+ON CREATE SET
+    e.id = coalesce($id, randomUUID()),
+    e.type = $entity_type,
+    e.canonical_name = toLower($name),
+    e.created_at = datetime()
+RETURN e.id AS id, e.name AS name, e.type AS type
+"""
+
+GET_FACTS_AND_PREFERENCES_FOR_ENTITY = """
+MATCH (e:Entity {id: $entity_id})
+OPTIONAL MATCH (f:Fact)-[:ABOUT]->(e)
+OPTIONAL MATCH (p:Preference)-[:ABOUT]->(e)
+WITH e,
+     collect(DISTINCT {type: 'fact', id: coalesce(f.id, f.subject), subject: f.subject,
+             predicate: f.predicate, object: f.object, confidence: f.confidence}) AS facts,
+     collect(DISTINCT {type: 'preference', id: coalesce(p.id, p.preference), category: p.category,
+             preference: p.preference, context: p.context}) AS preferences
+RETURN facts, preferences
 """
 
 # =============================================================================

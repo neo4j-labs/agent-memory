@@ -373,6 +373,7 @@ class TestEntityLookupTool:
         """entity_lookup returns found=False when not found."""
         mock_client = make_mock_client()
         mock_client.long_term.search_entities = AsyncMock(return_value=[])
+        mock_client.graph.execute_read = AsyncMock(return_value=[])
 
         server = create_tool_server(mock_client)
         async with Client(server) as client:

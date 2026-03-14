@@ -218,14 +218,23 @@ def register_tools(mcp: FastMCP) -> None:
                     preference=content,
                     generate_embedding=True,
                 )
-                return json.dumps(
-                    {
-                        "stored": True,
-                        "type": "preference",
-                        "id": str(preference.id),
-                        "category": category,
-                    }
-                )
+
+                # Extract entity from subject and link to preference
+                linked_entity_name = None
+                if subject:
+                    linked_entity_name = await _ensure_entity_linked(
+                        client, subject, "PERSON", str(preference.id), "preference"
+                    )
+
+                result_data: dict[str, Any] = {
+                    "stored": True,
+                    "type": "preference",
+                    "id": str(preference.id),
+                    "category": category,
+                }
+                if linked_entity_name:
+                    result_data["linked_entity"] = linked_entity_name
+                return json.dumps(result_data)
 
             elif memory_type == "fact":
                 if not all([subject, predicate, object_value]):
@@ -238,14 +247,31 @@ def register_tools(mcp: FastMCP) -> None:
                     predicate=predicate,
                     obj=object_value,
                 )
-                return json.dumps(
-                    {
-                        "stored": True,
-                        "type": "fact",
-                        "id": str(fact.id) if hasattr(fact, "id") else None,
-                        "triple": f"{subject} -> {predicate} -> {object_value}",
-                    }
-                )
+
+                # Link subject and object entities to the fact
+                linked_entities = []
+                if subject:
+                    name = await _ensure_entity_linked(
+                        client, subject, "PERSON", str(fact.id), "fact", role="subject"
+                    )
+                    if name:
+                        linked_entities.append(name)
+                if object_value:
+                    name = await _ensure_entity_linked(
+                        client, object_value, "OBJECT", str(fact.id), "fact", role="object"
+                    )
+                    if name:
+                        linked_entities.append(name)
+
+                result_data = {
+                    "stored": True,
+                    "type": "fact",
+                    "id": str(fact.id) if hasattr(fact, "id") else None,
+                    "triple": f"{subject} -> {predicate} -> {object_value}",
+                }
+                if linked_entities:
+                    result_data["linked_entities"] = linked_entities
+                return json.dumps(result_data)
 
             else:
                 return json.dumps({"error": f"Unknown memory type: {memory_type}"})
@@ -270,11 +296,24 @@ def register_tools(mcp: FastMCP) -> None:
         client = get_client(ctx)
 
         try:
+            from neo4j_agent_memory.graph import queries as q
+
             entities = await client.long_term.search_entities(
                 query=name,
                 entity_types=[entity_type] if entity_type else None,
                 limit=1,
             )
+
+            # Fallback: name-based lookup if vector search found nothing
+            if not entities:
+                records = await client.graph.execute_read(
+                    q.GET_ENTITY_BY_NAME,
+                    {"name": name},
+                )
+                if records:
+                    entity_data = dict(records[0]["e"])
+                    if not (entity_type and entity_data.get("type") != entity_type):
+                        entities = [client.long_term._parse_entity(entity_data)]
 
             if not entities:
                 return json.dumps({"found": False, "name": name})
@@ -296,6 +335,13 @@ def register_tools(mcp: FastMCP) -> None:
             if include_neighbors:
                 neighbors = await _get_entity_neighbors(client, str(entity.id), max_hops)
                 result["neighbors"] = neighbors
+
+            # Include linked facts and preferences
+            linked = await _get_entity_facts_and_preferences(client, str(entity.id))
+            if linked.get("facts"):
+                result["facts"] = linked["facts"]
+            if linked.get("preferences"):
+                result["preferences"] = linked["preferences"]
 
             return json.dumps(result, default=str)
 
@@ -454,6 +500,103 @@ def register_tools(mcp: FastMCP) -> None:
         except Exception as e:
             logger.error(f"Error in add_reasoning_trace: {e}")
             return json.dumps({"error": str(e)})
+
+
+async def _ensure_entity_linked(
+    client,
+    name: str,
+    default_type: str,
+    node_id: str,
+    node_type: str,
+    *,
+    role: str = "subject",
+) -> str | None:
+    """Create or resolve an entity and link it to a fact or preference.
+
+    Args:
+        client: MemoryClient instance.
+        name: Entity name to create/resolve.
+        default_type: Default entity type if creating new.
+        node_id: ID of the Fact or Preference node.
+        node_type: Either 'fact' or 'preference'.
+        role: Role in the relationship (subject/object), used for facts.
+
+    Returns:
+        The entity name if linked, None on failure.
+    """
+    from neo4j_agent_memory.graph import queries
+
+    try:
+        # MERGE entity by name — reuses existing or creates with auto-generated ID
+        records = await client.graph.execute_write(
+            queries.MERGE_ENTITY_BY_NAME,
+            {"name": name, "id": None, "entity_type": default_type},
+        )
+        if not records:
+            return None
+
+        entity_id = records[0]["id"]
+
+        # Generate embedding so the entity is discoverable via vector search
+        embedder = getattr(client.long_term, "_embedder", None)
+        if embedder is not None:
+            try:
+                embedding = await embedder.embed(name)
+                await client.graph.execute_write(
+                    queries.UPDATE_ENTITY_EMBEDDING,
+                    {"id": entity_id, "embedding": embedding},
+                )
+            except Exception:
+                logger.debug(f"Failed to generate embedding for entity '{name}'")
+
+        # Link the entity to the fact/preference
+        if node_type == "preference":
+            await client.graph.execute_write(
+                queries.LINK_PREFERENCE_TO_ENTITY,
+                {"preference_id": node_id, "entity_id": entity_id},
+            )
+        elif node_type == "fact":
+            await client.graph.execute_write(
+                queries.LINK_FACT_TO_ENTITY,
+                {"fact_id": node_id, "entity_id": entity_id, "role": role},
+            )
+
+        return name
+    except Exception as e:
+        logger.warning(f"Failed to link entity '{name}' to {node_type}: {e}")
+        return None
+
+
+async def _get_entity_facts_and_preferences(
+    client,
+    entity_id: str,
+) -> dict[str, list[dict[str, Any]]]:
+    """Get facts and preferences linked to an entity via ABOUT relationships.
+
+    Args:
+        client: MemoryClient instance.
+        entity_id: Entity ID.
+
+    Returns:
+        Dict with 'facts' and 'preferences' lists.
+    """
+    from neo4j_agent_memory.graph import queries
+
+    try:
+        records = await client.graph.execute_read(
+            queries.GET_FACTS_AND_PREFERENCES_FOR_ENTITY,
+            {"entity_id": entity_id},
+        )
+        if not records:
+            return {"facts": [], "preferences": []}
+
+        record = records[0]
+        facts = [f for f in record.get("facts", []) if f.get("id") is not None]
+        preferences = [p for p in record.get("preferences", []) if p.get("id") is not None]
+        return {"facts": facts, "preferences": preferences}
+    except Exception as e:
+        logger.debug(f"Error getting facts/preferences for entity: {e}")
+        return {"facts": [], "preferences": []}
 
 
 async def _get_entity_neighbors(
