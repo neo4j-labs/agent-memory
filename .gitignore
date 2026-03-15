@@ -62,3 +62,4 @@ plugins/
 *.tmp
 *.temp
 .cache/
+docs/package-lock.json
