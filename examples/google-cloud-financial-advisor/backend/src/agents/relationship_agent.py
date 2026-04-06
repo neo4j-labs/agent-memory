@@ -18,7 +18,7 @@ from ..tools.relationship_tools import (
     find_connections,
     map_beneficial_ownership,
 )
-from . import bind_tool
+from .utils import bind_tool
 from .prompts import RELATIONSHIP_AGENT_INSTRUCTION
 
 if TYPE_CHECKING:

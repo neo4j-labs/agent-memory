@@ -18,7 +18,7 @@ from ..tools.kyc_tools import (
     check_documents,
     verify_identity,
 )
-from . import bind_tool
+from .utils import bind_tool
 from .prompts import KYC_AGENT_INSTRUCTION
 
 if TYPE_CHECKING:

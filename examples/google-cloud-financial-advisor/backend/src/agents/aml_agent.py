@@ -18,7 +18,7 @@ from ..tools.aml_tools import (
     flag_suspicious_transaction,
     scan_transactions,
 )
-from . import bind_tool
+from .utils import bind_tool
 from .prompts import AML_AGENT_INSTRUCTION
 
 if TYPE_CHECKING:

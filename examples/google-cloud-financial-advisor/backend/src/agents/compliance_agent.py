@@ -18,7 +18,7 @@ from ..tools.compliance_tools import (
     generate_sar_report,
     verify_pep_status,
 )
-from . import bind_tool
+from .utils import bind_tool
 from .prompts import COMPLIANCE_AGENT_INSTRUCTION
 
 if TYPE_CHECKING:
