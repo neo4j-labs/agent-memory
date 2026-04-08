@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
@@ -36,7 +36,7 @@ class InvestigationFinding(BaseModel):
 
     id: str = Field(..., description="Finding identifier")
     timestamp: datetime = Field(
-        default_factory=datetime.utcnow, description="Finding timestamp"
+        default_factory=lambda: datetime.now(timezone.utc), description="Finding timestamp"
     )
     agent: str = Field(..., description="Agent that produced the finding")
     category: str = Field(..., description="Finding category")
@@ -71,10 +71,10 @@ class Investigation(InvestigationCreate):
         default=InvestigationStatus.PENDING, description="Current status"
     )
     created_at: datetime = Field(
-        default_factory=datetime.utcnow, description="Creation timestamp"
+        default_factory=lambda: datetime.now(timezone.utc), description="Creation timestamp"
     )
     updated_at: datetime = Field(
-        default_factory=datetime.utcnow, description="Last update timestamp"
+        default_factory=lambda: datetime.now(timezone.utc), description="Last update timestamp"
     )
     started_at: datetime | None = Field(
         default=None, description="When investigation started"

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
@@ -89,7 +89,7 @@ class Customer(CustomerCreate):
         default=RiskLevel.UNKNOWN, description="Current risk level"
     )
     onboarding_date: datetime = Field(
-        default_factory=datetime.utcnow, description="Date customer was onboarded"
+        default_factory=lambda: datetime.now(timezone.utc), description="Date customer was onboarded"
     )
     last_review_date: datetime | None = Field(
         default=None, description="Last KYC review date"
@@ -128,7 +128,7 @@ class CustomerRisk(BaseModel):
         default_factory=list, description="Risk mitigation recommendations"
     )
     assessment_date: datetime = Field(
-        default_factory=datetime.utcnow, description="Assessment timestamp"
+        default_factory=lambda: datetime.now(timezone.utc), description="Assessment timestamp"
     )
 
 

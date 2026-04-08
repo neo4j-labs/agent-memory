@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
@@ -69,10 +69,10 @@ class Alert(AlertCreate):
     id: str = Field(..., description="Unique alert identifier")
     status: AlertStatus = Field(default=AlertStatus.NEW, description="Current status")
     created_at: datetime = Field(
-        default_factory=datetime.utcnow, description="Alert creation time"
+        default_factory=lambda: datetime.now(timezone.utc), description="Alert creation time"
     )
     updated_at: datetime = Field(
-        default_factory=datetime.utcnow, description="Last update time"
+        default_factory=lambda: datetime.now(timezone.utc), description="Last update time"
     )
     assigned_to: str | None = Field(default=None, description="Assigned analyst")
     investigation_id: str | None = Field(

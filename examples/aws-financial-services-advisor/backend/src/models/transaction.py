@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
@@ -60,7 +60,7 @@ class Transaction(TransactionCreate):
 
     id: str = Field(..., description="Unique transaction identifier")
     timestamp: datetime = Field(
-        default_factory=datetime.utcnow, description="Transaction timestamp"
+        default_factory=lambda: datetime.now(timezone.utc), description="Transaction timestamp"
     )
     status: str = Field(default="completed", description="Transaction status")
     risk_score: float | None = Field(default=None, description="Transaction risk score")

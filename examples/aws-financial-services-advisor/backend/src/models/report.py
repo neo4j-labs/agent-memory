@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
@@ -62,7 +62,7 @@ class SARReport(BaseModel):
         default=ReportStatus.PENDING, description="Report status"
     )
     created_at: datetime = Field(
-        default_factory=datetime.utcnow, description="Creation timestamp"
+        default_factory=lambda: datetime.now(timezone.utc), description="Creation timestamp"
     )
     filed_at: datetime | None = Field(default=None, description="Filing timestamp")
     filing_reference: str | None = Field(
@@ -120,10 +120,10 @@ class RiskAssessmentReport(BaseModel):
         default=ReportStatus.PENDING, description="Report status"
     )
     created_at: datetime = Field(
-        default_factory=datetime.utcnow, description="Creation timestamp"
+        default_factory=lambda: datetime.now(timezone.utc), description="Creation timestamp"
     )
     assessment_date: datetime = Field(
-        default_factory=datetime.utcnow, description="Assessment date"
+        default_factory=lambda: datetime.now(timezone.utc), description="Assessment date"
     )
     valid_until: datetime | None = Field(
         default=None, description="Assessment validity period"
