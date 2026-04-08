@@ -82,6 +82,7 @@ class FuzzyMatchResolver(BaseResolver):
         entity_type: str,
         *,
         existing_entities: list[str] | None = None,
+        existing_entity_types: dict[str, str] | None = None,
     ) -> ResolvedEntity:
         """Resolve entity using fuzzy matching."""
         if not existing_entities:

@@ -166,8 +166,8 @@ for item in result.items:
 from neo4j_agent_memory.memory import DeduplicationConfig
 
 dedup_config = DeduplicationConfig(
-    auto_merge_threshold=0.95,
-    flag_threshold=0.85,
+    auto_merge_threshold=0.92,
+    flag_threshold=0.80,
 )
 
 stored_count = 0

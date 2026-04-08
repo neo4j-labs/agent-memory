@@ -501,6 +501,46 @@ extractor = GLiNERWithRelationsExtractor(
 
 Add extracted entities to your context graph in Neo4j.
 
+TIP: When using `add_message(extract_entities=True)` or `extract_entities_from_session()`, entities are automatically routed through the long-term memory pipeline for embedding generation, deduplication, and entity resolution. The manual storage methods below are for when you extract entities separately and want to store them yourself.
+
+=== Automatic Storage via Messages
+
+The simplest approach is to extract and store entities as part of message processing:
+
+[source,python]
+----
+# Entities are automatically extracted, deduplicated, and stored
+await client.short_term.add_message(
+    "session-1",
+    "user",
+    "John Smith works at Acme Corp in New York.",
+    extract_entities=True,   # Extract and store entities with embeddings + dedup
+    extract_relations=True,  # Also extract relationships (default: True)
+)
+----
+
+=== Direct Entity Ingestion
+
+For programmatic entity ingestion, use `ingest_extracted_entity()` which generates embeddings and runs deduplication:
+
+[source,python]
+----
+from neo4j_agent_memory.extraction.base import ExtractedEntity
+
+# Ingest a single extracted entity
+entity = ExtractedEntity(name="John Smith", type="PERSON", confidence=0.9)
+entity_id, is_new = await client.long_term.ingest_extracted_entity(entity)
+
+# Batch ingest for efficiency (uses embed_batch internally)
+entities = [
+    ExtractedEntity(name="John Smith", type="PERSON", confidence=0.9),
+    ExtractedEntity(name="Acme Corp", type="ORGANIZATION", confidence=0.85),
+]
+results = await client.long_term.ingest_extracted_entities_batch(entities)
+for entity_id, is_new in results:
+    print(f"Entity {entity_id}: {'new' if is_new else 'existing'}")
+----
+
 === Basic Storage
 
 [source,python]
@@ -563,8 +603,8 @@ from neo4j_agent_memory.memory import DeduplicationConfig
 
 # Configure deduplication thresholds
 dedup_config = DeduplicationConfig(
-    auto_merge_threshold=0.95,  # Auto-merge highly similar entities
-    flag_threshold=0.85,         # Flag for review between 0.85-0.95
+    auto_merge_threshold=0.92,  # Auto-merge highly similar entities
+    flag_threshold=0.80,         # Flag for review between 0.80-0.92
     use_fuzzy_matching=True,     # Use string similarity too
     match_same_type_only=True,   # Only match within same type
 )

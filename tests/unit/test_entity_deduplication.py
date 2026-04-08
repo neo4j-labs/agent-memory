@@ -22,11 +22,11 @@ class TestDeduplicationConfig:
         config = DeduplicationConfig()
 
         assert config.enabled is True
-        assert config.auto_merge_threshold == 0.95
-        assert config.flag_threshold == 0.85
+        assert config.auto_merge_threshold == 0.92
+        assert config.flag_threshold == 0.80
         assert config.use_fuzzy_matching is True
-        assert config.fuzzy_threshold == 0.9
-        assert config.max_candidates == 10
+        assert config.fuzzy_threshold == 0.85
+        assert config.max_candidates == 25
         assert config.match_same_type_only is True
 
     def test_custom_config(self):

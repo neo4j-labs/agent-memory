@@ -17,6 +17,18 @@ from neo4j_agent_memory.extraction.base import (
 
 logger = logging.getLogger(__name__)
 
+# Source quality weights for cross-extractor confidence merging.
+# Higher values mean higher trust in that extractor's confidence scores.
+# spaCy uses a fixed confidence (0.85) so its weight is lower to compensate.
+DEFAULT_SOURCE_WEIGHTS: dict[str, float] = {
+    "llm": 1.0,
+    "gliner": 0.9,
+    "spacy": 0.7,
+}
+
+# Confidence boost per additional extractor that agrees on an entity
+CROSS_EXTRACTOR_BOOST = 0.05
+
 
 # Type alias for progress callback: (completed_count, total_count) -> None
 ProgressCallback = Callable[[int, int], None]
@@ -186,9 +198,16 @@ class ExtractorStage:
 
 
 def _entity_key(entity: ExtractedEntity) -> str:
-    """Generate a unique key for entity deduplication."""
-    # Use normalized name and type for deduplication
-    return f"{entity.normalized_name}::{entity.type}"
+    """Generate a unique key for entity deduplication.
+
+    Includes subtype when present so that entities with different
+    subtypes (e.g., PERSON:INDIVIDUAL vs PERSON:ALIAS) are kept
+    as separate entries during merge.
+    """
+    key = f"{entity.normalized_name}::{entity.type}"
+    if entity.subtype:
+        key += f"::{entity.subtype.upper()}"
+    return key
 
 
 def _merge_entities_union(
@@ -242,16 +261,41 @@ def _merge_entities_intersection(
 def _merge_entities_confidence(
     all_entities: list[list[ExtractedEntity]],
 ) -> list[ExtractedEntity]:
-    """Merge entities keeping highest confidence per unique entity."""
-    best: dict[str, ExtractedEntity] = {}
+    """Merge entities keeping highest weighted confidence per unique entity.
+
+    Uses source quality weights to compensate for extractors with fixed
+    confidence scores (e.g., spaCy always returns 0.85). Also applies a
+    confidence boost for entities found by multiple extractors.
+    """
+    best: dict[str, tuple[ExtractedEntity, float]] = {}
+    # Track which extractors found each entity for consensus boosting
+    extractor_sets: dict[str, set[str]] = {}
 
     for entities in all_entities:
         for entity in entities:
             key = _entity_key(entity)
-            if key not in best or entity.confidence > best[key].confidence:
-                best[key] = entity
+            source = (entity.extractor or "").lower()
+            weight = DEFAULT_SOURCE_WEIGHTS.get(source, 0.8)
+            weighted_score = entity.confidence * weight
 
-    return list(best.values())
+            if key not in extractor_sets:
+                extractor_sets[key] = set()
+            extractor_sets[key].add(source or "unknown")
+
+            if key not in best or weighted_score > best[key][1]:
+                best[key] = (entity, weighted_score)
+
+    # Apply cross-extractor consensus boost
+    result = []
+    for key, (entity, _score) in best.items():
+        num_sources = len(extractor_sets.get(key, set()))
+        if num_sources > 1:
+            entity.confidence = min(
+                1.0, entity.confidence + CROSS_EXTRACTOR_BOOST * (num_sources - 1)
+            )
+        result.append(entity)
+
+    return result
 
 
 def _merge_entities_cascade(

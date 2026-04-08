@@ -188,6 +188,7 @@ if TYPE_CHECKING:
     from neo4j_agent_memory.embeddings.base import Embedder
     from neo4j_agent_memory.extraction.base import EntityExtractor
     from neo4j_agent_memory.graph.client import Neo4jClient
+    from neo4j_agent_memory.memory.long_term import LongTermMemory
 
 
 class MessageRole(str, Enum):
@@ -272,9 +273,21 @@ class ShortTermMemory(BaseMemory[Message]):
         client: "Neo4jClient",
         embedder: "Embedder | None" = None,
         extractor: "EntityExtractor | None" = None,
+        long_term: "LongTermMemory | None" = None,
     ):
-        """Initialize short-term memory."""
+        """Initialize short-term memory.
+
+        Args:
+            client: Neo4j client for database operations
+            embedder: Optional embedder for semantic search
+            extractor: Optional entity extractor for entity linking
+            long_term: Optional long-term memory for entity deduplication
+                and resolution during extraction. When provided, extracted
+                entities are routed through long-term memory's deduplication
+                pipeline instead of being stored directly.
+        """
         super().__init__(client, embedder, extractor)
+        self._long_term = long_term
 
     async def add(self, content: str, **kwargs: Any) -> Message:
         """Add content as a message."""
@@ -900,48 +913,66 @@ class ShortTermMemory(BaseMemory[Message]):
                 # Extract entities
                 extraction_result = await self._extractor.extract(content)
 
-                # Filter out invalid entities (stopwords, numbers, etc.)
+                # Filter out invalid entities and deduplicate
                 extraction_result = extraction_result.filter_invalid_entities()
+                extraction_result = extraction_result.deduplicate_entities()
 
                 # Track entity name to ID mapping for relation linking
                 entity_name_to_id: dict[str, str] = {}
 
-                for entity in extraction_result.entities:
-                    # Create or get entity with dynamic labels for type/subtype
-                    entity_id = str(uuid4())
-                    entity_subtype = getattr(entity, "subtype", None)
-                    create_query = build_create_entity_query(entity.type, entity_subtype)
-                    await self._client.execute_write(
-                        create_query,
-                        {
-                            "id": entity_id,
-                            "name": entity.name,
-                            "type": entity.type,
-                            "subtype": entity_subtype,
-                            "canonical_name": entity.name,
-                            "description": None,
-                            "embedding": None,
-                            "confidence": entity.confidence,
-                            "metadata": None,
-                            "location": None,  # Required for LOCATION entities
-                        },
+                if self._long_term is not None and extraction_result.entities:
+                    # Route through long-term memory for dedup/embeddings
+                    ingest_results = await self._long_term.ingest_extracted_entities_batch(
+                        extraction_result.entities
                     )
-
-                    # Store mapping for relation linking
-                    entity_name_to_id[entity.name.lower().strip()] = entity_id
-
-                    # Link message to entity
-                    await self._client.execute_write(
-                        queries.LINK_MESSAGE_TO_ENTITY,
-                        {
-                            "message_id": message_id,
-                            "entity_id": entity_id,
-                            "confidence": entity.confidence,
-                            "start_pos": entity.start_pos,
-                            "end_pos": entity.end_pos,
-                        },
-                    )
-                    entities_extracted += 1
+                    for entity, (entity_id, _is_new) in zip(
+                        extraction_result.entities, ingest_results
+                    ):
+                        entity_name_to_id[entity.name.lower().strip()] = entity_id
+                        await self._client.execute_write(
+                            queries.LINK_MESSAGE_TO_ENTITY,
+                            {
+                                "message_id": message_id,
+                                "entity_id": entity_id,
+                                "confidence": entity.confidence,
+                                "start_pos": entity.start_pos,
+                                "end_pos": entity.end_pos,
+                            },
+                        )
+                    entities_extracted += len(extraction_result.entities)
+                else:
+                    # Fallback: direct creation without dedup/embeddings
+                    for entity in extraction_result.entities:
+                        entity_id = str(uuid4())
+                        entity_subtype = getattr(entity, "subtype", None)
+                        create_query = build_create_entity_query(entity.type, entity_subtype)
+                        await self._client.execute_write(
+                            create_query,
+                            {
+                                "id": entity_id,
+                                "name": entity.name,
+                                "type": entity.type,
+                                "subtype": entity_subtype,
+                                "canonical_name": entity.name,
+                                "description": None,
+                                "embedding": None,
+                                "confidence": entity.confidence,
+                                "metadata": None,
+                                "location": None,
+                            },
+                        )
+                        entity_name_to_id[entity.name.lower().strip()] = entity_id
+                        await self._client.execute_write(
+                            queries.LINK_MESSAGE_TO_ENTITY,
+                            {
+                                "message_id": message_id,
+                                "entity_id": entity_id,
+                                "confidence": entity.confidence,
+                                "start_pos": entity.start_pos,
+                                "end_pos": entity.end_pos,
+                            },
+                        )
+                        entities_extracted += 1
 
                 # Store extracted relations
                 if extract_relations and extraction_result.relations:
@@ -1027,6 +1058,10 @@ class ShortTermMemory(BaseMemory[Message]):
     ) -> None:
         """Extract entities from message and link them.
 
+        When long-term memory is available, entities are routed through its
+        deduplication pipeline (embeddings, duplicate detection, enrichment).
+        Otherwise, falls back to direct entity creation.
+
         Args:
             message: The message to extract entities from
             extract_relations: Whether to also extract and store relations between entities
@@ -1036,47 +1071,61 @@ class ShortTermMemory(BaseMemory[Message]):
 
         result = await self._extractor.extract(message.content)
 
-        # Filter out invalid entities (stopwords, numbers, etc.)
+        # Filter out invalid entities and deduplicate within this extraction
         result = result.filter_invalid_entities()
+        result = result.deduplicate_entities()
 
         # Track entity name to ID mapping for relation linking
         entity_name_to_id: dict[str, str] = {}
 
-        for entity in result.entities:
-            # Create or get entity with dynamic labels for type/subtype
-            entity_id = str(uuid4())
-            entity_subtype = getattr(entity, "subtype", None)
-            create_query = build_create_entity_query(entity.type, entity_subtype)
-            await self._client.execute_write(
-                create_query,
-                {
-                    "id": entity_id,
-                    "name": entity.name,
-                    "type": entity.type,
-                    "subtype": entity_subtype,
-                    "canonical_name": entity.name,
-                    "description": None,
-                    "embedding": None,
-                    "confidence": entity.confidence,
-                    "metadata": None,  # Serialized as null for empty
-                    "location": None,  # Required for LOCATION entities
-                },
-            )
-
-            # Store mapping for relation linking
-            entity_name_to_id[entity.name.lower().strip()] = entity_id
-
-            # Link message to entity
-            await self._client.execute_write(
-                queries.LINK_MESSAGE_TO_ENTITY,
-                {
-                    "message_id": str(message.id),
-                    "entity_id": entity_id,
-                    "confidence": entity.confidence,
-                    "start_pos": entity.start_pos,
-                    "end_pos": entity.end_pos,
-                },
-            )
+        if self._long_term is not None and result.entities:
+            # Route through long-term memory for dedup, embeddings, enrichment
+            ingest_results = await self._long_term.ingest_extracted_entities_batch(result.entities)
+            for entity, (entity_id, _is_new) in zip(result.entities, ingest_results):
+                entity_name_to_id[entity.name.lower().strip()] = entity_id
+                # Link message to entity
+                await self._client.execute_write(
+                    queries.LINK_MESSAGE_TO_ENTITY,
+                    {
+                        "message_id": str(message.id),
+                        "entity_id": entity_id,
+                        "confidence": entity.confidence,
+                        "start_pos": entity.start_pos,
+                        "end_pos": entity.end_pos,
+                    },
+                )
+        else:
+            # Fallback: direct creation without dedup/embeddings
+            for entity in result.entities:
+                entity_id = str(uuid4())
+                entity_subtype = getattr(entity, "subtype", None)
+                create_query = build_create_entity_query(entity.type, entity_subtype)
+                await self._client.execute_write(
+                    create_query,
+                    {
+                        "id": entity_id,
+                        "name": entity.name,
+                        "type": entity.type,
+                        "subtype": entity_subtype,
+                        "canonical_name": entity.name,
+                        "description": None,
+                        "embedding": None,
+                        "confidence": entity.confidence,
+                        "metadata": None,
+                        "location": None,
+                    },
+                )
+                entity_name_to_id[entity.name.lower().strip()] = entity_id
+                await self._client.execute_write(
+                    queries.LINK_MESSAGE_TO_ENTITY,
+                    {
+                        "message_id": str(message.id),
+                        "entity_id": entity_id,
+                        "confidence": entity.confidence,
+                        "start_pos": entity.start_pos,
+                        "end_pos": entity.end_pos,
+                    },
+                )
 
         # Store extracted relations
         if extract_relations and result.relations:

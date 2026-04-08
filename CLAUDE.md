@@ -619,11 +619,11 @@ from neo4j_agent_memory.memory import (
 # Configure deduplication thresholds
 dedup_config = DeduplicationConfig(
     enabled=True,                    # Enable deduplication (default)
-    auto_merge_threshold=0.95,       # Auto-merge if similarity >= 0.95
-    flag_threshold=0.85,             # Flag for review if >= 0.85 but < 0.95
+    auto_merge_threshold=0.92,       # Auto-merge if similarity >= 0.92
+    flag_threshold=0.80,             # Flag for review if >= 0.80 but < 0.92
     use_fuzzy_matching=True,         # Also use fuzzy string matching
-    fuzzy_threshold=0.9,             # Fuzzy match threshold
-    max_candidates=10,               # Max candidates to check
+    fuzzy_threshold=0.85,            # Fuzzy match threshold
+    max_candidates=25,               # Max candidates to check
     match_same_type_only=True,       # Only match entities of same type
 )
 
@@ -946,6 +946,45 @@ extractor = (
 result = await extractor.extract("John works at Acme Corp in NYC")
 for entity in result.entities:
     print(f"{entity.name}: {entity.full_type}")  # e.g., "John: PERSON"
+
+# Deduplicate within extraction result (by normalized_name::type)
+deduped = result.deduplicate_entities()
+```
+
+### Extraction-to-Storage Bridge
+
+When `ShortTermMemory` has a `long_term` reference (automatically wired by `MemoryClient`), extracted entities are routed through `LongTermMemory.ingest_extracted_entities_batch()` which generates embeddings, runs deduplication, and applies entity resolution:
+
+```python
+# Entities extracted from messages are automatically routed through long-term memory
+await client.short_term.add_message(
+    session_id, "user", "John Smith works at Acme Corp",
+    extract_entities=True,  # Entities get embeddings + dedup via long-term memory
+)
+
+# Or ingest extracted entities directly
+from neo4j_agent_memory.extraction.base import ExtractedEntity
+
+entity = ExtractedEntity(name="John Smith", type="PERSON", confidence=0.9)
+entity_id, is_new = await client.long_term.ingest_extracted_entity(entity)
+
+# Batch ingest uses embed_batch() for efficiency
+entities = [
+    ExtractedEntity(name="John", type="PERSON", confidence=0.9),
+    ExtractedEntity(name="Acme", type="ORGANIZATION", confidence=0.8),
+]
+results = await client.long_term.ingest_extracted_entities_batch(entities)
+```
+
+### Source-Weighted Confidence Merge
+
+When using multi-stage pipelines with the `confidence` merge strategy, extractor source weights are applied to prevent extractors with fixed confidence values from dominating:
+
+```python
+from neo4j_agent_memory.extraction.pipeline import DEFAULT_SOURCE_WEIGHTS, CROSS_EXTRACTOR_BOOST
+
+# Default weights: {"llm": 1.0, "gliner": 0.9, "spacy": 0.7}
+# Cross-extractor boost: +0.05 per additional extractor that finds the same entity
 ```
 
 ### Batch Extraction
@@ -1641,7 +1680,7 @@ agent = ChatAgent(
 
 12. **GLiNER Availability Check**: GLiNER is an optional dependency. Use `is_gliner_available()` from `neo4j_agent_memory.extraction` to check if GLiNER is installed before creating extractors. The GLiNER model is lazy-loaded on first `extract()` call, so ImportError may occur during extraction rather than at extractor creation time.
 
-13. **Entity Deduplication**: `add_entity()` now returns a tuple `(Entity, DeduplicationResult)` instead of just `Entity`. Deduplication is enabled by default with `DeduplicationConfig()`. Use `deduplicate=False` parameter to skip deduplication for specific entities. Duplicates above `auto_merge_threshold` (default 0.95) are automatically merged; those between `flag_threshold` (0.85) and auto_merge are flagged with `SAME_AS` relationships for human review.
+13. **Entity Deduplication**: `add_entity()` now returns a tuple `(Entity, DeduplicationResult)` instead of just `Entity`. Deduplication is enabled by default with `DeduplicationConfig()`. Use `deduplicate=False` parameter to skip deduplication for specific entities. Duplicates above `auto_merge_threshold` (default 0.92) are automatically merged; those between `flag_threshold` (0.80) and auto_merge are flagged with `SAME_AS` relationships for human review.
 
 14. **Schema Persistence**: Custom schemas can be stored in Neo4j using `SchemaManager`. Schemas are stored as `(:Schema)` nodes with JSON-serialized config. Multiple versions of the same schema can exist, with one marked as active. Use `save_schema()` to store, `load_schema()` to retrieve by name, and `load_schema_version()` for specific versions. Indexes are created on `Schema.name` and `Schema.id` for efficient lookups.
 
@@ -1773,17 +1812,27 @@ agent = ChatAgent(
         props = {}
     ```
 
-28. **MCP Tool Profiles**: The MCP server supports two profiles: `core` (6 tools) and `extended` (16 tools, default). Tools are registered via `register_tools(mcp, profile="extended")` which calls `_register_core_tools()` and optionally `_register_extended_tools()`. Resources and prompts follow the same pattern. The profile is set at server startup via `--profile` CLI flag or `profile` parameter on `create_mcp_server()`.
+28. **Extraction-to-Storage Bridge**: `ShortTermMemory` accepts an optional `long_term` parameter (a `LongTermMemory` instance). When provided, `_extract_and_link_entities()` and `extract_entities_from_session()` route extracted entities through `LongTermMemory.ingest_extracted_entities_batch()` instead of creating raw nodes with `uuid4()`. This ensures extracted entities get embeddings, deduplication, and entity resolution. `MemoryClient.connect()` automatically wires this. Without `long_term`, falls back to direct node creation (backward compatible).
 
-29. **MCP Server Instructions**: Server instructions are sent during MCP initialization via FastMCP's `instructions` parameter. They guide the LLM to call `memory_get_context` at conversation start, `memory_store_message` for important messages, and `memory_search` when asked about past interactions. Instructions vary by profile (core vs extended).
+29. **Extraction Result Deduplication**: `ExtractionResult.deduplicate_entities()` deduplicates within a single extraction result by `normalized_name::type`, keeping the entity with the highest confidence. It also filters orphaned relations whose source or target was removed during deduplication.
 
-30. **MemoryIntegration Session Strategies**: The `MemoryIntegration` class resolves session IDs via three strategies: `per_conversation` (new UUID per instance), `per_day` (`"{user_id}-YYYY-MM-DD"`), `persistent` (fixed user_id). The strategy is configured at construction time and applied transparently in all operations. The `resolve_session_id(hint)` method always returns the hint if provided, falling back to the strategy.
+30. **Source-Weighted Confidence Merge**: The extraction pipeline applies source weights when merging entities from multiple extractors: LLM=1.0, GLiNER=0.9, spaCy=0.7. This prevents spaCy's fixed confidence (0.85) from dominating. Entities found by 2+ extractors get a +0.05 cross-extractor consensus boost per additional source. Constants: `DEFAULT_SOURCE_WEIGHTS` and `CROSS_EXTRACTOR_BOOST` in `extraction/pipeline.py`.
 
-31. **Automatic Preference Detection**: When `auto_preferences=True` on `MemoryIntegration`, `store_message()` fires a background `asyncio.create_task()` that runs `PreferenceDetector.detect()` on user messages. Detected preferences are stored via `client.long_term.add_preference()`. The detector uses regex patterns (not LLM calls) for zero-latency, zero-cost detection. It favors precision over recall.
+31. **Subtype-Aware Entity Key**: `_entity_key()` in `extraction/pipeline.py` now includes subtype: `{normalized_name}::{type}::{SUBTYPE}` when subtype is present. This prevents entities with the same name and type but different subtypes from being incorrectly merged.
 
-32. **Observational Memory**: The `MemoryObserver` tracks accumulated context per session (character count, message count) and extracts inline observations (decisions, facts) from user messages. When the token count exceeds `threshold_tokens` (default 30000), it generates keyword-based reflections from older messages. The observer is created in the MCP server lifespan and wired to `MemoryIntegration` via the `observer` property. The `memory_get_observations` tool returns the three-tier hierarchy: reflections, observations, and session stats.
+32. **Type-Aware Resolution Wiring**: `LongTermMemory.add_entity()` now passes `existing_entity_types` (a `dict[str, str]` mapping entity names to their types) to the resolver's `resolve()` method. All resolver implementations (`ExactMatchResolver`, `FuzzyMatchResolver`, `SemanticMatchResolver`, `CompositeResolver`) accept this parameter. This enables type-constrained resolution—entities of different types are never merged even if names are similar.
 
-33. **MCP Tool Annotations**: All MCP tools include FastMCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`). Read tools are marked `readOnlyHint=True, idempotentHint=True`. Write tools are marked `readOnlyHint=False, idempotentHint=False`. No tools are marked destructive.
+33. **MCP Tool Profiles**: The MCP server supports two profiles: `core` (6 tools) and `extended` (16 tools, default). Tools are registered via `register_tools(mcp, profile="extended")` which calls `_register_core_tools()` and optionally `_register_extended_tools()`. Resources and prompts follow the same pattern. The profile is set at server startup via `--profile` CLI flag or `profile` parameter on `create_mcp_server()`.
+
+34. **MCP Server Instructions**: Server instructions are sent during MCP initialization via FastMCP's `instructions` parameter. They guide the LLM to call `memory_get_context` at conversation start, `memory_store_message` for important messages, and `memory_search` when asked about past interactions. Instructions vary by profile (core vs extended).
+
+35. **MemoryIntegration Session Strategies**: The `MemoryIntegration` class resolves session IDs via three strategies: `per_conversation` (new UUID per instance), `per_day` (`"{user_id}-YYYY-MM-DD"`), `persistent` (fixed user_id). The strategy is configured at construction time and applied transparently in all operations. The `resolve_session_id(hint)` method always returns the hint if provided, falling back to the strategy.
+
+36. **Automatic Preference Detection**: When `auto_preferences=True` on `MemoryIntegration`, `store_message()` fires a background `asyncio.create_task()` that runs `PreferenceDetector.detect()` on user messages. Detected preferences are stored via `client.long_term.add_preference()`. The detector uses regex patterns (not LLM calls) for zero-latency, zero-cost detection. It favors precision over recall.
+
+37. **Observational Memory**: The `MemoryObserver` tracks accumulated context per session (character count, message count) and extracts inline observations (decisions, facts) from user messages. When the token count exceeds `threshold_tokens` (default 30000), it generates keyword-based reflections from older messages. The observer is created in the MCP server lifespan and wired to `MemoryIntegration` via the `observer` property. The `memory_get_observations` tool returns the three-tier hierarchy: reflections, observations, and session stats.
+
+38. **MCP Tool Annotations**: All MCP tools include FastMCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`). Read tools are marked `readOnlyHint=True, idempotentHint=True`. Write tools are marked `readOnlyHint=False, idempotentHint=False`. No tools are marked destructive.
 
 ## Environment Variables
 

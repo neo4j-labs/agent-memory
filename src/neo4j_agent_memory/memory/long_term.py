@@ -31,20 +31,20 @@ class DeduplicationConfig:
 
     Attributes:
         enabled: Whether deduplication is enabled (default True)
-        auto_merge_threshold: Similarity threshold for automatic merging (default 0.95)
-        flag_threshold: Similarity threshold for flagging potential duplicates (default 0.85)
+        auto_merge_threshold: Similarity threshold for automatic merging (default 0.92)
+        flag_threshold: Similarity threshold for flagging potential duplicates (default 0.80)
         use_fuzzy_matching: Also check fuzzy string matching (default True)
-        fuzzy_threshold: Threshold for fuzzy matching ratio (default 0.9)
-        max_candidates: Maximum number of candidates to check (default 10)
+        fuzzy_threshold: Threshold for fuzzy matching ratio (default 0.85)
+        max_candidates: Maximum number of candidates to check (default 25)
         match_same_type_only: Only match entities of the same type (default True)
     """
 
     enabled: bool = True
-    auto_merge_threshold: float = 0.95
-    flag_threshold: float = 0.85
+    auto_merge_threshold: float = 0.92
+    flag_threshold: float = 0.80
     use_fuzzy_matching: bool = True
-    fuzzy_threshold: float = 0.9
-    max_candidates: int = 10
+    fuzzy_threshold: float = 0.85
+    max_candidates: int = 25
     match_same_type_only: bool = True
 
     def __post_init__(self) -> None:
@@ -155,7 +155,7 @@ def _to_python_datetime(neo4j_datetime) -> datetime:
 if TYPE_CHECKING:
     from neo4j_agent_memory.embeddings.base import Embedder
     from neo4j_agent_memory.enrichment.background import BackgroundEnrichmentService
-    from neo4j_agent_memory.extraction.base import EntityExtractor
+    from neo4j_agent_memory.extraction.base import EntityExtractor, ExtractedEntity
     from neo4j_agent_memory.graph.client import Neo4jClient
     from neo4j_agent_memory.resolution.base import EntityResolver
     from neo4j_agent_memory.services.geocoder import Geocoder
@@ -425,10 +425,15 @@ class LongTermMemory(BaseMemory[Entity]):
         canonical_name = name
         confidence = 1.0
 
-        # Resolve against existing entities
+        # Resolve against existing entities (with type-aware filtering)
         if resolve and self._resolver is not None:
-            existing = await self._get_existing_entity_names(parsed_type)
-            resolved = await self._resolver.resolve(name, parsed_type, existing_entities=existing)
+            existing, existing_types = await self._get_existing_entity_names_and_types(parsed_type)
+            resolved = await self._resolver.resolve(
+                name,
+                parsed_type,
+                existing_entities=existing,
+                existing_entity_types=existing_types,
+            )
             canonical_name = resolved.canonical_name
             confidence = resolved.confidence
 
@@ -536,6 +541,296 @@ class LongTermMemory(BaseMemory[Entity]):
             )
 
         return entity, dedup_result
+
+    async def ingest_extracted_entity(
+        self,
+        extracted: "ExtractedEntity",
+        *,
+        generate_embedding: bool = True,
+        deduplicate: bool = True,
+        enrich: bool = True,
+    ) -> tuple[str, bool]:
+        """Ingest an entity from the extraction pipeline.
+
+        Optimized for the extraction flow: generates embedding,
+        checks for duplicates, and returns the entity ID for linking.
+        Unlike ``add_entity()``, this skips full entity resolution
+        (which queries all existing entities) for performance.
+
+        Args:
+            extracted: The extracted entity from the pipeline
+            generate_embedding: Whether to generate an embedding vector
+            deduplicate: Whether to check for duplicates
+            enrich: Whether to queue for background enrichment
+
+        Returns:
+            Tuple of (entity_id, is_new) where is_new indicates
+            whether a new node was created vs matched to existing.
+        """
+        entity_type = extracted.type.upper()
+        subtype = getattr(extracted, "subtype", None)
+        if subtype:
+            subtype = subtype.upper()
+
+        # Generate embedding
+        embedding = None
+        if generate_embedding and self._embedder is not None:
+            embedding = await self._embedder.embed(extracted.name)
+
+        # Check for duplicates using embedding similarity
+        if deduplicate and self._deduplication.enabled and embedding is not None:
+            dedup_result = await self._check_for_duplicates(
+                name=extracted.name,
+                entity_type=entity_type,
+                embedding=embedding,
+            )
+
+            if dedup_result.action == "merged" and dedup_result.matched_entity_id:
+                # Add new name as alias if different
+                existing = await self._get_entity_by_id(dedup_result.matched_entity_id)
+                if existing:
+                    if extracted.name != existing.name and extracted.name not in (
+                        existing.aliases or []
+                    ):
+                        await self._add_alias_to_entity(
+                            dedup_result.matched_entity_id, extracted.name
+                        )
+                    # Update embedding if existing entity is missing one
+                    if existing.embedding is None:
+                        await self._client.execute_write(
+                            queries.UPDATE_ENTITY_EMBEDDING,
+                            {
+                                "id": str(dedup_result.matched_entity_id),
+                                "embedding": embedding,
+                            },
+                        )
+                return str(dedup_result.matched_entity_id), False
+
+            if dedup_result.action == "flagged" and dedup_result.matched_entity_id:
+                # Create entity, then flag for review
+                entity_id = str(uuid4())
+                create_query = build_create_entity_query(entity_type, subtype)
+                await self._client.execute_write(
+                    create_query,
+                    {
+                        "id": entity_id,
+                        "name": extracted.name,
+                        "type": entity_type,
+                        "subtype": subtype,
+                        "canonical_name": extracted.name,
+                        "description": None,
+                        "embedding": embedding,
+                        "confidence": extracted.confidence,
+                        "metadata": None,
+                        "location": None,
+                    },
+                )
+                await self._client.execute_write(
+                    queries.CREATE_SAME_AS_RELATIONSHIP,
+                    {
+                        "source_id": entity_id,
+                        "target_id": str(dedup_result.matched_entity_id),
+                        "confidence": dedup_result.similarity_score,
+                        "match_type": dedup_result.match_type or "embedding",
+                        "status": "pending",
+                    },
+                )
+                # Queue enrichment for new entity
+                if (
+                    enrich
+                    and self._enrichment_service is not None
+                    and self._enrichment_service.is_running
+                ):
+                    await self._enrichment_service.enqueue(
+                        entity_id=UUID(entity_id),
+                        entity_name=extracted.name,
+                        entity_type=entity_type,
+                        context=None,
+                        confidence=extracted.confidence,
+                    )
+                return entity_id, True
+
+        # No duplicate found — create new entity
+        entity_id = str(uuid4())
+        create_query = build_create_entity_query(entity_type, subtype)
+        await self._client.execute_write(
+            create_query,
+            {
+                "id": entity_id,
+                "name": extracted.name,
+                "type": entity_type,
+                "subtype": subtype,
+                "canonical_name": extracted.name,
+                "description": None,
+                "embedding": embedding,
+                "confidence": extracted.confidence,
+                "metadata": None,
+                "location": None,
+            },
+        )
+
+        # Queue enrichment
+        if enrich and self._enrichment_service is not None and self._enrichment_service.is_running:
+            await self._enrichment_service.enqueue(
+                entity_id=UUID(entity_id),
+                entity_name=extracted.name,
+                entity_type=entity_type,
+                context=None,
+                confidence=extracted.confidence,
+            )
+
+        return entity_id, True
+
+    async def ingest_extracted_entities_batch(
+        self,
+        entities: list["ExtractedEntity"],
+        *,
+        generate_embeddings: bool = True,
+        deduplicate: bool = True,
+        enrich: bool = True,
+    ) -> list[tuple[str, bool]]:
+        """Batch ingest extracted entities with a single embed_batch call.
+
+        More efficient than calling ``ingest_extracted_entity()`` individually
+        because embeddings are generated in a single batch API call.
+
+        Args:
+            entities: List of extracted entities from the pipeline
+            generate_embeddings: Whether to generate embedding vectors
+            deduplicate: Whether to check for duplicates
+            enrich: Whether to queue for background enrichment
+
+        Returns:
+            List of (entity_id, is_new) tuples in the same order as input.
+        """
+        if not entities:
+            return []
+
+        # Generate all embeddings in one batch call
+        embeddings: list[list[float] | None] = [None] * len(entities)
+        if generate_embeddings and self._embedder is not None:
+            names = [e.name for e in entities]
+            try:
+                batch_embeddings = await self._embedder.embed_batch(names)
+                embeddings = list(batch_embeddings)
+            except (AttributeError, NotImplementedError):
+                # Fallback to individual embedding if embed_batch not available
+                for i, name in enumerate(names):
+                    embeddings[i] = await self._embedder.embed(name)
+
+        results: list[tuple[str, bool]] = []
+        for entity, embedding in zip(entities, embeddings):
+            # Temporarily set the embedding on the entity context
+            # and call the single-entity method
+            entity_type = entity.type.upper()
+            subtype = getattr(entity, "subtype", None)
+            if subtype:
+                subtype = subtype.upper()
+
+            # Check for duplicates
+            if deduplicate and self._deduplication.enabled and embedding is not None:
+                dedup_result = await self._check_for_duplicates(
+                    name=entity.name,
+                    entity_type=entity_type,
+                    embedding=embedding,
+                )
+
+                if dedup_result.action == "merged" and dedup_result.matched_entity_id:
+                    existing = await self._get_entity_by_id(dedup_result.matched_entity_id)
+                    if existing:
+                        if entity.name != existing.name and entity.name not in (
+                            existing.aliases or []
+                        ):
+                            await self._add_alias_to_entity(
+                                dedup_result.matched_entity_id, entity.name
+                            )
+                        if existing.embedding is None:
+                            await self._client.execute_write(
+                                queries.UPDATE_ENTITY_EMBEDDING,
+                                {
+                                    "id": str(dedup_result.matched_entity_id),
+                                    "embedding": embedding,
+                                },
+                            )
+                    results.append((str(dedup_result.matched_entity_id), False))
+                    continue
+
+                if dedup_result.action == "flagged" and dedup_result.matched_entity_id:
+                    entity_id = str(uuid4())
+                    create_query = build_create_entity_query(entity_type, subtype)
+                    await self._client.execute_write(
+                        create_query,
+                        {
+                            "id": entity_id,
+                            "name": entity.name,
+                            "type": entity_type,
+                            "subtype": subtype,
+                            "canonical_name": entity.name,
+                            "description": None,
+                            "embedding": embedding,
+                            "confidence": entity.confidence,
+                            "metadata": None,
+                            "location": None,
+                        },
+                    )
+                    await self._client.execute_write(
+                        queries.CREATE_SAME_AS_RELATIONSHIP,
+                        {
+                            "source_id": entity_id,
+                            "target_id": str(dedup_result.matched_entity_id),
+                            "confidence": dedup_result.similarity_score,
+                            "match_type": dedup_result.match_type or "embedding",
+                            "status": "pending",
+                        },
+                    )
+                    if (
+                        enrich
+                        and self._enrichment_service is not None
+                        and self._enrichment_service.is_running
+                    ):
+                        await self._enrichment_service.enqueue(
+                            entity_id=UUID(entity_id),
+                            entity_name=entity.name,
+                            entity_type=entity_type,
+                            context=None,
+                            confidence=entity.confidence,
+                        )
+                    results.append((entity_id, True))
+                    continue
+
+            # No duplicate — create new entity
+            entity_id = str(uuid4())
+            create_query = build_create_entity_query(entity_type, subtype)
+            await self._client.execute_write(
+                create_query,
+                {
+                    "id": entity_id,
+                    "name": entity.name,
+                    "type": entity_type,
+                    "subtype": subtype,
+                    "canonical_name": entity.name,
+                    "description": None,
+                    "embedding": embedding,
+                    "confidence": entity.confidence,
+                    "metadata": None,
+                    "location": None,
+                },
+            )
+            if (
+                enrich
+                and self._enrichment_service is not None
+                and self._enrichment_service.is_running
+            ):
+                await self._enrichment_service.enqueue(
+                    entity_id=UUID(entity_id),
+                    entity_name=entity.name,
+                    entity_type=entity_type,
+                    context=None,
+                    confidence=entity.confidence,
+                )
+            results.append((entity_id, True))
+
+        return results
 
     async def add_preference(
         self,
@@ -968,17 +1263,34 @@ class LongTermMemory(BaseMemory[Entity]):
 
     async def _get_existing_entity_names(self, entity_type: str) -> list[str]:
         """Get names of existing entities of a given type."""
+        names, _ = await self._get_existing_entity_names_and_types(entity_type)
+        return names
+
+    async def _get_existing_entity_names_and_types(
+        self, entity_type: str
+    ) -> tuple[list[str], dict[str, str]]:
+        """Get names and type mapping of existing entities.
+
+        Returns:
+            Tuple of (names list, name-to-type dict) for type-aware resolution.
+        """
         results = await self._client.execute_read(
             queries.SEARCH_ENTITIES_BY_TYPE,
             {"type": entity_type, "limit": 1000},
         )
-        names = []
+        names: list[str] = []
+        name_types: dict[str, str] = {}
         for row in results:
             entity_data = dict(row["e"])
-            names.append(entity_data["name"])
-            if entity_data.get("canonical_name"):
-                names.append(entity_data["canonical_name"])
-        return list(set(names))
+            entity_name = entity_data["name"]
+            etype = entity_data.get("type", entity_type)
+            names.append(entity_name)
+            name_types[entity_name] = etype
+            canonical = entity_data.get("canonical_name")
+            if canonical:
+                names.append(canonical)
+                name_types[canonical] = etype
+        return list(set(names)), name_types
 
     # =========================================================================
     # Entity Deduplication Methods
@@ -1002,13 +1314,17 @@ class LongTermMemory(BaseMemory[Entity]):
         """
         config = self._deduplication
 
+        # Use a lower retrieval threshold so fuzzy matching can boost
+        # candidates that have slightly lower embedding scores
+        retrieval_threshold = config.flag_threshold * 0.9
+
         # Search for similar entities by embedding
         results = await self._client.execute_read(
             queries.FIND_SIMILAR_ENTITIES_BY_EMBEDDING,
             {
                 "embedding": embedding,
                 "limit": config.max_candidates,
-                "threshold": config.flag_threshold,
+                "threshold": retrieval_threshold,
                 "type": entity_type if config.match_same_type_only else None,
             },
         )
@@ -1030,7 +1346,6 @@ class LongTermMemory(BaseMemory[Entity]):
                 continue
 
             # Check fuzzy matching if enabled
-            fuzzy_score = None
             if config.use_fuzzy_matching:
                 try:
                     from rapidfuzz import fuzz
@@ -1041,18 +1356,19 @@ class LongTermMemory(BaseMemory[Entity]):
                     canonical_score = fuzz.ratio(name.lower(), canonical_name.lower()) / 100
                     fuzzy_score = max(name_score, canonical_score)
 
-                    # Combine embedding and fuzzy scores
+                    # Combine embedding and fuzzy scores when fuzzy match is strong
                     if fuzzy_score >= config.fuzzy_threshold:
-                        # Boost score if both match
                         combined_score = (score + fuzzy_score) / 2
                         if combined_score > best_score:
                             best_score = combined_score
                             best_match = entity_data
                             match_type = "both"
-                        continue
+                        # Fall through to also check pure embedding score
+                        # in case combined didn't beat best but embedding alone might
                 except ImportError:
                     pass
 
+            # Check pure embedding score
             if score > best_score:
                 best_score = score
                 best_match = entity_data

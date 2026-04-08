@@ -945,7 +945,7 @@ dedup_config = DeduplicationConfig(
     embedding_threshold=0.92,             # Similarity for auto-merge
     fuzzy_threshold=0.85,                 # Fuzzy match threshold
     create_same_as=True,                  # Create SAME_AS for ambiguous matches
-    same_as_threshold=0.85,               # Threshold for SAME_AS relationships
+    same_as_threshold=0.80,               # Threshold for SAME_AS relationships
     batch_size=100,                       # Entities to process per batch
 )
 ----
@@ -959,7 +959,7 @@ NAM_DEDUPLICATION__STRATEGY=composite     # none, exact, fuzzy, embedding, compo
 NAM_DEDUPLICATION__EMBEDDING_THRESHOLD=0.92
 NAM_DEDUPLICATION__FUZZY_THRESHOLD=0.85
 NAM_DEDUPLICATION__CREATE_SAME_AS=true
-NAM_DEDUPLICATION__SAME_AS_THRESHOLD=0.85
+NAM_DEDUPLICATION__SAME_AS_THRESHOLD=0.80
 NAM_DEDUPLICATION__BATCH_SIZE=100
 ----
 
