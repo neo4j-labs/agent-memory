@@ -61,6 +61,30 @@ class TestVertexAIEmbedder:
                 f"Model {model} should have {expected_dims} dimensions"
             )
 
+    def test_model_property(self):
+        """Test model property returns correct value."""
+        from neo4j_agent_memory.embeddings.vertex_ai import VertexAIEmbedder
+
+        # Test default model
+        embedder = VertexAIEmbedder()
+        assert embedder.model == "text-embedding-004"
+
+        # Test custom model
+        embedder = VertexAIEmbedder(model="textembedding-gecko@003")
+        assert embedder.model == "textembedding-gecko@003"
+
+    def test_task_type_property(self):
+        """Test task_type property returns correct value."""
+        from neo4j_agent_memory.embeddings.vertex_ai import VertexAIEmbedder
+
+        # Test default task type
+        embedder = VertexAIEmbedder()
+        assert embedder.task_type == "RETRIEVAL_DOCUMENT"
+
+        # Test custom task type
+        embedder = VertexAIEmbedder(task_type="RETRIEVAL_QUERY")
+        assert embedder.task_type == "RETRIEVAL_QUERY"
+
     def test_batch_size_capped_at_limit(self):
         """Test batch size is capped at Vertex AI limit."""
         from neo4j_agent_memory.embeddings.vertex_ai import VertexAIEmbedder

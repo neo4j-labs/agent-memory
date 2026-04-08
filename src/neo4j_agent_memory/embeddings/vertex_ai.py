@@ -61,6 +61,8 @@ class VertexAIEmbedder(BaseEmbedder):
 
     Attributes:
         dimensions: The embedding vector dimensions (768 for most models).
+        model: The Vertex AI model name (e.g., "text-embedding-004").
+        task_type: The task type for embeddings (e.g., "RETRIEVAL_DOCUMENT").
     """
 
     def __init__(
@@ -156,6 +158,16 @@ class VertexAIEmbedder(BaseEmbedder):
     def dimensions(self) -> int:
         """Return the embedding dimensions."""
         return self._dimensions
+
+    @property
+    def model(self) -> str:
+        """Return the model name."""
+        return self._model
+
+    @property
+    def task_type(self) -> str:
+        """Return the task type for embeddings."""
+        return self._task_type
 
     async def embed(self, text: str) -> list[float]:
         """Generate embedding for a single text.

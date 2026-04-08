@@ -1408,8 +1408,9 @@ Implementation:: `neo4j_agent_memory.embeddings.vertex_ai.VertexAIEmbedder`
 VERTEX_MODEL_DIMENSIONS = {
     "text-embedding-004": 768,
     "textembedding-gecko@003": 768,
+    "textembedding-gecko@002": 768,
+    "textembedding-gecko@001": 768,
     "textembedding-gecko-multilingual@001": 768,
-    "text-embedding-005": 768,
 }
 ----
 
