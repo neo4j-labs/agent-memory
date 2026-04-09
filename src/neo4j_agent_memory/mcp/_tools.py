@@ -782,6 +782,65 @@ def _register_extended_tools(mcp: FastMCP) -> None:
             logger.error(f"Error in graph_query: {e}")
             return json.dumps({"error": str(e)})
 
+    # ── Delete tools ──
+
+    _DELETE_ANNOTATIONS = {
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": True,
+    }
+
+    @mcp.tool(annotations=_DELETE_ANNOTATIONS)
+    async def memory_delete_fact(ctx: Context, fact_id: str) -> str:
+        """Delete a fact by ID. Removes the fact and all its relationships.
+
+        Use memory_search to find fact IDs first.
+
+        Args:
+            fact_id: The UUID of the fact to delete.
+        """
+        integration = get_integration(ctx)
+        try:
+            result = await integration.delete_fact(fact_id)
+            return json.dumps(result, default=str)
+        except Exception as e:
+            logger.error(f"Error deleting fact: {e}")
+            return json.dumps({"error": str(e)})
+
+    @mcp.tool(annotations=_DELETE_ANNOTATIONS)
+    async def memory_delete_preference(ctx: Context, preference_id: str) -> str:
+        """Delete a preference by ID. Removes the preference and all its relationships.
+
+        Use memory_search to find preference IDs first.
+
+        Args:
+            preference_id: The UUID of the preference to delete.
+        """
+        integration = get_integration(ctx)
+        try:
+            result = await integration.delete_preference(preference_id)
+            return json.dumps(result, default=str)
+        except Exception as e:
+            logger.error(f"Error deleting preference: {e}")
+            return json.dumps({"error": str(e)})
+
+    @mcp.tool(annotations=_DELETE_ANNOTATIONS)
+    async def memory_delete_entity(ctx: Context, entity_id: str) -> str:
+        """Delete an entity by ID. Removes the entity and all its relationships.
+
+        Use memory_search to find entity IDs first.
+
+        Args:
+            entity_id: The UUID of the entity to delete.
+        """
+        integration = get_integration(ctx)
+        try:
+            result = await integration.delete_entity(entity_id)
+            return json.dumps(result, default=str)
+        except Exception as e:
+            logger.error(f"Error deleting entity: {e}")
+            return json.dumps({"error": str(e)})
+
 
 # ── Helpers ───────────────────────────────────────────────────────────
 

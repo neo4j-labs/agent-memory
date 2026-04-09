@@ -637,6 +637,24 @@ OPTIONAL MATCH (rs)-[:USES_TOOL]->(tc:ToolCall)
 DETACH DELETE c, m, rt, rs, tc
 """
 
+DELETE_FACT = """
+MATCH (f:Fact {id: $id})
+DETACH DELETE f
+RETURN true AS deleted
+"""
+
+DELETE_PREFERENCE = """
+MATCH (p:Preference {id: $id})
+DETACH DELETE p
+RETURN true AS deleted
+"""
+
+DELETE_ENTITY = """
+MATCH (e:Entity {id: $id})
+DETACH DELETE e
+RETURN true AS deleted
+"""
+
 GET_MEMORY_STATS = """
 OPTIONAL MATCH (c:Conversation) WITH count(c) AS conversations
 OPTIONAL MATCH (m:Message) WITH conversations, count(m) AS messages
