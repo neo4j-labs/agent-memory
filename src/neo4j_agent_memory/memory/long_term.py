@@ -1,6 +1,7 @@
 """Long-term memory for entities, preferences, and facts."""
 
 import json
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -13,6 +14,8 @@ from pydantic import Field
 from neo4j_agent_memory.core.memory import BaseMemory, MemoryEntry
 from neo4j_agent_memory.graph import queries
 from neo4j_agent_memory.graph.query_builder import build_create_entity_query
+
+logger = logging.getLogger(__name__)
 
 # =============================================================================
 # DEDUPLICATION CONFIGURATION
@@ -594,6 +597,9 @@ class LongTermMemory(BaseMemory[Entity]):
             },
         )
 
+        # Link preference to matching entities by category name
+        await self._link_to_entity_by_name(pref.category, str(pref.id), "preference")
+
         return pref
 
     async def add_fact(
@@ -659,7 +665,47 @@ class LongTermMemory(BaseMemory[Entity]):
             },
         )
 
+        # Link fact to matching entities (subject and object)
+        await self._link_to_entity_by_name(fact.subject, str(fact.id), "fact", role="subject")
+        await self._link_to_entity_by_name(fact.object, str(fact.id), "fact", role="object")
+
         return fact
+
+    async def _link_to_entity_by_name(
+        self,
+        name: str,
+        node_id: str,
+        node_type: str,
+        *,
+        role: str = "subject",
+    ) -> None:
+        """Link a Fact or Preference to a matching Entity via an ABOUT relationship.
+
+        Looks up the entity by name (case-insensitive). If found, creates
+        the appropriate ABOUT edge. Silently skips if no match is found.
+        """
+        try:
+            records = await self._client.execute_read(
+                queries.GET_ENTITY_BY_NAME,
+                {"name": name},
+            )
+            if not records:
+                return
+
+            entity_id = records[0]["e"]["id"]
+
+            if node_type == "preference":
+                await self._client.execute_write(
+                    queries.LINK_PREFERENCE_TO_ENTITY,
+                    {"preference_id": node_id, "entity_id": entity_id},
+                )
+            elif node_type == "fact":
+                await self._client.execute_write(
+                    queries.LINK_FACT_TO_ENTITY,
+                    {"fact_id": node_id, "entity_id": entity_id, "role": role},
+                )
+        except Exception as e:
+            logger.debug("Could not link %s to entity '%s': %s", node_type, name, e)
 
     async def add_relationship(
         self,
