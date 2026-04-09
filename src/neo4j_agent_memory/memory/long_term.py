@@ -598,7 +598,8 @@ class LongTermMemory(BaseMemory[Entity]):
         )
 
         # Link preference to matching entities by category name
-        await self._link_to_entity_by_name(pref.category, str(pref.id), "preference")
+        link_result = await self._link_to_entity_by_name(pref.category, str(pref.id), "preference")
+        pref.metadata["linked_entity"] = link_result
 
         return pref
 
@@ -666,8 +667,16 @@ class LongTermMemory(BaseMemory[Entity]):
         )
 
         # Link fact to matching entities (subject and object)
-        await self._link_to_entity_by_name(fact.subject, str(fact.id), "fact", role="subject")
-        await self._link_to_entity_by_name(fact.object, str(fact.id), "fact", role="object")
+        subject_link = await self._link_to_entity_by_name(
+            fact.subject, str(fact.id), "fact", role="subject"
+        )
+        object_link = await self._link_to_entity_by_name(
+            fact.object, str(fact.id), "fact", role="object"
+        )
+        fact.metadata["linked_entities"] = {
+            "subject": subject_link,
+            "object": object_link,
+        }
 
         return fact
 
@@ -678,11 +687,14 @@ class LongTermMemory(BaseMemory[Entity]):
         node_type: str,
         *,
         role: str = "subject",
-    ) -> None:
+    ) -> dict[str, Any]:
         """Link a Fact or Preference to a matching Entity via an ABOUT relationship.
 
         Looks up the entity by name (case-insensitive). If found, creates
-        the appropriate ABOUT edge. Silently skips if no match is found.
+        the appropriate ABOUT edge.
+
+        Returns:
+            Dict with linking result: ``{"name": ..., "linked": True/False}``.
         """
         try:
             records = await self._client.execute_read(
@@ -690,7 +702,7 @@ class LongTermMemory(BaseMemory[Entity]):
                 {"name": name},
             )
             if not records:
-                return
+                return {"name": name, "linked": False}
 
             entity_id = records[0]["e"]["id"]
 
@@ -704,8 +716,10 @@ class LongTermMemory(BaseMemory[Entity]):
                     queries.LINK_FACT_TO_ENTITY,
                     {"fact_id": node_id, "entity_id": entity_id, "role": role},
                 )
+            return {"name": name, "linked": True}
         except Exception as e:
             logger.debug("Could not link %s to entity '%s': %s", node_type, name, e)
+            return {"name": name, "linked": False}
 
     async def add_relationship(
         self,
