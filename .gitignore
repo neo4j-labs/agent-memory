@@ -13,6 +13,7 @@ wheels/
 .env
 .env.local
 .env.*.local
+scripts/backup-config.env
 
 # IDE and editor files
 .idea/
