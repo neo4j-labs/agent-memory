@@ -15,6 +15,7 @@ class EmbeddingProvider(str, Enum):
     SENTENCE_TRANSFORMERS = "sentence_transformers"
     VERTEX_AI = "vertex_ai"
     BEDROCK = "bedrock"
+    OLLAMA = "ollama"
     CUSTOM = "custom"
 
 
@@ -105,7 +106,7 @@ class EmbeddingConfig(BaseModel):
         default=EmbeddingProvider.OPENAI, description="Embedding provider to use"
     )
     model: str = Field(default="text-embedding-3-small", description="Embedding model name")
-    dimensions: int = Field(default=1536, ge=1, description="Embedding dimensions")
+    dimensions: int = Field(default=768, ge=1, description="Embedding dimensions")
     api_key: SecretStr | None = Field(default=None, description="API key for embedding provider")
     batch_size: int = Field(default=100, ge=1, description="Batch size for embeddings")
     # Sentence Transformers specific
@@ -120,6 +121,8 @@ class EmbeddingConfig(BaseModel):
     # AWS Bedrock specific
     aws_region: str | None = Field(default=None, description="AWS region for Bedrock")
     aws_profile: str | None = Field(default=None, description="AWS credentials profile name")
+    # Ollama specific
+    base_url: str | None = Field(default=None, description="Ollama server URL (default: http://localhost:11434)")
 
 
 class LLMConfig(BaseModel):

@@ -48,6 +48,7 @@ dependencies = [
 [project.optional-dependencies]
 # Embedding providers
 openai = ["openai>=1.0.0"]
+ollama = ["openai>=1.0.0"]
 anthropic = ["anthropic>=0.20.0"]
 sentence-transformers = ["sentence-transformers>=2.2.0"]
 vertex-ai = ["google-cloud-aiplatform>=1.38.0"]

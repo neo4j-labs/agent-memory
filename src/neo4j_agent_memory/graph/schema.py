@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 
 
 # Default vector dimensions
-DEFAULT_VECTOR_DIMENSIONS = 1536
+DEFAULT_VECTOR_DIMENSIONS = 768
 
 
 class SchemaManager:
