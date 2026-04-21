@@ -120,20 +120,20 @@ pip install neo4j-agent-memory[langchain]       # + LangChain
 pip install neo4j-agent-memory[all]             # Everything
 ```
 
-See the [getting started guide](https://neo4j.com/labs/agent-memory/getting-started.html) for all extras (Vertex AI, Bedrock, spaCy, GLiNER, Google ADK, Strands, etc.).
+See the [getting started guide](https://neo4j.com/labs/agent-memory/getting-started/) for all extras (Vertex AI, Bedrock, spaCy, GLiNER, Google ADK, Strands, etc.).
 
 ## Framework Integrations
 
 | Framework | Extra | Import |
 |---|---|---|
-| [LangChain](https://neo4j.com/labs/agent-memory/how-to/integrations/langchain.html) | `[langchain]` | `from neo4j_agent_memory.integrations.langchain import Neo4jAgentMemory` |
-| [Pydantic AI](https://neo4j.com/labs/agent-memory/how-to/integrations/pydantic-ai.html) | `[pydantic-ai]` | `from neo4j_agent_memory.integrations.pydantic_ai import MemoryDependency` |
-| [Google ADK](https://neo4j.com/labs/agent-memory/how-to/integrations/google-cloud.html) | `[google-adk]` | `from neo4j_agent_memory.integrations.google_adk import Neo4jMemoryService` |
-| [Strands (AWS)](https://neo4j.com/labs/agent-memory/how-to/integrations/aws-strands.html) | `[strands]` | `from neo4j_agent_memory.integrations.strands import context_graph_tools` |
-| [CrewAI](https://neo4j.com/labs/agent-memory/how-to/integrations/crewai.html) | `[crewai]` | `from neo4j_agent_memory.integrations.crewai import Neo4jCrewMemory` |
-| [LlamaIndex](https://neo4j.com/labs/agent-memory/how-to/integrations/llamaindex.html) | `[llamaindex]` | `from neo4j_agent_memory.integrations.llamaindex import Neo4jLlamaIndexMemory` |
-| [OpenAI Agents](https://neo4j.com/labs/agent-memory/how-to/integrations/openai-agents.html) | `[openai-agents]` | `from neo4j_agent_memory.integrations.openai_agents import ...` |
-| [Microsoft Agent](https://neo4j.com/labs/agent-memory/how-to/integrations/microsoft-agent.html) | `[microsoft-agent]` | `from neo4j_agent_memory.integrations.microsoft_agent import Neo4jMicrosoftMemory` |
+| [LangChain](https://neo4j.com/labs/agent-memory/how-to/integrations/langchain/) | `[langchain]` | `from neo4j_agent_memory.integrations.langchain import Neo4jAgentMemory` |
+| [Pydantic AI](https://neo4j.com/labs/agent-memory/how-to/integrations/pydantic-ai/) | `[pydantic-ai]` | `from neo4j_agent_memory.integrations.pydantic_ai import MemoryDependency` |
+| [Google ADK](https://neo4j.com/labs/agent-memory/how-to/integrations/google-cloud/) | `[google-adk]` | `from neo4j_agent_memory.integrations.google_adk import Neo4jMemoryService` |
+| [Strands (AWS)](https://neo4j.com/labs/agent-memory/how-to/integrations/aws-strands/) | `[strands]` | `from neo4j_agent_memory.integrations.strands import context_graph_tools` |
+| [CrewAI](https://neo4j.com/labs/agent-memory/how-to/integrations/crewai/) | `[crewai]` | `from neo4j_agent_memory.integrations.crewai import Neo4jCrewMemory` |
+| [LlamaIndex](https://neo4j.com/labs/agent-memory/how-to/integrations/llamaindex/) | `[llamaindex]` | `from neo4j_agent_memory.integrations.llamaindex import Neo4jLlamaIndexMemory` |
+| [OpenAI Agents](https://neo4j.com/labs/agent-memory/how-to/integrations/openai-agents/) | `[openai-agents]` | `from neo4j_agent_memory.integrations.openai_agents import ...` |
+| [Microsoft Agent](https://neo4j.com/labs/agent-memory/how-to/integrations/microsoft-agent/) | `[microsoft-agent]` | `from neo4j_agent_memory.integrations.microsoft_agent import Neo4jMicrosoftMemory` |
 
 ## MCP Server
 
