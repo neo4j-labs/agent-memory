@@ -500,12 +500,16 @@ class MemoryIntegration:
                 metadata=metadata,
                 generate_embedding=True,
             )
-            return {
+            result = {
                 "stored": True,
                 "type": "preference",
                 "id": str(pref.id),
                 "category": category,
             }
+            linked = pref.metadata.get("linked_entity")
+            if linked:
+                result["linked_entity"] = linked
+            return result
         except Exception as e:
             logger.error(f"Error adding preference: {e}")
             return {"error": str(e)}
@@ -545,12 +549,16 @@ class MemoryIntegration:
                 valid_until=valid_until,
                 generate_embedding=True,
             )
-            return {
+            result = {
                 "stored": True,
                 "type": "fact",
                 "id": str(fact.id) if hasattr(fact, "id") else None,
                 "triple": f"{subject} -> {predicate} -> {object_value}",
             }
+            linked = fact.metadata.get("linked_entities")
+            if linked:
+                result["linked_entities"] = linked
+            return result
         except Exception as e:
             logger.error(f"Error adding fact: {e}")
             return {"error": str(e)}

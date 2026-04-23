@@ -411,11 +411,24 @@ def _register_extended_tools(mcp: FastMCP) -> None:
         client = get_client(ctx)
 
         try:
+            from neo4j_agent_memory.graph import queries as q
+
             entities = await client.long_term.search_entities(
                 query=name,
                 entity_types=[entity_type] if entity_type else None,
                 limit=1,
             )
+
+            # Fallback: name-based lookup if vector search found nothing
+            if not entities:
+                records = await client.graph.execute_read(
+                    q.GET_ENTITY_BY_NAME,
+                    {"name": name},
+                )
+                if records:
+                    entity_data = dict(records[0]["e"])
+                    if not (entity_type and entity_data.get("type") != entity_type):
+                        entities = [client.long_term._parse_entity(entity_data)]
 
             if not entities:
                 return json.dumps({"found": False, "name": name})
@@ -438,6 +451,13 @@ def _register_extended_tools(mcp: FastMCP) -> None:
             if include_neighbors:
                 neighbors = await _get_entity_neighbors(client, str(entity.id), max_hops)
                 result["neighbors"] = neighbors
+
+            # Include linked facts and preferences
+            linked = await _get_entity_facts_and_preferences(client, str(entity.id))
+            if linked.get("facts"):
+                result["facts"] = linked["facts"]
+            if linked.get("preferences"):
+                result["preferences"] = linked["preferences"]
 
             return json.dumps(result, default=str)
 
@@ -784,6 +804,36 @@ def _register_extended_tools(mcp: FastMCP) -> None:
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
+
+
+async def _get_entity_facts_and_preferences(
+    client: Any,
+    entity_id: str,
+) -> dict[str, list[dict[str, Any]]]:
+    """Get facts and preferences linked to an entity via ABOUT relationships."""
+    query = """
+    MATCH (e:Entity {id: $entity_id})
+    OPTIONAL MATCH (f:Fact)-[:ABOUT]->(e)
+    OPTIONAL MATCH (p:Preference)-[:ABOUT]->(e)
+    WITH e,
+         collect(DISTINCT {type: 'fact', subject: f.subject,
+                 predicate: f.predicate, object: f.object}) AS facts,
+         collect(DISTINCT {type: 'preference', category: p.category,
+                 preference: p.preference}) AS preferences
+    RETURN facts, preferences
+    """
+    try:
+        records = await client.graph.execute_read(query, {"entity_id": entity_id})
+        if not records:
+            return {"facts": [], "preferences": []}
+
+        record = records[0]
+        facts = [f for f in record.get("facts", []) if f.get("subject") is not None]
+        preferences = [p for p in record.get("preferences", []) if p.get("category") is not None]
+        return {"facts": facts, "preferences": preferences}
+    except Exception as e:
+        logger.debug(f"Error getting facts/preferences for entity: {e}")
+        return {"facts": [], "preferences": []}
 
 
 async def _get_entity_neighbors(
