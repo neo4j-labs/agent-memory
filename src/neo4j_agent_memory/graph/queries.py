@@ -349,8 +349,8 @@ RETURN r
 GET_FACTS_BY_SUBJECT = """
 MATCH (f:Fact)
 WHERE f.subject = $subject
-  AND (f.valid_from IS NULL OR f.valid_from <= datetime())
-  AND (f.valid_until IS NULL OR f.valid_until >= datetime())
+  AND (f.valid_from IS NULL OR datetime(f.valid_from) <= datetime())
+  AND (f.valid_until IS NULL OR datetime(f.valid_until) >= datetime())
 RETURN f
 ORDER BY f.confidence DESC, f.created_at DESC
 LIMIT $limit
