@@ -246,7 +246,10 @@ RETURN e
 
 GET_ENTITY_BY_NAME = """
 MATCH (e:Entity)
-WHERE e.name = $name OR e.canonical_name = $name OR $name IN COALESCE(e.aliases, [])
+WHERE e.name = $name
+   OR toLower(e.name) = toLower($name)
+   OR e.canonical_name = toLower($name)
+   OR $name IN COALESCE(e.aliases, [])
 RETURN e
 LIMIT 1
 """
@@ -447,6 +450,14 @@ LINK_PREFERENCE_TO_ENTITY = """
 MATCH (p:Preference {id: $preference_id})
 MATCH (e:Entity {id: $entity_id})
 MERGE (p)-[r:ABOUT]->(e)
+RETURN r
+"""
+
+LINK_FACT_TO_ENTITY = """
+MATCH (f:Fact {id: $fact_id})
+MATCH (e:Entity {id: $entity_id})
+MERGE (f)-[r:ABOUT]->(e)
+ON CREATE SET r.role = $role
 RETURN r
 """
 
