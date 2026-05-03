@@ -758,6 +758,22 @@ def mcp():
     default=False,
     help="Disable automatic preference detection.",
 )
+@click.option(
+    "--no-parent-death-check",
+    is_flag=True,
+    default=False,
+    help=(
+        "Disable parent-death detection on stdio transport. By default, "
+        "the server self-terminates if its parent process exits (avoids "
+        "orphaned servers when an MCP client crashes)."
+    ),
+)
+@click.option(
+    "--parent-death-poll-interval",
+    type=float,
+    default=5.0,
+    help="Seconds between parent-process checks (default: 5.0).",
+)
 def mcp_serve(
     uri: str,
     user: str,
@@ -771,6 +787,8 @@ def mcp_serve(
     user_id: str | None,
     observation_threshold: int,
     no_auto_preferences: bool,
+    no_parent_death_check: bool,
+    parent_death_poll_interval: float,
 ):
     """Start the MCP server for Claude Desktop and other MCP hosts.
 
@@ -820,6 +838,8 @@ def mcp_serve(
             user_id=user_id,
             observation_threshold=observation_threshold,
             auto_preferences=not no_auto_preferences,
+            parent_death_check=not no_parent_death_check,
+            parent_death_poll_interval=parent_death_poll_interval,
         )
     )
 
