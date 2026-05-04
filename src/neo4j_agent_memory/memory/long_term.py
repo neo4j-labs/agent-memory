@@ -1,6 +1,7 @@
 """Long-term memory for entities, preferences, and facts."""
 
 import json
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -306,6 +307,9 @@ class Fact(MemoryEntry):
     def as_triple(self) -> tuple[str, str, str]:
         """Return fact as (subject, predicate, object) triple."""
         return (self.subject, self.predicate, self.object)
+
+
+logger = logging.getLogger(__name__)
 
 
 class LongTermMemory(BaseMemory[Entity]):
@@ -618,6 +622,9 @@ class LongTermMemory(BaseMemory[Entity]):
             },
         )
 
+        # Link preference to entities mentioned in its text
+        await self._link_preference_to_entities(pref)
+
         return pref
 
     async def add_fact(
@@ -716,6 +723,9 @@ class LongTermMemory(BaseMemory[Entity]):
             },
         )
 
+        # Link fact to entities mentioned in subject/object
+        await self._link_fact_to_entities(fact)
+
         return fact
 
     async def add_relationship(
@@ -776,6 +786,32 @@ class LongTermMemory(BaseMemory[Entity]):
         )
 
         return relationship
+
+    async def _link_fact_to_entities(self, fact: Fact) -> None:
+        """Link a fact to entities matching its subject and object."""
+        for entity_name in (fact.subject, fact.object):
+            try:
+                await self._client.execute_write(
+                    queries.LINK_FACT_TO_ENTITY,
+                    {"fact_id": str(fact.id), "entity_name": entity_name},
+                )
+            except Exception:
+                # Entity may not exist — that's expected
+                pass
+
+    async def _link_preference_to_entities(self, pref: Preference) -> None:
+        """Link a preference to entities mentioned in its text."""
+        text = f"{pref.category} {pref.preference}"
+        if pref.context:
+            text += f" {pref.context}"
+        try:
+            await self._client.execute_write(
+                queries.LINK_PREFERENCE_TO_ENTITIES_BY_TEXT,
+                {"preference_id": str(pref.id), "text": text},
+            )
+        except Exception:
+            # No matching entities — that's expected
+            pass
 
     async def get_entity_by_name(self, name: str) -> Entity | None:
         """
@@ -1780,6 +1816,7 @@ class LongTermMemory(BaseMemory[Entity]):
         *,
         limit: int = 10,
         threshold: float = 0.7,
+        include_expired: bool = False,
     ) -> list[Fact]:
         """
         Search for facts by semantic similarity.
@@ -1788,6 +1825,7 @@ class LongTermMemory(BaseMemory[Entity]):
             query: Search query
             limit: Maximum results
             threshold: Minimum similarity threshold
+            include_expired: Include facts past their valid_until date
 
         Returns:
             List of matching facts
@@ -1797,8 +1835,14 @@ class LongTermMemory(BaseMemory[Entity]):
 
         query_embedding = await self._embedder.embed(query)
 
+        vector_query = (
+            queries.SEARCH_FACTS_BY_EMBEDDING_WITH_EXPIRED
+            if include_expired
+            else queries.SEARCH_FACTS_BY_EMBEDDING
+        )
+
         results = await self._client.execute_read(
-            queries.SEARCH_FACTS_BY_EMBEDDING,
+            vector_query,
             {
                 "embedding": query_embedding,
                 "limit": limit,

@@ -349,12 +349,32 @@ RETURN r
 GET_FACTS_BY_SUBJECT = """
 MATCH (f:Fact)
 WHERE f.subject = $subject
+  AND (f.valid_from IS NULL OR datetime(f.valid_from) <= datetime())
+  AND (f.valid_until IS NULL OR datetime(f.valid_until) >= datetime())
+RETURN f
+ORDER BY f.confidence DESC, f.created_at DESC
+LIMIT $limit
+"""
+
+GET_FACTS_BY_SUBJECT_WITH_EXPIRED = """
+MATCH (f:Fact)
+WHERE f.subject = $subject
 RETURN f
 ORDER BY f.confidence DESC, f.created_at DESC
 LIMIT $limit
 """
 
 SEARCH_FACTS_BY_EMBEDDING = """
+CALL db.index.vector.queryNodes('fact_embedding_idx', $limit, $embedding)
+YIELD node, score
+WHERE score >= $threshold
+  AND (node.valid_from IS NULL OR node.valid_from <= datetime())
+  AND (node.valid_until IS NULL OR node.valid_until >= datetime())
+RETURN node AS f, score
+ORDER BY score DESC
+"""
+
+SEARCH_FACTS_BY_EMBEDDING_WITH_EXPIRED = """
 CALL db.index.vector.queryNodes('fact_embedding_idx', $limit, $embedding)
 YIELD node, score
 WHERE score >= $threshold
@@ -448,6 +468,25 @@ MATCH (p:Preference {id: $preference_id})
 MATCH (e:Entity {id: $entity_id})
 MERGE (p)-[r:ABOUT]->(e)
 RETURN r
+"""
+
+LINK_FACT_TO_ENTITY = """
+MATCH (f:Fact {id: $fact_id})
+MATCH (e:Entity)
+WHERE e.name = $entity_name OR e.canonical_name = $entity_name
+   OR $entity_name IN COALESCE(e.aliases, [])
+WITH f, e LIMIT 1
+MERGE (f)-[r:ABOUT]->(e)
+RETURN r
+"""
+
+LINK_PREFERENCE_TO_ENTITIES_BY_TEXT = """
+MATCH (p:Preference {id: $preference_id})
+MATCH (e:Entity)
+WHERE $text CONTAINS e.name
+WITH p, e LIMIT 5
+MERGE (p)-[r:ABOUT]->(e)
+RETURN count(r) AS linked
 """
 
 # =============================================================================
