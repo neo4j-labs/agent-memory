@@ -4554,6 +4554,18 @@ wheels = [
 ]
 
 [[package]]
+name = "nemo-flow"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5e/2e/2ccd2c9cccea62abafb135ce4f04ad5d3210f63b50d6d12e5ce9347cd13c/nemo_flow-0.1.0-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:2763690978b94ea84b4cdb8d137c88376ff24420e5959d2eba315bbcd949a03e", size = 4013568, upload-time = "2026-05-01T21:47:20.217Z" },
+    { url = "https://files.pythonhosted.org/packages/4c/33/d251565cdbabf80ab0dd28f3f485bacf4782928ba5dcc56fc69dd2898a73/nemo_flow-0.1.0-cp311-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:b437788cea723d5d7271c8001359b73962543253a28710b82a35a19f0abe0671", size = 3599365, upload-time = "2026-05-01T21:47:22.318Z" },
+    { url = "https://files.pythonhosted.org/packages/ec/ca/3de7ff316aba0fdee0f077d1e7642e10d9dc87840f4737053047ec00a9ad/nemo_flow-0.1.0-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:b4b44b9ffd3b69744dbb37ca4a4813982f41ada79d28089191d77ce7f797b012", size = 3753371, upload-time = "2026-05-01T21:47:24.058Z" },
+    { url = "https://files.pythonhosted.org/packages/e7/c6/20c2a95c60cde60fc11d90d4523f8e9a57312a60b64dafc46fefa241e6e0/nemo_flow-0.1.0-cp311-abi3-win_amd64.whl", hash = "sha256:ee17c893f543304a32d4a3c8fa6f0892f27c92f068f0ea3d7108853cee13674f", size = 3677742, upload-time = "2026-05-01T21:47:25.895Z" },
+    { url = "https://files.pythonhosted.org/packages/04/2a/81ae22a63db2fd1635a83043ebe671fc18327b9c0873601efbfb1526ca14/nemo_flow-0.1.0-cp311-abi3-win_arm64.whl", hash = "sha256:5e20f3eba98f485dd0b3aacd59a71368137648f9315d60ed17bc0cb7ba0e3ec0", size = 3489671, upload-time = "2026-05-01T21:47:27.967Z" },
+]
+
+[[package]]
 name = "neo4j"
 version = "6.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -4643,6 +4655,9 @@ mcp = [
 microsoft-agent = [
     { name = "agent-framework" },
 ]
+nemo-flow = [
+    { name = "nemo-flow", marker = "python_full_version >= '3.11'" },
+]
 observability = [
     { name = "opentelemetry-api" },
     { name = "opentelemetry-sdk" },
@@ -4714,6 +4729,7 @@ requires-dist = [
     { name = "google-cloud-aiplatform", marker = "extra == 'vertex-ai'", specifier = ">=1.38.0" },
     { name = "langchain-core", marker = "extra == 'langchain'", specifier = ">=0.2.0" },
     { name = "llama-index-core", marker = "extra == 'llamaindex'", specifier = ">=0.10.0" },
+    { name = "nemo-flow", marker = "python_full_version >= '3.11' and extra == 'nemo-flow'", specifier = ">=0.1.0rc5,<0.2.0" },
     { name = "neo4j", specifier = ">=5.20.0" },
     { name = "neo4j-agent-memory", extras = ["all", "sentence-transformers", "spacy", "gliner"], marker = "extra == 'full'" },
     { name = "neo4j-agent-memory", extras = ["openai", "anthropic", "fuzzy", "langchain", "llamaindex", "pydantic-ai", "crewai", "openai-agents", "microsoft-agent"], marker = "extra == 'all'" },
@@ -4735,7 +4751,7 @@ requires-dist = [
     { name = "spacy", marker = "extra == 'spacy'", specifier = ">=3.7.0" },
     { name = "strands-agents", marker = "extra == 'strands'", specifier = ">=0.1.0" },
 ]
-provides-extras = ["openai", "anthropic", "sentence-transformers", "vertex-ai", "bedrock", "google", "aws", "strands", "spacy", "gliner", "extraction", "fuzzy", "cli", "opentelemetry", "opik", "observability", "langchain", "llamaindex", "pydantic-ai", "crewai", "openai-agents", "microsoft-agent", "mcp", "google-adk", "all", "full"]
+provides-extras = ["openai", "anthropic", "sentence-transformers", "vertex-ai", "bedrock", "google", "aws", "strands", "spacy", "gliner", "extraction", "fuzzy", "cli", "opentelemetry", "opik", "observability", "langchain", "llamaindex", "pydantic-ai", "crewai", "openai-agents", "microsoft-agent", "nemo-flow", "mcp", "google-adk", "all", "full"]
 
 [package.metadata.requires-dev]
 dev = [

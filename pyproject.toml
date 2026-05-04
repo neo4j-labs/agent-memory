@@ -92,6 +92,7 @@ pydantic-ai = ["pydantic-ai>=0.1.0"]
 crewai = ["crewai>=0.50.0"]
 openai-agents = ["openai>=1.0.0"]
 microsoft-agent = ["agent-framework>=1.0.0b260212"]
+nemo-flow = ["nemo-flow>=0.1.0rc5,<0.2.0; python_version >= '3.11'"]
 
 # MCP server
 mcp = ["fastmcp>=2.0.0,<3"]

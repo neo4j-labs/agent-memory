@@ -32,6 +32,7 @@
 **** xref:how-to/integrations/aws-bedrock-embeddings.adoc[Amazon Bedrock Embeddings]
 **** xref:how-to/integrations/aws-hybrid-memory.adoc[AWS Hybrid Memory]
 **** xref:how-to/integrations/microsoft-agent.adoc[Microsoft Agent Framework]
+**** xref:how-to/integrations/nemo-flow.adoc[NeMo Flow]
 *** xref:how-to/create-context-graph-mcp.adoc[MCP + create-context-graph]
 
 ** Reference
