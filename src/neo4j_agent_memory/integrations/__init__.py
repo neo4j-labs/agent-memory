@@ -1,3 +1,5 @@
 """Agent framework integrations."""
 
-__all__: list[str] = []
+from . import nemo_flow
+
+__all__ = ["nemo_flow"]

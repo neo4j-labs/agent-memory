@@ -51,6 +51,10 @@ Neo4j Agent Memory provides official integrations for five popular agent framewo
 | xref:microsoft-agent.adoc[Microsoft Agent Framework]
 | Context providers, GDS algorithms, and graph-enhanced memory
 | ⚠️ Preview (API may change)
+
+| xref:how-to/integrations/nemo-flow.adoc[NeMo Flow]
+| Hidden LLM intercept layer for automatic recall, capture, and observability
+| ⚠️ Preview (API may change)
 |===
 
 == Quick Start
@@ -79,6 +83,9 @@ pip install neo4j-agent-memory[google,mcp]
 
 # AWS Strands Agents
 pip install neo4j-agent-memory[aws,strands]
+
+# NeMo Flow
+pip install "neo4j-agent-memory[nemo-flow]"
 
 # All frameworks
 pip install neo4j-agent-memory[all]
@@ -175,6 +182,20 @@ memory = Neo4jMicrosoftMemory(memory_client=client, session_id="user-123")
 agent = chat_client.as_agent(context_providers=[memory.context_provider])
 ----
 
+=== NeMo Flow
+
+[source,python]
+----
+from neo4j_agent_memory.integrations import nemo_flow
+
+handle = nemo_flow.install(memory_client)
+
+with nemo_flow.memory_scope(user_id="alex", thread_id="thread-123"):
+    result = await agent.ainvoke({"messages": messages})
+
+handle.uninstall()
+----
+
 == Choosing a Framework
 
 Not sure which integration to use? See the xref:explanation/framework-comparison.adoc[Framework Comparison Guide] for a detailed comparison of features, performance, and use cases.
@@ -216,6 +237,7 @@ Automatically extract entities from conversations:
 * xref:how-to/integrations/aws-strands.adoc[AWS Strands Integration] - Bedrock-powered agents with Context Graph
 * xref:how-to/integrations/aws-bedrock-embeddings.adoc[AWS Bedrock Embeddings] - Titan embedding configuration
 * xref:how-to/integrations/aws-hybrid-memory.adoc[AWS Hybrid Memory] - Combined memory providers
+* xref:how-to/integrations/nemo-flow.adoc[NeMo Flow Integration] - Hidden LLM intercept layer for recall and capture
 * xref:langchain.adoc[LangChain Integration] - Memory and retriever for chains
 * xref:pydantic-ai.adoc[PydanticAI Integration] - Type-safe agents with tracing
 * xref:llamaindex.adoc[LlamaIndex Integration] - RAG with TextNode support

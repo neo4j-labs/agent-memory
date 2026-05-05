@@ -1,0 +1,258 @@
+= NeMo Flow Integration
+:page-product: agent-memory
+:page-pagination:
+:description: Use NeMo Flow as a hidden runtime layer for automatic Neo4j Agent Memory recall and capture around instrumented LLM calls.
+:keywords: nemo-flow, memory, llm intercept, agent memory, langgraph, observability
+
+Use the optional NeMo Flow integration to add Neo4j Agent Memory recall and capture around instrumented LLM calls.
+
+The integration is an adapter layer:
+
+* Neo4j Agent Memory owns memory identity, filtering, retrieval, formatting, and writes.
+* NeMo Flow owns the LLM execution interception point and observability lifecycle.
+
+Application code does not need to import NeMo Flow directly for the common path.
+
+== Install
+
+[source,bash]
+----
+pip install "neo4j-agent-memory[nemo-flow]"
+----
+
+The `nemo-flow` dependency is optional. Regular `neo4j-agent-memory` installs do not include it.
+
+== Basic Usage
+
+[source,python]
+----
+from neo4j_agent_memory import MemoryClient, MemorySettings
+from neo4j_agent_memory.integrations import nemo_flow
+
+memory = MemoryClient(settings)
+handle = nemo_flow.install(memory)
+
+with nemo_flow.memory_scope(user_id="alex", thread_id="thread-123"):
+    result = await agent.ainvoke({"messages": messages})
+
+handle.uninstall()
+----
+
+`thread_id` is a LangGraph-friendly alias for `run_id`.
+
+The LLM call must flow through NeMo Flow instrumentation. The adapter cannot observe arbitrary model calls that never enter the NeMo Flow LLM execution pipeline.
+
+== Read Path
+
+Before the downstream LLM call, the intercept:
+
+. Resolves memory identity from a custom resolver, `memory_scope(...)`, or NeMo Flow scope metadata.
+. Extracts the latest user query from the LLM request.
+. Retrieves scoped memory context.
+. Injects formatted memory into a copied `LLMRequest`.
+. Calls the downstream provider with the mutated request.
+
+By default, recall includes:
+
+* current session history from `short_term.get_conversation(...)`
+* scoped semantic message search from `short_term.search_messages(...)`
+
+Optional recall sources:
+
+* `long_term.get_context(...)` when `include_long_term=True`
+* `reasoning.get_context(...)` when `include_reasoning=True`
+* `MemoryIntegration.get_context(...)` as a fallback when using the high-level wrapper
+
+Given:
+
+[source,python]
+----
+with nemo_flow.memory_scope(user_id="alex", thread_id="thread-123"):
+    ...
+----
+
+the adapter resolves:
+
+[source,python]
+----
+session_id = "alex:thread-123"
+
+metadata_filters = {
+    "user_id": "alex",
+    "run_id": "thread-123",
+    "session_id": "alex:thread-123",
+}
+----
+
+The filtering logic lives in the Neo4j adapter, not in NeMo Flow core.
+
+== Write Path
+
+After the downstream LLM call returns, the intercept:
+
+. Extracts the user message from the original request.
+. Extracts the assistant message from the response.
+. Stores the interaction in Neo4j Agent Memory.
+. Returns the original model response to the caller.
+
+The default capture path stores messages through:
+
+* `MemoryIntegration.store_message(...)` if the provided object has it
+* otherwise `client.short_term.add_message(...)`
+
+Capture stores conversational memory. It does not directly write long-term preferences, facts, or entities. Entity extraction may run indirectly if `short_term.add_message(..., extract_entities=True)` has an extractor configured, but the adapter does not currently observe extracted entity counts or deduplication results.
+
+== Observability
+
+The adapter emits both NeMo Flow scopes and mark events.
+
+Scopes are used for operations with duration:
+
+[cols="1,1,2", options="header"]
+|===
+| Scope | Type | Meaning
+
+| `neo4j_agent_memory.memory`
+| `Custom`
+| Lexical memory identity scope created by `memory_scope(...)`.
+
+| `neo4j_agent_memory.recall`
+| `Retriever`
+| Memory recall before the provider LLM call.
+
+| `neo4j_agent_memory.capture`
+| `Custom`
+| Interaction capture after the provider LLM call.
+|===
+
+Mark events are point-in-time state transitions attached to a scope:
+
+[cols="1,2", options="header"]
+|===
+| Event | Meaning
+
+| `neo4j_agent_memory.identity.resolved`
+| Memory identity was resolved for the intercepted LLM call.
+
+| `neo4j_agent_memory.recall.context_built`
+| Recall built context from one or more memory sources.
+
+| `neo4j_agent_memory.recall.injected`
+| Recall injected formatted memory context into the LLM request.
+
+| `neo4j_agent_memory.recall.skipped`
+| Recall did not mutate the LLM request.
+
+| `neo4j_agent_memory.recall.failed`
+| Recall raised an exception.
+
+| `neo4j_agent_memory.capture.extracted`
+| Capture extracted messages from the LLM request and response.
+
+| `neo4j_agent_memory.capture.message_stored`
+| Capture stored one message.
+
+| `neo4j_agent_memory.capture.stored`
+| Capture completed storage for the extracted interaction.
+
+| `neo4j_agent_memory.capture.skipped`
+| Capture did not store any interaction messages.
+
+| `neo4j_agent_memory.capture.failed`
+| Capture raised an exception.
+|===
+
+Typical successful flow:
+
+[source,text]
+----
+neo4j_agent_memory.memory
+  LLM scope
+    mark: neo4j_agent_memory.identity.resolved
+    neo4j_agent_memory.recall
+      mark: neo4j_agent_memory.recall.context_built
+      mark: neo4j_agent_memory.recall.injected
+    provider LLM call
+    neo4j_agent_memory.capture
+      mark: neo4j_agent_memory.capture.extracted
+      mark: neo4j_agent_memory.capture.message_stored
+      mark: neo4j_agent_memory.capture.message_stored
+      mark: neo4j_agent_memory.capture.stored
+----
+
+Scope and mark payloads avoid raw query text and memory text. They include operational metadata such as query length, source counts, context character counts, message counts, insertion index, roles, and storage status.
+
+== Public API
+
+[source,python]
+----
+from neo4j_agent_memory.integrations import nemo_flow
+
+handle = nemo_flow.install(
+    memory,
+    name="neo4j_agent_memory.memory",
+    priority=50,
+    auto_recall=True,
+    auto_capture=True,
+    max_items=10,
+    top_k=5,
+    threshold=0.7,
+    include_session_history=True,
+    include_user_messages=True,
+    include_long_term=False,
+    include_reasoning=False,
+    extract_entities=True,
+    extract_relations=True,
+    generate_embeddings=True,
+    metadata=None,
+    fail_open=True,
+    enable_observability=True,
+    emit_mark_events=True,
+    emit_identity_events=True,
+)
+
+with nemo_flow.memory_scope(
+    user_id="alex",
+    agent_id=None,
+    run_id=None,
+    thread_id="thread-123",
+    session_id=None,
+    filters=None,
+):
+    ...
+----
+
+Aliases are available:
+
+* `nemo_flow.memory_context`
+* `nemo_flow.neo4j_memory_context`
+* `nemo_flow.install_neo4j`
+
+== Customization
+
+Use custom hooks when a framework or provider has a non-standard request or response shape:
+
+[source,python]
+----
+handle = nemo_flow.install(
+    memory,
+    identity_resolver=my_identity_resolver,
+    query_extractor=my_query_extractor,
+    interaction_extractor=my_interaction_extractor,
+    context_builder=my_context_builder,
+    context_formatter=my_context_formatter,
+)
+----
+
+`context_builder` can return either a plain string or `NemoFlowRecallContext` when you want to provide source counts and other observability metadata.
+
+== Failure Behavior
+
+The adapter is fail-open by default. When `fail_open=True`, memory recall or capture errors are logged and the LLM call continues.
+
+Set `fail_open=False` when memory failures should fail the agent call.
+
+== Example
+
+See `examples/nemo_flow_memory.py` for a no-credentials smoke example. It uses a small in-memory object that implements the subset of `MemoryClient` methods used by the adapter and runs a real NeMo Flow LLM execution boundary.
+
