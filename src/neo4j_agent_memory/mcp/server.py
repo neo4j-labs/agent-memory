@@ -215,6 +215,8 @@ try:
         user_id: str | None = None,
         observation_threshold: int = 30000,
         auto_preferences: bool = True,
+        parent_death_check: bool = True,
+        parent_death_poll_interval: float = 5.0,
     ) -> None:
         """Run the MCP server with Neo4j connection.
 
@@ -233,6 +235,12 @@ try:
             user_id: User identifier for session strategies.
             observation_threshold: Token threshold for observer compression.
             auto_preferences: Whether to auto-detect preferences.
+            parent_death_check: When True (default) and using the stdio
+                transport, the server self-terminates if its parent process
+                exits (reparented to PID 1). Has no effect for SSE/HTTP
+                transports, which are expected to outlive their starter.
+            parent_death_poll_interval: Seconds between parent-process checks.
+                Only used when ``parent_death_check`` is True.
         """
         from pydantic import SecretStr
 
@@ -262,6 +270,13 @@ try:
             await server.run_async(transport="sse", host=host, port=port)
         elif transport == "http":
             await server.run_async(transport="http", host=host, port=port)
+        elif parent_death_check:
+            from neo4j_agent_memory.mcp._lifecycle import run_with_watchdog
+
+            await run_with_watchdog(
+                server.run_async(transport="stdio"),
+                poll_interval=parent_death_poll_interval,
+            )
         else:
             await server.run_async(transport="stdio")
 
@@ -358,6 +373,22 @@ def main() -> None:
         default=False,
         help="Disable automatic preference detection from user messages",
     )
+    parser.add_argument(
+        "--no-parent-death-check",
+        action="store_true",
+        default=False,
+        help=(
+            "Disable parent-death detection on stdio transport. "
+            "By default, the server self-terminates if its parent process "
+            "exits (avoids orphaned servers when an MCP client crashes)."
+        ),
+    )
+    parser.add_argument(
+        "--parent-death-poll-interval",
+        type=float,
+        default=5.0,
+        help="Seconds between parent-process checks (default: 5.0).",
+    )
 
     args = parser.parse_args()
 
@@ -375,6 +406,8 @@ def main() -> None:
             user_id=args.user_id,
             observation_threshold=args.observation_threshold,
             auto_preferences=not args.no_auto_preferences,
+            parent_death_check=not args.no_parent_death_check,
+            parent_death_poll_interval=args.parent_death_poll_interval,
         )
     )
 
