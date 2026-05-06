@@ -21,7 +21,7 @@ _SAFE_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 # Default vector dimensions
-DEFAULT_VECTOR_DIMENSIONS = 1536
+DEFAULT_VECTOR_DIMENSIONS = 768
 
 
 class SchemaManager:

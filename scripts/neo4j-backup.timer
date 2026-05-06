@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily Neo4j Backup to OwnCloud
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+AccuracySec=1h
+
+[Install]
+WantedBy=timers.target

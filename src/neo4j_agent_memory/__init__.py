@@ -1053,7 +1053,17 @@ class MemoryClient:
             return OpenAIEmbedder(
                 model=config.model,
                 api_key=config.api_key.get_secret_value() if config.api_key else None,
-                dimensions=config.dimensions if config.dimensions != 1536 else None,
+                dimensions=config.dimensions if config.dimensions != 768 else None,
+                batch_size=config.batch_size,
+            )
+        elif config.provider == EmbeddingProvider.OLLAMA:
+            from neo4j_agent_memory.embeddings.ollama import OllamaEmbedder
+
+            return OllamaEmbedder(
+                model=config.model,
+                base_url=config.base_url or "http://localhost:11434",
+                api_key=config.api_key.get_secret_value() if config.api_key else None,
+                dimensions=config.dimensions if config.dimensions != 768 else None,
                 batch_size=config.batch_size,
             )
         elif config.provider == EmbeddingProvider.SENTENCE_TRANSFORMERS:

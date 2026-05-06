@@ -10,6 +10,7 @@ __all__ = [
     "VertexAIEmbedder",
     "BedrockEmbedder",
     "SentenceTransformerEmbedder",
+    "OllamaEmbedder",
 ]
 
 
@@ -29,4 +30,8 @@ def __getattr__(name: str):
         )
 
         return SentenceTransformerEmbedder
+    if name == "OllamaEmbedder":
+        from neo4j_agent_memory.embeddings.ollama import OllamaEmbedder
+
+        return OllamaEmbedder
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -1,0 +1,13 @@
+[Unit]
+Description=Neo4j Backup to OwnCloud
+After=network.target docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/imohamma/Documents/Dev/agent-memory/scripts
+ExecStart=/home/imohamma/Documents/Dev/agent-memory/scripts/backup-neo4j-to-owncloud.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
