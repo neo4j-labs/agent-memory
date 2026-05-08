@@ -8,7 +8,6 @@ from neo4j_agent_memory.config.settings import (
     GeocodingConfig,
     GeocodingProvider,
     LLMConfig,
-    LLMProvider,
     MemoryConfig,
     MemorySettings,
     Neo4jConfig,
@@ -29,7 +28,6 @@ __all__ = [
     "GeocodingConfig",
     "GeocodingProvider",
     "EmbeddingProvider",
-    "LLMProvider",
     "ExtractorType",
     "ResolverStrategy",
 ]

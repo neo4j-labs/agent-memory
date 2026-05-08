@@ -4634,6 +4634,9 @@ google-adk = [
 langchain = [
     { name = "langchain-core" },
 ]
+litellm = [
+    { name = "litellm" },
+]
 llamaindex = [
     { name = "llama-index-core" },
 ]
@@ -4713,6 +4716,7 @@ requires-dist = [
     { name = "google-cloud-aiplatform", marker = "extra == 'google'", specifier = ">=1.38.0" },
     { name = "google-cloud-aiplatform", marker = "extra == 'vertex-ai'", specifier = ">=1.38.0" },
     { name = "langchain-core", marker = "extra == 'langchain'", specifier = ">=0.2.0" },
+    { name = "litellm", marker = "extra == 'litellm'", specifier = ">=1.35.25" },
     { name = "llama-index-core", marker = "extra == 'llamaindex'", specifier = ">=0.10.0" },
     { name = "neo4j", specifier = ">=5.20.0" },
     { name = "neo4j-agent-memory", extras = ["all", "sentence-transformers", "spacy", "gliner"], marker = "extra == 'full'" },
@@ -4735,7 +4739,7 @@ requires-dist = [
     { name = "spacy", marker = "extra == 'spacy'", specifier = ">=3.7.0" },
     { name = "strands-agents", marker = "extra == 'strands'", specifier = ">=0.1.0" },
 ]
-provides-extras = ["openai", "anthropic", "sentence-transformers", "vertex-ai", "bedrock", "google", "aws", "strands", "spacy", "gliner", "extraction", "fuzzy", "cli", "opentelemetry", "opik", "observability", "langchain", "llamaindex", "pydantic-ai", "crewai", "openai-agents", "microsoft-agent", "mcp", "google-adk", "all", "full"]
+provides-extras = ["openai", "anthropic", "sentence-transformers", "vertex-ai", "bedrock", "google", "aws", "strands", "spacy", "gliner", "litellm", "extraction", "fuzzy", "cli", "opentelemetry", "opik", "observability", "langchain", "llamaindex", "pydantic-ai", "crewai", "openai-agents", "microsoft-agent", "mcp", "google-adk", "all", "full"]
 
 [package.metadata.requires-dev]
 dev = [

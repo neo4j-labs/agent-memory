@@ -19,6 +19,7 @@ from neo4j_agent_memory.extraction.pipeline import (
     ExtractionPipeline,
     MergeStrategy,
 )
+from neo4j_agent_memory.llm.factory import create_llm
 
 logger = logging.getLogger(__name__)
 
@@ -162,8 +163,11 @@ def create_llm_extractor(
     if schema_config and schema_config.entity_types:
         entity_types = schema_config.entity_types
 
+    llm_client = create_llm(llm_config)
+
     return LLMEntityExtractor(
         model=extraction_config.llm_model,
+        client=llm_client,
         entity_types=entity_types,
         extract_relations=extraction_config.extract_relations,
         extract_preferences=extraction_config.extract_preferences,

@@ -14,7 +14,7 @@ from neo4j_agent_memory.extraction.base import (
 )
 
 if TYPE_CHECKING:
-    from openai import AsyncOpenAI
+    from neo4j_agent_memory.llm.litellm import LiteLLM
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +125,7 @@ class LLMEntityExtractor(EntityExtractor):
         self,
         model: str = "gpt-4o-mini",
         *,
+        client: Any | None = None,
         api_key: str | None = None,
         entity_types: list[str] | None = None,
         subtypes: dict[str, list[str]] | None = None,
@@ -138,6 +139,7 @@ class LLMEntityExtractor(EntityExtractor):
 
         Args:
             model: OpenAI model to use
+            client: Pre-initialized LLM client
             api_key: OpenAI API key (or set OPENAI_API_KEY env var)
             entity_types: Entity types to extract (defaults to POLE+O)
             subtypes: Mapping of entity types to allowed subtypes
@@ -154,23 +156,27 @@ class LLMEntityExtractor(EntityExtractor):
         self._temperature = temperature
         self._extract_relations = extract_relations
         self._extract_preferences = extract_preferences
-        self._client: AsyncOpenAI | None = None
+        self._client: Any | None = client
 
     @property
     def name(self) -> str:
         """Extractor name for pipeline identification."""
         return "LLMEntityExtractor"
 
-    def _ensure_client(self) -> "AsyncOpenAI":
-        """Ensure the OpenAI client is initialized."""
+    def _ensure_client(self) -> "LiteLLM":
+        """Ensure the LLM client is initialized."""
         if self._client is None:
             try:
-                from openai import AsyncOpenAI
+                from neo4j_agent_memory.llm.litellm import LiteLLM
             except ImportError:
                 raise ExtractionError(
-                    "OpenAI package not installed. Install with: pip install neo4j-agent-memory[openai]"
+                    "LiteLLM package not installed. Install with: pip install neo4j-agent-memory[litellm]"
                 )
-            self._client = AsyncOpenAI(api_key=self._api_key)
+            self._client = LiteLLM(
+                model=self._model,
+                temperature=self._temperature,
+                max_tokens=4096,
+            )
         return self._client
 
     def _build_subtype_info(self, types_to_use: list[str]) -> str:
@@ -226,22 +232,10 @@ class LLMEntityExtractor(EntityExtractor):
         )
 
         try:
-            response = await client.chat.completions.create(
-                model=self._model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are an expert at extracting structured information from text. "
-                        "You follow the POLE+O data model (Person, Object, Location, Event, Organization). "
-                        "Always respond with valid JSON.",
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=self._temperature,
-                response_format={"type": "json_object"},
-            )
+            # Use the LiteLLM client to extract
+            response = await client.extract(prompt=prompt)
+            content = json.dumps(response) if isinstance(response, dict) else response
 
-            content = response.choices[0].message.content
             if not content:
                 return ExtractionResult(source_text=text)
 

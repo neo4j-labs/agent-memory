@@ -483,19 +483,45 @@ NAM_RESOLUTION__SEMANTIC_THRESHOLD=0.9
 
 == LLM Configuration
 
-Settings for LLM-based operations.
+Settings for LLM-based operations. Neo4j Agent Memory uses litellm to provide provider-agnostic access to hundreds of LLM models.
+
+Supported providers include:
+- OpenAI (GPT-5, GPT-5-mini, GPT-5-pro)
+- Google Vertex AI (Gemini models)
+- Anthropic (Claude models)
+- Azure OpenAI
+- Cohere
+- Replicate
+- And 100+ others via litellm
+
+See link:https://litellm.vercel.app/docs/providers[LiteLLM Provider Documentation] for the complete list of supported models.
 
 === Python Configuration
 
 [source,python]
 ----
-from neo4j_agent_memory import LLMConfig, LLMProvider
+from neo4j_agent_memory import LLMConfig
 from pydantic import SecretStr
 
+# Using OpenAI
 llm_config = LLMConfig(
-    provider=LLMProvider.OPENAI,
     model="gpt-4o-mini",
     api_key=SecretStr("sk-..."),
+    temperature=0.0,
+    max_tokens=4096,
+)
+
+# Using Google Vertex AI
+llm_config = LLMConfig(
+    model="gemini/gemini-2.5-flash",
+    temperature=0.0,
+    max_tokens=4096,
+)
+
+# Using Anthropic Claude
+llm_config = LLMConfig(
+    model="claude-sonnet-4-5-20250929",
+    api_key=SecretStr("sk-ant-..."),
     temperature=0.0,
     max_tokens=4096,
 )
@@ -503,16 +529,96 @@ llm_config = LLMConfig(
 
 === Environment Variables
 
+The LLM configuration uses litellm's environment variable convention:
+
 [source,bash]
 ----
-NAM_LLM__PROVIDER=openai
-NAM_LLM__MODEL=gpt-4o-mini
+# Model name (required)
+NAM_LLM__MODEL=gpt-5-mini
+
+# API key (optional - provider uses standard env vars if not set)
 NAM_LLM__API_KEY=sk-...
+
+# Temperature and max tokens
 NAM_LLM__TEMPERATURE=0.0
 NAM_LLM__MAX_TOKENS=4096
 
-# Alternative
+# Provider-specific environment variables (detected automatically by litellm)
+# OpenAI
 OPENAI_API_KEY=sk-...
+
+# Google Vertex AI
+GOOGLE_APPLICATION_CREDENTIALS=/path/to/credentials.json
+
+# Anthropic
+ANTHROPIC_API_KEY=sk-ant-...
+
+# Azure OpenAI
+AZURE_API_KEY=your-key
+AZURE_API_BASE=https://...
+AZURE_API_VERSION=2024-02-15
+
+# See litellm docs for other providers
+----
+
+=== Model Naming Convention
+
+LiteLLM uses a consistent model naming pattern: `provider/model-name`
+
+Common examples:
+
+|===
+|Provider |Model Name |Example
+
+|OpenAI
+|No prefix required
+|`gpt-5-mini`, `gpt-5-pro`, `gpt-5-nano`
+
+|Google Vertex AI
+|`gemini/`
+|`gemini/gemini-2.5-flash`, `gemini/gemini-2.5-pro`
+
+|Anthropic
+|No prefix required
+|`claude-sonnet-4-5-20250929`, `claude-haiku-4-5-20251001`
+
+|Azure OpenAI
+|`azure/`
+|`azure/gpt-4-deployment-name`
+|===
+
+For the complete list of supported models and their naming conventions, see link:https://litellm.vercel.app/docs/providers[LiteLLM Provider Documentation].
+
+=== Usage Example
+
+[source,python]
+----
+from neo4j_agent_memory import MemoryClient, MemorySettings, LLMConfig
+from neo4j_agent_memory.config.settings import (
+    ExtractionConfig,
+    ExtractorType,
+)
+
+# Configure with any supported LLM
+memory_settings = MemorySettings(
+    neo4j={
+        "uri": "bolt://localhost:7687",
+        "username": "neo4j",
+        "password": "password",
+    },
+    extraction=ExtractionConfig(
+        extractor_type=ExtractorType.LLM
+    ),
+    llm=LLMConfig(
+        model="gpt-5-mini",
+        temperature=0.0,
+        max_tokens=4096,
+    )
+)
+
+async with MemoryClient(memory_settings) as client:
+    await client.connect()
+    # Use LLM-based extraction
 ----
 
 == Memory Configuration
@@ -1200,7 +1306,6 @@ from neo4j_agent_memory import (
     ResolutionConfig,
     ResolverStrategy,
     LLMConfig,
-    LLMProvider,
     DeduplicationConfig,
     DeduplicationStrategy,
     GeocodingConfig,
@@ -1247,7 +1352,6 @@ settings = MemorySettings(
         cache_results=True,
     ),
     llm=LLMConfig(
-        provider=LLMProvider.OPENAI,
         model="gpt-4o-mini",
     ),
     observability=ObservabilityConfig(
@@ -1306,7 +1410,7 @@ NAM_OBSERVABILITY__PROJECT_NAME=my-agent-memory
 
 # LLM
 NAM_LLM__PROVIDER=openai
-NAM_LLM__MODEL=gpt-4o-mini
+NAM_LLM__MODEL=gpt-5-mini
 
 # OpenAI API Key
 OPENAI_API_KEY=sk-...

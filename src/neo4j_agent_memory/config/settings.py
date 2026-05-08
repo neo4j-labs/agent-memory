@@ -18,14 +18,6 @@ class EmbeddingProvider(str, Enum):
     CUSTOM = "custom"
 
 
-class LLMProvider(str, Enum):
-    """Supported LLM providers for extraction."""
-
-    OPENAI = "openai"
-    ANTHROPIC = "anthropic"
-    CUSTOM = "custom"
-
-
 class ExtractorType(str, Enum):
     """Supported entity extractor types."""
 
@@ -125,9 +117,14 @@ class EmbeddingConfig(BaseModel):
 class LLMConfig(BaseModel):
     """LLM provider configuration for extraction."""
 
-    provider: LLMProvider = Field(default=LLMProvider.OPENAI, description="LLM provider to use")
-    model: str = Field(default="gpt-4o-mini", description="LLM model name")
-    api_key: SecretStr | None = Field(default=None, description="API key for LLM provider")
+    model: str = Field(
+        default="gpt-4o-mini",
+        description="LLM model name (e.g., 'openai/gpt-5-mini', 'gemini/gemini-2.5-flash')",
+    )
+    api_key: SecretStr | None = Field(
+        default=None,
+        description="API key for LLM provider (can also be set via environment variables)",
+    )
     temperature: float = Field(default=0.0, ge=0.0, le=2.0, description="LLM temperature")
     max_tokens: int = Field(default=4096, ge=1, description="Maximum tokens for LLM")
 

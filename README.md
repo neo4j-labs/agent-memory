@@ -114,7 +114,7 @@ This generates a ready-to-run project with a FastAPI backend, Next.js frontend, 
 
 ```bash
 pip install neo4j-agent-memory                  # Core
-pip install neo4j-agent-memory[openai]          # + OpenAI embeddings
+pip install neo4j-agent-memory[litellm]         # + LiteLLM (100+ LLM providers)
 pip install neo4j-agent-memory[mcp]             # + MCP server
 pip install neo4j-agent-memory[langchain]       # + LangChain
 pip install neo4j-agent-memory[all]             # Everything
