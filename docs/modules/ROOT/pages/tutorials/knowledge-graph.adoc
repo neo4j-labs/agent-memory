@@ -1,10 +1,8 @@
 = Build a Knowledge Graph from Documents
 :page-product: agent-memory
 :page-pagination:
-:toc: right
 :toclevels: 3
 :sectanchors:
-:sectlinks:
 :icons: font
 :source-highlighter: highlight.js
 :page-ad-icon: mortarboard
@@ -571,14 +569,7 @@ RETURN e, r, d
 LIMIT 50
 ----
 
-[NOTE]
-====
-**[SCREENSHOT PLACEHOLDER]**
-
-_Description: Neo4j Browser showing the financial knowledge graph with PERSON nodes (blue) connected to COMPANY nodes (green) via WORKS_AT relationships, and SECURITY nodes (yellow) connected to companies._
-
-Image path: `images/screenshots/financial-knowledge-graph.png`
-====
+image::diagrams/graph-schema.png[Financial knowledge graph with PERSON, COMPANY, and SECURITY nodes connected by relationships,width=540,align=left]
 
 == Step 6: Use the Knowledge Graph with an Agent
 

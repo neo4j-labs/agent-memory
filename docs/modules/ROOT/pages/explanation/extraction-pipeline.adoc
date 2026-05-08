@@ -1,7 +1,6 @@
 = How Entity Extraction Works
 :page-product: agent-memory
 :page-pagination:
-:toc: left
 :toclevels: 2
 
 Understanding the multi-stage extraction pipeline, trade-offs between speed and accuracy, and how extractors work together.
@@ -20,39 +19,7 @@ Machines need help.
 
 neo4j-agent-memory supports three fundamentally different extraction approaches, each with trade-offs:
 
-.Extraction Pipeline
-[cols="1", options="header"]
-|===
-| [DIAGRAM PLACEHOLDER: Extraction Pipeline]
-
-a|
-[source,text]
-----
-Input Text
-    ↓
-┌─────────────────────────────────────┐
-│ Stage 1: spaCy (Statistical NER)    │
-│   Fast, free, limited types         │
-└─────────────────────────────────────┘
-    ↓
-┌─────────────────────────────────────┐
-│ Stage 2: GLiNER (Zero-shot NER)     │
-│   Custom types, good accuracy       │
-└─────────────────────────────────────┘
-    ↓
-┌─────────────────────────────────────┐
-│ Stage 3: LLM (Context-aware)        │
-│   Best accuracy, highest cost       │
-└─────────────────────────────────────┘
-    ↓
-┌─────────────────────────────────────┐
-│ Merge & Filter                      │
-│   Deduplicate, resolve conflicts    │
-└─────────────────────────────────────┘
-    ↓
-Knowledge Graph
-----
-|===
+image::diagrams/extraction-pipeline.png[Multi-stage extraction pipeline: spaCy → GLiNER2 → GLiREL → LLM → Knowledge Graph,width=540,align=left]
 
 === spaCy: Statistical NER
 

@@ -96,7 +96,7 @@ async def main():
 
         # Search for project-related memories
         print("\n  Query: 'project deadline'")
-        results = await memory_service.search_memories(
+        results = await memory_service.search_memory(
             query="project deadline",
             limit=5,
         )
@@ -105,7 +105,7 @@ async def main():
 
         # Search for people
         print("\n  Query: 'Sarah'")
-        results = await memory_service.search_memories(
+        results = await memory_service.search_memory(
             query="Sarah",
             limit=5,
         )
@@ -151,7 +151,7 @@ async def main():
 
         # Search for programming preferences
         print("\n  Query: 'programming preferences'")
-        results = await memory_service.search_memories(
+        results = await memory_service.search_memory(
             query="programming preferences",
             limit=5,
         )

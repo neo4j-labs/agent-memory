@@ -1,0 +1,97 @@
+= Run Without an LLM
+:page-product: agent-memory
+:page-pagination:
+:toclevels: 3
+:sectanchors:
+:icons: font
+:source-highlighter: highlight.js
+
+How to use `neo4j-agent-memory` with no LLM provider — useful for air-gapped deployments, environments without an `OPENAI_API_KEY`, or when you want fully deterministic, free, local extraction.
+
+== Overview
+
+`MemorySettings.llm` is `Optional[LLMConfig]`. Set it to `None` to opt out of all LLM construction. Combine that with a local embedder (sentence-transformers) and a local extractor (spaCy and/or GLiNER) to get a working `MemoryClient` that never imports `openai`.
+
+== Prerequisites
+
+[source,bash]
+----
+pip install "neo4j-agent-memory[extraction,sentence-transformers]"
+python -m spacy download en_core_web_sm
+----
+
+You also need a running Neo4j instance.
+
+== Configuration
+
+[source,python]
+----
+from pydantic import SecretStr
+
+from neo4j_agent_memory import MemoryClient, MemorySettings, Neo4jConfig
+from neo4j_agent_memory.config.settings import (
+    EmbeddingConfig, EmbeddingProvider,
+    ExtractionConfig, ExtractorType,
+)
+
+settings = MemorySettings(
+    neo4j=Neo4jConfig(uri="bolt://localhost:7687", password=SecretStr("password")),
+    llm=None,                                         # <1>
+    embedding=EmbeddingConfig(
+        provider=EmbeddingProvider.SENTENCE_TRANSFORMERS,
+        model="all-MiniLM-L6-v2",
+        dimensions=384,
+    ),
+    extraction=ExtractionConfig(
+        extractor_type=ExtractorType.PIPELINE,
+        enable_spacy=True,
+        enable_gliner=True,
+        enable_llm_fallback=False,                    # <2>
+    ),
+)
+
+async with MemoryClient(settings) as memory:
+    await memory.short_term.add_message("session-1", "user", "John works at Acme")
+    print(await memory.get_context("Tell me about John"))
+----
+<1> Explicit opt-out — no LLM client is ever constructed.
+<2> Required when `llm=None` — see <<validation>>.
+
+[[validation]]
+== Validation rules
+
+`MemorySettings` raises a `ValidationError` at construction time if you set `llm=None` together with extraction settings that require an LLM:
+
+* `extraction.extractor_type == ExtractorType.LLM`, or
+* `extraction.enable_llm_fallback is True`.
+
+The error message names both fields and points at the minimal fix.
+
+If you _omit_ the `llm` field altogether (rather than passing `None`), the package keeps its historical behavior of auto-filling a default `LLMConfig` when an LLM stage is enabled — so existing code that relies on the default doesn't break.
+
+== Default behavior summary
+
+[cols="2,1,3", options="header"]
+|===
+| Configuration | LLM constructed? | Notes
+
+| `llm=None` + `extractor_type=SPACY/GLINER/NONE`, `enable_llm_fallback=False`
+| No
+| Fully local; `openai` is never imported.
+
+| `llm=None` + LLM-dependent extractor
+| —
+| `ValidationError` at construction time.
+
+| `llm` omitted + default `ExtractionConfig` (LLM fallback on)
+| Yes (default `LLMConfig`)
+| Backwards-compatible default — same as before this change.
+
+| `llm` omitted + non-LLM extractor
+| No
+| Validator skips the auto-fill since no LLM stage is enabled.
+|===
+
+== Worked example
+
+A runnable script lives at `examples/no_llm/main.py` in the repository.

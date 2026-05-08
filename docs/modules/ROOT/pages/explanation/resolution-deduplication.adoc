@@ -1,10 +1,8 @@
 = Entity Resolution and Deduplication
 :page-product: agent-memory
 :page-pagination:
-:toc: right
 :toclevels: 3
 :sectanchors:
-:sectlinks:
 :icons: font
 :source-highlighter: highlight.js
 
@@ -100,39 +98,7 @@ When agents retrieve context for responses, duplicate entities mean:
 
 The primary resolution method uses vector embeddings to find semantically similar entities:
 
-[cols="1", options="header"]
-|===
-| [DIAGRAM: Embedding-Based Resolution]
-
-a|
-[source,text]
-----
-New Entity: "JP Morgan Chase"
-        │
-        ▼
-┌─────────────────────────┐
-│   Generate Embedding    │
-│   (OpenAI, Sentence     │
-│    Transformers, etc.)  │
-└─────────────────────────┘
-        │
-        ▼
-┌─────────────────────────┐
-│   Vector Similarity     │
-│   Search in Neo4j       │
-│   (HNSW Index)          │
-└─────────────────────────┘
-        │
-        ▼
-┌─────────────────────────┐
-│   Similarity Scores     │
-│                         │
-│   JPMorgan: 0.97        │  ← Auto-merge (>0.95)
-│   JP Morgan: 0.94       │  ← Flag for review
-│   Morgan Stanley: 0.72  │  ← Different entity
-└─────────────────────────┘
-----
-|===
+image::diagrams/embedding-based-similarity.png[Embedding-based entity resolution: new entity → embedding → vector similarity search → similarity scores → merge/flag/create,width=540,align=left]
 
 .How It Works
 1. New entity text is converted to a vector embedding

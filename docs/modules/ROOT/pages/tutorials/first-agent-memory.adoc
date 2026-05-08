@@ -1,10 +1,8 @@
 = Build Your First Memory-Enabled Agent
 :page-product: agent-memory
 :page-pagination:
-:toc: right
 :toclevels: 3
 :sectanchors:
-:sectlinks:
 :icons: font
 :source-highlighter: highlight.js
 :page-ad-icon: mortarboard
@@ -435,14 +433,7 @@ RETURN n, r, m
 LIMIT 100
 ----
 
-[NOTE]
-====
-**[SCREENSHOT PLACEHOLDER]**
-
-_Description: Neo4j Browser showing the context graph with Message nodes connected to Entity nodes (Person, Organization, Location) via MENTIONS relationships._
-
-Image path: `images/screenshots/neo4j-context-graph.png`
-====
+image::diagrams/1-natural-relationship-modeling.png[Neo4j graph showing Message nodes connected to Entity nodes via MENTIONS relationships,width=480,align=left]
 
 == Step 8: Search Your Context Graph
 

@@ -1,10 +1,8 @@
 = Why Neo4j? Graph-Native Memory Architecture
 :page-product: agent-memory
 :page-pagination:
-:toc: right
 :toclevels: 3
 :sectanchors:
-:sectlinks:
 :icons: font
 :source-highlighter: highlight.js
 :page-ad-icon: mortarboard
@@ -172,38 +170,7 @@ No schema migrations, no downtime, no breaking existing queries.
 
 Neo4j enables a unified storage layer for all three memory types:
 
-[cols="1", options="header"]
-|===
-| [DIAGRAM: Memory Architecture in Neo4j]
-
-a|
-[source,text]
-----
-┌─────────────────────────────────────────────────────────────┐
-│                      MemoryClient                           │
-├───────────────────┬───────────────────┬─────────────────────┤
-│   Short-Term      │    Long-Term      │     Reasoning       │
-│   Memory          │    Memory         │     Memory          │
-│                   │                   │                     │
-│ • Messages        │ • Entities        │ • Traces            │
-│ • Sessions        │ • Preferences     │ • Tool Calls        │
-│ • Summaries       │ • Facts           │ • Decisions         │
-└───────────────────┴───────────────────┴─────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    Neo4j Graph Database                     │
-│                                                             │
-│  ┌──────────┐    ┌──────────┐    ┌──────────┐              │
-│  │  Nodes   │────│Relations │────│ Vectors  │              │
-│  └──────────┘    └──────────┘    └──────────┘              │
-│                                                             │
-│  • Cypher Queries    • ACID Transactions                    │
-│  • Vector Indexes    • Spatial Queries                      │
-│  • Full-Text Search  • Graph Algorithms                     │
-└─────────────────────────────────────────────────────────────┘
-----
-|===
+image::diagrams/memory-architecture.png[Memory architecture: MemoryClient with three layers backed by Neo4j graph database,width=600,align=left]
 
 === Why One Database?
 

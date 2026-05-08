@@ -1,0 +1,147 @@
+= Evaluating Memory Quality
+:page-product: agent-memory
+:toclevels: 2
+
+How to run labeled regression tests against your memory graph using the
+v0.2 evaluation harness.
+
+[.lead]
+The harness is a *scaffold*, not a benchmark — three dimensions, simple
+metrics, no opinionated dataset. Use it to detect regressions when you
+change extraction settings, dedup thresholds, or schema, *not* to make
+"library X scores Y on benchmark Z" claims.
+
+== Dimensions
+
+[cols="1,3"]
+|===
+| Dimension | Metric
+
+| Retrieval relevance
+| Recall@k of `client.long_term.search_entities(query, limit=k)` against a labeled set of expected entity ids per query.
+
+| Audit completeness
+| Recall of `(:Entity)<-[:TOUCHED]-(:ReasoningStep)` traversal against a labeled set of expected step ids per entity.
+
+| Preference fidelity
+| F1 score of `client.long_term.get_preferences_for(user, active_only=True)` against the expected active preference ids per user.
+|===
+
+== Goal
+
+Run a suite of labeled cases and score each dimension:
+
+[source,python]
+----
+from neo4j_agent_memory.memory.eval import (
+    AuditCase,
+    EvalSuite,
+    PreferenceCase,
+    RetrievalCase,
+)
+
+suite = EvalSuite(
+    retrieval=[
+        RetrievalCase(
+            query="healthcare consultants",
+            expected_entity_ids={"entity-anthem", "entity-sara"},
+            k=5,
+        ),
+    ],
+    audit=[
+        AuditCase(
+            entity_id="entity-anthem",
+            expected_step_ids={"step-1", "step-2"},
+        ),
+    ],
+    preference=[
+        PreferenceCase(
+            user_identifier="sara@omg.com",
+            expected_active_pref_ids={"pref-senior-healthcare"},
+        ),
+    ],
+)
+
+report = await client.eval.run(suite)
+print(f"Overall: {report.overall_score:.2f}")
+print(f"Retrieval recall: {report.retrieval.score:.2f}")
+print(f"Audit recall:     {report.audit.score:.2f}")
+print(f"Pref F1:          {report.preference.score:.2f}")
+----
+
+== Steps
+
+=== 1. Build a labeled seedset
+
+The labels are the hard part. Two reasonable starting points:
+
+* **Capture from production**: pick a handful of representative
+  retrieval queries; for each, record the entity ids your team agrees
+  are correct hits. Re-evaluate periodically.
+* **Synthesize from fixtures**: seed the database with a known graph
+  (the `examples/audit-trail/` pattern works well), then label
+  expectations explicitly in test code.
+
+The harness doesn't know how you produced the labels — it just compares
+to whatever you provide.
+
+=== 2. Run the suite
+
+[source,python]
+----
+report = await client.eval.run(suite)
+----
+
+By default every dimension with cases is evaluated. To run a subset:
+
+[source,python]
+----
+report = await client.eval.run(suite, dimensions=["audit"])
+----
+
+Skipped dimensions show as `None` on the report.
+
+=== 3. Inspect per-case detail
+
+`DimensionReport.details` lists each case with its expected vs. actual
+ids, recall (or precision/recall/F1 for the preference dimension), and
+the case parameters. Useful for debugging regressions:
+
+[source,python]
+----
+for d in report.audit.details:
+    if d["recall"] < 1.0:
+        print(f"Audit miss for entity {d['entity_id']}:")
+        print(f"  expected = {d['expected']}")
+        print(f"  actual   = {d['actual']}")
+----
+
+=== 4. Wire into CI
+
+Treat the suite as a regression test. Compare against a baseline score
+file, fail the build if any dimension drops below a threshold:
+
+[source,python]
+----
+report = await client.eval.run(suite)
+
+assert report.retrieval.score >= 0.80, (
+    f"Retrieval regression: {report.retrieval.score:.2f}"
+)
+assert report.audit.score >= 0.95, (
+    f"Audit regression: {report.audit.score:.2f}"
+)
+----
+
+== What the harness is not
+
+* Not a public benchmark — your labels are domain-specific.
+* Not a replacement for hand inspection — high recall@k can hide
+  systematic bias toward popular entities.
+* Not a substitute for the ``ConsolidationRun`` audit trail — the eval
+  harness measures *current* state; audit nodes record *change* over time.
+
+== See Also
+
+* xref:how-to/consolidation.adoc[Memory Consolidation]
+* `examples/eval-harness/` — the runnable example.

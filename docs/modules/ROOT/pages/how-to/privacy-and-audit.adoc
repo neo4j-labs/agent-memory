@@ -1,0 +1,105 @@
+= Privacy and Audit
+:page-product: agent-memory
+:toclevels: 2
+
+How to record audit trails for sensitive memory reads, archive expired
+conversations, and plug in at-rest encryption for `Message.content`.
+
+[.lead]
+Privacy in v0.5 is opt-in: the library ships the integration points but
+keeps every transparent middleware off by default, since "audit every
+read" doubles traffic and "encrypt every message" pulls in
+provider-specific dependencies.
+
+== Read auditing
+
+For sensitive read paths (preference lookups, exports, cross-tenant
+queries), record an audit node alongside the actual read:
+
+[source,python]
+----
+prefs = await client.long_term.get_preferences_for("sara@omg.com")
+
+await client.consolidation.record_read_audit(
+    "get_preferences_for sara@omg.com",
+    user_identifier="sara@omg.com",
+    kind="preference.read",
+    result_count=len(prefs),
+    metadata={"endpoint": "/api/preferences", "request_id": "req-abc"},
+)
+----
+
+The audit node is `(:MemoryReadAudit {id, kind, query, user_identifier,
+result_count, metadata_json, recorded_at})` plus a
+`(:User)-[:PERFORMED_READ]->(:MemoryReadAudit)` edge when a user
+identifier is supplied.
+
+The library does not transparently intercept every `execute_read` call
+to record audits — that would multiply database traffic by 2x and
+record reads the agent doesn't care about. Auditing is callsite-explicit
+on purpose.
+
+== Conversation TTL
+
+Configure a default TTL via settings, then run the archival job
+periodically:
+
+[source,python]
+----
+settings.memory.conversation_ttl_days = 90
+
+async with MemoryClient(settings) as client:
+    report = await client.consolidation.archive_expired_conversations(
+        ttl_days=settings.memory.conversation_ttl_days,
+        dry_run=False,
+    )
+    print(f"Archived {report.actions_taken} conversations")
+----
+
+Archival sets `c.archived = true` and `c.archived_at = datetime()` on
+each Conversation; data is preserved for compliance / audit trails. Add
+a follow-up job that hard-deletes archived conversations older than
+your retention window if you want full deletion.
+
+== At-rest encryption protocol
+
+The library exposes a protocol but does not ship a real cipher (real
+crypto needs KMS-, vault-, or hardware-backed key management that the
+library shouldn't opinionate). Use the protocol to wire up your own:
+
+[source,python]
+----
+from neo4j_agent_memory.core.encryption import (
+    MessageContentEncrypter,
+    NoOpEncrypter,
+)
+
+
+class AESGCMEncrypter:
+    """Example KMS-backed implementation (sketch)."""
+
+    def __init__(self, kms_key_id: str):
+        self.kms_key_id = kms_key_id
+
+    def encrypt(self, plaintext: str) -> str:
+        # ... real implementation: pull DEK from KMS, AES-GCM encrypt,
+        # base64 the (iv || ciphertext || tag).
+        ...
+
+    def decrypt(self, ciphertext: str) -> str:
+        ...
+
+
+# Verify the structural protocol at runtime if you want belt-and-braces:
+encrypter: MessageContentEncrypter = AESGCMEncrypter("kms/...")
+assert isinstance(encrypter, MessageContentEncrypter)
+----
+
+The library ships `NoOpEncrypter` as the default — appropriate when the
+database itself is encrypted at rest (Neo4j Aura, AWS RDS), or in
+development.
+
+== See Also
+
+* xref:how-to/consolidation.adoc[Memory Consolidation] — `archive_expired_conversations` and the underlying audit-run pattern.
+* xref:how-to/multi-tenancy.adoc[Multi-Tenant Memory] — the `:User` node that audit edges attach to.

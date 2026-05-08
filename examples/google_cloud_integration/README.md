@@ -1,6 +1,16 @@
 # Google Cloud Integration Examples
 
-This directory contains comprehensive examples demonstrating Neo4j Agent Memory's Google Cloud integration features (Vertex AI, ADK, MCP, MemoryIntegration with session strategies).
+![Neo4j Labs](https://img.shields.io/badge/Neo4j-Labs-6366F1?logo=neo4j)
+![Status: Beta](https://img.shields.io/badge/Status-Beta-6366F1)
+![Community Supported](https://img.shields.io/badge/Support-Community-6B7280)
+
+> Vertex AI embeddings, Google ADK memory, the MCP server, and a full pipeline that ties them together — one folder.
+
+Comprehensive examples wiring `neo4j-agent-memory` into the Google Cloud surface. Use this if you've already chosen GCP; otherwise [`examples/google_adk_demo/`](../google_adk_demo/) is the smaller starting point.
+
+> ⚠️ **Neo4j Labs Project**
+>
+> This example is part of [`neo4j-agent-memory`](https://github.com/neo4j-labs/agent-memory), a Neo4j Labs project. It is actively maintained but not officially supported. APIs may change. Community support is available via the [Neo4j Community Forum](https://community.neo4j.com).
 
 ## Architecture
 
@@ -253,3 +263,13 @@ neo4j-agent-memory mcp serve --transport stdio 2>&1 | tee mcp.log
 - [Google ADK Documentation](https://cloud.google.com/vertex-ai/docs/reasoning-engine/agent-development-kit)
 - [Model Context Protocol](https://modelcontextprotocol.io/)
 - [Neo4j Agent Memory Documentation](../../docs/)
+
+## Support
+
+- 💬 [Neo4j Community Forum](https://community.neo4j.com)
+- 🐛 [GitHub Issues](https://github.com/neo4j-labs/agent-memory/issues)
+- 📖 [`neo4j-agent-memory` documentation](https://github.com/neo4j-labs/agent-memory#readme)
+
+---
+
+_Verified against `neo4j-agent-memory` v0.1.2 / v0.2-dev on 2026-05-03. Stale `await memory_client.initialize()` snippet in `adk_memory_service.py` was corrected to `await memory_client.connect()` during this verification pass._

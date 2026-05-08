@@ -1,7 +1,6 @@
 = Understanding the Three Memory Types
 :page-product: agent-memory
 :page-pagination:
-:toc: left
 :toclevels: 2
 :page-ad-icon: mortarboard
 :page-ad-title: Context Graphs: Agent Memory with Neo4j
@@ -27,19 +26,9 @@ This leads to repetitive interactions, missed context, and agents that never tru
 
 neo4j-agent-memory addresses this with three distinct memory layers, each serving a different purpose:
 
-.Memory Architecture
-[listing]
-....
-+---------------------------------------------+
-|              MemoryClient                   |
-+---------------+-------------+---------------+
-| Short-Term    | Long-Term   | Reasoning     |
-| Memory        | Memory      | Memory        |
-+---------------+-------------+---------------+
-|           Neo4j Graph Database              |
-| Nodes · Relationships · Vectors · Spatial   |
-+---------------------------------------------+
-....
+image::diagrams/the-three-layer-memory-architecture.png[Three-layer memory architecture: short-term, long-term, and reasoning memory backed by Neo4j,width=600,align=left]
+
+image::diagrams/three-memory-types-diagram.png[Detailed breakdown of all three memory types: short-term (Conversation/Message chain), long-term (POLE+O entities, Preference, Fact), and reasoning (Trace, Step, ToolCall) with their key capabilities,width=600,align=left]
 
 === Short-Term Memory: What Happened
 

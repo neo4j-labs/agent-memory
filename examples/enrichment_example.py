@@ -354,8 +354,8 @@ async def demo_with_neo4j():
         # Check if entities were enriched
         print("\nChecking enrichment results:")
         for entity in added_entities:
-            # Fetch updated entity
-            updated = await client.long_term.get_entity(entity.id)
+            # Fetch updated entity by name (same node, now with enrichment fields)
+            updated = await client.long_term.get_entity_by_name(entity.name)
             if updated:
                 enriched_desc = getattr(updated, "enriched_description", None)
                 wiki_url = getattr(updated, "wikipedia_url", None)

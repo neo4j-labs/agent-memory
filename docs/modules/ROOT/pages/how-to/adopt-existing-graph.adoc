@@ -1,0 +1,168 @@
+= Adopt an Existing Domain Graph
+:page-product: agent-memory
+:page-pagination:
+:toclevels: 2
+
+How to layer `neo4j-agent-memory` on top of a Neo4j graph that already
+exists in production, so that library writes (entity extraction, MENTIONS
+edges, relation writes) link to your existing nodes instead of creating
+duplicates.
+
+[.lead]
+By default, the library MERGEs entities on `(:Entity {name, type})`. If
+your existing graph has nodes labelled `:Person`, `:Movie`, `:Client`,
+and so on — none of which carry `:Entity` — those merges will create
+duplicates. The `client.schema.adopt_existing_graph()` helper attaches
+the `:Entity` super-label, the library's `id`/`type`/`name` properties,
+and is idempotent.
+
+== Goal
+
+Adopt an existing domain graph as long-term memory entities in one call:
+
+[source,python]
+----
+await client.schema.adopt_existing_graph(
+    label_to_type={
+        "Person": "PERSON",
+        "Movie": "MOVIE",
+        "Genre": "GENRE",
+    },
+    name_property_per_label={"Movie": "title"},
+)
+----
+
+== Prerequisites
+
+* A running Neo4j 5.x with your existing domain graph already loaded.
+* `neo4j-agent-memory` v0.2 or later.
+* A `MemorySettings` configured for the database (see xref:reference/configuration.adoc[Configuration Reference]).
+
+If your domain types differ from the POLE+O default ontology, also configure `SchemaModel.CUSTOM`:
+
+[source,python]
+----
+from neo4j_agent_memory import MemorySettings
+from neo4j_agent_memory.config.settings import SchemaConfig, SchemaModel
+
+settings = MemorySettings(
+    schema_config=SchemaConfig(
+        model=SchemaModel.CUSTOM,
+        entity_types=["PERSON", "MOVIE", "GENRE"],
+        strict_types=True,
+    ),
+    # ...
+)
+----
+
+== Steps
+
+=== 1. Identify the labels and name properties to adopt
+
+For each Neo4j label in your existing graph, decide:
+
+* The library entity type to assign (a string — POLE+O members like `PERSON` if you're keeping the default ontology, or your own type names if you're using `SchemaModel.CUSTOM`).
+* The property to use as the `name` of the resulting `:Entity` node. Defaults to `name` per label, but you can override per label (movies often use `title`, people sometimes use `full_name`, etc.).
+
+=== 2. Call `adopt_existing_graph`
+
+[source,python]
+----
+async with MemoryClient(settings) as client:
+    report = await client.schema.adopt_existing_graph(
+        label_to_type={
+            "Person": "PERSON",
+            "Movie": "MOVIE",
+            "Genre": "GENRE",
+        },
+        name_property_per_label={"Movie": "title"},
+    )
+
+    print(f"Migrated {report.total_migrated} nodes "
+          f"({report.total_already_adopted} already adopted, "
+          f"{report.total_skipped} skipped).")
+    for label_report in report.by_label:
+        print(
+            f"  {label_report.label} -> {label_report.type}: "
+            f"+{label_report.migrated_count} new, "
+            f"={label_report.already_adopted_count} already, "
+            f"~{label_report.skipped_count} skipped"
+        )
+----
+
+The helper:
+
+. Adds `:Entity` to every matching node that doesn't already carry it.
+. Sets `type` from the input map.
+. Sets `name` from the configured property (defaulting to existing `name`).
+. Generates a deterministic `id` of the form `<label_lc>:<name>` for nodes that don't have one. Existing `id` properties are preserved.
+. Skips nodes whose configured name property is null.
+
+=== 3. Dry-run before mutating
+
+Pass `dry_run=True` to see what would change without mutating the graph:
+
+[source,python]
+----
+report = await client.schema.adopt_existing_graph(
+    label_to_type={"Person": "PERSON"},
+    dry_run=True,
+)
+print(f"Would migrate {report.total_migrated} nodes.")
+----
+
+=== 4. Re-run as needed
+
+The helper is idempotent. Re-running attaches `:Entity` to any new nodes
+of the configured labels added since the last run, and reports the
+already-adopted count for the rest.
+
+== Verification
+
+After adoption, library writes that MERGE on `(:Entity {name, type})`
+should link to your existing nodes:
+
+[source,python]
+----
+# Add a message that names someone in the existing graph.
+await client.short_term.add_message(
+    "demo", "user", "Have you seen Inception? Bob Singh directed it."
+)
+
+# Verify there's still exactly one node per name in the graph.
+rows = await client.graph.execute_read(
+    """
+    UNWIND ['Bob Singh', 'Inception'] AS target
+    MATCH (n {name: target})
+    WHERE n:Person OR n:Movie
+    RETURN target, count(n) AS count
+    """
+)
+for row in rows:
+    print(f"{row['target']}: {row['count']} (expect 1)")
+----
+
+== Edge cases
+
+[cols="1,3"]
+|===
+| Case | Behavior
+
+| Node missing the configured name property
+| Skipped. Reported in `AdoptionLabelReport.skipped_count`.
+
+| Node already carries `:Entity` from a previous run
+| No-op. Reported in `AdoptionLabelReport.already_adopted_count`.
+
+| Node has an `id` property already
+| Preserved. The helper only generates an `id` when one is absent.
+
+| Label or name property contains characters outside `[A-Za-z_][A-Za-z0-9_]*`
+| `SchemaError` raised before any mutation. The helper refuses to interpolate unsafe identifiers into Cypher.
+|===
+
+== See Also
+
+* xref:reference/api/memory-client.adoc[MemoryClient API reference]
+* xref:explanation/poleo-model.adoc[POLE+O Entity Model] — the default ontology you're either keeping or overriding with `SchemaModel.CUSTOM`.
+* `examples/existing-graph/` — a runnable end-to-end example using a small Movies-style domain.

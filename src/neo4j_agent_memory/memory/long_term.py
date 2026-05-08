@@ -333,6 +333,8 @@ class LongTermMemory(BaseMemory[Entity]):
         entity_types: list[str] | None = None,
         strict_types: bool = False,
         deduplication: DeduplicationConfig | None = None,
+        *,
+        multi_tenant: bool = False,
     ):
         """Initialize long-term memory.
 
@@ -346,14 +348,26 @@ class LongTermMemory(BaseMemory[Entity]):
             entity_types: Allowed entity types (defaults to POLE+O)
             strict_types: If True, reject entities with unknown types
             deduplication: Optional deduplication configuration (defaults to enabled)
+            multi_tenant: If True, ``add_preference`` raises when
+                ``user_identifier`` is omitted.
         """
         super().__init__(client, embedder, extractor)
+        self._multi_tenant = multi_tenant
         self._resolver = resolver
         self._geocoder = geocoder
         self._enrichment_service = enrichment_service
         self._entity_types = entity_types or POLEO_TYPES
         self._strict_types = strict_types
         self._deduplication = deduplication or DeduplicationConfig()
+
+    def _enforce_multi_tenant(self, user_identifier: str | None) -> None:
+        """Raise if multi-tenant is on and ``user_identifier`` is missing."""
+        if self._multi_tenant and user_identifier is None:
+            raise ValueError(
+                "MemorySettings.memory.multi_tenant=True but no "
+                "user_identifier was supplied. Pass user_identifier= to "
+                "scope this preference."
+            )
 
     def _validate_entity_type(self, entity_type: str) -> str:
         """Validate and normalize entity type."""
@@ -546,9 +560,15 @@ class LongTermMemory(BaseMemory[Entity]):
         confidence: float = 1.0,
         generate_embedding: bool = True,
         metadata: dict[str, Any] | None = None,
+        user_identifier: str | None = None,
+        applies_to: "list | None" = None,
     ) -> Preference:
         """
-        Add a user preference.
+        Add a user preference with deduplication.
+
+        If a preference in the same category already exists with high
+        semantic similarity, returns the existing one instead of creating
+        a duplicate.
 
         Args:
             category: Preference category (food, music, communication, etc.)
@@ -557,10 +577,21 @@ class LongTermMemory(BaseMemory[Entity]):
             confidence: Confidence score
             generate_embedding: Whether to generate embedding
             metadata: Optional metadata
+            user_identifier: When provided, writes a
+                ``(:User)-[:HAS_PREFERENCE]->(:Preference)`` edge linking
+                the preference to the user's :User node. Multi-tenant
+                deployments should pass this on every call.
+            applies_to: Optional list of :class:`EntityRef` describing the
+                entities this preference scopes to. Each ref is materialized
+                as a ``(:Preference)-[:APPLIES_TO]->(:Entity)`` edge so
+                ``get_preferences_for(user, applies_to=...)`` queries can
+                find scoped preferences efficiently.
 
         Returns:
-            The created preference
+            The created or existing preference
         """
+        self._enforce_multi_tenant(user_identifier)
+
         # Generate embedding
         embedding = None
         if generate_embedding and self._embedder is not None:
@@ -568,6 +599,34 @@ class LongTermMemory(BaseMemory[Entity]):
             if context:
                 text += f" ({context})"
             embedding = await self._embedder.embed(text)
+
+        # Check for duplicate preferences (same category, high similarity)
+        if self._deduplication.enabled and embedding is not None:
+            try:
+                dupes = await self._client.execute_read(
+                    queries.FIND_DUPLICATE_PREFERENCES,
+                    {
+                        "embedding": embedding,
+                        "limit": 3,
+                        "threshold": 0.95,
+                        "category": category,
+                    },
+                )
+                if dupes:
+                    existing_data = dict(dupes[0]["p"])
+                    existing = self._parse_preference(existing_data)
+                    existing.metadata["deduplicated"] = True
+                    # Even on a dedupe hit we still want to attach the user
+                    # and applies-to edges, since this caller may be a
+                    # different user pinning the same general preference.
+                    if user_identifier is not None:
+                        await self._link_user_to_preference(user_identifier, str(existing.id))
+                    if applies_to:
+                        for ref in applies_to:
+                            await self._link_preference_to_entity(str(existing.id), ref)
+                    return existing
+            except Exception:
+                pass  # Vector index may not exist yet
 
         # Create preference
         pref = Preference(
@@ -594,7 +653,165 @@ class LongTermMemory(BaseMemory[Entity]):
             },
         )
 
+        # Set bi-temporal validity bounds on the new preference. ``valid_from``
+        # is now; ``valid_until`` stays null until ``supersede_preference``
+        # closes the interval.
+        await self._client.execute_write(
+            "MATCH (p:Preference {id: $id}) SET p.valid_from = datetime()",
+            {"id": str(pref.id)},
+        )
+
+        # Wire up :HAS_PREFERENCE / :APPLIES_TO when the caller supplied them.
+        if user_identifier is not None:
+            await self._link_user_to_preference(user_identifier, str(pref.id))
+        if applies_to:
+            for ref in applies_to:
+                await self._link_preference_to_entity(str(pref.id), ref)
+
         return pref
+
+    async def _link_user_to_preference(self, user_identifier: str, preference_id: str) -> None:
+        """Idempotently write ``(:User)-[:HAS_PREFERENCE]->(:Preference)``."""
+        await self._client.execute_write(
+            """
+            MERGE (u:User {identifier: $user_identifier})
+            ON CREATE SET u.id = $user_identifier, u.created_at = datetime()
+            WITH u
+            MATCH (p:Preference {id: $preference_id})
+            MERGE (u)-[:HAS_PREFERENCE]->(p)
+            """,
+            {
+                "user_identifier": user_identifier,
+                "preference_id": preference_id,
+            },
+        )
+
+    async def _link_preference_to_entity(
+        self,
+        preference_id: str,
+        ref: Any,
+    ) -> None:
+        """Write ``(:Preference)-[:APPLIES_TO]->(:Entity)`` for an EntityRef."""
+        if getattr(ref, "id", None):
+            await self._client.execute_write(
+                """
+                MATCH (p:Preference {id: $preference_id})
+                MATCH (e:Entity {id: $entity_id})
+                MERGE (p)-[:APPLIES_TO]->(e)
+                """,
+                {"preference_id": preference_id, "entity_id": ref.id},
+            )
+        elif getattr(ref, "type", None):
+            await self._client.execute_write(
+                """
+                MATCH (p:Preference {id: $preference_id})
+                MERGE (e:Entity {name: $name, type: $type})
+                ON CREATE SET e.id = coalesce(e.id, $name + ':' + $type),
+                              e.created_at = datetime()
+                MERGE (p)-[:APPLIES_TO]->(e)
+                """,
+                {
+                    "preference_id": preference_id,
+                    "name": ref.name,
+                    "type": ref.type,
+                },
+            )
+        else:
+            await self._client.execute_write(
+                """
+                MATCH (p:Preference {id: $preference_id})
+                MERGE (e:Entity {name: $name})
+                ON CREATE SET e.id = coalesce(e.id, $name),
+                              e.created_at = datetime()
+                MERGE (p)-[:APPLIES_TO]->(e)
+                """,
+                {"preference_id": preference_id, "name": ref.name},
+            )
+
+    async def supersede_preference(
+        self,
+        old_preference_id: "UUID | str",
+        new_preference_id: "UUID | str",
+    ) -> None:
+        """Mark ``old`` as superseded by ``new``.
+
+        Writes ``(:Preference)-[:SUPERSEDED_BY]->(:Preference)`` and sets
+        ``old.valid_until = datetime()`` so time-travel queries
+        (``get_preferences_for(..., as_of=...)``) return the right snapshot.
+
+        Idempotent: re-running on an already-superseded preference is a
+        no-op (the edge MERGEs and ``valid_until`` is only set if null).
+        """
+        old_id = str(old_preference_id)
+        new_id = str(new_preference_id)
+        await self._client.execute_write(
+            """
+            MATCH (old:Preference {id: $old_id})
+            MATCH (new:Preference {id: $new_id})
+            MERGE (old)-[:SUPERSEDED_BY]->(new)
+            SET old.valid_until = coalesce(old.valid_until, datetime())
+            """,
+            {"old_id": old_id, "new_id": new_id},
+        )
+
+    async def get_preferences_for(
+        self,
+        user_identifier: str,
+        *,
+        applies_to: Any | None = None,
+        active_only: bool = True,
+        as_of: "datetime | None" = None,
+    ) -> list[Preference]:
+        """Return preferences scoped to a user.
+
+        Args:
+            user_identifier: The user whose preferences to return.
+            applies_to: Optional :class:`EntityRef` to scope further
+                (e.g. preferences scoped to a particular Industry).
+            active_only: When ``True`` (default), exclude preferences
+                that have been superseded.
+            as_of: When provided, only preferences whose validity interval
+                contains this timestamp are returned. Implements the
+                v0.5 bi-temporal time-travel API on top of valid_from /
+                valid_until set by :meth:`add_preference` and
+                :meth:`supersede_preference`.
+        """
+        params: dict[str, Any] = {"user_identifier": user_identifier}
+        clauses: list[str] = [
+            "MATCH (u:User {identifier: $user_identifier})-[:HAS_PREFERENCE]->(p:Preference)"
+        ]
+        where: list[str] = []
+
+        if active_only:
+            where.append("NOT (p)-[:SUPERSEDED_BY]->(:Preference)")
+
+        if as_of is not None:
+            where.append(
+                "(p.valid_from IS NULL OR p.valid_from <= datetime($as_of)) "
+                "AND (p.valid_until IS NULL OR p.valid_until > datetime($as_of))"
+            )
+            params["as_of"] = as_of.isoformat()
+
+        if applies_to is not None:
+            clauses.append("MATCH (p)-[:APPLIES_TO]->(e:Entity)")
+            if getattr(applies_to, "id", None):
+                where.append("e.id = $applies_to_id")
+                params["applies_to_id"] = applies_to.id
+            elif getattr(applies_to, "type", None):
+                where.append("e.name = $applies_to_name AND e.type = $applies_to_type")
+                params["applies_to_name"] = applies_to.name
+                params["applies_to_type"] = applies_to.type
+            else:
+                where.append("e.name = $applies_to_name")
+                params["applies_to_name"] = applies_to.name
+
+        query = "\n".join(clauses)
+        if where:
+            query += "\nWHERE " + " AND ".join(where)
+        query += "\nRETURN DISTINCT p"
+
+        rows = await self._client.execute_read(query, params)
+        return [self._parse_preference(dict(r["p"])) for r in rows]
 
     async def add_fact(
         self,
@@ -609,7 +826,11 @@ class LongTermMemory(BaseMemory[Entity]):
         metadata: dict[str, Any] | None = None,
     ) -> Fact:
         """
-        Add a declarative fact.
+        Add a declarative fact with deduplication.
+
+        If a fact with the same subject and predicate already exists
+        with high semantic similarity, updates the existing fact's
+        confidence instead of creating a duplicate.
 
         Args:
             subject: Fact subject
@@ -622,13 +843,42 @@ class LongTermMemory(BaseMemory[Entity]):
             metadata: Optional metadata
 
         Returns:
-            The created fact
+            The created or existing fact
         """
         # Generate embedding
         embedding = None
         if generate_embedding and self._embedder is not None:
             text = f"{subject} {predicate} {obj}"
             embedding = await self._embedder.embed(text)
+
+        # Check for duplicate facts (same subject+predicate, high similarity)
+        if self._deduplication.enabled and embedding is not None:
+            try:
+                dupes = await self._client.execute_read(
+                    queries.FIND_DUPLICATE_FACTS,
+                    {
+                        "embedding": embedding,
+                        "limit": 3,
+                        "threshold": 0.95,
+                        "subject": subject,
+                        "predicate": predicate,
+                    },
+                )
+                if dupes:
+                    existing_data = dict(dupes[0]["f"])
+                    await self._client.execute_write(
+                        queries.UPDATE_FACT_CONFIDENCE,
+                        {
+                            "id": existing_data["id"],
+                            "confidence": confidence,
+                            "object": obj,
+                        },
+                    )
+                    existing = self._parse_fact(existing_data)
+                    existing.metadata["deduplicated"] = True
+                    return existing
+            except Exception:
+                pass  # Vector index may not exist yet; proceed with creation
 
         # Create fact
         fact = Fact(

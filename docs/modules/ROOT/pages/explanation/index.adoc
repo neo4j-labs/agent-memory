@@ -1,7 +1,6 @@
 = Explanation
 :page-product: agent-memory
 :page-pagination:
-:toc: left
 :toclevels: 2
 
 Understand the concepts, design decisions, and architecture behind neo4j-agent-memory.

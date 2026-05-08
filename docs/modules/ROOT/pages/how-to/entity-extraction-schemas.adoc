@@ -1,0 +1,292 @@
+= Entity Extraction: Domain Schemas
+:page-product: agent-memory
+:page-pagination:
+:toclevels: 3
+:sectanchors:
+:icons: font
+:source-highlighter: highlight.js
+
+How to use pre-built domain schemas and define custom entity types for domain-specific extraction.
+
+[TIP]
+====
+Domain schemas dramatically improve extraction quality for specialized text. A financial schema trained to recognize TICKER vs SECURITY vs AMOUNT will outperform a generic POLE+O schema on financial documents, even with the same underlying model.
+====
+
+== Available Built-In Schemas
+
+[cols="1,3,2", options="header"]
+|===
+|Schema |Optimized For |Key Entity Types
+
+|`poleo`
+|General investigations and intelligence
+|PERSON, OBJECT, LOCATION, EVENT, ORGANIZATION
+
+|`financial`
+|Investment and financial services
+|SECURITY, TICKER, ACCOUNT, AMOUNT, RISK_PROFILE
+
+|`ecommerce`
+|Retail and customer support
+|PRODUCT, SKU, ORDER_ID, CARRIER, PROMOTION
+
+|`podcast`
+|Podcast transcripts
+|PERSON, COMPANY, PRODUCT, CONCEPT, TECHNOLOGY
+
+|`news`
+|News articles
+|PERSON, ORGANIZATION, LOCATION, EVENT, DATE
+
+|`scientific`
+|Research papers
+|AUTHOR, INSTITUTION, METHOD, DATASET, METRIC
+
+|`medical`
+|Healthcare text
+|DISEASE, DRUG, SYMPTOM, PROCEDURE, GENE
+
+|`legal`
+|Legal documents
+|CASE, COURT, LAW, MONETARY_AMOUNT
+|===
+
+== Financial Services Schema
+
+[source,python]
+----
+from neo4j_agent_memory.extraction import GLiNEREntityExtractor
+
+extractor = GLiNEREntityExtractor.for_schema("financial")
+
+text = """
+    Client meeting with Acme Investment Holdings regarding their Q4 portfolio review.
+    They currently hold 10,000 shares of Apple (AAPL) and 5,000 shares of Microsoft (MSFT).
+    The client expressed interest in increasing exposure to the AI sector, specifically
+    mentioning NVIDIA and AMD as potential additions. Risk tolerance remains moderate-growth.
+    Advisor Sarah Johnson recommended a 15% allocation to technology, balanced with
+    fixed income through the Vanguard Total Bond ETF (BND).
+"""
+
+result = await extractor.extract(text)
+for entity in result.entities:
+    print(f"{entity.name}: {entity.type}")
+    # Acme Investment Holdings: ORGANIZATION
+    # Apple: SECURITY  |  AAPL: TICKER
+    # Microsoft: SECURITY  |  NVIDIA: SECURITY
+    # Sarah Johnson: PERSON
+    # Vanguard Total Bond ETF: SECURITY  |  BND: TICKER
+----
+
+.Financial Entity Types
+[cols="1,2,2", options="header"]
+|===
+|Type |Description |Examples
+
+|PERSON |Clients, advisors, contacts |"John Smith", "Sarah Johnson"
+|ORGANIZATION |Companies, funds, institutions |"Acme Holdings", "BlackRock"
+|SECURITY |Stocks, bonds, ETFs, funds |"Apple Inc.", "Treasury Bond"
+|TICKER |Stock/fund symbols |"AAPL", "BND", "SPY"
+|ACCOUNT |Account types and numbers |"IRA", "401k", "Account #12345"
+|AMOUNT |Dollar amounts, percentages |"$50,000", "15%", "10,000 shares"
+|DATE |Dates and time periods |"Q4 2024", "next quarter"
+|SECTOR |Industry sectors |"Technology", "Healthcare"
+|RISK_PROFILE |Risk classifications |"moderate-growth", "conservative"
+|===
+
+== Ecommerce Retail Schema
+
+[source,python]
+----
+extractor = GLiNEREntityExtractor.for_schema("ecommerce")
+
+text = """
+    Customer inquiry from Jane Doe (Gold member) about order #ORD-98765.
+    She ordered Nike Air Max 90 in size 9 (SKU: NKE-AM90-WHT-9) from our
+    mobile app. The package was shipped via FedEx (tracking: 1234567890)
+    to her address in Brooklyn, NY.
+"""
+
+result = await extractor.extract(text)
+for entity in result.entities:
+    print(f"{entity.name}: {entity.type}")
+    # Jane Doe: CUSTOMER  |  ORD-98765: ORDER_ID
+    # Nike Air Max 90: PRODUCT  |  NKE-AM90-WHT-9: SKU
+    # FedEx: CARRIER  |  Brooklyn, NY: LOCATION
+----
+
+.Ecommerce Entity Types
+[cols="1,2,2", options="header"]
+|===
+|Type |Description |Examples
+
+|CUSTOMER |Customer names and IDs |"Jane Doe", "CUST-12345"
+|PRODUCT |Product names |"Nike Air Max 90", "iPhone 15"
+|SKU |Product identifiers |"NKE-AM90-001"
+|BRAND |Brand names |"Nike", "Apple"
+|CATEGORY |Product categories |"Footwear", "Electronics"
+|ORDER_ID |Order identifiers |"ORD-98765", "#12345"
+|CARRIER |Shipping carriers |"FedEx", "UPS"
+|LOCATION |Addresses, stores, warehouses |"Brooklyn, NY", "Store #42"
+|PAYMENT_METHOD |Payment types |"Apple Pay", "Visa ****1234"
+|PROMOTION |Coupons, discounts |"20% off", "SUMMER2024"
+|===
+
+== Custom Domain Schemas
+
+=== Define Entity Types
+
+[source,python]
+----
+from neo4j_agent_memory.schema import EntitySchemaConfig, EntityTypeConfig
+
+insurance_schema = EntitySchemaConfig(
+    name="insurance",
+    version="1.0",
+    description="Schema for insurance industry context graphs",
+    entity_types=[
+        EntityTypeConfig(
+            name="POLICYHOLDER",
+            description="Insurance policy holder or applicant",
+            examples=["John Smith", "Acme Corporation"],
+        ),
+        EntityTypeConfig(
+            name="POLICY",
+            description="Insurance policy with number",
+            examples=["Policy #INS-2024-001", "Auto Policy 12345"],
+        ),
+        EntityTypeConfig(
+            name="CLAIM",
+            description="Insurance claim reference",
+            examples=["Claim #CLM-98765", "accident claim"],
+        ),
+        EntityTypeConfig(
+            name="COVERAGE",
+            description="Type of insurance coverage",
+            examples=["liability coverage", "comprehensive", "collision"],
+        ),
+        EntityTypeConfig(
+            name="PREMIUM",
+            description="Insurance premium amount",
+            examples=["$500/month", "annual premium of $6,000"],
+        ),
+        EntityTypeConfig(
+            name="VEHICLE",
+            description="Insured vehicle",
+            examples=["2024 Toyota Camry", "Honda Accord"],
+        ),
+    ],
+)
+
+extractor = GLiNEREntityExtractor.for_schema(insurance_schema)
+----
+
+[TIP]
+====
+*Write descriptions as prompts.* The `description` field is what the model reads to decide whether a span matches this type. "Insurance policy holder or applicant" is better than "a person" — it gives the model the domain context it needs to avoid false positives.
+
+Good examples (3-5 representative values) improve accuracy more than longer descriptions.
+====
+
+=== Extend Built-In Schemas
+
+[source,python]
+----
+from neo4j_agent_memory.schema import get_schema, EntityTypeConfig
+
+base_schema = get_schema("ecommerce")
+
+custom_types = [
+    EntityTypeConfig(
+        name="LOYALTY_TIER",
+        description="Customer loyalty program tier",
+        examples=["Gold member", "Platinum status", "VIP"],
+    ),
+    EntityTypeConfig(
+        name="SUBSCRIPTION",
+        description="Subscription service",
+        examples=["Prime membership", "monthly box subscription"],
+    ),
+]
+
+extended_schema = base_schema.extend(
+    name="ecommerce_extended",
+    additional_types=custom_types,
+)
+
+extractor = GLiNEREntityExtractor.for_schema(extended_schema)
+----
+
+=== Persist Schemas to Neo4j
+
+Store schemas in Neo4j for reuse across sessions and applications:
+
+[source,python]
+----
+from neo4j_agent_memory.schema import SchemaManager
+
+manager = SchemaManager(client)
+
+stored = await manager.save_schema(
+    insurance_schema,
+    created_by="admin",
+    set_active=True,
+)
+
+print(f"Schema saved with ID: {stored.id}")
+
+# Load schema in another session
+loaded = await manager.load_schema("insurance")
+extractor = GLiNEREntityExtractor.for_schema(loaded.config)
+----
+
+== Relationship Extraction
+
+=== GLiREL (No LLM Required)
+
+[source,python]
+----
+from neo4j_agent_memory.extraction import GLiNERWithRelationsExtractor
+
+extractor = GLiNERWithRelationsExtractor.for_schema("ecommerce")
+
+text = """
+    Jane Doe purchased Nike Air Max 90 from our Manhattan store.
+    The product was manufactured by Nike and shipped via FedEx.
+"""
+
+result = await extractor.extract(text)
+
+for rel in result.relations:
+    print(f"  ({rel.source}) -[:{rel.type}]-> ({rel.target})")
+    # (Jane Doe) -[:PURCHASED]-> (Nike Air Max 90)
+    # (Nike Air Max 90) -[:SOLD_AT]-> (Manhattan store)
+    # (Nike Air Max 90) -[:MANUFACTURED_BY]-> (Nike)
+    # (Nike Air Max 90) -[:SHIPPED_VIA]-> (FedEx)
+----
+
+=== Custom Relationship Types
+
+[source,python]
+----
+financial_relations = [
+    {"name": "ADVISES",      "description": "Financial advisor advises client"},
+    {"name": "HOLDS",        "description": "Account holds security position"},
+    {"name": "TRADED",       "description": "Executed trade in security"},
+    {"name": "SUBSIDIARY_OF","description": "Company is subsidiary of parent"},
+    {"name": "CUSTODIED_AT", "description": "Assets custodied at institution"},
+]
+
+extractor = GLiNERWithRelationsExtractor(
+    entity_schema="financial",
+    relation_types=financial_relations,
+)
+----
+
+== See Also
+
+* xref:how-to/entity-extraction.adoc[Basic Extraction & Pipelines]
+* xref:how-to/entity-extraction-batch.adoc[Batch & Streaming Extraction]
+* xref:reference/schemas.adoc[Schemas Reference]
+* xref:reference/extractors.adoc[Extractor Classes Reference]

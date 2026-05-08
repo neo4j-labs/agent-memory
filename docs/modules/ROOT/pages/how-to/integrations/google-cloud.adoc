@@ -215,7 +215,7 @@ async with MemoryClient(settings) as client:
     await memory_service.add_session_to_memory(session)
 
     # Search across all memory types
-    results = await memory_service.search_memories(
+    results = await memory_service.search_memory(
         query="user preferences",
         limit=10,
     )
@@ -243,13 +243,13 @@ await memory_service.add_session_to_memory(
 )
 ----
 
-==== search_memories
+==== search_memory
 
 Semantic search across all memory types.
 
 [source,python]
 ----
-results = await memory_service.search_memories(
+results = await memory_service.search_memory(
     query="search query",
     app_name="my-app",      # Optional app filter
     user_id="user-id",      # Optional user filter
@@ -328,7 +328,7 @@ async def remember_fact(fact: str) -> str:
 @agent.tool
 async def recall_memories(query: str) -> list[str]:
     """Search memories for relevant information."""
-    results = await memory_service.search_memories(query, limit=5)
+    results = await memory_service.search_memory(query, limit=5)
     return [entry.content for entry in results]
 ----
 

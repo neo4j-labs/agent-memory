@@ -254,11 +254,12 @@ def _register_core_tools(mcp: FastMCP) -> None:
         confidence: float = 1.0,
         valid_from: str | None = None,
         valid_until: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> str:
         """Store a subject-predicate-object fact triple.
 
         Records declarative knowledge as a structured triple with optional
-        temporal validity bounds.
+        temporal validity bounds and arbitrary metadata.
 
         Args:
             subject: The subject of the fact (e.g., 'Earth').
@@ -267,6 +268,7 @@ def _register_core_tools(mcp: FastMCP) -> None:
             confidence: Confidence score 0.0-1.0 (default: 1.0).
             valid_from: ISO date string for when this fact becomes valid.
             valid_until: ISO date string for when this fact expires.
+            metadata: Additional metadata (e.g., scope, stack_tags, temporality).
         """
         integration = get_integration(ctx)
         result = await integration.add_fact(
@@ -276,6 +278,7 @@ def _register_core_tools(mcp: FastMCP) -> None:
             confidence=confidence,
             valid_from=valid_from,
             valid_until=valid_until,
+            metadata=metadata,
         )
         return json.dumps(result, default=str)
 

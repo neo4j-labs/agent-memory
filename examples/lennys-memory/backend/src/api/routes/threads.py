@@ -187,7 +187,7 @@ async def delete_thread(
     # Delete from Neo4j if present
     if exists_in_neo4j and memory:
         try:
-            await memory.short_term.delete_conversation(thread_id)
+            await memory.short_term.clear_session(thread_id)
         except Exception:
             pass
 

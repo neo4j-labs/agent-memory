@@ -193,7 +193,7 @@ async def demo_adk_memory_service(client):
     ]
 
     for query, description in queries:
-        results = await memory_service.search_memories(query=query, limit=2)
+        results = await memory_service.search_memory(query=query, limit=2)
         print(f"  Query: '{query}' ({description})")
         for r in results:
             print(f"    [{r.memory_type}] {r.content[:50]}...")

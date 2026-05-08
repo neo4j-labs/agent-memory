@@ -1,7 +1,6 @@
 = Build a Strands Agent with Context Graph Memory
 :description: Build your first AI agent with Neo4j Context Graphs and AWS Strands Agents SDK
 :keywords: strands, aws, bedrock, neo4j, agent, memory, tutorial
-:toc:
 
 This tutorial walks you through building your first AI agent with persistent memory using Neo4j Agent Memory and the AWS Strands Agents SDK.
 

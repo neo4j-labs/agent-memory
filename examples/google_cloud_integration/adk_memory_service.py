@@ -112,7 +112,7 @@ async def demo_basic_usage():
 
         for query in queries:
             print(f"\n  Query: '{query}'")
-            results = await memory_service.search_memories(
+            results = await memory_service.search_memory(
                 query=query,
                 limit=3,
             )
@@ -203,7 +203,7 @@ async def demo_entity_extraction():
 
         for query in entity_queries:
             print(f"\n  Entity: '{query}'")
-            results = await memory_service.search_memories(
+            results = await memory_service.search_memory(
                 query=query,
                 limit=2,
             )
@@ -295,7 +295,7 @@ async def demo_preference_learning():
 
         for query in pref_queries:
             print(f"\n  Query: '{query}'")
-            results = await memory_service.search_memories(
+            results = await memory_service.search_memory(
                 query=query,
                 limit=2,
             )
@@ -323,7 +323,7 @@ from neo4j_agent_memory.integration import MemoryIntegration, SessionStrategy
 # Initialize memory
 settings = MemorySettings(...)
 memory_client = MemoryClient(settings)
-await memory_client.initialize()
+await memory_client.connect()
 
 # Create memory service
 memory_service = Neo4jMemoryService(
@@ -371,7 +371,7 @@ async def remember_fact(fact: str) -> str:
 @agent.tool
 async def recall_memories(query: str) -> list[str]:
     """Search memories for relevant information."""
-    results = await memory_service.search_memories(query, limit=5)
+    results = await memory_service.search_memory(query, limit=5)
     return [entry.content for entry in results]
 '''
 

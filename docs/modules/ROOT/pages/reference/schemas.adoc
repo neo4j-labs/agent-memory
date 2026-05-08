@@ -1,7 +1,6 @@
 = Domain Schemas Reference
 :page-product: agent-memory
 :page-pagination:
-:toc: left
 :toclevels: 2
 
 Reference for built-in domain schemas and custom schema creation.

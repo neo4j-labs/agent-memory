@@ -1,7 +1,6 @@
 = Add MCP Server to create-context-graph Projects
 :page-product: agent-memory
 :page-pagination:
-:toc: right
 :toclevels: 2
 :sectanchors:
 :icons: font

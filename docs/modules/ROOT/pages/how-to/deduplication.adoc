@@ -1,10 +1,8 @@
 = Handle Duplicate Entities
 :page-product: agent-memory
 :page-pagination:
-:toc: right
 :toclevels: 3
 :sectanchors:
-:sectlinks:
 :icons: font
 :source-highlighter: highlight.js
 
@@ -13,6 +11,8 @@ How to configure and manage entity deduplication to maintain a clean context gra
 == Overview
 
 When building context graphs from conversations and documents, the same real-world entity often appears with different names or spellings. Deduplication ensures your graph remains clean and connected.
+
+image::diagrams/entity-dedup-flow.png[Entity deduplication flow: similarity thresholds route new entities to auto-merge, flag for review, or create as new,width=540,align=left]
 
 == Prerequisites
 

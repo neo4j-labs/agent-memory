@@ -1,7 +1,6 @@
 = Configure Amazon Bedrock Embeddings
 :description: How to use Amazon Titan embeddings with Neo4j Agent Memory
 :keywords: bedrock, titan, embeddings, aws, neo4j
-:toc:
 
 This guide shows how to configure Amazon Bedrock embeddings for semantic search in Neo4j Agent Memory.
 

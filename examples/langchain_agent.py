@@ -73,7 +73,8 @@ async def main():
         # Add entity - type and subtype become PascalCase Neo4j node labels for efficient querying
         # This creates a node with labels (:Entity:Organization)
         # You can query with: MATCH (o:Organization) RETURN o
-        await client.long_term.add_entity(
+        # add_entity returns (entity, dedup_result); see enrichment_example.py for dedup usage.
+        _, _ = await client.long_term.add_entity(
             name="Thai Kitchen",
             entity_type="ORGANIZATION",  # Becomes a node label
             subtype="RESTAURANT",  # Also becomes a node label (if valid POLE+O subtype)

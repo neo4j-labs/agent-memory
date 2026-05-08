@@ -1,0 +1,96 @@
+= Glossary
+:page-product: agent-memory
+:toclevels: 2
+
+A reference for the terminology used in `neo4j-agent-memory` and how it
+relates to terms from neighbouring projects in the agent-memory space.
+
+== Library terminology
+
+[cols="1,3"]
+|===
+| Term | Meaning in `neo4j-agent-memory`
+
+| Short-term memory
+| Conversations and messages, with sequential `FIRST_MESSAGE` /
+`NEXT_MESSAGE` linking and embedded message content for similarity
+search. Accessed via `client.short_term`.
+
+| Long-term memory
+| Entities (POLE+O or custom typed), preferences, and facts. The
+declarative knowledge layer. Accessed via `client.long_term`.
+
+| Reasoning memory
+| Reasoning traces, reasoning steps, and tool calls — captured per
+agent task. The "how did we get there" layer that complements the
+"what we know" of long-term memory. Accessed via `client.reasoning`.
+
+| POLE+O
+| The default entity ontology — Person, Object, Location, Event,
+Organization. See xref:explanation/poleo-model.adoc[POLE+O Model].
+
+| `:Entity` super-label
+| The label every long-term memory entity carries in addition to its
+type/subtype labels (e.g. `:Entity:Person:Individual`). The library
+MERGEs on `(:Entity {name, type})` for deduplication.
+
+| Adoption
+| The process of attaching the `:Entity` super-label and library-managed
+properties (`id`, `type`, `name`) to nodes from a pre-existing domain
+graph, so the library's writes link to the existing nodes instead of
+duplicating them. See xref:how-to/adopt-existing-graph.adoc[].
+|===
+
+== Industry-glossary alignment
+
+The agent-memory space uses overlapping terminology. Mappings to closely
+related concepts in other ecosystems:
+
+[cols="1,1,3"]
+|===
+| External term | Closest concept here | Notes
+
+| Context graph
+| The full three-layer graph this library builds (short-term + long-term
++ reasoning).
+| Zep uses "context graph" to describe a persisted graph attached to a
+session. `neo4j-agent-memory`'s closest analogue is the unified graph
+spanning the three memory layers, with cross-layer edges like
+`(ReasoningTrace)-[:INITIATED_BY]->(Message)`.
+
+| Memify / memification
+| Long-term memory ingestion (`add_entity`, `add_preference`,
+`add_fact`) plus the entity-extraction pipeline.
+| Cognee's "memify" pipeline corresponds roughly to entity extraction +
+deduplication + embedding here. The library does not bundle a
+single-call "memify(text)" entry point — extraction and storage are
+separate by design.
+
+| Core memory
+| Long-term memory (entities, preferences, facts) — the persistent,
+queryable layer.
+| Letta's "core memory" maps to long-term memory, especially preferences
+and entity-attached attributes that persist across sessions.
+
+| Episodic memory
+| Short-term memory (messages and conversations).
+| Several agent frameworks distinguish "semantic" (long-term) from
+"episodic" (per-session). `neo4j-agent-memory` uses short-term /
+long-term, with reasoning memory as a third axis that doesn't fit
+either label cleanly.
+
+| Working memory
+| Not a first-class concept here.
+| What other systems call "working memory" (current-turn context) is
+typically assembled per-call via `client.get_context(...)` rather than
+persisted as its own layer.
+|===
+
+== See Also
+
+* xref:explanation/memory-types.adoc[Memory Types] — concept-level
+description of short-term, long-term, and reasoning memory.
+* xref:explanation/poleo-model.adoc[POLE+O Model] — the default
+entity ontology.
+* xref:explanation/framework-comparison.adoc[Framework Comparison] —
+how the library compares to other agent-memory tools.

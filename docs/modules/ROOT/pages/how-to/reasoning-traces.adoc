@@ -1,10 +1,8 @@
 = Record and Query Reasoning Traces
 :page-product: agent-memory
 :page-pagination:
-:toc: right
 :toclevels: 3
 :sectanchors:
-:sectlinks:
 :icons: font
 :source-highlighter: highlight.js
 
@@ -14,45 +12,7 @@ How to record agent reasoning traces and use them to improve future decisions th
 
 Reasoning traces capture the step-by-step thought process of agents, including tool calls, decisions, and outcomes. Stored in the context graph, traces enable agents to learn from past experiences and improve over time.
 
-[cols="1", options="header"]
-|===
-| Reasoning Traces in the Context Graph
-
-a|
-[source,text]
-----
-                    Context Graph
-                    ─────────────
-            ┌─────────────────────────┐
-            │    (ReasoningTrace)     │
-            │    "Product search"     │
-            └───────────┬─────────────┘
-                        │
-        ┌───────────────┼───────────────┐
-        │               │               │
-        ▼               ▼               ▼
-  [:HAS_STEP]     [:HAS_STEP]     [:HAS_STEP]
-        │               │               │
-        ▼               ▼               ▼
-  ┌───────────┐   ┌───────────┐   ┌───────────┐
-  │ Step 1:   │   │ Step 2:   │   │ Step 3:   │
-  │ Search    │──▶│ Filter    │──▶│ Recommend │
-  │ products  │   │ by prefs  │   │ top 3     │
-  └───────────┘   └───────────┘   └───────────┘
-        │               │               │
-        ▼               ▼               ▼
-  [:USED_TOOL]    [:USED_TOOL]    [:USED_TOOL]
-        │               │               │
-        ▼               ▼               ▼
-  ┌───────────┐   ┌───────────┐   ┌───────────┐
-  │search_    │   │get_       │   │rank_      │
-  │products   │   │preferences│   │products   │
-  └───────────┘   └───────────┘   └───────────┘
-
-Agent can query: "How did I successfully recommend
-                  running shoes before?"
-----
-|===
+image::diagrams/reasoning-trace-graph.png[Reasoning trace graph: Message triggers a ReasoningTrace with Steps, each Step using ToolCalls that TOUCH entities,width=540,align=left]
 
 == Prerequisites
 

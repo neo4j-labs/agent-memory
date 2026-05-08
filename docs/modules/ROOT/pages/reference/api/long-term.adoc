@@ -1,7 +1,6 @@
 = LongTermMemory API Reference
 :page-product: agent-memory
 :page-pagination:
-:toc: left
 :toclevels: 2
 
 API for entity, preference, and fact storage.
@@ -143,7 +142,7 @@ results = await long_term.search_entities(
     query: str,
     entity_types: list[str] | None = None,
     limit: int = 10,
-    min_score: float = 0.0,
+    threshold: float = 0.7,
 )
 ----
 
@@ -374,7 +373,7 @@ stats = await long_term.geocode_locations(skip_existing: bool = True)
 class Entity:
     id: str
     name: str
-    entity_type: str
+    type: str
     subtype: str | None
     description: str | None
     metadata: dict[str, Any]

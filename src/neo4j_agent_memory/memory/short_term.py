@@ -272,9 +272,21 @@ class ShortTermMemory(BaseMemory[Message]):
         client: "Neo4jClient",
         embedder: "Embedder | None" = None,
         extractor: "EntityExtractor | None" = None,
+        *,
+        multi_tenant: bool = False,
     ):
         """Initialize short-term memory."""
         super().__init__(client, embedder, extractor)
+        self._multi_tenant = multi_tenant
+
+    def _enforce_multi_tenant(self, user_identifier: str | None) -> None:
+        """Raise if multi-tenant is on and ``user_identifier`` is missing."""
+        if self._multi_tenant and user_identifier is None:
+            raise ValueError(
+                "MemorySettings.memory.multi_tenant=True but no "
+                "user_identifier was supplied. Pass user_identifier= to "
+                "scope this write."
+            )
 
     async def add(self, content: str, **kwargs: Any) -> Message:
         """Add content as a message."""
@@ -491,6 +503,9 @@ class ShortTermMemory(BaseMemory[Message]):
         extract_relations: bool = True,
         generate_embedding: bool = True,
         metadata: dict[str, Any] | None = None,
+        extraction_mode: Literal["auto", "skip", "explicit"] = "auto",
+        explicit_mentions: "list[Any] | None" = None,
+        user_identifier: str | None = None,
     ) -> Message:
         """
         Add a message to a conversation.
@@ -500,20 +515,37 @@ class ShortTermMemory(BaseMemory[Message]):
             role: Message role (user, assistant, system, tool)
             content: Message content
             conversation_id: Optional specific conversation ID
-            extract_entities: Whether to extract entities from content
+            extract_entities: Whether to extract entities from content. Has
+                no effect when ``extraction_mode != 'auto'``.
             extract_relations: Whether to extract and store relations between entities
             generate_embedding: Whether to generate embedding
             metadata: Optional metadata
+            extraction_mode: How to populate MENTIONS edges for this message.
+                ``'auto'`` (default): run the configured extractor pipeline.
+                ``'skip'``: do not run extraction, do not write MENTIONS edges.
+                ``'explicit'``: do not run extraction, write MENTIONS edges
+                only for the entities supplied via ``explicit_mentions``.
+            explicit_mentions: When ``extraction_mode='explicit'``, a list
+                of :class:`~neo4j_agent_memory.schema.models.EntityRef`
+                describing the entities to MERGE on and link.
+            user_identifier: When provided, scopes the conversation to a
+                :User node via ``(:User)-[:HAS_CONVERSATION]->(:Conversation)``.
+                Required when ``MemorySettings.multi_tenant=True``.
 
         Returns:
             The created message
         """
+        # Multi-tenant guardrail.
+        self._enforce_multi_tenant(user_identifier)
+
         # Normalize role
         if isinstance(role, str):
             role = MessageRole(role.lower())
 
         # Get or create conversation
-        conv_id = await self._ensure_conversation(session_id, conversation_id)
+        conv_id = await self._ensure_conversation(
+            session_id, conversation_id, user_identifier=user_identifier
+        )
 
         # Generate embedding if enabled
         embedding = None
@@ -543,11 +575,76 @@ class ShortTermMemory(BaseMemory[Message]):
             },
         )
 
-        # Extract and link entities if enabled
-        if extract_entities and self._extractor is not None:
-            await self._extract_and_link_entities(message, extract_relations=extract_relations)
+        # Extract and link entities according to the requested mode.
+        if extraction_mode == "skip":
+            pass
+        elif extraction_mode == "explicit":
+            await self._link_explicit_mentions(message, explicit_mentions or [])
+        else:
+            # 'auto' — preserve historical behavior.
+            if extract_entities and self._extractor is not None:
+                await self._extract_and_link_entities(message, extract_relations=extract_relations)
 
         return message
+
+    async def _link_explicit_mentions(
+        self,
+        message: Message,
+        mentions: list,
+    ) -> None:
+        """Write a ``MENTIONS`` edge from ``message`` to each supplied EntityRef.
+
+        Skips extraction entirely. Used by callers who already know which
+        entities a message touches (e.g. a tool's output is a list of
+        Client objects).
+        """
+        if not mentions:
+            return
+
+        for ref in mentions:
+            # Resolve to or create the target entity. Identity precedence:
+            # id > name+type > name.
+            if getattr(ref, "id", None):
+                rows = await self._client.execute_read(
+                    "MATCH (e:Entity {id: $id}) RETURN e.id AS id LIMIT 1",
+                    {"id": ref.id},
+                )
+                if not rows:
+                    continue
+                entity_id = rows[0]["id"]
+            elif getattr(ref, "type", None):
+                rows = await self._client.execute_write(
+                    """
+                    MERGE (e:Entity {name: $name, type: $type})
+                    ON CREATE SET e.id = coalesce(e.id, $name + ':' + $type),
+                                  e.created_at = datetime()
+                    RETURN e.id AS id
+                    """,
+                    {"name": ref.name, "type": ref.type},
+                )
+                entity_id = rows[0]["id"]
+            else:
+                rows = await self._client.execute_write(
+                    """
+                    MERGE (e:Entity {name: $name})
+                    ON CREATE SET e.id = coalesce(e.id, $name),
+                                  e.created_at = datetime()
+                    RETURN e.id AS id
+                    """,
+                    {"name": ref.name},
+                )
+                entity_id = rows[0]["id"]
+
+            await self._client.execute_write(
+                queries.LINK_MESSAGE_TO_ENTITY,
+                {
+                    "message_id": str(message.id),
+                    "entity_id": entity_id,
+                    "confidence": 1.0,
+                    "start_pos": None,
+                    "end_pos": None,
+                },
+            )
 
     async def get_conversation(
         self,
@@ -966,8 +1063,16 @@ class ShortTermMemory(BaseMemory[Message]):
         self,
         session_id: str,
         conversation_id: UUID | str | None = None,
+        user_identifier: str | None = None,
     ) -> UUID:
-        """Ensure a conversation exists and return its ID."""
+        """Ensure a conversation exists and return its ID.
+
+        When ``user_identifier`` is provided and the conversation is being
+        created (not just retrieved), the conversation is linked to the
+        :User node via ``(:User)-[:HAS_CONVERSATION]->(:Conversation)``,
+        and ``user_identifier`` is denormalized onto the Conversation
+        node for fast filtering.
+        """
         if conversation_id:
             return UUID(str(conversation_id))
 
@@ -977,7 +1082,14 @@ class ShortTermMemory(BaseMemory[Message]):
         )
 
         if results:
-            return UUID(results[0]["c"]["id"])
+            existing_id = UUID(results[0]["c"]["id"])
+            # If the caller now supplies a user_identifier and it wasn't
+            # already attached, idempotently wire it up. Cheap and avoids
+            # surprise when an existing conversation gets its first
+            # user-scoped write.
+            if user_identifier is not None:
+                await self._link_user_to_conversation(user_identifier, existing_id)
+            return existing_id
 
         # Create new conversation
         new_id = uuid4()
@@ -989,7 +1101,32 @@ class ShortTermMemory(BaseMemory[Message]):
                 "title": None,
             },
         )
+        if user_identifier is not None:
+            await self._link_user_to_conversation(user_identifier, new_id)
         return new_id
+
+    async def _link_user_to_conversation(self, user_identifier: str, conversation_id: UUID) -> None:
+        """Idempotently write ``(:User)-[:HAS_CONVERSATION]->(:Conversation)``.
+
+        Also denormalizes ``user_identifier`` onto the Conversation node
+        so per-user queries are indexable via the (existing)
+        ``conversation_session_idx`` plus a property-equality filter,
+        without an extra MATCH on :User.
+        """
+        await self._client.execute_write(
+            """
+            MERGE (u:User {identifier: $user_identifier})
+            ON CREATE SET u.id = $user_identifier, u.created_at = datetime()
+            WITH u
+            MATCH (c:Conversation {id: $conversation_id})
+            MERGE (u)-[:HAS_CONVERSATION]->(c)
+            SET c.user_identifier = $user_identifier
+            """,
+            {
+                "user_identifier": user_identifier,
+                "conversation_id": str(conversation_id),
+            },
+        )
 
     async def _get_last_message_id(self, conversation_id: UUID) -> str | None:
         """Get the ID of the last message in a conversation (one without outgoing NEXT_MESSAGE)."""
@@ -1047,6 +1184,13 @@ class ShortTermMemory(BaseMemory[Message]):
             entity_id = str(uuid4())
             entity_subtype = getattr(entity, "subtype", None)
             create_query = build_create_entity_query(entity.type, entity_subtype)
+            # Stage attribution: which extractor produced this entity?
+            # Stored in metadata so it's queryable via apoc / JSON helpers
+            # without changing the constraint or index footprint.
+            extracted_by = getattr(entity, "extractor", None)
+            metadata_payload = (
+                json.dumps({"extracted_by": extracted_by}) if extracted_by is not None else None
+            )
             await self._client.execute_write(
                 create_query,
                 {
@@ -1058,7 +1202,7 @@ class ShortTermMemory(BaseMemory[Message]):
                     "description": None,
                     "embedding": None,
                     "confidence": entity.confidence,
-                    "metadata": None,  # Serialized as null for empty
+                    "metadata": metadata_payload,
                     "location": None,  # Required for LOCATION entities
                 },
             )

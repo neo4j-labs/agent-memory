@@ -29,8 +29,16 @@ from neo4j_agent_memory.extraction import (
 
 
 @pytest.fixture
-def runner():
-    """Create a CLI test runner."""
+def runner(monkeypatch):
+    """Create a CLI test runner with a deterministic environment.
+
+    Clears NEO4J_* env vars so the `--password` and `--uri` Click options
+    don't pick up the developer's local environment via `envvar=`. Without
+    this, the `*_no_password` tests fail when run by anyone who has
+    NEO4J_PASSWORD set in their shell.
+    """
+    for var in ("NEO4J_PASSWORD", "NEO4J_USER", "NEO4J_USERNAME", "NEO4J_URI"):
+        monkeypatch.delenv(var, raising=False)
     return CliRunner()
 
 
@@ -486,16 +494,20 @@ class TestSchemasCommand:
         assert result.exit_code == 1
         assert "password required" in result.output
 
-    @patch("neo4j.AsyncGraphDatabase")
+    @patch("neo4j_agent_memory.graph.client.AsyncGraphDatabase")
     @patch("neo4j_agent_memory.schema.SchemaManager")
     def test_schemas_list_json(self, mock_manager_class, mock_driver_class, runner):
         """Test schemas list with JSON output."""
 
         from neo4j_agent_memory.schema import SchemaListItem
 
+        # Patch path follows the CLI's new dependency: schemas_list constructs a
+        # Neo4jClient internally, and Neo4jClient.connect() calls
+        # AsyncGraphDatabase.driver() and verify_connectivity().
         mock_driver = MagicMock()
         mock_driver_class.driver.return_value = mock_driver
         mock_driver.close = AsyncMock()
+        mock_driver.verify_connectivity = AsyncMock()
 
         mock_manager = MagicMock()
         mock_manager_class.return_value = mock_manager
@@ -573,13 +585,17 @@ class TestStatsCommand:
         assert result.exit_code == 1
         assert "password required" in result.output
 
-    @patch("neo4j.AsyncGraphDatabase")
+    @patch("neo4j_agent_memory.graph.client.AsyncGraphDatabase")
     @patch("neo4j_agent_memory.memory.LongTermMemory")
     def test_stats_json_output(self, mock_memory_class, mock_driver_class, runner):
         """Test stats with JSON output."""
+        # Patch path follows the CLI's new dependency: stats constructs a
+        # Neo4jClient internally, and Neo4jClient.connect() calls
+        # AsyncGraphDatabase.driver() and verify_connectivity().
         mock_driver = MagicMock()
         mock_driver_class.driver.return_value = mock_driver
         mock_driver.close = AsyncMock()
+        mock_driver.verify_connectivity = AsyncMock()
 
         mock_memory = MagicMock()
         mock_memory_class.return_value = mock_memory

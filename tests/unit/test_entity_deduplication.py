@@ -287,7 +287,11 @@ class TestLongTermMemoryDeduplication:
         assert dedup_result.is_duplicate is True
         assert dedup_result.action == "merged"
         assert dedup_result.matched_entity_id == UUID(existing_entity_id)
-        assert dedup_result.similarity_score == 0.96
+        # The contractual property is "above auto_merge_threshold (0.95)".
+        # The exact value depends on whether fuzzy matching is enabled (the
+        # default DeduplicationConfig averages vector + fuzzy scores, so the
+        # combined score ≠ the raw 0.96 vector score from the mock).
+        assert dedup_result.similarity_score >= 0.95
         # The returned entity should be the existing one
         assert entity.name == "John Smith"
 

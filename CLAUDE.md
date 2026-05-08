@@ -154,11 +154,39 @@ benchmarks/                   # Extraction quality benchmarks (separate module)
 - **`ShortTermMemory`**: Handles conversations and messages
 - **`LongTermMemory`**: Handles entities (POLE+O), preferences, and facts
 - **`ReasoningMemory`**: Handles reasoning traces and tool calls
+- **`UserMemory`** _(v0.2)_: First-class `:User` identity for multi-tenant deployments
+- **`BufferedWriter`** _(v0.2)_: Fire-and-forget Cypher writer with bounded queue and background drain
+- **`ConsolidationMemory`** _(v0.2)_: Dry-runnable hygiene jobs (entity dedupe, trace summarization, preference supersedence, conversation archival)
+- **`EvalMemory`** _(v0.2)_: Labelled-suite evaluation harness for retrieval, audit, and preference quality
 - **`Neo4jClient`**: Async wrapper around neo4j Python driver
 - **`ExtractionPipeline`**: Multi-stage entity extraction (spaCy → GLiNER → LLM)
 - **`CompositeResolver`**: Type-aware entity resolution
 - **`MemoryObserver`**: Observational memory - tracks context per session and generates reflections when token thresholds are exceeded
 - **`PreferenceDetector`**: Pattern-based preference detection from user messages
+
+### v0.2 surface (in development on the `adopt-existing-graph` branch)
+
+The v0.2 feature drop adds production-readiness primitives. Each is opt-in and lives behind a `MemoryClient` property accessor; existing v0.1 code keeps working unchanged.
+
+- **`client.schema.adopt_existing_graph(label_to_type=..., name_property_per_label=...)`** — attach the `:Entity` super-label and library properties to nodes from a pre-existing graph. Idempotent. Use with `SchemaModel.CUSTOM` to map non-POLE+O domain types. Headline v0.2 feature. Doc: `docs/.../how-to/adopt-existing-graph.adoc`.
+- **`MemorySettings.memory.multi_tenant=True`** plus **`user_identifier=`** kwarg on short/long/reasoning APIs — scopes reads and writes per tenant. **`client.users`** (`UserMemory`) provides `upsert_user()`, `get_user()`, `link_user_to_conversation()`. Doc: `docs/.../how-to/multi-tenancy.adoc`.
+- **`MemorySettings.memory.write_mode="buffered"`** + **`client.buffered.submit(query, params)`** + **`client.flush()`** + **`client.write_errors`** — fire-and-forget Cypher with a bounded queue. The user-visible response path is decoupled from Neo4j round-trips. Doc: `docs/.../how-to/buffered-writes.adoc`.
+- **`client.consolidation`** — `dedupe_entities()`, `summarize_long_traces()`, `detect_superseded_preferences()`, `archive_expired_conversations()`. All default to `dry_run=True`. Doc: `docs/.../how-to/consolidation.adoc`.
+- **`client.eval.run(EvalSuite(audit=[AuditCase(...)], preference=[PreferenceCase(...)], ...))`** — labelled regression tests. Returns an `EvalReport` with per-dimension scores. Doc: `docs/.../how-to/evaluation.adoc`.
+- **Reasoning audit edges**: `record_tool_call(touched_entities=[EntityRef(...)])`, `@client.reasoning.on_tool_call_recorded` decorator hook for domain-specific inference, `TraceOutcome` (success/error_kind/summary/related_entities/metrics) on `complete_trace(outcome=...)`. The headline payoff: a one-hop `MATCH (e:Entity)<-[:TOUCHED]-(s:ReasoningStep)<-[:HAS_STEP]-(rt:ReasoningTrace)` audit query. Doc: `docs/.../how-to/audit-reasoning.adoc`.
+- **Encryption helper**: `core.encryption` for at-rest encryption of sensitive memory fields. Doc: `docs/.../how-to/privacy-and-audit.adoc`.
+
+**Schema additions in v0.2:**
+
+```
+(:User {identifier})                                     # UserMemory
+(:User)-[:HAS_CONVERSATION]->(:Conversation)             # multi-tenant scoping
+(ReasoningStep)-[:TOUCHED]->(:Entity)                    # audit edges (NEW relationship type)
+```
+
+**Smoke-testing the v0.2 surface:** see the four small examples — `examples/{existing-graph,buffered-writes,audit-trail,eval-harness}/` — all run with `llm=None` and a local sentence-transformers embedder, no API keys required. Each pairs with a `tests/examples/test_*_example.py` smoke test wired into `example-tests` CI.
+
+**Phantom-method guard:** `tests/examples/test_no_phantom_methods.py` cross-references every `client.<layer>.<method>(` call in `examples/` against the actual class API. Catches silent breakage when an example calls a renamed/removed method (this guard caught five real cases during the v0.2 examples-review pass — see `CHANGELOG.md`).
 
 ### Neo4j Schema
 
@@ -195,6 +223,7 @@ Reasoning memory can link to short-term memory messages:
 ```
 (ReasoningTrace) -[:INITIATED_BY]-> (Message)    # Trace triggered by user message
 (ToolCall) -[:TRIGGERED_BY]-> (Message)          # Tool call triggered by message
+(ReasoningStep) -[:TOUCHED]-> (Entity)           # v0.2: audit edges for "what did this step affect?"
 ```
 
 Vector indexes are created for embedding-based search on Message, Entity, Preference, and ReasoningTrace nodes.

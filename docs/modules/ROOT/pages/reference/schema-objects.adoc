@@ -1,0 +1,112 @@
+= Schema Objects Reference
+:page-product: agent-memory
+:toclevels: 2
+
+Complete inventory of the constraints, regular indexes, vector indexes,
+and point indexes that `neo4j-agent-memory` creates on first connection.
+Use this page to answer "what schema changes will this library make to
+my Neo4j database?" before deploying.
+
+All schema objects are created by `SchemaManager.setup_all()`, which
+runs as part of `MemoryClient.connect()`. Existing constraints/indexes
+with the same name are skipped; the operation is idempotent.
+
+The authoritative source is
+`src/neo4j_agent_memory/graph/schema.py`. This page is a human-readable
+reference to the schema objects the library creates, but consult that
+file for the complete current inventory used in deployments.
+
+== Unique constraints
+
+[cols="1,1,1,3"]
+|===
+| Name | Label | Property | Purpose
+
+| `conversation_id`       | `Conversation`       | `id`         | Unique conversation identifier.
+| `message_id`            | `Message`            | `id`         | Unique message identifier.
+| `entity_id`             | `Entity`             | `id`         | Unique entity identifier across all subtypes.
+| `preference_id`         | `Preference`         | `id`         | Unique preference identifier.
+| `fact_id`               | `Fact`               | `id`         | Unique fact identifier.
+| `reasoning_trace_id`    | `ReasoningTrace`     | `id`         | Unique reasoning-trace identifier.
+| `reasoning_step_id`     | `ReasoningStep`      | `id`         | Unique reasoning-step identifier.
+| `tool_name`             | `Tool`               | `name`       | One `Tool` node per unique tool name (used for aggregated stats).
+| `tool_call_id`          | `ToolCall`           | `id`         | Unique tool-call identifier.
+| `user_identifier`       | `User`               | `identifier` | Unique user identifier (multi-tenancy).
+| `consolidation_run_id`  | `ConsolidationRun`   | `id`         | Unique consolidation-job run identifier.
+| `memory_read_audit_id`  | `MemoryReadAudit`    | `id`         | Unique memory-read audit event identifier.
+|===
+
+== Regular indexes
+
+Lookup indexes for common filter / equality queries.
+
+[cols="1,1,1,3"]
+|===
+| Name | Label | Property | Purpose
+
+| `conversation_session_idx`   | `Conversation`      | `session_id`     | Look up conversations by session.
+| `conversation_archived_idx`  | `Conversation`      | `archived`       | Filter active vs. archived conversations.
+| `message_timestamp_idx`      | `Message`           | `timestamp`      | Order messages chronologically.
+| `message_role_idx`           | `Message`           | `role`           | Filter messages by role (`user` / `assistant` / `system` / `tool`).
+| `entity_type_idx`            | `Entity`            | `type`           | Filter entities by POLE+O (or custom) type.
+| `entity_name_idx`            | `Entity`            | `name`           | Look up entities by display name.
+| `entity_canonical_idx`       | `Entity`            | `canonical_name` | Look up entities by deduplicated canonical name.
+| `preference_category_idx`    | `Preference`        | `category`       | Filter preferences by category.
+| `trace_session_idx`          | `ReasoningTrace`    | `session_id`     | Reasoning traces for a session.
+| `trace_success_idx`          | `ReasoningTrace`    | `success`        | Successful vs. failed traces.
+| `trace_error_kind_idx`       | `ReasoningTrace`    | `error_kind`     | Filter failed traces by error classification.
+| `consolidation_run_kind_idx` | `ConsolidationRun`  | `kind`           | Filter consolidation runs by kind.
+| `memory_read_audit_kind_idx` | `MemoryReadAudit`   | `kind`           | Filter memory-read audit events by kind.
+| `tool_call_status_idx`       | `ToolCall`          | `status`         | Filter tool calls by status.
+|===
+
+== Vector indexes
+
+Created with the embedding dimensions configured at construction time
+(`SchemaManager(client, vector_dimensions=...)`). Default is 1536.
+
+NOTE: Vector indexes require Neo4j 5.11+. On older databases the library
+silently skips creation — semantic search via these indexes won't
+work, but the rest of the library functions normally.
+
+[cols="1,1,1,3"]
+|===
+| Name | Label | Property | Purpose
+
+| `message_embedding_idx`     | `Message`         | `embedding`      | Semantic search over message content.
+| `entity_embedding_idx`      | `Entity`          | `embedding`      | Semantic search over entity descriptions.
+| `preference_embedding_idx`  | `Preference`      | `embedding`      | Semantic search over preferences.
+| `fact_embedding_idx`        | `Fact`            | `embedding`      | Semantic search over facts.
+| `task_embedding_idx`        | `ReasoningTrace`  | `task_embedding` | Search past reasoning traces by task similarity.
+| `step_embedding_idx`        | `ReasoningStep`   | `embedding`      | Semantic search over individual reasoning steps (used by `search_steps`).
+|===
+
+== Point indexes
+
+Created for geospatial queries on Location entities.
+
+[cols="1,1,1,3"]
+|===
+| Name | Label | Property | Purpose
+
+| `entity_location_idx` | `Entity` | `location` | Geospatial proximity queries (`point.distance`, bounding box).
+|===
+
+== Removing the schema
+
+`SchemaManager.drop_all()` removes every constraint and index whose name
+starts with one of `conversation_`, `message_`, `entity_`,
+`preference_`, `fact_`, `reasoning_`, `trace_`, `tool_`, `task_`,
+`step_`, `user_`, `consolidation_`, or `memory_read_`. It does not
+delete data — only schema definitions.
+
+[source,python]
+----
+async with MemoryClient(settings) as client:
+    await client.schema.drop_all()
+----
+
+== See Also
+
+* xref:reference/configuration.adoc[Configuration Reference] — how to override `vector_dimensions` and other schema-related options.
+* xref:explanation/graph-architecture.adoc[Graph Architecture] — the relationships these constraints/indexes support.

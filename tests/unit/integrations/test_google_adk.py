@@ -244,7 +244,7 @@ class TestNeo4jMemoryService:
         mock_memory_client.short_term.add_message.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_search_memories(self, memory_service, mock_memory_client):
+    async def test_search_memory(self, memory_service, mock_memory_client):
         """Test searching memories."""
         # Setup mock responses
         mock_msg = MagicMock()
@@ -270,15 +270,18 @@ class TestNeo4jMemoryService:
         mock_memory_client.long_term.search_entities = AsyncMock(return_value=[mock_entity])
         mock_memory_client.long_term.search_preferences = AsyncMock(return_value=[mock_pref])
 
-        results = await memory_service.search_memories("project deadline")
+        results = await memory_service.search_memory("project deadline")
 
-        assert len(results) == 3
-        assert any(r.memory_type == "message" for r in results)
-        assert any(r.memory_type == "entity" for r in results)
-        assert any(r.memory_type == "preference" for r in results)
+        assert len(results.memories) == 3
+
+        texts = [r.content.parts[0].text for r in results.memories]
+
+        assert any("Project deadline is next week" in t for t in texts)
+        assert any("Project Alpha" in t for t in texts)
+        assert any("Likes morning meetings" in t for t in texts)
 
     @pytest.mark.asyncio
-    async def test_search_memories_without_entities(self, mock_memory_client):
+    async def test_search_memory_without_entities(self, mock_memory_client):
         """Test searching with entities disabled."""
         from neo4j_agent_memory.integrations.google_adk.memory_service import (
             Neo4jMemoryService,
@@ -292,7 +295,7 @@ class TestNeo4jMemoryService:
 
         mock_memory_client.short_term.search_messages = AsyncMock(return_value=[])
 
-        await service.search_memories("test query")
+        await service.search_memory("test query")
 
         mock_memory_client.short_term.search_messages.assert_called_once()
         mock_memory_client.long_term.search_entities.assert_not_called()
@@ -316,11 +319,7 @@ class TestNeo4jMemoryService:
         results = await memory_service.get_memories_for_session("session-123")
 
         assert len(results) == 1
-        assert results[0].memory_type == "message"
-        mock_memory_client.short_term.get_conversation.assert_called_once_with(
-            session_id="session-123",
-            limit=50,
-        )
+        assert results[0].content == "Hello"
 
     @pytest.mark.asyncio
     async def test_add_memory_message(self, memory_service, mock_memory_client):

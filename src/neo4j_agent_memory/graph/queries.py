@@ -362,6 +362,34 @@ RETURN node AS f, score
 ORDER BY score DESC
 """
 
+FIND_DUPLICATE_FACTS = """
+CALL db.index.vector.queryNodes('fact_embedding_idx', $limit, $embedding)
+YIELD node, score
+WHERE score >= $threshold
+  AND node.subject = $subject
+  AND node.predicate = $predicate
+RETURN node AS f, score
+ORDER BY score DESC
+"""
+
+UPDATE_FACT_CONFIDENCE = """
+MATCH (f:Fact {id: $id})
+SET f.confidence = CASE
+    WHEN $confidence > f.confidence THEN $confidence ELSE f.confidence END,
+    f.object = CASE
+    WHEN $confidence > f.confidence THEN $object ELSE f.object END
+RETURN f
+"""
+
+FIND_DUPLICATE_PREFERENCES = """
+CALL db.index.vector.queryNodes('preference_embedding_idx', $limit, $embedding)
+YIELD node, score
+WHERE score >= $threshold
+  AND node.category = $category
+RETURN node AS p, score
+ORDER BY score DESC
+"""
+
 GET_ENTITY_RELATIONSHIPS = """
 MATCH (e:Entity {id: $entity_id})-[r:RELATED_TO]-(other:Entity)
 RETURN e, r, other
@@ -558,6 +586,17 @@ RETURN node AS rt, score
 ORDER BY score DESC
 """
 
+
+SEARCH_STEPS_BY_EMBEDDING = """
+CALL db.index.vector.queryNodes('step_embedding_idx', $limit, $embedding)
+YIELD node AS rs, score
+WHERE score >= $threshold
+MATCH (rt:ReasoningTrace)-[:HAS_STEP]->(rs)
+WHERE ($success_only = false OR rt.success = true)
+RETURN rs, score, rt.task AS task, rt.outcome AS outcome, rt.success AS trace_success
+ORDER BY score DESC
+"""
+
 GET_TRACE_WITH_STEPS = """
 MATCH (rt:ReasoningTrace {id: $id})
 OPTIONAL MATCH (rt)-[:HAS_STEP]->(rs:ReasoningStep)
@@ -612,6 +651,38 @@ MATCH (tc:ToolCall {id: $tool_call_id})
 MATCH (m:Message {id: $message_id})
 MERGE (tc)-[:TRIGGERED_BY]->(m)
 RETURN tc, m
+"""
+
+
+# Match by id when provided (most specific), else fall back to (name, type),
+# else (name) only. The MERGE on the relationship is keyed on the pair so
+# re-recording the same touched entity doesn't create duplicate edges.
+RECORD_TOUCHED_EDGE_BY_ID = """
+MATCH (s:ReasoningStep {id: $step_id})
+MATCH (e:Entity {id: $entity_id})
+MERGE (s)-[r:TOUCHED]->(e)
+ON CREATE SET r.recorded_at = datetime()
+RETURN s, e
+"""
+
+RECORD_TOUCHED_EDGE_BY_NAME_TYPE = """
+MATCH (s:ReasoningStep {id: $step_id})
+MERGE (e:Entity {name: $name, type: $type})
+ON CREATE SET e.id = coalesce(e.id, $name + ':' + $type),
+              e.created_at = datetime()
+MERGE (s)-[r:TOUCHED]->(e)
+ON CREATE SET r.recorded_at = datetime()
+RETURN s, e
+"""
+
+RECORD_TOUCHED_EDGE_BY_NAME = """
+MATCH (s:ReasoningStep {id: $step_id})
+MERGE (e:Entity {name: $name})
+ON CREATE SET e.id = coalesce(e.id, $name),
+              e.created_at = datetime()
+MERGE (s)-[r:TOUCHED]->(e)
+ON CREATE SET r.recorded_at = datetime()
+RETURN s, e
 """
 
 GET_SESSION_CONTEXT = """
@@ -1245,3 +1316,59 @@ def build_metadata_search_query(metadata_clause: str) -> str:
         Complete Cypher query string for vector search with metadata filter
     """
     return SEARCH_MESSAGES_WITH_METADATA_TEMPLATE.format(metadata_clause=metadata_clause)
+
+
+# =============================================================================
+# EXISTING-GRAPH ADOPTION QUERIES (v0.2)
+# =============================================================================
+#
+# These templates are used by ``SchemaManager.adopt_existing_graph(...)`` to
+# attach the ``:Entity`` super-label and the ``id``/``type``/``name``
+# properties to nodes in a pre-existing domain graph, so that the library's
+# MENTIONS / RELATED_TO writes find them instead of creating duplicates.
+#
+# The label and the name property are interpolated into the query string
+# because Neo4j cannot parameterize identifiers. They are validated against
+# a Cypher-safe identifier pattern by the caller before substitution.
+
+
+def adopt_label_to_entity_query(
+    label: str,
+    name_property: str,
+) -> str:
+    """Build a Cypher query that adopts nodes of ``label`` as :Entity.
+
+    Idempotent — already-adopted nodes are skipped by the WHERE clause.
+    Returns the count of nodes mutated in this run.
+    """
+    return f"""
+    MATCH (n:`{label}`)
+    WHERE NOT n:Entity AND n.`{name_property}` IS NOT NULL
+    WITH n,
+         CASE
+             WHEN n.id IS NOT NULL THEN n.id
+             ELSE $label_lc + ':' + toString(n.`{name_property}`)
+         END AS computed_id
+    SET n:Entity,
+        n.type = $type,
+        n.id = coalesce(n.id, computed_id),
+        n.name = coalesce(n.name, n.`{name_property}`)
+    RETURN count(n) AS migrated_count
+    """
+
+
+def count_adoption_skipped_query(label: str, name_property: str) -> str:
+    """Count nodes that couldn't be adopted because they lack the name property."""
+    return f"""
+    MATCH (n:`{label}`)
+    WHERE NOT n:Entity AND n.`{name_property}` IS NULL
+    RETURN count(n) AS skipped_count
+    """
+
+
+def count_already_adopted_query(label: str) -> str:
+    """Count nodes that already carry the :Entity super-label."""
+    return f"""
+    MATCH (n:`{label}`:Entity)
+    RETURN count(n) AS already_adopted_count
+    """

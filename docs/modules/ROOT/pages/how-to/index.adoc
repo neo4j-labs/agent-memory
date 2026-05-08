@@ -1,7 +1,6 @@
 = How-To Guides
 :page-product: agent-memory
 :page-pagination:
-:toc: left
 :toclevels: 2
 :page-ad-icon: mortarboard
 :page-ad-title: Context Graphs: Agent Memory with Neo4j
@@ -44,8 +43,14 @@ Automatically extract entities and relationships to populate your context graph 
 |===
 | Guide | What You'll Accomplish
 
+| xref:how-to/adopt-existing-graph.adoc[Adopt an Existing Domain Graph]
+| Layer agent memory on top of a graph that already exists in production. Attach the `:Entity` super-label and library-managed properties idempotently with `client.schema.adopt_existing_graph()`.
+
 | xref:how-to/entity-extraction.adoc[Configure Entity Extraction]
 | Set up spaCy, GLiNER, or LLM extractors. Create custom domain schemas for financial services, ecommerce, or any industry. Build multi-stage pipelines.
+
+| xref:how-to/running-without-an-llm.adoc[Run Without an LLM]
+| Use spaCy/GLiNER-only extraction with `llm=None`. Run in air-gapped environments or without an OpenAI key.
 
 | xref:how-to/batch-processing.adoc[Process Documents in Batch]
 | Extract entities from large document collections efficiently. Handle streaming for long documents. Import product catalogs or financial reports.

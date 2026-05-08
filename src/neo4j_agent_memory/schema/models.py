@@ -15,8 +15,9 @@ This implementation extends POLE with Organizations as a first-class entity type
 
 from enum import Enum
 from pathlib import Path
+from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class POLEOEntityType(str, Enum):
@@ -89,6 +90,211 @@ class RelationTypeConfig(BaseModel):
     properties: list[str] = Field(
         default_factory=list, description="Properties on this relationship"
     )
+
+
+class User(BaseModel):
+    """First-class user identity for multi-tenant deployments.
+
+    Pre-0.4 every consumer of the library reinvented user scoping.
+    ``client.users.upsert_user(...)`` makes user identity a first-class
+    concept; pass ``user_identifier=`` to short-term, long-term, and
+    reasoning APIs to scope writes and reads by user.
+    """
+
+    id: str = Field(description="UUID for the User node (auto-generated)")
+    identifier: str = Field(
+        description=(
+            "Stable identifier for the user (commonly an email address). "
+            "Unique constraint enforced at the database level."
+        ),
+    )
+    attributes: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Arbitrary per-user attributes (name, role, etc.)",
+    )
+
+
+class EntityRef(BaseModel):
+    """A lightweight reference to an entity, used by reasoning APIs.
+
+    Used as the input shape for ``record_tool_call(touched_entities=[...])``,
+    ``add_message(explicit_mentions=[...])``, ``add_preference(applies_to=[...])``,
+    and the structured ``related_entities`` field on :class:`TraceOutcome`.
+
+    Identity precedence (most specific wins): ``id`` > ``name + type``.
+    """
+
+    label: str | None = Field(
+        default=None,
+        description=(
+            "Optional source domain label (e.g. 'Client'). Used when adopting "
+            "an existing graph and the caller wants to disambiguate by label."
+        ),
+    )
+    name: str | None = Field(
+        default=None,
+        description="Entity display name (matches Entity.name)",
+    )
+    type: str | None = Field(
+        default=None,
+        description="POLE+O or custom entity type (matches Entity.type)",
+    )
+    id: str | None = Field(
+        default=None,
+        description=(
+            "Optional explicit entity id. When set, the reference identifies "
+            "exactly one entity regardless of name/type."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _require_name_or_id(self) -> "EntityRef":
+        if not self.name and not self.id:
+            raise ValueError("EntityRef requires at least one of 'name' or 'id'")
+        return self
+
+
+class TraceOutcome(BaseModel):
+    """Structured outcome attached to a reasoning trace at completion time.
+
+    Pre-0.3 callers passed an outcome ``str`` and a boolean ``success`` to
+    ``complete_trace``. ``TraceOutcome`` lets a caller attach an indexable
+    error kind, structured related entities, and metrics — while remaining
+    fully back-compatible with the legacy string + boolean API.
+    """
+
+    success: bool = Field(description="Whether the task succeeded")
+    summary: str = Field(description="Human-readable outcome summary")
+    error_kind: str | None = Field(
+        default=None,
+        description=(
+            "Indexed error category, e.g. 'timeout', 'no_results', "
+            "'user_aborted'. Stored on the ReasoningTrace for fast filtering."
+        ),
+    )
+    related_entities: list[EntityRef] = Field(
+        default_factory=list,
+        description="Entities the trace touched (for case-based retrieval)",
+    )
+    metrics: dict[str, float] = Field(
+        default_factory=dict,
+        description=("Arbitrary numeric metrics keyed by name (e.g. 'latency_ms', 'tools_called')"),
+    )
+
+
+class ConsolidationCandidate(BaseModel):
+    """A single candidate action identified by a consolidation primitive.
+
+    Used by :class:`ConsolidationReport.candidates` to describe what
+    *would* happen in a dry-run, or what *did* happen in a real run.
+    """
+
+    kind: str = Field(
+        description=(
+            "What action this represents. Examples: 'dedupe_entity_pair', "
+            "'summarize_trace', 'supersede_preference'."
+        ),
+    )
+    description: str = Field(description="Human-readable summary")
+    payload: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Operation-specific details (entity IDs, trace ID, etc.)",
+    )
+    action_taken: bool = Field(
+        default=False,
+        description=(
+            "True if the consolidation actually mutated the graph, "
+            "False if dry_run was set or the candidate was below threshold."
+        ),
+    )
+
+
+class ConsolidationReport(BaseModel):
+    """Result of a consolidation primitive.
+
+    Returned by ``client.consolidation.dedupe_entities()``,
+    ``summarize_long_traces()``, etc. When ``dry_run`` is True the
+    report describes candidates only — no writes happen. When False,
+    the report records what was mutated and a corresponding
+    ``:ConsolidationRun`` audit node is created in Neo4j.
+    """
+
+    kind: str = Field(description="Consolidation kind, e.g. 'dedupe_entities'")
+    dry_run: bool = Field(
+        default=True,
+        description="True if no mutations occurred",
+    )
+    candidates: list[ConsolidationCandidate] = Field(
+        default_factory=list,
+        description="Per-candidate breakdown",
+    )
+    run_id: str | None = Field(
+        default=None,
+        description=("ID of the ``:ConsolidationRun`` audit node, set when ``dry_run=False``."),
+    )
+
+    @property
+    def candidate_count(self) -> int:
+        return len(self.candidates)
+
+    @property
+    def actions_taken(self) -> int:
+        return sum(1 for c in self.candidates if c.action_taken)
+
+
+class AdoptionLabelReport(BaseModel):
+    """Per-label result of :meth:`SchemaManager.adopt_existing_graph`.
+
+    Reports how many nodes of a given label were newly adopted as
+    ``:Entity``, how many were already adopted, and how many were skipped
+    because they lack the configured name property.
+    """
+
+    label: str = Field(description="Source domain label, e.g. 'Person'")
+    type: str = Field(description="Library entity type assigned, e.g. 'PERSON'")
+    name_property: str = Field(description="Property used as the entity name (defaults to 'name')")
+    migrated_count: int = Field(default=0, description="Number of nodes adopted in this run")
+    already_adopted_count: int = Field(
+        default=0, description="Number of nodes that already carried :Entity"
+    )
+    skipped_count: int = Field(
+        default=0,
+        description=(
+            "Number of nodes that couldn't be adopted because the configured name property is null"
+        ),
+    )
+
+
+class AdoptionReport(BaseModel):
+    """Result of :meth:`SchemaManager.adopt_existing_graph`.
+
+    Aggregates per-label results plus a summary suitable for printing
+    after a migration run.
+    """
+
+    by_label: list[AdoptionLabelReport] = Field(
+        default_factory=list,
+        description="Per-label adoption results, one per input label",
+    )
+    dry_run: bool = Field(
+        default=False,
+        description="True if no mutations were performed (counts are projected)",
+    )
+
+    @property
+    def total_migrated(self) -> int:
+        """Total nodes adopted in this run across all labels."""
+        return sum(r.migrated_count for r in self.by_label)
+
+    @property
+    def total_already_adopted(self) -> int:
+        """Total nodes already adopted (no-op portion of an idempotent run)."""
+        return sum(r.already_adopted_count for r in self.by_label)
+
+    @property
+    def total_skipped(self) -> int:
+        """Total nodes that couldn't be adopted (missing name property)."""
+        return sum(r.skipped_count for r in self.by_label)
 
 
 class EntitySchemaConfig(BaseModel):

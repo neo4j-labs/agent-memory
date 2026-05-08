@@ -92,7 +92,7 @@ class TestMCPToolsIntegration:
         async with Client(mcp_server) as client:
             result = await client.call_tool(
                 "memory_search",
-                {"query": "AI company", "limit": 10, "memory_types": ["entities"]},
+                {"query": "OpenAI organization", "limit": 10, "memory_types": ["entities"]},
             )
 
         data = json.loads(result.content[0].text)

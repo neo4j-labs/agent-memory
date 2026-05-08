@@ -157,7 +157,7 @@ class FinancialMemoryService:
         Returns:
             List of matching memory entries with content and type.
         """
-        results = await self.adk_memory_service.search_memories(
+        results = await self.adk_memory_service.search_memory(
             query=query,
             limit=limit,
             threshold=threshold,

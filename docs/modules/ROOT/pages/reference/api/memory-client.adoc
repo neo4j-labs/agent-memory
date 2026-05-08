@@ -1,7 +1,6 @@
 = MemoryClient API Reference
 :page-product: agent-memory
 :page-pagination:
-:toc: left
 :toclevels: 2
 
 The main entry point for all memory operations.

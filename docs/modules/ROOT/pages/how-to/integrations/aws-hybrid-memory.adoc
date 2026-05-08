@@ -1,7 +1,6 @@
 = AWS Hybrid Memory Provider
 :description: Combine AgentCore Memory with Neo4j Context Graphs for optimal memory management
 :keywords: agentcore, hybrid, memory, aws, neo4j, routing
-:toc:
 
 This guide shows how to use the HybridMemoryProvider to intelligently route queries between short-term session memory and long-term context graphs.
 

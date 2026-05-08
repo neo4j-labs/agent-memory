@@ -1,0 +1,112 @@
+= Memory Consolidation
+:page-product: agent-memory
+:toclevels: 2
+
+How to keep your memory graph clean over time. v0.5 ships four
+dry-runnable consolidation primitives — entity dedupe, long-trace
+flagging, preference supersede detection, and conversation TTL
+archival.
+
+[.lead]
+All primitives default to ``dry_run=True``: they identify candidates
+without mutating the graph. Pass ``dry_run=False`` to apply changes,
+which writes a ``:ConsolidationRun`` audit node so you can track when
+each job last ran.
+
+== Goal
+
+Run periodic hygiene jobs from a cron / scheduler:
+
+[source,python]
+----
+async with MemoryClient(settings) as client:
+    # 1. Find near-duplicate entities, merge those above 0.95 similarity.
+    report = await client.consolidation.dedupe_entities(
+        similarity_threshold=0.95, dry_run=False
+    )
+    log.info("Deduped %d entity pairs", report.actions_taken)
+
+    # 2. Flag long traces for out-of-band summarization.
+    await client.consolidation.summarize_long_traces(
+        min_steps=20, dry_run=False
+    )
+
+    # 3. Fold near-duplicate preferences into supersede chains.
+    await client.consolidation.detect_superseded_preferences(
+        dry_run=False
+    )
+
+    # 4. Archive conversations older than 90 days.
+    await client.consolidation.archive_expired_conversations(
+        ttl_days=90, dry_run=False
+    )
+----
+
+== Steps
+
+=== 1. Always dry-run first
+
+Every primitive returns a :class:`ConsolidationReport` with a
+``candidates`` list. Inspect it before applying.
+
+[source,python]
+----
+report = await client.consolidation.dedupe_entities(dry_run=True)
+for c in report.candidates[:10]:
+    print(c.description)
+print(f"... {report.candidate_count} total candidates.")
+----
+
+=== 2. Apply with `dry_run=False`
+
+[source,python]
+----
+report = await client.consolidation.dedupe_entities(
+    similarity_threshold=0.95, dry_run=False
+)
+print(f"Run id: {report.run_id}")
+print(f"Applied: {report.actions_taken}")
+----
+
+When mutations occur, the library writes a
+``(:ConsolidationRun {id, kind, started_at, completed_at, stats_json})``
+node. Successive runs can pick up where the last left off by querying
+the most recent run for a given kind:
+
+[source,cypher]
+----
+MATCH (cr:ConsolidationRun {kind: 'dedupe_entities'})
+RETURN cr.id, cr.completed_at, cr.stats_json
+ORDER BY cr.completed_at DESC LIMIT 1
+----
+
+=== 3. Idempotent re-runs
+
+Each primitive skips work it has already done — for example,
+``summarize_long_traces`` only flags traces where
+``summarization_pending`` is not already true. Re-running on a clean
+graph is a no-op.
+
+== Primitives reference
+
+[cols="1,3"]
+|===
+| Primitive | What it does
+
+| `dedupe_entities`
+| Find entity pairs with embedding similarity above the threshold (defaulting to 0.95) that aren't already linked via `:SAME_AS`. Mutation writes `[:SAME_AS {status: 'auto_consolidated'}]`.
+
+| `summarize_long_traces`
+| Find `:ReasoningTrace` nodes with `>= min_steps` steps that haven't been summarized. Mutation sets `summarization_pending = true` so an out-of-band summarizer can pick them up; the library does not summarize traces itself (that's prompt + LLM choice).
+
+| `detect_superseded_preferences`
+| Find pairs of preferences in the same category with high embedding similarity but different text — likely supersedes. Mutation calls `supersede_preference` (writes `[:SUPERSEDED_BY]` and sets `valid_until`).
+
+| `archive_expired_conversations`
+| Mark `:Conversation` nodes older than `ttl_days` as archived. Sets `archived = true` and `archived_at`; does not delete data. Pair with `MemorySettings.memory.conversation_ttl_days`.
+|===
+
+== See Also
+
+* xref:how-to/preferences.adoc[Manage Preferences]
+* xref:how-to/audit-reasoning.adoc[Audit Reasoning with TOUCHED Edges]

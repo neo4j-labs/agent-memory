@@ -1,6 +1,16 @@
-# Google Cloud Financial Advisor
+# Financial Services Advisor — Google Cloud Implementation
 
-An intelligent compliance assistant powered by **Google ADK** (Agent Development Kit) and **Neo4j Agent Memory Context Graphs**, demonstrating multi-agent AI for KYC/AML compliance, fraud detection, and relationship intelligence.
+![Neo4j Labs](https://img.shields.io/badge/Neo4j-Labs-6366F1?logo=neo4j)
+![Status: Beta](https://img.shields.io/badge/Status-Beta-6366F1)
+![Community Supported](https://img.shields.io/badge/Support-Community-6B7280)
+
+> Multi-agent KYC/AML compliance assistant on Google ADK + Gemini + Vertex AI + Neo4j Agent Memory.
+
+An intelligent compliance assistant powered by **Google ADK** (Agent Development Kit) and **Neo4j Agent Memory Context Graphs**, demonstrating multi-agent AI for KYC/AML compliance, fraud detection, and relationship intelligence. The AWS variant lives at [`../aws-financial-services-advisor/`](../aws-financial-services-advisor/); both share the same sample data and Neo4j schema.
+
+> ⚠️ **Neo4j Labs Project**
+>
+> This example is part of [`neo4j-agent-memory`](https://github.com/neo4j-labs/agent-memory), a Neo4j Labs project. It is actively maintained but not officially supported. APIs may change. Community support is available via the [Neo4j Community Forum](https://community.neo4j.com).
 
 ## Architecture
 
@@ -636,3 +646,13 @@ Full API documentation available at http://localhost:8000/docs when running loca
 ## License
 
 This example is part of the neo4j-agent-memory project and is licensed under the Apache 2.0 License.
+
+## Support
+
+- 💬 [Neo4j Community Forum](https://community.neo4j.com)
+- 🐛 [GitHub Issues](https://github.com/neo4j-labs/agent-memory/issues)
+- 📖 [`neo4j-agent-memory` documentation](https://github.com/neo4j-labs/agent-memory#readme)
+
+---
+
+_Verified against `neo4j-agent-memory` v0.1.2 / v0.2-dev on 2026-05-03 (105 unit tests pass; full end-to-end run requires Google API key and `[google-adk,vertex-ai]` extras)._

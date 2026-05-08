@@ -544,6 +544,7 @@ class MemoryIntegration:
                 valid_from=valid_from,
                 valid_until=valid_until,
                 generate_embedding=True,
+                metadata=metadata,
             )
             return {
                 "stored": True,

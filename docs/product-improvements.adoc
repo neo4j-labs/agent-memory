@@ -31,7 +31,6 @@ This document tracks product improvement suggestions identified during the devel
 * <<interactive-explorer,Interactive Schema Explorer>>
 
 .Library API Improvements
-* <<entity-dedup-management-api,Entity Deduplication Management API>>
 * <<session-listing-api,Session Listing API>>
 * <<conversation-summarization-api,Conversation Summarization API>>
 * <<tool-statistics-enhancements,Tool Statistics Enhancements>>
@@ -79,6 +78,49 @@ This document tracks product improvement suggestions identified during the devel
 * <<doctest-integration,Doctest-Style Assertions>>
 * <<api-docs-generation,Automated API Reference Generation>>
 * <<version-matrix-testing,Documentation Version Matrix Testing>>
+
+=== Implemented (Unreleased / v0.2)
+
+The v0.2 feature drop. Production-readiness primitives. All opt-in; existing v0.1 code is unaffected.
+
+.Headline feature
+* **Adopt an existing graph** — `client.schema.adopt_existing_graph(label_to_type=..., name_property_per_label=...)` attaches the `:Entity` super-label and library properties to nodes from a pre-existing graph. Idempotent. After adoption, library writes link to existing nodes instead of creating duplicates. Pairs with `SchemaModel.CUSTOM` for non-POLE+O domains. ✅
+
+.Production-readiness primitives
+* **Multi-tenancy** — `MemorySettings.memory.multi_tenant=True` plus `user_identifier=` kwarg on short/long/reasoning APIs scopes reads and writes per tenant. New `client.users` (`UserMemory`) layer for first-class `:User` identity. ✅
+* **Buffered (fire-and-forget) writes** — `MemorySettings.memory.write_mode="buffered"` plus `client.buffered.submit(query, params)`, `client.flush()`, `client.write_errors`. Decouples user-visible latency from Neo4j round-trips. ✅
+* **Consolidation primitives** — `client.consolidation` exposes `dedupe_entities()`, `summarize_long_traces()`, `detect_superseded_preferences()`, `archive_expired_conversations()`. All default to `dry_run=True`. ✅
+* **Evaluation harness** — `client.eval.run(EvalSuite(...))` for labelled regression tests over memory quality (recall@k retrieval, audit-coverage of `:TOUCHED` paths, preference fidelity). ✅
+
+.Reasoning audit
+* **TOUCHED edges** — `record_tool_call(touched_entities=[EntityRef(...)])` plus `@client.reasoning.on_tool_call_recorded` hook for domain-specific inference. ✅
+* **`TraceOutcome`** — structured outcomes on `complete_trace(outcome=...)` with indexable `error_kind` for failure-mode analytics. ✅
+* **Headline audit query** — one-hop `MATCH (e:Entity)<-[:TOUCHED]-(s:ReasoningStep)<-[:HAS_STEP]-(rt:ReasoningTrace)`. ✅
+
+.Privacy & docs
+* **Encryption helper** at `core.encryption` for at-rest encryption of sensitive memory fields. ✅
+* **Schema objects reference** — declarative constraints/indexes documented at `docs/.../reference/schema-objects.adoc`. ✅
+* **Glossary page** at `docs/.../glossary.adoc`. ✅
+
+.Test infrastructure
+* **Phantom-method guard** — `tests/examples/test_no_phantom_methods.py` cross-references every `client.<layer>.<method>(` call in `examples/` against the actual class API. Caught five real silent-breakage cases during the v0.2 examples-review pass. ✅
+* **Per-feature smoke tests** for the four new examples (`audit-trail`, `buffered-writes`, `eval-harness`, `existing-graph`), all wired into the `example-tests` CI job. ✅
+
+=== Implemented (v0.1.x)
+
+.v0.1.2 (2026-04-29)
+* **Optional LLM** — `MemorySettings.llm` is now `Optional[LLMConfig]`. `llm=None` constructs a fully working `MemoryClient` without any LLM provider — useful for air-gapped environments. New `examples/no_llm/` example. Validator catches misconfigurations at construction time. ✅
+
+.v0.1.1 (2026-04-23)
+* **Fact and Preference deduplication on creation** — `add_fact()` and `add_preference()` check for existing entries with matching subject/predicate (or category/preference) and >0.95 embedding similarity, returning the existing record with `metadata["deduplicated"] = True`. ✅
+* **`add_entity()` returns a tuple** — `(entity, dedup_result)` instead of just `entity`, exposing the `DeduplicationResult` for caller inspection. ✅
+* **AWS Strands multi-agent financial-services example** — aligned with the GCP variant. ✅
+
+.v0.1.0 (2026-04-02)
+* **Entity Deduplication Management API** — `find_potential_duplicates()`, `merge_duplicate_entities()`, `review_duplicate()`, `get_deduplication_stats()` on `LongTermMemory` for human-in-the-loop entity resolution. ✅
+* **MCP server enhancements** — tool profiles (`core` 6 tools / `extended` 16 tools), observational memory (`MemoryObserver` with reflection generation), pattern-based `PreferenceDetector`, server instructions, MCPB manifest for Claude Desktop. ✅
+* **MemoryIntegration layer** — high-level convenience wrapper with `SessionStrategy` (`per_conversation`, `per_day`, `persistent`), auto-extraction, and preference detection. Shared by the MCP server and `create-context-graph`. ✅
+* **Managed transactions** — Neo4j `@unit_of_work` decorator with automatic retry. ✅
 
 === Implemented (v0.0.4)
 
@@ -332,19 +374,19 @@ Current State:: Schema documentation is static text.
 NOTE: These suggestions were identified while implementing enhanced tools for demo applications (e.g., Lenny's Memory). In each case the workaround is raw Cypher, but native library methods would be more efficient and easier to maintain.
 
 [[entity-dedup-management-api]]
-==== Entity Deduplication Management API
+==== Entity Deduplication Management API ✅ (shipped in v0.1.0)
 
 [horizontal]
-Priority:: High
-Current State:: The library creates `SAME_AS` relationships and supports deduplication on ingest, but there is no public API to find, review, or merge duplicate entities after the fact.
+Status:: ✅ Implemented in v0.1.0
+Available on:: `LongTermMemory`
 
-**Suggestion**: Add management methods to `LongTermMemory` for human-in-the-loop entity resolution.
+All four proposed methods shipped:
 
-.Proposed Methods
-* `find_potential_duplicates(entity_type, status, limit)` -- list entity pairs flagged as potential duplicates
-* `merge_duplicate_entities(source_id, target_id)` -- merge source into target, transferring all relationships
-* `review_duplicate(entity1_id, entity2_id, decision)` -- confirm or reject a duplicate pair
-* `get_deduplication_stats()` -- aggregate stats on pending/confirmed/rejected duplicates
+* `find_potential_duplicates(limit=100)` — lists entity pairs flagged as potential duplicates
+* `merge_duplicate_entities(source_id, target_id)` — merges source into target, transferring relationships
+* `review_duplicate(source_id, target_id, confirm=True)` — confirms or rejects a duplicate pair
+* `get_deduplication_stats()` — aggregate stats on pending/confirmed/rejected duplicates
+* (Bonus) `get_same_as_cluster(entity_id)` — get all entities in a SAME_AS cluster
 
 '''
 
@@ -1427,7 +1469,7 @@ Implementation:: `neo4j_agent_memory.integrations.google_adk.Neo4jMemoryService`
 
 * `Neo4jMemoryService` implementing ADK MemoryService interface
 * `add_session_to_memory()` - Store session messages and extract entities
-* `search_memories()` - Semantic search across all memory types
+* `search_memory()` - Semantic search across all memory types
 * `get_memories_for_session()` - Retrieve session-specific memories
 * `add_memory()` - Store individual memory entries
 * `clear_session()` - Clear session data
@@ -1444,7 +1486,7 @@ async with MemoryClient(settings) as client:
     memory_service = Neo4jMemoryService(client, user_id="user-123")
 
     # Search memories
-    results = await memory_service.search_memories(
+    results = await memory_service.search_memory(
         query="What are the project deadlines?",
         limit=10
     )

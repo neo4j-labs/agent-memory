@@ -1,6 +1,16 @@
 # Smart Shopping Assistant
 
-A full-stack example application demonstrating Neo4j Agent Memory integration with Microsoft Agent Framework. This retail shopping assistant showcases graph-native memory capabilities including preference learning, graph-based recommendations, and memory visualization.
+![Neo4j Labs](https://img.shields.io/badge/Neo4j-Labs-6366F1?logo=neo4j)
+![Status: Beta](https://img.shields.io/badge/Status-Beta-6366F1)
+![Community Supported](https://img.shields.io/badge/Support-Community-6B7280)
+
+> Microsoft Agent Framework + Neo4j Agent Memory: a retail assistant that learns shopping preferences and recommends products via graph traversal.
+
+A full-stack example application demonstrating Neo4j Agent Memory integration with the Microsoft Agent Framework. The retail shopping assistant showcases graph-native memory capabilities including preference learning, graph-based recommendations, and memory visualization.
+
+> ⚠️ **Neo4j Labs Project**
+>
+> This example is part of [`neo4j-agent-memory`](https://github.com/neo4j-labs/agent-memory), a Neo4j Labs project. It is actively maintained but not officially supported. APIs may change. Community support is available via the [Neo4j Community Forum](https://community.neo4j.com).
 
 ## Features
 
@@ -290,3 +300,13 @@ The backend allows requests from `http://localhost:3000` and `http://127.0.0.1:3
 ## License
 
 Apache 2.0
+
+## Support
+
+- 💬 [Neo4j Community Forum](https://community.neo4j.com)
+- 🐛 [GitHub Issues](https://github.com/neo4j-labs/agent-memory/issues)
+- 📖 [`neo4j-agent-memory` documentation](https://github.com/neo4j-labs/agent-memory#readme)
+
+---
+
+_Verified against `neo4j-agent-memory` v0.1.2 / v0.2-dev on 2026-05-03 (structure & import tests pass; full end-to-end run requires the `microsoft-agent` extra and a Microsoft Agent Framework runtime)._

@@ -1,7 +1,6 @@
 = Configuration Reference
 :page-product: agent-memory
 :page-pagination:
-:toc: left
 :toclevels: 3
 :sectanchors:
 :icons: font
@@ -31,7 +30,7 @@ settings = MemorySettings(
     embedding=EmbeddingConfig(...),
     extraction=ExtractionConfig(...),
     resolution=ResolutionConfig(...),
-    schema=SchemaConfig(...),
+    schema_config=SchemaConfig(...),
     llm=LLMConfig(...),
     memory=MemoryConfig(...),
     search=SearchConfig(...),
@@ -234,11 +233,6 @@ extraction_config = ExtractionConfig(
     gliner_threshold=0.5,
     gliner_device="cpu",
 
-    # GLiREL relation extraction (optional)
-    enable_gliner_relations=False,
-    gliner_relations_model="jackboyla/glirel-large-v0",
-    gliner_relations_threshold=0.3,
-
     # LLM settings
     llm_model="gpt-5-mini",
 
@@ -248,15 +242,11 @@ extraction_config = ExtractionConfig(
     # Extraction options
     extract_relations=True,
     extract_preferences=True,
-
-    # Batch extraction settings
-    batch_size=10,
-    batch_max_concurrent=5,
-
-    # Streaming extraction settings
-    streaming_chunk_size=4000,
-    streaming_chunk_overlap=200,
+    confidence_threshold=0.5,
 )
+# Batching and streaming are configured at call time on
+# ``ExtractionPipeline.extract_batch()`` / ``StreamingExtractor``.
+# GLiREL relation extraction is opt-in via ``GLiRELExtractor``.
 ----
 
 === Environment Variables
@@ -283,11 +273,6 @@ NAM_EXTRACTION__SPACY_CONFIDENCE=0.85
 NAM_EXTRACTION__GLINER_MODEL=urchade/gliner_medium-v2.1
 NAM_EXTRACTION__GLINER_THRESHOLD=0.5
 NAM_EXTRACTION__GLINER_DEVICE=cpu
-
-# GLiREL relation extraction (optional)
-NAM_EXTRACTION__ENABLE_GLINER_RELATIONS=false
-NAM_EXTRACTION__GLINER_RELATIONS_MODEL=jackboyla/glirel-large-v0
-NAM_EXTRACTION__GLINER_RELATIONS_THRESHOLD=0.3
 
 # LLM settings
 NAM_EXTRACTION__LLM_MODEL=gpt-5-mini
@@ -375,11 +360,11 @@ schema_config = SchemaConfig(
 
 [source,bash]
 ----
-NAM_SCHEMA__MODEL=poleo                   # poleo, legacy, custom
-NAM_SCHEMA__ENTITY_TYPES='["PERSON","PRODUCT"]'  # For custom model
-NAM_SCHEMA__ENABLE_SUBTYPES=true
-NAM_SCHEMA__STRICT_TYPES=false
-NAM_SCHEMA__CUSTOM_SCHEMA_PATH=/path/to/schema.json
+NAM_SCHEMA_CONFIG__MODEL=poleo                   # poleo, legacy, custom
+NAM_SCHEMA_CONFIG__ENTITY_TYPES='["PERSON","PRODUCT"]'  # For custom model
+NAM_SCHEMA_CONFIG__ENABLE_SUBTYPES=true
+NAM_SCHEMA_CONFIG__STRICT_TYPES=false
+NAM_SCHEMA_CONFIG__CUSTOM_SCHEMA_PATH=/path/to/schema.json
 ----
 
 === Schema Models
@@ -596,10 +581,12 @@ Settings for memory behavior.
 from neo4j_agent_memory import MemoryConfig
 
 memory_config = MemoryConfig(
-    default_session_ttl=86400,            # Session TTL in seconds (24 hours)
-    max_messages_per_session=1000,        # Max messages per session
-    auto_summarize=False,                 # Auto-summarize long conversations
-    summarize_threshold=50,               # Messages before summarization
+    default_conversation_limit=50,                 # Default messages per conversation
+    message_embedding_enabled=True,                # Embed messages for similarity search
+    preference_confidence_threshold=0.7,           # Confidence floor for preferences
+    fact_deduplication_enabled=True,               # Deduplicate facts on ingest
+    trace_embedding_enabled=True,                  # Embed reasoning traces for retrieval
+    tool_stats_enabled=True,                       # Aggregate tool-call statistics
 )
 ----
 
@@ -607,10 +594,12 @@ memory_config = MemoryConfig(
 
 [source,bash]
 ----
-NAM_MEMORY__DEFAULT_SESSION_TTL=86400
-NAM_MEMORY__MAX_MESSAGES_PER_SESSION=1000
-NAM_MEMORY__AUTO_SUMMARIZE=false
-NAM_MEMORY__SUMMARIZE_THRESHOLD=50
+NAM_MEMORY__DEFAULT_CONVERSATION_LIMIT=50
+NAM_MEMORY__MESSAGE_EMBEDDING_ENABLED=true
+NAM_MEMORY__PREFERENCE_CONFIDENCE_THRESHOLD=0.7
+NAM_MEMORY__FACT_DEDUPLICATION_ENABLED=true
+NAM_MEMORY__TRACE_EMBEDDING_ENABLED=true
+NAM_MEMORY__TOOL_STATS_ENABLED=true
 ----
 
 == Search Configuration
@@ -625,9 +614,9 @@ from neo4j_agent_memory import SearchConfig
 
 search_config = SearchConfig(
     default_limit=10,                     # Default result limit
-    max_limit=100,                        # Maximum result limit
-    similarity_threshold=0.7,             # Minimum similarity score
-    include_metadata=True,                # Include metadata in results
+    default_threshold=0.7,                # Minimum similarity score
+    hybrid_search_enabled=True,           # Combine vector + graph signals
+    graph_depth=2,                        # Hops to traverse during graph search
 )
 ----
 
@@ -636,9 +625,9 @@ search_config = SearchConfig(
 [source,bash]
 ----
 NAM_SEARCH__DEFAULT_LIMIT=10
-NAM_SEARCH__MAX_LIMIT=100
-NAM_SEARCH__SIMILARITY_THRESHOLD=0.7
-NAM_SEARCH__INCLUDE_METADATA=true
+NAM_SEARCH__DEFAULT_THRESHOLD=0.7
+NAM_SEARCH__HYBRID_SEARCH_ENABLED=true
+NAM_SEARCH__GRAPH_DEPTH=2
 ----
 
 == Geocoding Configuration
@@ -1272,10 +1261,9 @@ from neo4j_agent_memory import (
     LLMConfig,
     DeduplicationConfig,
     DeduplicationStrategy,
+    LLMProvider,
     GeocodingConfig,
     GeocodingProvider,
-    ObservabilityConfig,
-    TracingProvider,
 )
 from pydantic import SecretStr
 
@@ -1295,20 +1283,13 @@ settings = MemorySettings(
         enable_gliner=True,
         enable_llm_fallback=True,
         merge_strategy=MergeStrategy.CONFIDENCE,
-        # GLiREL for relation extraction
-        enable_gliner_relations=True,
     ),
-    schema=SchemaConfig(
+    schema_config=SchemaConfig(
         model=SchemaModel.POLEO,
         enable_subtypes=True,
     ),
     resolution=ResolutionConfig(
         strategy=ResolverStrategy.COMPOSITE,
-    ),
-    deduplication=DeduplicationConfig(
-        enabled=True,
-        strategy=DeduplicationStrategy.COMPOSITE,
-        embedding_threshold=0.92,
     ),
     geocoding=GeocodingConfig(
         enabled=True,
@@ -1318,12 +1299,11 @@ settings = MemorySettings(
     llm=LLMConfig(
         model="gpt-5-mini",
     ),
-    observability=ObservabilityConfig(
-        enabled=True,
-        provider=TracingProvider.OPIK,
-        project_name="my-agent-memory",
-    ),
 )
+# Per-entity deduplication is configured via DeduplicationConfig
+# at the memory layer (see how-to/deduplication.adoc).
+# Observability tracers are obtained from
+# ``neo4j_agent_memory.observability.get_tracer(...)``.
 ----
 
 === Environment Variables (`.env` file)
@@ -1345,11 +1325,10 @@ NAM_EXTRACTION__ENABLE_SPACY=true
 NAM_EXTRACTION__ENABLE_GLINER=true
 NAM_EXTRACTION__ENABLE_LLM_FALLBACK=true
 NAM_EXTRACTION__MERGE_STRATEGY=confidence
-NAM_EXTRACTION__ENABLE_GLINER_RELATIONS=true
 
 # Schema
-NAM_SCHEMA__MODEL=poleo
-NAM_SCHEMA__ENABLE_SUBTYPES=true
+NAM_SCHEMA_CONFIG__MODEL=poleo
+NAM_SCHEMA_CONFIG__ENABLE_SUBTYPES=true
 
 # Resolution
 NAM_RESOLUTION__STRATEGY=composite

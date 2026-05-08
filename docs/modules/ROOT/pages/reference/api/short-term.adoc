@@ -1,7 +1,6 @@
 = ShortTermMemory API Reference
 :page-product: agent-memory
 :page-pagination:
-:toc: left
 :toclevels: 2
 
 API for conversation and message storage.

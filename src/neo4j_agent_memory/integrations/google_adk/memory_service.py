@@ -9,6 +9,41 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+try:
+    from google.adk.memory.base_memory_service import BaseMemoryService, SearchMemoryResponse
+except ImportError:
+    BaseMemoryService = object
+
+    class SearchMemoryResponse:
+        """Exact replica of ADK's response objects for CI environments."""
+
+        def __init__(self, memories=None, **kwargs):
+            self.memories = []
+            for m in memories or []:
+                if isinstance(m, dict):
+
+                    class MockPart:
+                        def __init__(self, text):
+                            self.text = text
+
+                    class MockContent:
+                        def __init__(self, role, parts):
+                            self.role = role
+                            self.parts = [MockPart(p.get("text", "")) for p in parts]
+
+                    class MockEntry:
+                        def __init__(self, data):
+                            self.id = data.get("id")
+                            c_data = data.get("content", {})
+                            self.content = MockContent(
+                                c_data.get("role", "user"), c_data.get("parts", [])
+                            )
+
+                    self.memories.append(MockEntry(m))
+                else:
+                    self.memories.append(m)
+
+
 from neo4j_agent_memory.integrations.google_adk.types import (
     MemoryEntry,
     SessionMessage,
@@ -24,7 +59,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class Neo4jMemoryService:
+class Neo4jMemoryService(BaseMemoryService):
     """Neo4j-backed memory service for Google ADK agents.
 
     Implements the ADK MemoryService interface to provide:
@@ -51,7 +86,7 @@ class Neo4jMemoryService:
             await memory_service.add_session_to_memory(session)
 
             # Search memories
-            results = await memory_service.search_memories("project deadline")
+            results = await memory_service.search_memory("project deadline")
 
     Attributes:
         user_id: Optional user identifier for personalization.
@@ -77,6 +112,7 @@ class Neo4jMemoryService:
             include_preferences: Whether to include preferences in search.
             extract_on_store: Whether to extract entities when storing sessions.
         """
+        super().__init__()
         self._client = memory_client
         self._user_id = user_id
         self._include_entities = include_entities
@@ -143,7 +179,7 @@ class Neo4jMemoryService:
 
         logger.debug(f"Stored {len(messages)} messages for session {session_id}")
 
-    async def search_memories(
+    async def search_memory(
         self,
         query: str,
         *,
@@ -152,7 +188,7 @@ class Neo4jMemoryService:
         limit: int = 10,
         threshold: float = 0.7,
         **kwargs: Any,
-    ) -> list[MemoryEntry]:
+    ) -> SearchMemoryResponse:
         """Search across all memory types.
 
         Performs hybrid vector + graph search across messages, entities,
@@ -204,7 +240,19 @@ class Neo4jMemoryService:
 
         # Sort by score (descending) and limit
         results.sort(key=lambda x: x.score or 0, reverse=True)
-        return results[:limit]
+        adk_memories = []
+        for r in results[:limit]:
+            adk_memories.append(
+                {
+                    "id": str(getattr(r, "id", "default")),
+                    "content": {
+                        "role": getattr(r, "role", "user") or "user",
+                        "parts": [{"text": str(getattr(r, "content", ""))}],
+                    },
+                }
+            )
+
+        return SearchMemoryResponse(memories=adk_memories)
 
     async def get_memories_for_session(
         self,

@@ -116,7 +116,7 @@ class TestGoogleADKDemoImports:
 
         expected_methods = [
             "add_session_to_memory",
-            "search_memories",
+            "search_memory",
             "get_memories_for_session",
             "add_memory",
         ]
@@ -134,7 +134,7 @@ class TestGoogleADKDemoImports:
 
         async_methods = [
             "add_session_to_memory",
-            "search_memories",
+            "search_memory",
             "get_memories_for_session",
             "add_memory",
         ]

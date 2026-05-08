@@ -241,6 +241,13 @@ class TestSnippetImports:
             "HybridMemoryProvider",
             "StrandsConfig",
             "MemoryType",
+            # Observability (imported from neo4j_agent_memory.observability)
+            "get_tracer",
+            # v0.3 reasoning models (imported from neo4j_agent_memory.schema.models)
+            "EntityRef",
+            "TraceOutcome",
+            "AdoptionLabelReport",
+            "AdoptionReport",
         }
         actual_missing = set(missing) - allowed_missing
 
@@ -365,3 +372,93 @@ class TestSnippetConsistency:
                     # Could be a top-level await in a script context
                     # or inside a class method - these are usually fine
                     pass
+
+
+@pytest.mark.docs
+@pytest.mark.imports
+class TestSettingsFieldDrift:
+    """Verify that kwargs in documented config constructions exist on the model.
+
+    Pre-0.2 ``MemorySettings`` accepted ``extra="ignore"``, which silently
+    dropped misspelled kwargs (``schema=`` instead of ``schema_config=``).
+    With ``extra="forbid"``, those errors surface at construction time —
+    but only when the snippet is actually executed. This test validates
+    the kwargs **statically** against ``model_fields`` so docs that are
+    only syntax-checked still catch the typo.
+    """
+
+    # Models whose constructions we want to validate. Map model class to
+    # the import name documentation uses.
+    _MODELS_TO_CHECK = {
+        "MemorySettings": "neo4j_agent_memory.config.settings:MemorySettings",
+        "Neo4jConfig": "neo4j_agent_memory.config.settings:Neo4jConfig",
+        "EmbeddingConfig": "neo4j_agent_memory.config.settings:EmbeddingConfig",
+        "LLMConfig": "neo4j_agent_memory.config.settings:LLMConfig",
+        "SchemaConfig": "neo4j_agent_memory.config.settings:SchemaConfig",
+        "ExtractionConfig": "neo4j_agent_memory.config.settings:ExtractionConfig",
+        "ResolutionConfig": "neo4j_agent_memory.config.settings:ResolutionConfig",
+        "MemoryConfig": "neo4j_agent_memory.config.settings:MemoryConfig",
+        "SearchConfig": "neo4j_agent_memory.config.settings:SearchConfig",
+        "GeocodingConfig": "neo4j_agent_memory.config.settings:GeocodingConfig",
+        "EnrichmentConfig": "neo4j_agent_memory.config.settings:EnrichmentConfig",
+    }
+
+    @staticmethod
+    def _resolve_model_fields(class_name: str) -> set[str] | None:
+        spec = TestSettingsFieldDrift._MODELS_TO_CHECK.get(class_name)
+        if spec is None:
+            return None
+        module_path, attr = spec.split(":")
+        import importlib
+
+        module = importlib.import_module(module_path)
+        cls = getattr(module, attr)
+        return set(cls.model_fields.keys())
+
+    def test_no_unknown_kwargs_in_doc_constructions(self, python_snippets: list[CodeSnippet]):
+        """Walk every doc snippet's AST. For each ``Class(kwarg=...)`` call
+        whose class is in ``_MODELS_TO_CHECK``, verify each kwarg exists on
+        the live model.
+        """
+        violations: list[str] = []
+
+        for snippet in python_snippets:
+            if snippet.is_signature_doc or snippet.is_placeholder_snippet:
+                continue
+            try:
+                tree = ast.parse(snippet.get_syntax_checkable_code())
+            except SyntaxError:
+                # Syntax test owns this — skip here so we only report drift.
+                continue
+
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                func = node.func
+                # Only handle ``ClassName(...)``, not ``module.ClassName(...)``.
+                if isinstance(func, ast.Name):
+                    class_name = func.id
+                elif isinstance(func, ast.Attribute):
+                    class_name = func.attr
+                else:
+                    continue
+
+                fields = self._resolve_model_fields(class_name)
+                if fields is None:
+                    continue
+
+                for kw in node.keywords:
+                    if kw.arg is None:  # **kwargs splat — can't check
+                        continue
+                    if kw.arg not in fields:
+                        violations.append(
+                            f"{snippet.file_path.name}:{snippet.line_number}"
+                            f" {class_name}({kw.arg}=...) is not a real field;"
+                            f" valid fields: {sorted(fields)}"
+                        )
+
+        assert not violations, (
+            "Documented config constructions reference unknown fields. "
+            "Either fix the docs to use valid kwargs, or add the field to "
+            "the model:\n  - " + "\n  - ".join(violations)
+        )

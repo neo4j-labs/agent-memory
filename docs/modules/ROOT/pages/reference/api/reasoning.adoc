@@ -1,7 +1,6 @@
 = ReasoningMemory API Reference
 :page-product: agent-memory
 :page-pagination:
-:toc: left
 :toclevels: 2
 
 API for reasoning trace and tool call storage.

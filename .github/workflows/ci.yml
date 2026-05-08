@@ -327,6 +327,9 @@ jobs:
             tests/examples/test_llamaindex_example.py \
             tests/examples/test_aws_financial_advisor.py \
             tests/examples/test_domain_schemas.py \
+            tests/examples/test_no_llm_example.py \
+            tests/examples/test_enrichment_example.py \
+            tests/examples/test_no_phantom_methods.py \
             -v \
             --tb=short \
             --timeout=60

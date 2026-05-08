@@ -1,10 +1,15 @@
 """Configuration settings for neo4j-agent-memory."""
 
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, SecretStr
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
+from pydantic_settings.sources import DotEnvSettingsSource
+
+# Strict config shared by every child config model. Misspelled fields raise
+# at construction time instead of being silently dropped.
+_STRICT_CONFIG = ConfigDict(extra="forbid")
 
 
 class EmbeddingProvider(str, Enum):
@@ -58,6 +63,8 @@ class ResolverStrategy(str, Enum):
 class Neo4jConfig(BaseModel):
     """Neo4j connection configuration."""
 
+    model_config = _STRICT_CONFIG
+
     uri: str = Field(default="bolt://localhost:7687", description="Neo4j connection URI")
     username: str = Field(default="neo4j", description="Neo4j username")
     password: SecretStr = Field(description="Neo4j password")
@@ -93,6 +100,8 @@ class Neo4jConfig(BaseModel):
 class EmbeddingConfig(BaseModel):
     """Embedding provider configuration."""
 
+    model_config = _STRICT_CONFIG
+
     provider: EmbeddingProvider = Field(
         default=EmbeddingProvider.OPENAI, description="Embedding provider to use"
     )
@@ -115,7 +124,15 @@ class EmbeddingConfig(BaseModel):
 
 
 class LLMConfig(BaseModel):
-    """LLM provider configuration for extraction."""
+    """LLM provider configuration for extraction.
+
+    This config is optional on `MemorySettings`. Set ``MemorySettings.llm=None``
+    to run without any LLM provider (e.g. spaCy/GLiNER-only extraction in
+    air-gapped or no-API-key environments). See the "Running without an LLM"
+    how-to and ``examples/no_llm/`` for a worked example.
+    """
+
+    model_config = _STRICT_CONFIG
 
     model: str = Field(
         default="gpt-4o-mini",
@@ -135,6 +152,8 @@ class SchemaConfig(BaseModel):
     Defines what entity types are valid and how the knowledge graph is structured.
     The default is the POLE+O model (Person, Object, Location, Event, Organization).
     """
+
+    model_config = _STRICT_CONFIG
 
     model: SchemaModel = Field(default=SchemaModel.POLEO, description="Schema model to use")
     entity_types: list[str] | None = Field(
@@ -157,6 +176,8 @@ class ExtractionConfig(BaseModel):
     - PIPELINE: Multi-stage pipeline combining multiple extractors
     - NONE: Disable extraction
     """
+
+    model_config = _STRICT_CONFIG
 
     extractor_type: ExtractorType = Field(
         default=ExtractorType.PIPELINE, description="Type of entity extractor"
@@ -223,6 +244,8 @@ class ExtractionConfig(BaseModel):
 class ResolutionConfig(BaseModel):
     """Entity resolution configuration."""
 
+    model_config = _STRICT_CONFIG
+
     strategy: ResolverStrategy = Field(
         default=ResolverStrategy.COMPOSITE, description="Resolution strategy"
     )
@@ -239,6 +262,8 @@ class ResolutionConfig(BaseModel):
 class MemoryConfig(BaseModel):
     """Memory behavior configuration."""
 
+    model_config = _STRICT_CONFIG
+
     # Short-term memory
     default_conversation_limit: int = Field(
         default=50, ge=1, description="Default conversation message limit"
@@ -254,10 +279,60 @@ class MemoryConfig(BaseModel):
         default=True, description="Enable reasoning trace embeddings"
     )
     tool_stats_enabled: bool = Field(default=True, description="Enable tool usage statistics")
+    # Multi-tenancy (v0.4)
+    multi_tenant: bool = Field(
+        default=False,
+        description=(
+            "When True, APIs that accept ``user_identifier=`` raise a "
+            "ValueError if the kwarg is omitted. Use in production "
+            "deployments to prevent accidental cross-tenant writes."
+        ),
+    )
+    # Buffered writes (v0.4 P1.1)
+    write_mode: Literal["sync", "buffered"] = Field(
+        default="sync",
+        description=(
+            "How fire-and-forget writes via ``client.buffered.submit(...)`` "
+            "are persisted. ``'sync'`` (default): each submit awaits the "
+            "underlying execute_write — useful for tests and small loads. "
+            "``'buffered'``: submits enqueue and a background task drains "
+            "to Neo4j; callers use ``client.flush()`` / "
+            "``client.wait_for_pending()`` at shutdown."
+        ),
+    )
+    max_pending: int = Field(
+        default=200,
+        ge=1,
+        description=(
+            "Maximum number of buffered writes that can be in flight. "
+            "When the queue is full, ``client.buffered.submit(...)`` "
+            "blocks until a worker drains an item."
+        ),
+    )
+    # Conversation hygiene (v0.5)
+    conversation_ttl_days: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "When set, ``client.consolidation.archive_expired_conversations()``"
+            " marks Conversation nodes older than this many days as archived."
+        ),
+    )
+    # Privacy (v0.5)
+    audit_read: bool = Field(
+        default=False,
+        description=(
+            "When True, ``client.consolidation.audit_reads(...)`` records a "
+            ":MemoryReadAudit node for the supplied query string. Off by "
+            "default — auditing every read is opt-in."
+        ),
+    )
 
 
 class SearchConfig(BaseModel):
     """Search configuration."""
+
+    model_config = _STRICT_CONFIG
 
     default_limit: int = Field(default=10, ge=1, description="Default search limit")
     default_threshold: float = Field(
@@ -292,6 +367,8 @@ class GeocodingConfig(BaseModel):
     - NOMINATIM: Free OpenStreetMap-based geocoding (rate limited to 1 req/sec)
     - GOOGLE: Google Maps geocoding (requires API key, has usage costs)
     """
+
+    model_config = _STRICT_CONFIG
 
     enabled: bool = Field(
         default=False, description="Enable automatic geocoding of Location entities"
@@ -328,6 +405,8 @@ class EnrichmentConfig(BaseModel):
     - WIKIMEDIA: Free Wikipedia/Wikidata enrichment (rate limited to ~2 req/sec)
     - DIFFBOT: Diffbot Knowledge Graph (requires API key, structured data)
     """
+
+    model_config = _STRICT_CONFIG
 
     enabled: bool = Field(default=False, description="Enable automatic entity enrichment")
 
@@ -391,6 +470,23 @@ class EnrichmentConfig(BaseModel):
     )
 
 
+class _FilteredDotEnvSource(DotEnvSettingsSource):
+    # Wraps an existing DotEnvSettingsSource instance, preserving all runtime
+    # overrides (e.g. _env_file=None or _env_file=some_path passed at
+    # MemorySettings instantiation time) while dropping .env keys that are not
+    # top-level model fields.  The original source is already configured with
+    # the correct env_file / env_file_encoding / env_prefix when it arrives in
+    # settings_customise_sources — copying its __dict__ is cheaper and safer
+    # than re-constructing from settings_cls alone.
+    def __init__(self, original: PydanticBaseSettingsSource) -> None:
+        self.__dict__.update(original.__dict__)
+
+    def __call__(self) -> dict[str, Any]:
+        data = super().__call__()
+        valid = set(self.settings_cls.model_fields.keys())
+        return {k: v for k, v in data.items() if k in valid}
+
+
 class MemorySettings(BaseSettings):
     """
     Main configuration class for neo4j-agent-memory.
@@ -411,12 +507,18 @@ class MemorySettings(BaseSettings):
         env_nested_delimiter="__",
         env_file=".env",
         env_file_encoding="utf-8",
-        extra="ignore",
+        # ``extra="forbid"`` rejects misspelled top-level fields (e.g.
+        # ``schema=`` instead of ``schema_config=``) at construction time
+        # rather than silently dropping them. Unrelated keys in a user's
+        # ``.env`` (e.g. plain ``NEO4J_URI=…`` or ``OPENAI_API_KEY=…`` for
+        # other tools) are filtered out by ``settings_customise_sources``
+        # below before they reach validation.
+        extra="forbid",
     )
 
     neo4j: Neo4jConfig = Field(default_factory=lambda: Neo4jConfig(password=SecretStr("")))
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
-    llm: LLMConfig = Field(default_factory=LLMConfig)
+    llm: LLMConfig | None = Field(default=None)
     schema_config: SchemaConfig = Field(default_factory=SchemaConfig)
     extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
     resolution: ResolutionConfig = Field(default_factory=ResolutionConfig)
@@ -424,6 +526,44 @@ class MemorySettings(BaseSettings):
     search: SearchConfig = Field(default_factory=SearchConfig)
     geocoding: GeocodingConfig = Field(default_factory=GeocodingConfig)
     enrichment: EnrichmentConfig = Field(default_factory=EnrichmentConfig)
+
+    @model_validator(mode="after")
+    def _validate_llm_consistency(self) -> "MemorySettings":
+        ext = self.extraction
+        needs_llm = ext.extractor_type == ExtractorType.LLM or (
+            ext.extractor_type == ExtractorType.PIPELINE and ext.enable_llm_fallback
+        )
+        if needs_llm and self.llm is None:
+            # Distinguish explicit `llm=None` (strict) from "user didn't mention llm".
+            if "llm" in self.model_fields_set:
+                raise ValueError(
+                    "llm=None is incompatible with extraction settings: "
+                    f"extractor_type={ext.extractor_type.value}, "
+                    f"enable_llm_fallback={ext.enable_llm_fallback}. "
+                    "Either provide an LLMConfig, or set extractor_type to "
+                    "ExtractorType.SPACY/GLINER/PIPELINE/NONE and "
+                    "enable_llm_fallback=False."
+                )
+            # Lenient fallback preserves pre-0.2 default behavior when the user
+            # didn't explicitly opt out.
+            self.llm = LLMConfig()
+        return self
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],  # noqa: ARG003 — required by pydantic-settings hook
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        return (
+            init_settings,
+            env_settings,
+            _FilteredDotEnvSource(dotenv_settings),
+            file_secret_settings,
+        )
 
     @classmethod
     def from_dict(cls, config: dict[str, Any]) -> "MemorySettings":

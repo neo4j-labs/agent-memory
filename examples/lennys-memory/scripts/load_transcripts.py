@@ -440,8 +440,8 @@ def slugify(name: str) -> str:
 async def check_session_exists(memory: MemoryClient, session_id: str) -> bool:
     """Check if a session already exists in the database."""
     try:
-        messages = await memory.short_term.get_messages(session_id, limit=1)
-        return len(messages) > 0
+        conversation = await memory.short_term.get_conversation(session_id)
+        return bool(conversation and conversation.messages)
     except Exception:
         return False
 

@@ -424,17 +424,17 @@ def schemas_list(format: str, uri: str, user: str, password: str | None):
         )
         sys.exit(1)
 
-    from neo4j import AsyncGraphDatabase
+    from pydantic import SecretStr
 
+    from neo4j_agent_memory.config.settings import Neo4jConfig
+    from neo4j_agent_memory.graph.client import Neo4jClient
     from neo4j_agent_memory.schema import SchemaManager
 
     async def do_list():
-        driver = AsyncGraphDatabase.driver(uri, auth=(user, password))
-        try:
-            manager = SchemaManager(driver)
+        config = Neo4jConfig(uri=uri, username=user, password=SecretStr(password))
+        async with Neo4jClient(config) as client:
+            manager = SchemaManager(client)
             return await manager.list_schemas()
-        finally:
-            await driver.close()
 
     try:
         schema_list = run_async(do_list())
@@ -519,19 +519,19 @@ def schemas_show(
         error_console.print("[red]Error:[/red] Neo4j password required.")
         sys.exit(1)
 
-    from neo4j import AsyncGraphDatabase
+    from pydantic import SecretStr
 
+    from neo4j_agent_memory.config.settings import Neo4jConfig
+    from neo4j_agent_memory.graph.client import Neo4jClient
     from neo4j_agent_memory.schema import SchemaManager
 
     async def do_show():
-        driver = AsyncGraphDatabase.driver(uri, auth=(user, password))
-        try:
-            manager = SchemaManager(driver)
+        config = Neo4jConfig(uri=uri, username=user, password=SecretStr(password))
+        async with Neo4jClient(config) as client:
+            manager = SchemaManager(client)
             if version:
                 return await manager.load_schema_version(name, version)
             return await manager.load_schema(name)
-        finally:
-            await driver.close()
 
     try:
         schema_config = run_async(do_show())
@@ -605,19 +605,19 @@ def stats(format: str, uri: str, user: str, password: str | None):
         )
         sys.exit(1)
 
-    from neo4j import AsyncGraphDatabase
+    from pydantic import SecretStr
 
+    from neo4j_agent_memory.config.settings import Neo4jConfig
+    from neo4j_agent_memory.graph.client import Neo4jClient
     from neo4j_agent_memory.memory import LongTermMemory
 
     async def do_stats():
-        driver = AsyncGraphDatabase.driver(uri, auth=(user, password))
-        try:
-            memory = LongTermMemory(driver)
+        config = Neo4jConfig(uri=uri, username=user, password=SecretStr(password))
+        async with Neo4jClient(config) as client:
+            memory = LongTermMemory(client)
             extraction_stats = await memory.get_extraction_stats()
             extractor_stats = await memory.get_extractor_stats()
             return extraction_stats, extractor_stats
-        finally:
-            await driver.close()
 
     try:
         extraction_stats, extractor_stats = run_async(do_stats())

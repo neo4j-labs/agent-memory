@@ -1,11 +1,14 @@
 = AWS Strands Agents Integration
 :description: Integrate Neo4j Agent Memory with AWS Strands Agents SDK
 :keywords: strands, aws, bedrock, neo4j, agent, tools
-:toc:
 
 This guide shows how to add Neo4j Context Graph memory to AWS Strands agents using the `@tool` decorated functions.
 
 == Overview
+
+image::diagrams/multi-agent-architecture-aws-neo4j.png[Multi-agent architecture with shared Neo4j memory: Strands agents communicate through a shared knowledge graph,width=600,align=left]
+
+image::diagrams/shared-memory-data-flow-kyc-graph-credit.png[Shared memory data flow: KYC agent writes entities to Neo4j, Credit agent reads them — findings are immediately available across agents,width=540,align=left]
 
 The Strands integration provides four memory tools that agents can use:
 

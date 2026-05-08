@@ -1,10 +1,8 @@
 = Frequently Asked Questions
 :page-product: agent-memory
 :page-pagination:
-:toc: left
 :toclevels: 3
 :sectanchors:
-:sectlinks:
 :icons: font
 :source-highlighter: highlight.js
 :experimental:
@@ -15,6 +13,13 @@
 :page-ad-underline-role: button
 :page-ad-underline: Enroll now
 
+++++
+<style>
+.doc h3 { font-size: 1.15em; font-weight: 700; margin-top: 1.75rem; margin-bottom: 0.4rem; }
+.doc .hdlist dt { font-weight: 700; }
+</style>
+++++
+
 This document answers common questions about neo4j-agent-memory, with a focus on the entity extraction pipeline and domain schemas.
 
 == General Questions
@@ -24,10 +29,9 @@ This document answers common questions about neo4j-agent-memory, with a focus on
 
 neo4j-agent-memory is a Python package that provides a comprehensive memory system for AI agents using Neo4j as the backend. It implements three memory types:
 
-[horizontal]
-Short-Term Memory:: Conversations and messages
-Long-Term Memory:: Entities, preferences, and facts (using the POLE+O data model)
-Reasoning Memory:: Reasoning traces and tool usage patterns
+* *Short-Term Memory* — Conversations and messages
+* *Long-Term Memory* — Entities, preferences, and facts (using the POLE+O data model)
+* *Reasoning Memory* — Reasoning traces and tool usage patterns
 
 See xref:index.adoc[Overview] for more details.
 
@@ -58,10 +62,9 @@ Neo4j 5.x is supported, with **5.11+ recommended** for vector index support (use
 
 Yes. The package provides full AWS support including:
 
-[horizontal]
-Amazon Bedrock Embeddings:: Use Bedrock embedding models (Titan, Cohere) instead of OpenAI. Install with `pip install neo4j-agent-memory[bedrock]`.
-Strands Agents SDK:: Pre-built tools for context graph operations with the AWS Strands Agents framework. Install with `pip install neo4j-agent-memory[strands]`.
-AgentCore Memory:: `HybridMemoryProvider` for routing between short-term and long-term memory stores.
+* *Amazon Bedrock Embeddings* — Use Bedrock embedding models (Titan, Cohere) instead of OpenAI. Install with `pip install neo4j-agent-memory[bedrock]`.
+* *Strands Agents SDK* — Pre-built tools for context graph operations with the AWS Strands Agents framework. Install with `pip install neo4j-agent-memory[strands]`.
+* *AgentCore Memory* — `HybridMemoryProvider` for routing between short-term and long-term memory stores.
 
 See xref:how-to/integrations/aws-strands.adoc[Strands Integration] and xref:how-to/integrations/aws-bedrock-embeddings.adoc[Bedrock Embeddings] for details.
 
@@ -423,10 +426,9 @@ For most use cases, `en_core_web_sm` is sufficient and fastest.
 
 Use LLM extraction when you need:
 
-[horizontal]
-Relationship extraction:: LLM is the only extractor that can extract relationships between entities
-Complex context:: When entity identification requires understanding context
-Highest accuracy:: When cost is not a concern
+* *Relationship extraction* — LLM is the only extractor that can extract relationships between entities
+* *Complex context* — When entity identification requires understanding context
+* *Highest accuracy* — When cost is not a concern
 
 [[llm-models]]
 === What LLM models are supported?
@@ -575,16 +577,21 @@ Entity deduplication automatically merges similar entities during extraction:
 
 [source,python]
 ----
-from neo4j_agent_memory import MemorySettings, DeduplicationConfig
-
-settings = MemorySettings(
-    deduplication=DeduplicationConfig(
-        enabled=True,
-        embedding_threshold=0.92,     # High similarity = auto-merge
-        same_as_threshold=0.85,       # Medium similarity = SAME_AS link
-        create_same_as=True,
-    )
+from neo4j_agent_memory.memory.long_term import (
+    DeduplicationConfig,
+    LongTermMemory,
 )
+
+# Deduplication is configured at the memory layer, not on MemorySettings.
+dedup_config = DeduplicationConfig(
+    enabled=True,
+    auto_merge_threshold=0.95,    # High similarity = auto-merge
+    flag_threshold=0.85,          # Medium similarity = flagged SAME_AS link
+    use_fuzzy_matching=True,
+)
+
+# Pass into LongTermMemory when constructing it manually, or rely on the
+# defaults when using MemoryClient.
 ----
 
 * **High confidence matches** (>0.92) are automatically merged
@@ -624,10 +631,9 @@ The package automatically creates:
 
 Entities get multiple labels based on their type:
 
-[horizontal]
-Base label:: `:Entity`
-Type label:: `:Person`, `:Organization`, `:Location`, `:Event`, `:Object`
-Subtype label:: `:Vehicle`, `:Address`, `:Company`, etc. (if specified)
+* *Base label* — `:Entity`
+* *Type label* — `:Person`, `:Organization`, `:Location`, `:Event`, `:Object`
+* *Subtype label* — `:Vehicle`, `:Address`, `:Company`, etc. (if specified)
 
 .Example
 ====
@@ -849,14 +855,14 @@ pip install neo4j-agent-memory[opik]
 
 [source,python]
 ----
-from neo4j_agent_memory import MemorySettings, ObservabilityConfig, TracingProvider
+from neo4j_agent_memory.observability import get_tracer
 
-settings = MemorySettings(
-    observability=ObservabilityConfig(
-        enabled=True,
-        provider=TracingProvider.OPIK,  # or OPENTELEMETRY
-        project_name="my-agent",
-    )
+# Observability tracers are obtained from
+# ``neo4j_agent_memory.observability.get_tracer(...)``, not from
+# ``MemorySettings``.
+tracer = get_tracer(
+    provider="opik",            # or "opentelemetry"
+    project_name="my-agent",
 )
 ----
 
@@ -1026,6 +1032,39 @@ GLiNER has a context window limit. For large texts:
 . Split into smaller chunks
 . Process chunks separately
 . Merge and deduplicate results
+
+[[extra-forbidden-from-env]]
+=== Why does `MemorySettings(...)` raise `extra_forbidden` for `neo4j_uri` / `openai_api_key`?
+
+You see an error like:
+
+[source,text]
+----
+ValidationError: 1 validation error for MemorySettings
+neo4j_uri
+  Extra inputs are not permitted [type=extra_forbidden, input_value='neo4j://localhost:7687']
+----
+
+…even though you only passed `neo4j={...}` as a kwarg. The cause is unrelated keys in your `.env` file (e.g. plain `NEO4J_URI=...` from a Docker setup, or `OPENAI_API_KEY=...` for a different tool). pydantic-settings 2.x leaks unmatched `.env` keys into the validation payload regardless of `env_prefix`, and `MemorySettings` uses `extra="forbid"` to catch code-level typos.
+
+**Fix:** upgrade to the next `0.2.x` patch release of `neo4j-agent-memory` (not `0.2.0`) or later -- `MemorySettings` filters non-`NAM_`-matching keys before they reach validation. No code change needed.
+
+**On older versions:** subclass `MemorySettings` (or your own settings class) with `extra="ignore"`:
+
+[source,python]
+----
+from pydantic_settings import SettingsConfigDict
+from neo4j_agent_memory import MemorySettings
+
+class MySettings(MemorySettings):
+    model_config = SettingsConfigDict(
+        env_prefix="NAM_",
+        env_nested_delimiter="__",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+----
 
 [[gliner-not-installed]]
 === ImportError: GLiNER not installed

@@ -1,10 +1,8 @@
 = Work with Entities
 :page-product: agent-memory
 :page-pagination:
-:toc: right
 :toclevels: 3
 :sectanchors:
-:sectlinks:
 :icons: font
 :source-highlighter: highlight.js
 
@@ -413,6 +411,8 @@ for fact in facts:
 ----
 
 == Entity Enrichment
+
+image::diagrams/background-entity-enrichment.png[Background enrichment flow: entity created → enrichment queue → Wikipedia/Diffbot → entity updated with description and metadata,width=540,align=left]
 
 Automatically enrich entities with external data:
 

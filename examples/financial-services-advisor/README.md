@@ -1,6 +1,16 @@
 # Financial Services Advisor
 
-A multi-agent AI compliance investigation system powered by [Neo4j Agent Memory](https://github.com/neo4j-labs/agent-memory) Context Graphs. A supervisor agent orchestrates four specialist agents (KYC, AML, Relationship, Compliance) to investigate customers, detect money laundering patterns, trace shell company networks, and screen sanctions lists -- all backed by real Neo4j graph queries.
+![Neo4j Labs](https://img.shields.io/badge/Neo4j-Labs-6366F1?logo=neo4j)
+![Status: Beta](https://img.shields.io/badge/Status-Beta-6366F1)
+![Community Supported](https://img.shields.io/badge/Support-Community-6B7280)
+
+> Multi-agent AML/KYC compliance investigations powered by Neo4j Agent Memory Context Graphs — implemented twice, once on AWS Strands + Bedrock, once on Google ADK + Gemini.
+
+A supervisor agent orchestrates four specialist agents (KYC, AML, Relationship, Compliance) to investigate customers, detect money-laundering patterns, trace shell-company networks, and screen sanctions lists — all backed by real Neo4j graph queries.
+
+> ⚠️ **Neo4j Labs Project**
+>
+> This example is part of [`neo4j-agent-memory`](https://github.com/neo4j-labs/agent-memory), a Neo4j Labs project. It is actively maintained but not officially supported. APIs may change. Community support is available via the [Neo4j Community Forum](https://community.neo4j.com).
 
 ![agent chat](img/beneficial-ownership.png)
 
@@ -259,3 +269,13 @@ Both implementations expose the same REST API:
 - [AWS Strands Agents](https://strandsagents.com/) -- Agent framework for the AWS implementation
 - [Google ADK](https://google.github.io/adk-docs/) -- Agent Development Kit for the Google Cloud implementation
 - [Neo4j Aura](https://neo4j.io/aura) -- Free hosted Neo4j for getting started
+
+## Support
+
+- 💬 [Neo4j Community Forum](https://community.neo4j.com)
+- 🐛 [GitHub Issues](https://github.com/neo4j-labs/agent-memory/issues)
+- 📖 [`neo4j-agent-memory` documentation](https://github.com/neo4j-labs/agent-memory#readme)
+
+---
+
+_Verified against `neo4j-agent-memory` v0.1.2 / v0.2-dev on 2026-05-03 (structure, syntax, import tests, and 105 unit tests pass for the GCP implementation; full end-to-end run requires AWS or GCP credentials)._

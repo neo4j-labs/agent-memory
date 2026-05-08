@@ -1,10 +1,8 @@
 = Manage User Preferences
 :page-product: agent-memory
 :page-pagination:
-:toc: right
 :toclevels: 3
 :sectanchors:
-:sectlinks:
 :icons: font
 :source-highlighter: highlight.js
 
@@ -14,38 +12,7 @@ How to store, retrieve, and use user preferences to personalize agent interactio
 
 Preferences are structured knowledge about user likes, dislikes, and behavioral patterns stored in the context graph. They enable agents to provide personalized responses without asking the same questions repeatedly.
 
-[cols="1", options="header"]
-|===
-| Preference-Aware Context Graph
-
-a|
-[source,text]
-----
-                    Context Graph
-                    ─────────────
-            ┌─────────────────────────┐
-            │       (Customer)        │
-            │      "Jane Smith"       │
-            └───────────┬─────────────┘
-                        │
-        ┌───────────────┼───────────────┐
-        │               │               │
-        ▼               ▼               ▼
-  [:HAS_PREFERENCE][:HAS_PREFERENCE][:HAS_PREFERENCE]
-        │               │               │
-        ▼               ▼               ▼
-  ┌───────────┐   ┌───────────┐   ┌───────────┐
-  │ Brand:    │   │ Shipping: │   │ Style:    │
-  │ Nike      │   │ Next-day  │   │ Minimalist│
-  └───────────┘   └───────────┘   └───────────┘
-
-Agent uses preferences to personalize:
-- Product recommendations
-- Communication style
-- Shipping options offered
-- Promotion targeting
-----
-|===
+image::diagrams/preference-aware-context-graph.png[Preference-aware context graph: Customer node connected via HAS_PREFERENCE relationships to Brand, Shipping, and Style preference nodes,width=600,align=left]
 
 == Prerequisites
 

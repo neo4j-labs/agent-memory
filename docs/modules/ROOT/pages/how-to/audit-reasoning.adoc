@@ -1,0 +1,153 @@
+= Audit Reasoning with `:TOUCHED` Edges
+:page-product: agent-memory
+:toclevels: 2
+
+How to make every agent reasoning step queryable from any entity it
+referenced — a 1-hop traversal instead of the default 3-hop path.
+
+[.lead]
+By default, the library writes
+`(ReasoningTrace)-[:INITIATED_BY]->(Message)-[:MENTIONS]->(Entity)` and
+`(ToolCall)-[:TRIGGERED_BY]->(Message)`, so reaching an entity from a
+step is three hops. v0.3 introduces a direct
+`(:ReasoningStep)-[:TOUCHED]->(:Entity)` edge that you can write either
+explicitly or via an observer hook. This page shows both.
+
+== Goal
+
+image::diagrams/provenance-chain-graph-auditability.png[Provenance chain: graph traversal and vector similarity both trace agent decisions back to source messages and entities,width=600,align=left]
+
+Run the headline audit query in 1 hop:
+
+[source,cypher]
+----
+MATCH (c:Entity {name: 'Anthem'})<-[:TOUCHED]-(s:ReasoningStep)
+      <-[:HAS_STEP]-(rt:ReasoningTrace)
+RETURN rt.task, s.thought, rt.outcome
+----
+
+== Approach 1 — Pass `touched_entities` directly
+
+Simplest: when you know the touched entities at call time, pass them
+into `record_tool_call(...)`.
+
+[source,python]
+----
+from neo4j_agent_memory.schema.models import EntityRef
+
+await client.reasoning.record_tool_call(
+    step.id,
+    tool_name="recommend_team",
+    arguments={"client_name": "Anthem"},
+    result=[{"consultant": "Sara"}],
+    touched_entities=[
+        EntityRef(name="Anthem", type="Client"),
+        EntityRef(name="Sara", type="PERSON"),
+    ],
+)
+----
+
+The library MERGEs each `EntityRef` into the long-term memory layer
+(matching by `id` if provided, else `name + type`, else `name` only)
+and writes a `pass:[(:ReasoningStep)-[:TOUCHED {recorded_at}]->(:Entity)]`
+edge. Re-recording the same touched entity is a no-op — the relationship
+is keyed on the (step, entity) pair.
+
+== Approach 2 — Register an observer hook
+
+Often the touched entities aren't known until the tool result is in
+hand (e.g. `recommend_team` returns a list of consultants). Register a
+hook that fires after every `record_tool_call` and adds edges based on
+the result:
+
+[source,python]
+----
+from neo4j_agent_memory.schema.models import EntityRef
+
+
+def infer_touched(tool_name, arguments, result):
+    """Domain-specific mapping from tool calls to EntityRef lists."""
+    refs = []
+    if tool_name == "recommend_team":
+        refs.append(EntityRef(name=arguments["client_name"], type="Client"))
+        for row in result or []:
+            refs.append(EntityRef(name=row["consultant"], type="PERSON"))
+    return refs
+
+
+@client.reasoning.on_tool_call_recorded
+async def link_touched_entities(tool_call, ctx):
+    for ref in infer_touched(tool_call.tool_name, tool_call.arguments, tool_call.result):
+        await ctx.add_touched_edge(ref)
+----
+
+Hook errors are logged but never raised — memory writes must not break
+agent execution loops. Hooks fire in registration order, after the tool
+call is persisted and after any `touched_entities` passed to
+`record_tool_call` have been written.
+
+== Indexable structured outcomes
+
+image::diagrams/graph-provenance-tracing-decisions-to-sources.png[Graph provenance: a single Cypher traversal from a credit decision through shared entities back to the original KYC findings,width=540,align=left]
+
+Pair `:TOUCHED` with `TraceOutcome` to make audit queries filterable
+by structured failure mode:
+
+[source,python]
+----
+from neo4j_agent_memory.schema.models import TraceOutcome
+
+await client.reasoning.complete_trace(
+    trace.id,
+    outcome=TraceOutcome(
+        success=False,
+        summary="Recommendation failed: no consultants matched skills",
+        error_kind="no_results",
+        related_entities=[
+            EntityRef(name="Anthem", type="Client"),
+        ],
+        metrics={"tools_called": 1.0},
+    ),
+)
+----
+
+`error_kind` is a top-level indexed property on `:ReasoningTrace`, so
+you can scan failure modes cheaply:
+
+[source,cypher]
+----
+MATCH (rt:ReasoningTrace {error_kind: 'timeout'})
+RETURN rt.task, rt.completed_at, rt.outcome
+ORDER BY rt.completed_at DESC
+----
+
+The `related_entities` list is materialized as `:TOUCHED` edges on the
+most recent step of the trace, so trace-level audit queries continue to
+work via the same 1-hop path.
+
+== Step-level case-based retrieval
+
+For case-based imitation prompting, search past *steps* by their
+thought/action — coarser-grained `get_similar_traces` searches the
+trace task, which is often too high-level:
+
+[source,python]
+----
+results = await client.reasoning.search_steps(
+    "query schema before joining",
+    limit=10,
+    success_only=True,
+)
+for r in results:
+    print(f"({r.similarity:.2f}) parent={r.parent_task!r} step={r.step.thought!r}")
+----
+
+Each result includes the parent trace's task and outcome so the LLM
+can see "in a similar situation, here's what worked."
+
+== See Also
+
+* xref:how-to/reasoning-traces.adoc[Record Reasoning Traces] — the
+underlying trace + step + tool-call API.
+* `examples/audit-trail/` — runnable end-to-end example using
+this how-to.

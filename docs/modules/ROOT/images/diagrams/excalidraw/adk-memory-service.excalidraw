@@ -138,13 +138,13 @@
       "frameId": null,
       "roundness": null,
       "boundElements": null,
-      "text": "Neo4jMemoryService\n\n• add_session_to_memory\n• search_memories\n• get_memories_for_session",
+      "text": "Neo4jMemoryService\n\n• add_session_to_memory\n• search_memory\n• get_memories_for_session",
       "fontSize": 12,
       "fontFamily": 1,
       "textAlign": "left",
       "verticalAlign": "top",
       "containerId": null,
-      "originalText": "Neo4jMemoryService\n\n• add_session_to_memory\n• search_memories\n• get_memories_for_session"
+      "originalText": "Neo4jMemoryService\n\n• add_session_to_memory\n• search_memory\n• get_memories_for_session"
     },
     {
       "id": "arrow-agent-to-service",

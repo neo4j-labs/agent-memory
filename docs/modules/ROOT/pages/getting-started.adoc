@@ -1,7 +1,6 @@
 = Getting Started
 :page-product: agent-memory
 :page-pagination:
-:toc: left
 :toclevels: 3
 :sectanchors:
 :icons: font
@@ -322,6 +321,11 @@ async with MemoryClient(settings) as memory:
     # Your memory operations here
     pass
 ----
+
+[NOTE]
+====
+Other env vars in your `.env` (e.g. plain `NEO4J_URI=...`, `OPENAI_API_KEY=...` for unrelated tools) are silently ignored by `MemorySettings` -- only `NAM_*`-prefixed vars are loaded. If you see `extra_forbidden` errors, upgrade to the next `0.2.x` patch release and see xref:faq.adoc#extra-forbidden-from-env[the FAQ entry].
+====
 
 == Error Handling
 

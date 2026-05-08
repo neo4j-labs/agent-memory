@@ -1,7 +1,6 @@
 = CLI Reference
 :page-product: agent-memory
 :page-pagination:
-:toc: left
 :toclevels: 2
 
 Command-line interface for neo4j-agent-memory extraction and schema management.

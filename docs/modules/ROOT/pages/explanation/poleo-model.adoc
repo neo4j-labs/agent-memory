@@ -1,13 +1,14 @@
 = POLE+O Data Model
 :page-product: agent-memory
 :page-pagination:
-:toc: left
 :toclevels: 3
 :sectanchors:
 :icons: font
 :source-highlighter: highlight.js
 
 The POLE+O data model is the default entity classification system in neo4j-agent-memory. It provides a structured, extensible framework for categorizing entities extracted from text.
+
+image::diagrams/poleo-model.png[POLE+O entity model: Person, Object, Location, Event, and Organization node types with their subtypes,width=600,align=left]
 
 == What is POLE+O?
 
@@ -422,7 +423,7 @@ from neo4j_agent_memory import MemorySettings, SchemaConfig, SchemaModel, Extrac
 
 # E-commerce domain example
 settings = MemorySettings(
-    schema=SchemaConfig(
+    schema_config=SchemaConfig(
         model=SchemaModel.CUSTOM,
         entity_types=["CUSTOMER", "PRODUCT", "ORDER", "STORE", "REVIEW"],
         strict_types=True  # Reject unknown types
@@ -473,7 +474,7 @@ Load it in configuration:
 from neo4j_agent_memory import MemorySettings, SchemaConfig, SchemaModel
 
 settings = MemorySettings(
-    schema=SchemaConfig(
+    schema_config=SchemaConfig(
         model=SchemaModel.CUSTOM,
         custom_schema_path="./ecommerce_schema.json"
     )

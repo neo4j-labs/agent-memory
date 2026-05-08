@@ -1,7 +1,7 @@
 """Factory for creating extraction pipelines and extractors."""
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from neo4j_agent_memory.config.settings import (
     ExtractionConfig,
@@ -20,6 +20,9 @@ from neo4j_agent_memory.extraction.pipeline import (
     MergeStrategy,
 )
 from neo4j_agent_memory.llm.factory import create_llm
+
+if TYPE_CHECKING:
+    from neo4j_agent_memory.schema.models import EntitySchemaConfig
 
 logger = logging.getLogger(__name__)
 
@@ -337,6 +340,7 @@ class ExtractorBuilder:
         self._gliner_threshold = 0.5
         self._gliner_device = "cpu"
         self._gliner_schema: str | None = None
+        self._gliner_entity_labels: list[str] | None = None
         self._llm_model = "gpt-4o-mini"
         self._merge_strategy = MergeStrategy.CONFIDENCE
         self._entity_types: list[str] = [
@@ -348,6 +352,7 @@ class ExtractorBuilder:
         ]
         self._extract_relations = True
         self._extract_preferences = True
+        self._confidence_threshold: float | None = None
 
     def with_spacy(self, model: str = "en_core_web_sm") -> "ExtractorBuilder":
         """Add spaCy extractor to pipeline."""
@@ -357,13 +362,24 @@ class ExtractorBuilder:
 
     def with_gliner(
         self,
-        model: str = "gliner-community/gliner_medium-v2.5",
+        model: str | None = None,
         threshold: float = 0.5,
         device: str = "cpu",
+        *,
+        model_name: str | None = None,
     ) -> "ExtractorBuilder":
-        """Add GLiNER2 extractor to pipeline with simple labels."""
+        """Add GLiNER2 extractor to pipeline with simple labels.
+
+        Args:
+            model: GLiNER model identifier (e.g. ``gliner-community/gliner_medium-v2.5``).
+            threshold: Confidence threshold.
+            device: Inference device (``cpu`` / ``cuda`` / ``mps``).
+            model_name: Alias for ``model`` (kept for compatibility with the CLI
+                and older call sites).
+        """
         self._enable_gliner = True
-        self._gliner_model = model
+        resolved = model_name or model or "gliner-community/gliner_medium-v2.5"
+        self._gliner_model = resolved
         self._gliner_threshold = threshold
         self._gliner_device = device
         return self
@@ -400,9 +416,47 @@ class ExtractorBuilder:
         self._llm_model = model
         return self
 
+    def with_llm(self, model: str = "gpt-4o-mini") -> "ExtractorBuilder":
+        """Add an LLM extractor (alias of :meth:`with_llm_fallback`)."""
+        return self.with_llm_fallback(model)
+
     def with_entity_types(self, types: list[str]) -> "ExtractorBuilder":
         """Set entity types to extract."""
         self._entity_types = types
+        # GLiNER labels mirror the configured entity types when no domain
+        # schema is provided.
+        self._gliner_entity_labels = [t.lower() for t in types]
+        return self
+
+    def with_confidence_threshold(self, threshold: float) -> "ExtractorBuilder":
+        """Set the confidence threshold for entity extraction.
+
+        Applies to GLiNER (the threshold passed to the model) and is recorded
+        for downstream filtering by other stages.
+        """
+        if not 0.0 <= threshold <= 1.0:
+            raise ValueError(f"confidence_threshold must be in [0.0, 1.0], got {threshold!r}")
+        self._confidence_threshold = threshold
+        self._gliner_threshold = threshold
+        return self
+
+    def with_schema(self, schema_config: "EntitySchemaConfig") -> "ExtractorBuilder":
+        """Configure entity types from an :class:`EntitySchemaConfig`.
+
+        Derives ``entity_types`` from the schema's
+        :attr:`EntitySchemaConfig.entity_types` and uses them as labels for
+        GLiNER and as the type set for the LLM extractor. Equivalent to
+        calling :meth:`with_entity_types` with the names from the schema.
+
+        Args:
+            schema_config: Entity schema configuration. Each
+                :class:`EntityTypeConfig` contributes its ``name`` to the
+                extractor's type set.
+        """
+        type_names = [t.name for t in schema_config.entity_types]
+        if type_names:
+            self._entity_types = type_names
+            self._gliner_entity_labels = [t.lower() for t in type_names]
         return self
 
     def merge_by_union(self) -> "ExtractorBuilder":
@@ -465,6 +519,7 @@ class ExtractorBuilder:
                 stages.append(
                     GLiNEREntityExtractor(
                         model=self._gliner_model,
+                        entity_labels=self._gliner_entity_labels,
                         threshold=self._gliner_threshold,
                         device=self._gliner_device,
                     )

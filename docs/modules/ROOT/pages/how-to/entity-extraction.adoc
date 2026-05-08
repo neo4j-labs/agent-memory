@@ -1,44 +1,14 @@
 = Configure Entity Extraction
 :page-product: agent-memory
 :page-pagination:
-:toc: right
 :toclevels: 3
 :sectanchors:
-:sectlinks:
 :icons: font
 :source-highlighter: highlight.js
 
 How to configure entity extraction pipelines to automatically build your context graph from conversations and documents.
 
-== Overview
-
-Entity extraction transforms unstructured text into structured knowledge in your context graph. The extracted entities, relationships, and facts become the foundation for personalized agent interactions.
-
-[cols="1", options="header"]
-|===
-| Context Graph Construction
-
-a|
-[source,text]
-----
-Conversation Text                    Context Graph
-─────────────────                    ─────────────
-"I just bought Nike Air Max         (Customer)──[:PURCHASED]──>(Nike Air Max)
- shoes from the downtown                │                            │
- store. Love the comfort!"              │                            │
-                                        ▼                            ▼
-                                  [:VISITED]              [:SOLD_AT]
-                                        │                            │
-                                        ▼                            ▼
-                                  (Downtown Store)◄─────────────────┘
-                                        │
-                                        ▼
-                                  [:HAS_PREFERENCE]
-                                        │
-                                        ▼
-                                  (Preference: comfort)
-----
-|===
+image::diagrams/three-extraction-approaches.png[Three extraction approaches: spaCy, GLiNER, and LLM, each with different speed/quality trade-offs,width=480,align=left]
 
 == Prerequisites
 
@@ -47,8 +17,6 @@ Conversation Text                    Context Graph
 * For LLM extraction: OpenAI API key or compatible LLM
 
 == Quick Start
-
-=== Default Extraction
 
 Use the built-in POLE+O schema for general-purpose extraction:
 
@@ -66,7 +34,6 @@ client = MemoryClient(settings)
 # Create extractor with POLE+O schema
 extractor = GLiNEREntityExtractor.for_poleo()
 
-# Extract entities from text
 text = """
     Customer Jane Smith called about her order #12345 from Nike.
     She purchased Air Max 90 shoes last week from our Manhattan store.
@@ -75,584 +42,23 @@ text = """
 
 result = await extractor.extract(text)
 
-print("Extracted entities:")
 for entity in result.entities:
     print(f"  {entity.name} ({entity.type}) - confidence: {entity.confidence:.2f}")
 ----
 
-== Domain-Specific Schemas
-
-Use pre-built schemas optimized for specific industries to build domain-relevant context graphs.
-
-=== Financial Services Schema
-
-[source,python]
-----
-from neo4j_agent_memory.extraction import GLiNEREntityExtractor
-from neo4j_agent_memory.schema import get_schema
-
-# Load financial services schema
-extractor = GLiNEREntityExtractor.for_schema("financial")
-
-text = """
-    Client meeting with Acme Investment Holdings regarding their Q4 portfolio review.
-    They currently hold 10,000 shares of Apple (AAPL) and 5,000 shares of Microsoft (MSFT).
-    The client expressed interest in increasing exposure to the AI sector, specifically
-    mentioning NVIDIA and AMD as potential additions. Risk tolerance remains moderate-growth.
-    Advisor Sarah Johnson recommended a 15% allocation to technology, balanced with
-    fixed income through the Vanguard Total Bond ETF (BND).
-"""
-
-result = await extractor.extract(text)
-
-# Entities automatically typed for financial domain
-for entity in result.entities:
-    print(f"{entity.name}: {entity.type}")
-    # Output:
-    # Acme Investment Holdings: ORGANIZATION
-    # Apple: SECURITY
-    # AAPL: TICKER
-    # Microsoft: SECURITY
-    # NVIDIA: SECURITY
-    # Sarah Johnson: PERSON
-    # Vanguard Total Bond ETF: SECURITY
-    # BND: TICKER
-----
-
-.Financial Schema Entity Types
-[cols="1,2,2"]
-|===
-|Type |Description |Examples
-
-|PERSON
-|Clients, advisors, contacts
-|"John Smith", "Sarah Johnson"
-
-|ORGANIZATION
-|Companies, funds, institutions
-|"Acme Holdings", "BlackRock"
-
-|SECURITY
-|Stocks, bonds, ETFs, funds
-|"Apple Inc.", "Treasury Bond"
-
-|TICKER
-|Stock/fund symbols
-|"AAPL", "BND", "SPY"
-
-|ACCOUNT
-|Account types and numbers
-|"IRA", "401k", "Account #12345"
-
-|AMOUNT
-|Dollar amounts, percentages
-|"$50,000", "15%", "10,000 shares"
-
-|DATE
-|Dates and time periods
-|"Q4 2024", "next quarter"
-
-|SECTOR
-|Industry sectors
-|"Technology", "Healthcare"
-
-|RISK_PROFILE
-|Risk classifications
-|"moderate-growth", "conservative"
-|===
-
-=== Ecommerce Retail Schema
-
-[source,python]
-----
-extractor = GLiNEREntityExtractor.for_schema("ecommerce")
-
-text = """
-    Customer inquiry from Jane Doe (Gold member) about order #ORD-98765.
-    She ordered Nike Air Max 90 in size 9 (SKU: NKE-AM90-WHT-9) from our
-    mobile app. The package was shipped via FedEx (tracking: 1234567890)
-    to her address in Brooklyn, NY. She's asking about the return policy
-    for the Adidas Ultraboost she's considering. Her preferred payment
-    method is Apple Pay and she mentioned she has a 20% off coupon code.
-"""
-
-result = await extractor.extract(text)
-
-# Entities typed for ecommerce context graph
-for entity in result.entities:
-    print(f"{entity.name}: {entity.type}")
-    # Output:
-    # Jane Doe: CUSTOMER
-    # ORD-98765: ORDER_ID
-    # Nike Air Max 90: PRODUCT
-    # NKE-AM90-WHT-9: SKU
-    # FedEx: CARRIER
-    # Brooklyn, NY: LOCATION
-    # Adidas Ultraboost: PRODUCT
-    # Apple Pay: PAYMENT_METHOD
-    # 20% off: PROMOTION
-----
-
-.Ecommerce Schema Entity Types
-[cols="1,2,2"]
-|===
-|Type |Description |Examples
-
-|CUSTOMER
-|Customer names and IDs
-|"Jane Doe", "CUST-12345"
-
-|PRODUCT
-|Product names
-|"Nike Air Max 90", "iPhone 15"
-
-|SKU
-|Product identifiers
-|"NKE-AM90-001", "APL-IPH15-256"
-
-|BRAND
-|Brand names
-|"Nike", "Apple", "Samsung"
-
-|CATEGORY
-|Product categories
-|"Footwear", "Electronics"
-
-|ORDER_ID
-|Order identifiers
-|"ORD-98765", "#12345"
-
-|CARRIER
-|Shipping carriers
-|"FedEx", "UPS", "USPS"
-
-|LOCATION
-|Addresses, stores, warehouses
-|"Brooklyn, NY", "Store #42"
-
-|PAYMENT_METHOD
-|Payment types
-|"Apple Pay", "Visa ****1234"
-
-|PROMOTION
-|Coupons, discounts, sales
-|"20% off", "SUMMER2024"
-|===
-
-== Custom Domain Schemas
-
-Create custom schemas to extract domain-specific entities for your context graph.
-
-=== Define Custom Entity Types
-
-[source,python]
-----
-from neo4j_agent_memory.schema import EntitySchemaConfig, EntityTypeConfig
-
-# Define a custom schema for insurance domain
-insurance_schema = EntitySchemaConfig(
-    name="insurance",
-    version="1.0",
-    description="Schema for insurance industry context graphs",
-    entity_types=[
-        EntityTypeConfig(
-            name="POLICYHOLDER",
-            description="Insurance policy holder or applicant",
-            examples=["John Smith", "Acme Corporation"],
-        ),
-        EntityTypeConfig(
-            name="POLICY",
-            description="Insurance policy with number",
-            examples=["Policy #INS-2024-001", "Auto Policy 12345"],
-        ),
-        EntityTypeConfig(
-            name="COVERAGE",
-            description="Type of insurance coverage",
-            examples=["liability coverage", "comprehensive", "collision"],
-        ),
-        EntityTypeConfig(
-            name="CLAIM",
-            description="Insurance claim reference",
-            examples=["Claim #CLM-98765", "accident claim"],
-        ),
-        EntityTypeConfig(
-            name="PREMIUM",
-            description="Insurance premium amount",
-            examples=["$500/month", "annual premium of $6,000"],
-        ),
-        EntityTypeConfig(
-            name="DEDUCTIBLE",
-            description="Policy deductible amount",
-            examples=["$1,000 deductible", "$500 collision deductible"],
-        ),
-        EntityTypeConfig(
-            name="VEHICLE",
-            description="Insured vehicle",
-            examples=["2024 Toyota Camry", "Honda Accord"],
-        ),
-        EntityTypeConfig(
-            name="PROPERTY",
-            description="Insured property",
-            examples=["123 Main St home", "commercial building"],
-        ),
-    ],
-)
-
-# Create extractor with custom schema
-extractor = GLiNEREntityExtractor.for_schema(insurance_schema)
-----
-
-=== Save Schema to Neo4j
-
-Persist schemas for reuse across sessions and applications:
-
-[source,python]
-----
-from neo4j_agent_memory.schema import SchemaManager
-
-manager = SchemaManager(client)
-
-# Save schema to Neo4j
-stored = await manager.save_schema(
-    insurance_schema,
-    created_by="admin",
-    set_active=True,
-)
-
-print(f"Schema saved with ID: {stored.id}")
-
-# Later, load the schema
-loaded = await manager.load_schema("insurance")
-extractor = GLiNEREntityExtractor.for_schema(loaded.config)
-----
-
-=== Extend Built-in Schemas
-
-Add custom types to existing schemas:
-
-[source,python]
-----
-from neo4j_agent_memory.schema import get_schema, EntityTypeConfig
-
-# Start with ecommerce schema
-base_schema = get_schema("ecommerce")
-
-# Add custom types for your business
-custom_types = [
-    EntityTypeConfig(
-        name="LOYALTY_TIER",
-        description="Customer loyalty program tier",
-        examples=["Gold member", "Platinum status", "VIP"],
-    ),
-    EntityTypeConfig(
-        name="SUBSCRIPTION",
-        description="Subscription service",
-        examples=["Prime membership", "monthly box subscription"],
-    ),
-    EntityTypeConfig(
-        name="GIFT_CARD",
-        description="Gift card or store credit",
-        examples=["$50 gift card", "store credit balance"],
-    ),
-]
-
-# Extend schema
-extended_schema = base_schema.extend(
-    name="ecommerce_extended",
-    additional_types=custom_types,
-)
-
-extractor = GLiNEREntityExtractor.for_schema(extended_schema)
-----
-
-== Multi-Stage Extraction Pipelines
-
-Combine multiple extractors for comprehensive context graph construction.
-
-=== GLiNER + LLM Pipeline
-
-Use fast local extraction followed by LLM refinement:
-
-[source,python]
-----
-from neo4j_agent_memory.extraction import (
-    ExtractionPipeline,
-    GLiNEREntityExtractor,
-    LLMEntityExtractor,
-)
-
-# Stage 1: Fast local extraction with GLiNER
-gliner = GLiNEREntityExtractor.for_schema("financial")
-
-# Stage 2: LLM for relationship extraction and refinement
-llm = LLMEntityExtractor(
-    model="gpt-4o-mini",
-    extract_relations=True,
-    schema="financial",
-)
-
-# Build pipeline
-pipeline = ExtractionPipeline(
-    stages=[gliner, llm],
-    merge_strategy="confidence",  # Keep highest confidence
-)
-
-# Extract with full pipeline
-result = await pipeline.extract(text)
-
-print(f"Entities: {len(result.entities)}")
-print(f"Relations: {len(result.relations)}")
-
-# Relations show how entities connect in the context graph
-for rel in result.relations:
-    print(f"  {rel.source} --[{rel.type}]--> {rel.target}")
-----
-
-=== Conditional Pipeline
-
-Apply different extractors based on content:
-
-[source,python]
-----
-from neo4j_agent_memory.extraction import ConditionalPipeline
-
-pipeline = ConditionalPipeline(
-    # Use financial schema for investment discussions
-    conditions=[
-        {
-            "keywords": ["portfolio", "investment", "stock", "bond", "dividend"],
-            "extractor": GLiNEREntityExtractor.for_schema("financial"),
-        },
-        {
-            "keywords": ["order", "shipping", "product", "return", "delivery"],
-            "extractor": GLiNEREntityExtractor.for_schema("ecommerce"),
-        },
-    ],
-    # Default to general POLE+O
-    default=GLiNEREntityExtractor.for_poleo(),
-)
-
-result = await pipeline.extract(text)
-----
-
-== Relationship Extraction
-
-Extract relationships to build connected context graphs.
-
-=== GLiREL for Relationships
-
-Use GLiREL alongside GLiNER for zero-cost relationship extraction:
-
-[source,python]
-----
-from neo4j_agent_memory.extraction import GLiNERWithRelationsExtractor
-
-extractor = GLiNERWithRelationsExtractor.for_schema("ecommerce")
-
-text = """
-    Jane Doe purchased Nike Air Max 90 from our Manhattan store.
-    The product was manufactured by Nike and shipped via FedEx.
-"""
-
-result = await extractor.extract(text)
-
-print("Context Graph Edges:")
-for rel in result.relations:
-    print(f"  ({rel.source}) -[:{rel.type}]-> ({rel.target})")
-    # Output:
-    # (Jane Doe) -[:PURCHASED]-> (Nike Air Max 90)
-    # (Nike Air Max 90) -[:SOLD_AT]-> (Manhattan store)
-    # (Nike Air Max 90) -[:MANUFACTURED_BY]-> (Nike)
-    # (Nike Air Max 90) -[:SHIPPED_VIA]-> (FedEx)
-----
-
-=== Custom Relationship Types
-
-Define domain-specific relationships:
-
-[source,python]
-----
-from neo4j_agent_memory.extraction import GLiNERWithRelationsExtractor
-
-# Custom relationship types for financial domain
-financial_relations = [
-    # Person relationships
-    {"name": "ADVISES", "description": "Financial advisor advises client"},
-    {"name": "MANAGES", "description": "Manager manages account or fund"},
-    {"name": "AUTHORIZED_ON", "description": "Person authorized on account"},
-
-    # Security relationships
-    {"name": "HOLDS", "description": "Account holds security position"},
-    {"name": "TRADED", "description": "Executed trade in security"},
-    {"name": "BENCHMARKED_TO", "description": "Portfolio benchmarked to index"},
-
-    # Organization relationships
-    {"name": "SUBSIDIARY_OF", "description": "Company is subsidiary of parent"},
-    {"name": "CUSTODIED_AT", "description": "Assets custodied at institution"},
-]
-
-extractor = GLiNERWithRelationsExtractor(
-    entity_schema="financial",
-    relation_types=financial_relations,
-)
-----
-
-== Store Extracted Entities
-
-Add extracted entities to your context graph in Neo4j.
-
-=== Basic Storage
-
-[source,python]
-----
-# Extract entities
-result = await extractor.extract(text)
-
-# Store each entity in the context graph
-for entity in result.entities:
-    stored, _ = await client.long_term.add_entity(
-        name=entity.name,
-        entity_type=entity.type,
-        attributes={
-            "confidence": entity.confidence,
-            "source_text": text[:200],
-            "extracted_at": datetime.now().isoformat(),
-        },
-    )
-    print(f"Stored: {stored.name} ({stored.id})")
-----
-
-=== With Provenance Tracking
-
-Track where entities came from for audit and quality:
-
-[source,python]
-----
-# Store entity with provenance
-entity, _ = await client.long_term.add_entity(
-    name=extracted.name,
-    entity_type=extracted.type,
-)
-
-# Link to source message
-await client.long_term.link_entity_to_message(
-    entity=entity,
-    message_id=message.id,
-    confidence=extracted.confidence,
-    start_pos=extracted.start,
-    end_pos=extracted.end,
-    context=extracted.context,
-)
-
-# Link to extractor for debugging
-await client.long_term.link_entity_to_extractor(
-    entity=entity,
-    extractor_name="GLiNEREntityExtractor",
-    extractor_version="1.0",
-    confidence=extracted.confidence,
-)
-----
-
-=== With Deduplication
-
-Prevent duplicate nodes in your context graph:
-
-[source,python]
-----
-from neo4j_agent_memory.memory import DeduplicationConfig
-
-# Configure deduplication thresholds
-dedup_config = DeduplicationConfig(
-    auto_merge_threshold=0.95,  # Auto-merge highly similar entities
-    flag_threshold=0.85,         # Flag for review between 0.85-0.95
-    use_fuzzy_matching=True,     # Use string similarity too
-    match_same_type_only=True,   # Only match within same type
-)
-
-# Store with deduplication
-for extracted in result.entities:
-    entity, dedup_result = await client.long_term.add_entity(
-        name=extracted.name,
-        entity_type=extracted.type,
-        deduplication=dedup_config,
-    )
-
-    if dedup_result.action == "merged":
-        print(f"Merged '{extracted.name}' with existing '{dedup_result.matched_entity_name}'")
-    elif dedup_result.action == "flagged":
-        print(f"Flagged '{extracted.name}' for review against '{dedup_result.matched_entity_name}'")
-    else:
-        print(f"Created new entity: {entity.name}")
-----
-
-== Batch Extraction
-
-Process multiple documents efficiently:
-
-[source,python]
-----
-# List of documents to process
-documents = [
-    {"id": "doc-1", "text": "Customer John ordered iPhone 15..."},
-    {"id": "doc-2", "text": "Jane returned the Nike shoes..."},
-    {"id": "doc-3", "text": "Order #12345 shipped via FedEx..."},
-    # ... hundreds more
-]
-
-# Batch extraction
-texts = [doc["text"] for doc in documents]
-
-result = await extractor.extract_batch(
-    texts=texts,
-    batch_size=10,
-    max_concurrency=5,
-    on_progress=lambda done, total: print(f"Progress: {done}/{total}"),
-)
-
-print(f"Processed: {result.successful_items}/{result.total_items}")
-print(f"Total entities extracted: {result.total_entities}")
-print(f"Total relations extracted: {result.total_relations}")
-----
-
-== Streaming Extraction
-
-Process long documents in chunks:
-
-[source,python]
-----
-from neo4j_agent_memory.extraction import StreamingExtractor
-
-# Wrap extractor for streaming
-streamer = StreamingExtractor(
-    extractor=extractor,
-    chunk_size=4000,    # Characters per chunk
-    overlap=200,        # Overlap to avoid splitting entities
-)
-
-# Process long document
-long_document = open("annual_report.txt").read()  # 100K+ characters
-
-# Stream results as they're extracted
-async for chunk_result in streamer.extract_streaming(long_document):
-    print(f"Chunk {chunk_result.chunk.index}: {chunk_result.entity_count} entities")
-
-    # Store entities as they're extracted
-    for entity in chunk_result.entities:
-        stored, _ = await client.long_term.add_entity(
-            name=entity.name,
-            entity_type=entity.type,
-        )
-
-# Or get complete deduplicated result
-result = await streamer.extract(long_document, deduplicate=True)
-print(f"Total unique entities: {result.stats.deduplicated_entities}")
-----
-
-== Performance Optimization
-
-=== Choose the Right Extractor
-
-[cols="1,1,1,1,1"]
+== Choosing an Extractor
+
+[TIP]
+====
+*Which extractor should I use?*
+
+* **spaCy only** — throughput > 1000 docs/s, common entity types (PERSON, ORG, GPE), no GPU needed, offline
+* **GLiNER** — domain-specific types, ~50-200 docs/s, no API cost, GPU recommended; *the right default for most use cases*
+* **LLM** — complex or ambiguous text where accuracy is critical; add as a fallback stage, not a first pass
+* **GLiNER + GLiREL** — when you need both entities and relationships without an LLM
+====
+
+[cols="1,1,1,1,1", options="header"]
 |===
 |Extractor |Speed |Quality |Cost |Best For
 
@@ -660,7 +66,7 @@ print(f"Total unique entities: {result.stats.deduplicated_entities}")
 |Very Fast
 |Basic
 |Free
-|High-volume, standard entities
+|High-volume, standard entity types
 
 |GLiNER
 |Fast
@@ -672,13 +78,13 @@ print(f"Total unique entities: {result.stats.deduplicated_entities}")
 |Fast
 |Good
 |Free
-|Entities + relationships
+|Entities + relationships together
 
-|LLM (GPT-4o-mini)
+|LLM (gpt-4o-mini)
 |Slow
 |Excellent
 |$$
-|Complex text, high accuracy needs
+|Complex text, high-accuracy requirements
 
 |Hybrid Pipeline
 |Medium
@@ -687,92 +93,121 @@ print(f"Total unique entities: {result.stats.deduplicated_entities}")
 |Production systems
 |===
 
-=== Optimize for Your Use Case
+== Multi-Stage Extraction Pipelines
 
-.High-Volume Ecommerce (Speed Priority)
+Combine extractors for comprehensive extraction:
+
 [source,python]
 ----
-# Fast local extraction for real-time chat
-extractor = GLiNEREntityExtractor.for_schema("ecommerce")
-
-# Process in batches for bulk imports
-result = await extractor.extract_batch(
-    texts=product_descriptions,
-    batch_size=50,  # Larger batches for throughput
-    max_concurrency=10,
+from neo4j_agent_memory.extraction import (
+    ExtractionPipeline,
+    GLiNEREntityExtractor,
+    LLMEntityExtractor,
 )
-----
 
-.Financial Compliance (Accuracy Priority)
-[source,python]
-----
-# Multi-stage pipeline for accuracy
+# Stage 1: Fast local extraction
+gliner = GLiNEREntityExtractor.for_schema("financial")
+
+# Stage 2: LLM for refinement and relationship extraction
+llm = LLMEntityExtractor(
+    model="gpt-4o-mini",
+    extract_relations=True,
+    schema="financial",
+)
+
 pipeline = ExtractionPipeline(
-    stages=[
-        GLiNEREntityExtractor.for_schema("financial"),
-        LLMEntityExtractor(
-            model="gpt-4o",  # Higher quality model
-            extract_relations=True,
-            temperature=0,  # Deterministic
-        ),
+    stages=[gliner, llm],
+    merge_strategy="confidence",  # Keep highest confidence result per entity
+)
+
+result = await pipeline.extract(text)
+----
+
+[TIP]
+====
+*Use LLM as a fallback, not a first pass.* Run GLiNER first — it handles 80-90% of entities with no API cost. Only route to LLM when GLiNER confidence is below your threshold, or when you need relationship extraction that GLiREL can't handle.
+====
+
+=== Conditional Pipeline
+
+Apply different schemas based on conversation content:
+
+[source,python]
+----
+from neo4j_agent_memory.extraction import ConditionalPipeline
+
+pipeline = ConditionalPipeline(
+    conditions=[
+        {
+            "keywords": ["portfolio", "investment", "stock", "bond", "dividend"],
+            "extractor": GLiNEREntityExtractor.for_schema("financial"),
+        },
+        {
+            "keywords": ["order", "shipping", "product", "return", "delivery"],
+            "extractor": GLiNEREntityExtractor.for_schema("ecommerce"),
+        },
     ],
-    merge_strategy="union",  # Keep all extractions
+    default=GLiNEREntityExtractor.for_poleo(),
 )
 
-# Verify extractions before adding to context graph
-result = await pipeline.extract(compliance_document)
+result = await pipeline.extract(text)
+----
+
+== Store Extracted Entities
+
+=== Basic Storage
+
+[source,python]
+----
+result = await extractor.extract(text)
+
 for entity in result.entities:
-    if entity.confidence < 0.8:
-        # Flag for human review
-        await flag_for_review(entity)
+    stored, _ = await client.long_term.add_entity(
+        name=entity.name,
+        entity_type=entity.type,
+        attributes={
+            "confidence": entity.confidence,
+            "extracted_at": datetime.now().isoformat(),
+        },
+    )
 ----
 
-== Best Practices
+=== With Deduplication
 
-=== 1. Match Schema to Domain
-
-Use domain-specific schemas for better extraction quality:
+Prevent duplicate nodes in your context graph:
 
 [source,python]
 ----
-# Good: Domain-specific schema
-extractor = GLiNEREntityExtractor.for_schema("financial")
+from neo4j_agent_memory.memory import DeduplicationConfig
 
-# Less effective: Generic schema for specialized content
-extractor = GLiNEREntityExtractor.for_poleo()
-----
-
-=== 2. Include Entity Examples
-
-Examples improve extraction accuracy:
-
-[source,python]
-----
-EntityTypeConfig(
-    name="TICKER",
-    description="Stock ticker symbol",
-    # Good examples help the model
-    examples=["AAPL", "MSFT", "GOOGL", "NVDA", "BND", "SPY"],
+dedup_config = DeduplicationConfig(
+    auto_merge_threshold=0.95,  # Auto-merge highly similar entities
+    flag_threshold=0.85,         # Flag for review between 0.85-0.95
+    use_fuzzy_matching=True,
+    match_same_type_only=True,
 )
+
+for extracted in result.entities:
+    entity, dedup_result = await client.long_term.add_entity(
+        name=extracted.name,
+        entity_type=extracted.type,
+        deduplication=dedup_config,
+    )
+
+    if dedup_result.action == "merged":
+        print(f"Merged '{extracted.name}' with '{dedup_result.matched_entity_name}'")
+    elif dedup_result.action == "flagged":
+        print(f"Flagged '{extracted.name}' for review")
 ----
 
-=== 3. Validate Before Storing
-
-Check extraction quality before building the context graph:
+=== Validate Before Storing
 
 [source,python]
 ----
 for entity in result.entities:
-    # Skip low-confidence extractions
     if entity.confidence < 0.6:
         continue
-
-    # Skip very short entities (likely noise)
     if len(entity.name) < 2:
-        continue
-
-    # Skip stopwords extracted as entities
-    if entity.name.lower() in stopwords:
         continue
 
     stored, _ = await client.long_term.add_entity(
@@ -781,28 +216,35 @@ for entity in result.entities:
     )
 ----
 
-=== 4. Track Extraction Quality
-
-Monitor extraction performance over time:
+=== With Provenance Tracking
 
 [source,python]
 ----
-# Log extraction metrics
-metrics = {
-    "document_id": doc_id,
-    "text_length": len(text),
-    "entities_extracted": len(result.entities),
-    "relations_extracted": len(result.relations),
-    "avg_confidence": sum(e.confidence for e in result.entities) / len(result.entities),
-    "extraction_time_ms": result.extraction_time_ms,
-    "extractor": extractor.__class__.__name__,
-}
+entity, _ = await client.long_term.add_entity(
+    name=extracted.name,
+    entity_type=extracted.type,
+)
 
-await log_metrics(metrics)
+await client.long_term.link_entity_to_message(
+    entity=entity,
+    message_id=message.id,
+    confidence=extracted.confidence,
+    start_pos=extracted.start,
+    end_pos=extracted.end,
+)
+
+await client.long_term.link_entity_to_extractor(
+    entity=entity,
+    extractor_name="GLiNEREntityExtractor",
+    extractor_version="1.0",
+    confidence=extracted.confidence,
+)
 ----
 
 == See Also
 
+* xref:how-to/entity-extraction-schemas.adoc[Domain Schemas & Custom Types]
+* xref:how-to/entity-extraction-batch.adoc[Batch & Streaming Extraction]
 * xref:reference/schemas.adoc[Domain Schemas Reference]
 * xref:reference/extractors.adoc[Extractor Classes Reference]
 * xref:how-to/deduplication.adoc[Handle Duplicate Entities]

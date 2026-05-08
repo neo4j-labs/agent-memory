@@ -94,7 +94,7 @@ Neo4j Agent Memory provides integrations for seven popular agent frameworks. Thi
 | ✅ 55+ tests
 |===
 
-NOTE: The Microsoft Agent Framework column is marked with ⚠️ because it targets `agent-framework>=1.0.0b260212` (preview). APIs may change before GA release.
+NOTE: The Microsoft Agent Framework column targets `agent-framework>=1.0.0b260212`. The framework has reached GA — check the https://github.com/microsoft/agent-framework[official releases] for the latest stable version.
 
 == Quick Decision Guide
 
@@ -207,7 +207,7 @@ agent = Agent(
 * You need Graph Data Science (GDS) algorithms for recommendations
 * You want auto-invoked tools with no manual dispatch
 
-WARNING: This integration targets Microsoft Agent Framework v1.0.0b260212 (preview). APIs may change before GA.
+NOTE: This integration targets Microsoft Agent Framework v1.0.0b260212. The framework has reached GA — check the https://github.com/microsoft/agent-framework[official releases] for the latest stable version.
 
 [source,python]
 ----

@@ -12,7 +12,15 @@ from neo4j_agent_memory.cli.main import cli
 
 
 @pytest.fixture
-def runner():
+def runner(monkeypatch):
+    """CliRunner with NEO4J_* env vars cleared.
+
+    The `mcp serve --password` option is wired to `envvar="NEO4J_PASSWORD"`,
+    so without clearing the var, `test_serve_requires_password` picks up the
+    developer's local password and gets past the validation guard.
+    """
+    for var in ("NEO4J_PASSWORD", "NEO4J_USER", "NEO4J_USERNAME", "NEO4J_URI"):
+        monkeypatch.delenv(var, raising=False)
     return CliRunner()
 
 

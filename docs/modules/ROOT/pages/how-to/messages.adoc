@@ -1,14 +1,14 @@
 = Store and Search Messages
 :page-product: agent-memory
 :page-pagination:
-:toc: right
 :toclevels: 3
 :sectanchors:
-:sectlinks:
 :icons: font
 :source-highlighter: highlight.js
 
 How to store conversation messages and retrieve them using semantic search.
+
+image::diagrams/message-chain.png[Message chain: Conversation linked to Messages via FIRST_MESSAGE and NEXT_MESSAGE, with MENTIONS edges to entities,width=600,align=left]
 
 == Prerequisites
 

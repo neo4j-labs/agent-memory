@@ -1,10 +1,8 @@
 = Add Conversation Memory to a Chatbot
 :page-product: agent-memory
 :page-pagination:
-:toc: right
 :toclevels: 3
 :sectanchors:
-:sectlinks:
 :icons: font
 :source-highlighter: highlight.js
 :page-ad-icon: mortarboard

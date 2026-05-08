@@ -1,6 +1,8 @@
 """Reasoning memory for reasoning traces and tool usage."""
 
 import json
+import logging
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Literal
@@ -10,6 +12,16 @@ from pydantic import BaseModel, Field
 
 from neo4j_agent_memory.core.memory import BaseMemory, MemoryEntry
 from neo4j_agent_memory.graph import queries
+from neo4j_agent_memory.schema.models import EntityRef, TraceOutcome
+
+logger = logging.getLogger(__name__)
+
+
+# Signature for tool-call observer hooks. Hooks run after the tool call is
+# persisted and after any caller-provided ``touched_entities`` have been
+# written. They receive the persisted ToolCall and a HookContext that
+# exposes helpers for adding additional :TOUCHED edges.
+ToolCallHook = Callable[["ToolCall", "HookContext"], Awaitable[None]]
 
 
 def _serialize_json(data: dict[str, Any] | list | None) -> str | None:
@@ -321,6 +333,50 @@ class StreamingTraceRecorder:
         return self.current_step.id if self.current_step else None
 
 
+class ReasoningStepWithContext(BaseModel):
+    """A reasoning step plus its parent trace's task and outcome.
+
+    Returned by :meth:`ReasoningMemory.search_steps`. The parent context
+    lets callers do case-based imitation prompting on the *step*
+    granularity (the actual thought/action) while still surfacing the
+    *trace*-level task ("staff a healthcare team") that frames it.
+    """
+
+    step: ReasoningStep
+    similarity: float = Field(description="Cosine similarity to the query (0-1)")
+    parent_task: str = Field(description="Task of the parent ReasoningTrace")
+    parent_outcome: str | None = Field(
+        default=None, description="Outcome of the parent ReasoningTrace, if completed"
+    )
+    parent_success: bool | None = Field(
+        default=None, description="Success flag of the parent ReasoningTrace"
+    )
+
+
+class HookContext:
+    """Context object passed to tool-call observer hooks.
+
+    Provides helpers for writing additional ``:TOUCHED`` edges from the
+    just-recorded reasoning step, so a hook can add cross-region links
+    that depend on the tool's *result* (which often isn't known until
+    after the call returns).
+    """
+
+    def __init__(
+        self,
+        memory: "ReasoningMemory",
+        step_id: UUID,
+        tool_call: "ToolCall",
+    ):
+        self.memory = memory
+        self.step_id = step_id
+        self.tool_call = tool_call
+
+    async def add_touched_edge(self, ref: EntityRef) -> None:
+        """Write a ``(:ReasoningStep)-[:TOUCHED]->(:Entity)`` edge for ``ref``."""
+        await self.memory._record_touched_edge(self.step_id, ref)
+
+
 class ReasoningMemory(BaseMemory[ReasoningStep]):
     """
     Reasoning memory stores reasoning traces and tool usage patterns.
@@ -335,9 +391,22 @@ class ReasoningMemory(BaseMemory[ReasoningStep]):
         self,
         client: "Neo4jClient",
         embedder: "Embedder | None" = None,
+        *,
+        multi_tenant: bool = False,
     ):
         """Initialize reasoning memory."""
         super().__init__(client, embedder, None)
+        self._tool_call_hooks: list[ToolCallHook] = []
+        self._multi_tenant = multi_tenant
+
+    def _enforce_multi_tenant(self, user_identifier: str | None) -> None:
+        """Raise if multi-tenant is on and ``user_identifier`` is missing."""
+        if self._multi_tenant and user_identifier is None:
+            raise ValueError(
+                "MemorySettings.memory.multi_tenant=True but no "
+                "user_identifier was supplied. Pass user_identifier= to "
+                "scope this trace."
+            )
 
     async def add(self, content: str, **kwargs: Any) -> ReasoningStep:
         """Add content as a reasoning step."""
@@ -359,6 +428,7 @@ class ReasoningMemory(BaseMemory[ReasoningStep]):
         generate_embedding: bool = True,
         metadata: dict[str, Any] | None = None,
         triggered_by_message_id: UUID | str | None = None,
+        user_identifier: str | None = None,
     ) -> ReasoningTrace:
         """
         Start a new reasoning trace.
@@ -370,10 +440,17 @@ class ReasoningMemory(BaseMemory[ReasoningStep]):
             metadata: Optional metadata
             triggered_by_message_id: Optional message ID that initiated this trace.
                 Creates an INITIATED_BY relationship from ReasoningTrace to Message.
+            user_identifier: When provided, scopes the trace to a :User
+                node via ``(:User)-[:HAS_TRACE]->(:ReasoningTrace)`` and
+                denormalizes ``user_identifier`` onto the trace node for
+                fast filtering. Required when
+                ``MemorySettings.memory.multi_tenant=True``.
 
         Returns:
             The created reasoning trace
         """
+        self._enforce_multi_tenant(user_identifier)
+
         # Generate task embedding
         task_embedding = None
         if generate_embedding and self._embedder is not None:
@@ -413,6 +490,22 @@ class ReasoningMemory(BaseMemory[ReasoningStep]):
                 {
                     "trace_id": str(trace.id),
                     "message_id": msg_id_str,
+                },
+            )
+
+        if user_identifier is not None:
+            await self._client.execute_write(
+                """
+                MERGE (u:User {identifier: $user_identifier})
+                ON CREATE SET u.id = $user_identifier, u.created_at = datetime()
+                WITH u
+                MATCH (rt:ReasoningTrace {id: $trace_id})
+                MERGE (u)-[:HAS_TRACE]->(rt)
+                SET rt.user_identifier = $user_identifier
+                """,
+                {
+                    "user_identifier": user_identifier,
+                    "trace_id": str(trace.id),
                 },
             )
 
@@ -490,6 +583,45 @@ class ReasoningMemory(BaseMemory[ReasoningStep]):
 
         return step
 
+    def on_tool_call_recorded(self, hook: ToolCallHook) -> ToolCallHook:
+        """Register an observer that runs after every ``record_tool_call``.
+
+        Usable as a decorator::
+
+            @client.reasoning.on_tool_call_recorded
+            async def link_touched(tc, ctx):
+                for ref in infer_touched_entities(tc.tool_name, tc.arguments, tc.result):
+                    await ctx.add_touched_edge(ref)
+
+        Hooks fire in registration order, after the tool call is persisted
+        and after any ``touched_entities`` passed to ``record_tool_call``
+        have been written. Hook errors are logged but never raised — memory
+        writes must not break agent loops.
+        """
+        self._tool_call_hooks.append(hook)
+        return hook
+
+    async def _record_touched_edge(self, step_id: UUID, ref: EntityRef) -> None:
+        """Persist a single ``(:ReasoningStep)-[:TOUCHED]->(:Entity)`` edge.
+
+        Identity precedence: ``id`` > ``name + type`` > ``name``.
+        """
+        if ref.id is not None:
+            await self._client.execute_write(
+                queries.RECORD_TOUCHED_EDGE_BY_ID,
+                {"step_id": str(step_id), "entity_id": ref.id},
+            )
+        elif ref.type is not None:
+            await self._client.execute_write(
+                queries.RECORD_TOUCHED_EDGE_BY_NAME_TYPE,
+                {"step_id": str(step_id), "name": ref.name, "type": ref.type},
+            )
+        else:
+            await self._client.execute_write(
+                queries.RECORD_TOUCHED_EDGE_BY_NAME,
+                {"step_id": str(step_id), "name": ref.name},
+            )
+
     async def record_tool_call(
         self,
         step_id: UUID,
@@ -502,6 +634,7 @@ class ReasoningMemory(BaseMemory[ReasoningStep]):
         error: str | None = None,
         auto_observation: bool = False,
         message_id: UUID | str | None = None,
+        touched_entities: list[EntityRef] | None = None,
     ) -> ToolCall:
         """
         Record a tool call within a reasoning step.
@@ -519,6 +652,11 @@ class ReasoningMemory(BaseMemory[ReasoningStep]):
                 is the tool's output.
             message_id: Optional message ID that triggered this tool call.
                 Creates a TRIGGERED_BY relationship from ToolCall to Message.
+            touched_entities: Optional list of :class:`EntityRef` describing
+                entities this tool call touched. Each ref is materialized as
+                a ``(:ReasoningStep)-[:TOUCHED]->(:Entity)`` edge so audit
+                queries can reach the entity in one hop instead of three.
+                See ``how-to/audit-reasoning.adoc``.
 
         Returns:
             The created tool call
@@ -567,6 +705,23 @@ class ReasoningMemory(BaseMemory[ReasoningStep]):
                 {"id": str(step_id), "observation": observation},
             )
 
+        # Materialize :TOUCHED edges from the explicit list.
+        if touched_entities:
+            for ref in touched_entities:
+                await self._record_touched_edge(step_id, ref)
+
+        # Fire observer hooks. Errors are logged but never raised — memory
+        # writes must not break agent execution loops.
+        if self._tool_call_hooks:
+            ctx = HookContext(self, step_id, tool_call)
+            for hook in self._tool_call_hooks:
+                try:
+                    await hook(tool_call, ctx)
+                except Exception:
+                    logger.exception(
+                        "Tool-call hook %s raised; continuing.", getattr(hook, "__name__", hook)
+                    )
+
         return tool_call
 
     def _format_observation(self, result: Any, max_length: int = 1000) -> str:
@@ -591,7 +746,7 @@ class ReasoningMemory(BaseMemory[ReasoningStep]):
         self,
         trace_id: UUID,
         *,
-        outcome: str | None = None,
+        outcome: "str | TraceOutcome | None" = None,
         success: bool | None = None,
         generate_step_embeddings: bool = False,
     ) -> ReasoningTrace:
@@ -600,8 +755,12 @@ class ReasoningMemory(BaseMemory[ReasoningStep]):
 
         Args:
             trace_id: Trace ID to complete
-            outcome: Final outcome description
-            success: Whether the task succeeded
+            outcome: Final outcome. Either a free-text string (legacy) or a
+                :class:`TraceOutcome` for structured outcomes with
+                ``error_kind``, ``related_entities``, and metrics.
+                A :class:`TraceOutcome` overrides any ``success=`` argument.
+            success: Whether the task succeeded. Ignored when ``outcome`` is
+                a :class:`TraceOutcome`.
             generate_step_embeddings: If True, batch generate embeddings for all steps
                 that don't have them yet. Useful when steps were recorded with
                 generate_embedding=False during streaming.
@@ -613,14 +772,68 @@ class ReasoningMemory(BaseMemory[ReasoningStep]):
         if generate_step_embeddings and self._embedder is not None:
             await self._generate_step_embeddings_batch(trace_id)
 
+        # Normalize the outcome shape into the legacy ``(string, bool)``
+        # storage representation, plus side-effect writes for the
+        # structured fields.
+        outcome_str: str | None
+        success_bool: bool | None
+        error_kind: str | None = None
+        related_entities: list[EntityRef] = []
+        metrics: dict[str, float] = {}
+
+        if isinstance(outcome, TraceOutcome):
+            outcome_str = outcome.summary
+            success_bool = outcome.success
+            error_kind = outcome.error_kind
+            related_entities = list(outcome.related_entities)
+            metrics = dict(outcome.metrics)
+        else:
+            outcome_str = outcome
+            success_bool = success
+
         results = await self._client.execute_write(
             queries.UPDATE_REASONING_TRACE,
             {
                 "id": str(trace_id),
-                "outcome": outcome,
-                "success": success,
+                "outcome": outcome_str,
+                "success": success_bool,
             },
         )
+
+        # Persist the structured fields. ``error_kind`` is a top-level
+        # property so it's index-friendly; ``metrics`` and
+        # ``related_entities`` go into metadata for now.
+        if error_kind is not None or metrics:
+            await self._client.execute_write(
+                """
+                MATCH (rt:ReasoningTrace {id: $id})
+                SET rt.error_kind = $error_kind,
+                    rt.metrics_json = $metrics_json
+                """,
+                {
+                    "id": str(trace_id),
+                    "error_kind": error_kind,
+                    "metrics_json": _serialize_json(metrics),
+                },
+            )
+
+        # Materialize trace-level :TOUCHED edges via the most recent step,
+        # so the audit query (Step)-[:TOUCHED]->(Entity) still works for
+        # entities surfaced only at trace-completion time.
+        if related_entities:
+            last_step_rows = await self._client.execute_read(
+                """
+                MATCH (rt:ReasoningTrace {id: $trace_id})-[:HAS_STEP]->(s:ReasoningStep)
+                RETURN s.id AS step_id
+                ORDER BY s.step_number DESC
+                LIMIT 1
+                """,
+                {"trace_id": str(trace_id)},
+            )
+            if last_step_rows:
+                last_step_id = UUID(last_step_rows[0]["step_id"])
+                for ref in related_entities:
+                    await self._record_touched_edge(last_step_id, ref)
 
         if not results:
             raise ValueError(f"Trace not found: {trace_id}")
@@ -729,6 +942,82 @@ class ReasoningMemory(BaseMemory[ReasoningStep]):
     async def search(self, query: str, **kwargs: Any) -> list[ReasoningStep]:
         """Search is not directly supported for reasoning memory."""
         return []
+
+    async def search_steps(
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+        success_only: bool = True,
+        threshold: float = 0.7,
+    ) -> list[ReasoningStepWithContext]:
+        """Vector-search past reasoning *steps* by their thought/action.
+
+        Complements :meth:`get_similar_traces`, which searches at the
+        coarser trace-task granularity. Step-level search is the right
+        cut for case-based imitation prompting — past *thoughts* on
+        similar problems, not just past *task descriptions*.
+
+        Args:
+            query: Free-text query. Embedded via the configured embedder.
+            limit: Maximum number of results.
+            success_only: When ``True``, only steps whose parent trace
+                completed successfully are returned. Filtering on the
+                trace level (not the step) because individual steps don't
+                carry their own outcome.
+            threshold: Minimum cosine similarity, 0-1.
+
+        Returns:
+            A list of :class:`ReasoningStepWithContext`, each pairing a
+            step with its parent task / outcome.
+        """
+        if self._embedder is None:
+            return []
+
+        query_embedding = await self._embedder.embed(query)
+
+        rows = await self._client.execute_read(
+            queries.SEARCH_STEPS_BY_EMBEDDING,
+            {
+                "embedding": query_embedding,
+                "limit": limit,
+                "threshold": threshold,
+                "success_only": success_only,
+            },
+        )
+
+        results: list[ReasoningStepWithContext] = []
+        for row in rows:
+            rs = dict(row["rs"])
+            # Resolve trace_id from the parent relationship for the
+            # step model. The step node itself doesn't carry trace_id
+            # as a property in the current schema.
+            trace_id_rows = await self._client.execute_read(
+                """
+                MATCH (rt:ReasoningTrace)-[:HAS_STEP]->(rs:ReasoningStep {id: $id})
+                RETURN rt.id AS trace_id
+                """,
+                {"id": rs["id"]},
+            )
+            trace_id = UUID(trace_id_rows[0]["trace_id"]) if trace_id_rows else uuid4()
+            results.append(
+                ReasoningStepWithContext(
+                    step=ReasoningStep(
+                        id=UUID(rs["id"]),
+                        trace_id=trace_id,
+                        step_number=rs.get("step_number", 0),
+                        thought=rs.get("thought"),
+                        action=rs.get("action"),
+                        observation=rs.get("observation"),
+                        embedding=rs.get("embedding"),
+                    ),
+                    similarity=float(row["score"]),
+                    parent_task=row["task"],
+                    parent_outcome=row.get("outcome"),
+                    parent_success=row.get("trace_success"),
+                )
+            )
+        return results
 
     async def get_similar_traces(
         self,

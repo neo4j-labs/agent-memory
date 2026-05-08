@@ -1,10 +1,8 @@
 = Neo4j Agent Memory
 :page-product: agent-memory
 :page-pagination:
-:toc: left
 :toclevels: 3
 :sectanchors:
-:sectlinks:
 :icons: font
 :source-highlighter: highlight.js
 :experimental:
@@ -15,73 +13,48 @@
 :page-ad-underline-role: button
 :page-ad-underline: Enroll now
 
-++++
-<div class="hero">
-  <div class="hero-content">
-    <p class="hero-eyebrow"><i class="fa-solid fa-flask"></i> Neo4j Labs &nbsp;·&nbsp; <i class="fa-solid fa-database"></i> Graph-native memory for AI agents</p>
-    <h2 class="hero-title">Your agents forget everything.<br>Fix that.</h2>
-    <p class="hero-subtitle">Store conversations, build knowledge graphs, and let your agents learn from their own reasoning &mdash; all backed by Neo4j.</p>
-    <div class="status-badges">
-      <span class="status-badge experimental">Experimental</span>
-      <span class="status-badge community">Community Supported</span>
-    </div>
-    <div class="hero-actions">
-      <a href="tutorials/first-agent-memory.html" class="btn btn-primary"><i class="fa-solid fa-rocket"></i> Get Started</a>
-      <a href="https://github.com/neo4j-labs/agent-memory" class="btn btn-secondary" target="_blank" rel="noopener noreferrer"><i class="fab fa-github"></i> GitHub</a>
-      <a href="https://pypi.org/project/neo4j-agent-memory/" class="btn btn-secondary" target="_blank" rel="noopener noreferrer"><i class="fab fa-python"></i> PyPI</a>
-    </div>
-    <div class="hero-install">
-      <code>pip install neo4j-agent-memory</code>
-    </div>
-  </div>
-</div>
-++++
+icon:flask[] *Neo4j Labs* · icon:database[] Graph-native memory for AI agents
+
+[.lead]
+Your agents forget everything. *Fix that.*
+
+Store conversations, build knowledge graphs, and let your agents learn from their own reasoning — all backed by Neo4j.
+
+[NOTE]
+====
+*Experimental · Community Supported*
+====
+
+[source,bash]
+----
+pip install neo4j-agent-memory
+----
+
+xref:tutorials/first-agent-memory.adoc[Get Started] | https://github.com/neo4j-labs/agent-memory[GitHub] | https://pypi.org/project/neo4j-agent-memory/[PyPI]
 
 == Three Memory Types, One Graph
 
 Most agent memory systems give you a flat context window or a simple vector store.
-Neo4j Agent Memory gives your agent three distinct memory layers -- all connected in a single knowledge graph.
+Neo4j Agent Memory gives your agent three distinct memory layers — all connected in a single knowledge graph.
 
-++++
-<div class="memory-types-grid">
-  <div class="memory-card">
-    <div class="memory-card-icon short-term"><i class="fa-solid fa-comments"></i></div>
-    <h3>Short-Term Memory</h3>
-    <p class="memory-card-subtitle">Conversations &amp; experiences</p>
-    <p>Full conversation history with sequential message chains, session management, metadata-based search, and conversation summaries.</p>
-    <ul class="memory-card-features">
-      <li>Semantic message search</li>
-      <li>Session scoping &amp; listing</li>
-      <li>Metadata filters</li>
-      <li>LLM-powered summaries</li>
-    </ul>
-  </div>
-  <div class="memory-card">
-    <div class="memory-card-icon long-term"><i class="fa-solid fa-brain"></i></div>
-    <h3>Long-Term Memory</h3>
-    <p class="memory-card-subtitle">Facts, entities &amp; preferences</p>
-    <p>A knowledge graph of entities (people, places, orgs), preferences, facts, and relationships &mdash; built automatically from conversations.</p>
-    <ul class="memory-card-features">
-      <li>POLE+O entity classification</li>
-      <li>Entity deduplication</li>
-      <li>Temporal fact validity</li>
-      <li>Geospatial queries</li>
-    </ul>
-  </div>
-  <div class="memory-card">
-    <div class="memory-card-icon reasoning"><i class="fa-solid fa-route"></i></div>
-    <h3>Reasoning Memory</h3>
-    <p class="memory-card-subtitle">Tool usage &amp; reasoning traces</p>
-    <p>Records how the agent solved problems &mdash; every thought, tool call, and outcome &mdash; so it can learn from past reasoning patterns.</p>
-    <ul class="memory-card-features">
-      <li>Trace similarity search</li>
-      <li>Tool call statistics</li>
-      <li>Message-linked traces</li>
-      <li>Streaming trace recording</li>
-    </ul>
-  </div>
-</div>
-++++
+image::diagrams/the-three-layer-memory-architecture.png[Three memory types: short-term, long-term, and reasoning, all backed by Neo4j,width=360,align=left]
+
+[cols="1,2,2", options="header"]
+|===
+|Memory Type |What It Stores |Key Features
+
+|icon:comments[] *Short-Term*
+|Conversations & experiences
+|Semantic message search, session scoping, metadata filters, LLM-powered summaries
+
+|icon:brain[] *Long-Term*
+|Facts, entities & preferences
+|POLE+O entity classification, entity deduplication, temporal fact validity, geospatial queries
+
+|icon:random[] *Reasoning*
+|Tool usage & reasoning traces
+|Trace similarity search, tool call statistics, message-linked traces, streaming trace recording
+|===
 
 [source,python]
 ----
@@ -103,113 +76,67 @@ async with MemoryClient(settings) as memory:
 
 == What Makes This Different
 
-++++
-<div class="differentiators-grid">
-  <div class="diff-card">
-    <div class="diff-icon"><i class="fa-solid fa-diagram-project"></i></div>
-    <h4>Graph-Native, Not Bolted On</h4>
-    <p>Built on Neo4j from the ground up. Entities, messages, traces, and preferences are all <strong>nodes and relationships</strong> &mdash; not rows in a table or chunks in a vector store. Query across memory types with a single traversal.</p>
-  </div>
-  <div class="diff-card">
-    <div class="diff-icon"><i class="fa-solid fa-magnifying-glass"></i></div>
-    <h4>Vector + Graph + Spatial in One</h4>
-    <p>Semantic similarity search, graph traversal, and geospatial queries all in <strong>one database</strong>. No separate vector DB, no Redis, no Postgres. Find entities by meaning, by relationship, or by location.</p>
-  </div>
-  <div class="diff-card">
-    <div class="diff-icon"><i class="fa-solid fa-gears"></i></div>
-    <h4>Multi-Stage Entity Extraction</h4>
-    <p>Combine <strong>spaCy, GLiNER2, GLiREL, and LLM extractors</strong> in a configurable pipeline. 8 domain schemas (podcast, news, medical, legal...). Streaming extraction for 100K+ token documents.</p>
-  </div>
-  <div class="diff-card">
-    <div class="diff-icon"><i class="fa-solid fa-layer-group"></i></div>
-    <h4>Three Memory Layers, Connected</h4>
-    <p>Short-term conversations inform long-term entity extraction. Reasoning traces link back to triggering messages. The agent understands <strong>what happened, what it knows, and how it solved things</strong>.</p>
-  </div>
-  <div class="diff-card">
-    <div class="diff-icon"><i class="fa-solid fa-globe"></i></div>
-    <h4>Wikipedia Enrichment &amp; Geocoding</h4>
-    <p>Entities are automatically enriched with <strong>Wikipedia descriptions, images, and Wikidata IDs</strong>. Location entities get coordinates for geospatial queries. All in the background.</p>
-  </div>
-  <div class="diff-card">
-    <div class="diff-icon"><i class="fa-solid fa-plug"></i></div>
-    <h4>Framework Agnostic</h4>
-    <p>Works with <strong>LangChain, PydanticAI, LlamaIndex, and CrewAI</strong>. Or use the client directly. Your agent framework, your choice &mdash; the memory layer stays the same.</p>
-  </div>
-</div>
-++++
+[cols="1,3", options="header"]
+|===
+|Capability |Why It Matters
+
+|icon:sitemap[] *Graph-Native, Not Bolted On*
+|Built on Neo4j from the ground up. Entities, messages, traces, and preferences are all *nodes and relationships* — not rows in a table or chunks in a vector store. Query across memory types with a single traversal.
+
+|icon:search[] *Vector + Graph + Spatial in One*
+|Semantic similarity search, graph traversal, and geospatial queries all in *one database*. No separate vector DB, no Redis, no Postgres. Find entities by meaning, by relationship, or by location.
+
+|icon:cogs[] *Multi-Stage Entity Extraction*
+|Combine *spaCy, GLiNER2, GLiREL, and LLM extractors* in a configurable pipeline. 8 domain schemas (podcast, news, medical, legal...). Streaming extraction for 100K+ token documents.
+
+|icon:layers[] *Three Memory Layers, Connected*
+|Short-term conversations inform long-term entity extraction. Reasoning traces link back to triggering messages. The agent understands *what happened, what it knows, and how it solved things*.
+
+|icon:globe[] *Wikipedia Enrichment & Geocoding*
+|Entities are automatically enriched with *Wikipedia descriptions, images, and Wikidata IDs*. Location entities get coordinates for geospatial queries. All in the background.
+
+|icon:plug[] *Framework Agnostic*
+|Works with *LangChain, PydanticAI, LlamaIndex, and CrewAI*. Or use the client directly. Your agent framework, your choice — the memory layer stays the same.
+|===
 
 == Demos
 
-++++
-<div class="demos-section">
-  <div class="demo-card demo-card-featured">
-    <div class="demo-card-badge">Flagship Demo</div>
-    <div class="demo-card-body">
-      <h3><i class="fa-solid fa-podcast"></i> Lenny's Podcast Memory Explorer</h3>
-      <p class="demo-description">299 podcast episodes transformed into a searchable knowledge graph with a full-stack AI chat agent, interactive graph visualization, geospatial map view, and Wikipedia-enriched entity cards.</p>
-      <div class="demo-highlights">
-        <div class="demo-highlight">
-          <span class="demo-highlight-number">299</span>
-          <span class="demo-highlight-label">Episodes loaded</span>
-        </div>
-        <div class="demo-highlight">
-          <span class="demo-highlight-number">19</span>
-          <span class="demo-highlight-label">Agent tools</span>
-        </div>
-        <div class="demo-highlight">
-          <span class="demo-highlight-number">3</span>
-          <span class="demo-highlight-label">Memory types</span>
-        </div>
-      </div>
-      <div class="demo-features-list">
-        <div class="demo-feature"><i class="fa-solid fa-circle-check"></i> Interactive graph visualization (Neo4j NVL)</div>
-        <div class="demo-feature"><i class="fa-solid fa-circle-check"></i> Geospatial map with marker clusters &amp; heatmaps</div>
-        <div class="demo-feature"><i class="fa-solid fa-circle-check"></i> Wikipedia-enriched entity cards with images</div>
-        <div class="demo-feature"><i class="fa-solid fa-circle-check"></i> SSE streaming with tool call visualization</div>
-        <div class="demo-feature"><i class="fa-solid fa-circle-check"></i> Automatic preference learning from conversation</div>
-        <div class="demo-feature"><i class="fa-solid fa-circle-check"></i> FastAPI + PydanticAI + Next.js + Chakra UI</div>
-      </div>
-      <div class="demo-actions">
-        <a href="https://lennys-memory.vercel.app" class="btn btn-primary" target="_blank"><i class="fa-solid fa-play"></i> Try Live Demo</a>
-        <a href="https://github.com/neo4j-labs/agent-memory/tree/main/neo4j-agent-memory/examples/lennys-memory" class="btn btn-secondary" target="_blank"><i class="fab fa-github"></i> View on GitHub</a>
-      </div>
-    </div>
-  </div>
-  <div class="demo-card">
-    <div class="demo-card-body">
-      <h3><i class="fa-solid fa-newspaper"></i> Full-Stack Chat Agent</h3>
-      <p class="demo-description">A news research assistant that uses all three memory types with an interactive memory graph visualization. Double-click nodes to expand neighbors and explore the knowledge graph.</p>
-      <div class="demo-features-list">
-        <div class="demo-feature"><i class="fa-solid fa-circle-check"></i> Memory graph visualization with expansion</div>
-        <div class="demo-feature"><i class="fa-solid fa-circle-check"></i> Conversation-scoped graph filtering</div>
-        <div class="demo-feature"><i class="fa-solid fa-circle-check"></i> Dual Neo4j databases (memory + news)</div>
-      </div>
-      <div class="demo-actions">
-        <a href="https://github.com/neo4j-labs/agent-memory/tree/main/neo4j-agent-memory/examples/full-stack-chat-agent" class="btn btn-secondary" target="_blank"><i class="fa-solid fa-arrow-up-right-from-square"></i> View on GitHub</a>
-      </div>
-    </div>
-  </div>
-  <div class="demo-card">
-    <div class="demo-card-body">
-      <h3><i class="fa-solid fa-flask"></i> Domain Schema Examples</h3>
-      <p class="demo-description">8 specialized extraction schemas for different domains. See how GLiNER2 domain schemas improve entity extraction accuracy with type descriptions and confidence tuning.</p>
-      <div class="demo-tags">
-        <span class="demo-tag">Podcast</span>
-        <span class="demo-tag">News</span>
-        <span class="demo-tag">Scientific</span>
-        <span class="demo-tag">Business</span>
-        <span class="demo-tag">Medical</span>
-        <span class="demo-tag">Legal</span>
-        <span class="demo-tag">Entertainment</span>
-        <span class="demo-tag">POLE+O</span>
-      </div>
-      <div class="demo-actions">
-        <a href="https://github.com/neo4j-labs/agent-memory/tree/main/neo4j-agent-memory/examples/domain-schemas" class="btn btn-secondary" target="_blank"><i class="fa-solid fa-arrow-up-right-from-square"></i> View on GitHub</a>
-      </div>
-    </div>
-  </div>
-</div>
-++++
+=== icon:podcast[] Lenny's Podcast Memory Explorer _(Flagship)_
+
+299 podcast episodes transformed into a searchable knowledge graph with a full-stack AI chat agent, interactive graph visualization, geospatial map view, and Wikipedia-enriched entity cards.
+
+[cols="^1,^1,^1", options="header"]
+|===
+|Episodes loaded |Agent tools |Memory types
+|299 |19 |3
+|===
+
+* Interactive graph visualization (Neo4j NVL)
+* Geospatial map with marker clusters & heatmaps
+* Wikipedia-enriched entity cards with images
+* SSE streaming with tool call visualization
+* Automatic preference learning from conversation
+* FastAPI + PydanticAI + Next.js + Chakra UI
+
+https://lennys-memory.vercel.app[Try Live Demo] | https://github.com/neo4j-labs/agent-memory/tree/main/neo4j-agent-memory/examples/lennys-memory[View on GitHub]
+
+=== icon:newspaper[] Full-Stack Chat Agent
+
+A news research assistant that uses all three memory types with an interactive memory graph visualization. Double-click nodes to expand neighbors and explore the knowledge graph.
+
+* Memory graph visualization with expansion
+* Conversation-scoped graph filtering
+* Dual Neo4j databases (memory + news)
+
+https://github.com/neo4j-labs/agent-memory/tree/main/neo4j-agent-memory/examples/full-stack-chat-agent[View on GitHub]
+
+=== icon:flask[] Domain Schema Examples
+
+8 specialized extraction schemas for different domains. See how GLiNER2 domain schemas improve entity extraction accuracy with type descriptions and confidence tuning.
+
+_Schemas: Podcast · News · Scientific · Business · Medical · Legal · Entertainment · POLE+O_
+
+https://github.com/neo4j-labs/agent-memory/tree/main/neo4j-agent-memory/examples/domain-schemas[View on GitHub]
 
 == Quick Start
 
@@ -245,132 +172,88 @@ asyncio.run(main())
 
 == Entity Extraction Pipeline
 
-++++
-<div class="pipeline-section">
-  <div class="pipeline-diagram">
-    <div class="pipeline-stage">
-      <div class="pipeline-icon"><i class="fa-solid fa-bolt"></i></div>
-      <span class="pipeline-label">spaCy</span>
-      <span class="pipeline-detail">Fast &amp; free</span>
-    </div>
-    <div class="pipeline-arrow"><i class="fa-solid fa-arrow-right"></i></div>
-    <div class="pipeline-stage">
-      <div class="pipeline-icon"><i class="fa-solid fa-crosshairs"></i></div>
-      <span class="pipeline-label">GLiNER2</span>
-      <span class="pipeline-detail">Zero-shot NER</span>
-    </div>
-    <div class="pipeline-arrow"><i class="fa-solid fa-arrow-right"></i></div>
-    <div class="pipeline-stage">
-      <div class="pipeline-icon"><i class="fa-solid fa-link"></i></div>
-      <span class="pipeline-label">GLiREL</span>
-      <span class="pipeline-detail">Relation extraction</span>
-    </div>
-    <div class="pipeline-arrow"><i class="fa-solid fa-arrow-right"></i></div>
-    <div class="pipeline-stage">
-      <div class="pipeline-icon"><i class="fa-solid fa-wand-magic-sparkles"></i></div>
-      <span class="pipeline-label">LLM</span>
-      <span class="pipeline-detail">High accuracy</span>
-    </div>
-    <div class="pipeline-arrow"><i class="fa-solid fa-arrow-right"></i></div>
-    <div class="pipeline-stage pipeline-stage-final">
-      <div class="pipeline-icon"><i class="fa-solid fa-diagram-project"></i></div>
-      <span class="pipeline-label">Knowledge Graph</span>
-      <span class="pipeline-detail">Merged results</span>
-    </div>
-  </div>
-  <p class="pipeline-caption">Combine extractors in a configurable pipeline. 5 merge strategies. 8 domain schemas. Streaming extraction for 100K+ token documents.</p>
-</div>
-++++
+image::diagrams/extraction-pipeline.png[Multi-stage extraction pipeline: spaCy → GLiNER2 → GLiREL → LLM → Knowledge Graph,width=360,align=left]
+
+Combine extractors in a configurable pipeline. 5 merge strategies. 8 domain schemas. Streaming extraction for 100K+ token documents.
+
+[cols="1,2,1", options="header"]
+|===
+|Stage |Purpose |Best for
+
+|icon:bolt[] spaCy
+|Fast rule-based & statistical NER
+|High throughput, no API cost
+
+|icon:crosshairs[] GLiNER2
+|Zero-shot NER with domain schemas
+|Accuracy without LLM cost
+
+|icon:link[] GLiREL
+|Relation extraction between entities
+|Graph edge extraction
+
+|icon:magic[] LLM fallback
+|High-accuracy extraction via API
+|Complex or ambiguous text
+|===
 
 == Framework Integrations
 
-++++
-<div class="integrations-grid">
-  <a href="how-to/integrations/langchain.html" class="integration-card">
-    <strong>LangChain</strong>
-    <span>Memory &amp; retriever</span>
-  </a>
-  <a href="how-to/integrations/pydantic-ai.html" class="integration-card">
-    <strong>PydanticAI</strong>
-    <span>Deps &amp; trace recording</span>
-  </a>
-  <a href="how-to/integrations/llamaindex.html" class="integration-card">
-    <strong>LlamaIndex</strong>
-    <span>Memory nodes</span>
-  </a>
-  <a href="how-to/integrations/crewai.html" class="integration-card">
-    <strong>CrewAI</strong>
-    <span>Crew memory</span>
-  </a>
-</div>
-++++
+[cols="1,2,1"]
+|===
+|Framework |Integration |Guide
+
+|*LangChain*
+|Memory & retriever
+|xref:how-to/integrations/langchain.adoc[LangChain guide]
+
+|*PydanticAI*
+|Deps & trace recording
+|xref:how-to/integrations/pydantic-ai.adoc[PydanticAI guide]
+
+|*LlamaIndex*
+|Memory nodes
+|xref:how-to/integrations/llamaindex.adoc[LlamaIndex guide]
+
+|*CrewAI*
+|Crew memory
+|xref:how-to/integrations/crewai.adoc[CrewAI guide]
+
+|*AWS Strands*
+|Agent tools
+|xref:how-to/integrations/aws-strands.adoc[Strands guide]
+
+|*Google ADK*
+|MemoryService
+|xref:tutorials/first-agent-memory.adoc[ADK tutorial]
+|===
 
 == Architecture
 
-[source]
-----
-                         ┌─────────────────────────────────────────────┐
-                         │              MemoryClient                   │
-                         ├───────────────┬──────────────┬──────────────┤
-                         │  Short-Term   │  Long-Term   │  Reasoning   │
-                         │  Memory       │  Memory      │  Memory      │
-                         ├───────────────┴──────────────┴──────────────┤
-                         │          Extraction Pipeline                 │
-                         │  ┌───────┬─────────┬────────┬─────┐        │
-                         │  │ spaCy │ GLiNER2 │ GLiREL │ LLM │        │
-                         │  └───────┴─────────┴────────┴─────┘        │
-                         ├─────────────────────────────────────────────┤
-                         │        Neo4j Graph Database                  │
-                         │   Nodes · Relationships · Vectors · Spatial │
-                         └─────────────────────────────────────────────┘
-----
+image::diagrams/architecture-overview.png[Architecture overview: MemoryClient with three memory layers backed by Neo4j,width=360,align=left]
 
 == Documentation
 
-++++
-<div class="diataxis-grid">
-  <a href="tutorials/index.html" class="diataxis-card diataxis-tutorials">
-    <div class="diataxis-icon"><i class="fa-solid fa-graduation-cap"></i></div>
-    <h4>Tutorials</h4>
-    <p>Learn by building complete examples. Step-by-step guides that teach the basics.</p>
-    <ul>
-      <li>Build your first memory-enabled agent</li>
-      <li>Add conversation memory to a chatbot</li>
-      <li>Create a knowledge graph from documents</li>
-    </ul>
-  </a>
-  <a href="how-to/index.html" class="diataxis-card diataxis-howto">
-    <div class="diataxis-icon"><i class="fa-solid fa-wrench"></i></div>
-    <h4>How-To Guides</h4>
-    <p>Practical recipes for common tasks. Goal-oriented and problem-focused.</p>
-    <ul>
-      <li>Store and search messages</li>
-      <li>Configure entity extraction</li>
-      <li>Integrate with PydanticAI, LangChain</li>
-    </ul>
-  </a>
-  <a href="reference/index.html" class="diataxis-card diataxis-reference">
-    <div class="diataxis-icon"><i class="fa-solid fa-book"></i></div>
-    <h4>Reference</h4>
-    <p>Technical specifications. Complete API docs and configuration options.</p>
-    <ul>
-      <li>Configuration reference</li>
-      <li>API documentation</li>
-      <li>CLI command reference</li>
-    </ul>
-  </a>
-  <a href="explanation/index.html" class="diataxis-card diataxis-explanation">
-    <div class="diataxis-icon"><i class="fa-solid fa-lightbulb"></i></div>
-    <h4>Explanation</h4>
-    <p>Concepts and architecture. Understand why things work the way they do.</p>
-    <ul>
-      <li>The three memory types explained</li>
-      <li>POLE+O data model concepts</li>
-      <li>Why Neo4j for agent memory?</li>
-    </ul>
-  </a>
-</div>
-++++
+[cols="1,2,2"]
+|===
+|Section |Purpose |Start here
+
+|icon:graduation-cap[] xref:tutorials/index.adoc[Tutorials]
+|Learn by building complete examples
+|xref:tutorials/first-agent-memory.adoc[Build your first memory-enabled agent]
+
+|icon:wrench[] xref:how-to/index.adoc[How-To Guides]
+|Practical recipes for common tasks
+|xref:how-to/entity-extraction.adoc[Configure entity extraction]
+
+|icon:book[] xref:reference/index.adoc[Reference]
+|Technical specifications and API docs
+|xref:reference/configuration.adoc[Configuration reference]
+
+|icon:lightbulb[] xref:explanation/index.adoc[Explanation]
+|Concepts and architecture
+|xref:explanation/memory-types.adoc[Understanding memory types]
+|===
 
 === Quick Links
 
@@ -399,13 +282,3 @@ asyncio.run(main())
 * Python 3.10+
 * Neo4j 5.20+ (with APOC plugin recommended)
 * OpenAI API key (for embeddings and LLM extraction)
-
-++++
-<div class="footer-cta">
-  <h3>Ready to give your agents memory?</h3>
-  <div class="hero-actions">
-    <a href="tutorials/first-agent-memory.html" class="btn btn-primary"><i class="fa-solid fa-rocket"></i> Get Started</a>
-    <a href="https://github.com/neo4j-labs/agent-memory" class="btn btn-secondary" target="_blank"><i class="fab fa-github"></i> Star on GitHub</a>
-  </div>
-</div>
-++++

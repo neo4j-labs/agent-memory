@@ -48,9 +48,9 @@ Neo4j Agent Memory provides official integrations for five popular agent framewo
 | AgentCore + Context Graphs combined
 | ✅ Production Ready
 
-| xref:microsoft-agent.adoc[Microsoft Agent Framework]
+| xref:how-to/integrations/microsoft-agent.adoc[Microsoft Agent Framework]
 | Context providers, GDS algorithms, and graph-enhanced memory
-| ⚠️ Preview (API may change)
+| ✅ Production Ready
 |===
 
 == Quick Start
@@ -145,7 +145,7 @@ from neo4j_agent_memory.integrations.google_adk import Neo4jMemoryService
 
 memory_service = Neo4jMemoryService(memory_client=client, user_id="user-123")
 await memory_service.add_session_to_memory(session)
-results = await memory_service.search_memories("query")
+results = await memory_service.search_memory("query")
 ----
 
 === AWS Strands Agents
@@ -216,9 +216,4 @@ Automatically extract entities from conversations:
 * xref:how-to/integrations/aws-strands.adoc[AWS Strands Integration] - Bedrock-powered agents with Context Graph
 * xref:how-to/integrations/aws-bedrock-embeddings.adoc[AWS Bedrock Embeddings] - Titan embedding configuration
 * xref:how-to/integrations/aws-hybrid-memory.adoc[AWS Hybrid Memory] - Combined memory providers
-* xref:langchain.adoc[LangChain Integration] - Memory and retriever for chains
-* xref:pydantic-ai.adoc[PydanticAI Integration] - Type-safe agents with tracing
-* xref:llamaindex.adoc[LlamaIndex Integration] - RAG with TextNode support
-* xref:crewai.adoc[CrewAI Integration] - Multi-agent shared memory
-* xref:openai-agents.adoc[OpenAI Agents Integration] - Function tools for OpenAI
-* xref:microsoft-agent.adoc[Microsoft Agent Framework] - Context providers with GDS
+* xref:how-to/integrations/microsoft-agent.adoc[Microsoft Agent Framework] - Context providers with GDS

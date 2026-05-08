@@ -1,7 +1,6 @@
 = MCP Tools Reference
 :page-product: agent-memory
 :page-pagination:
-:toc: left
 :toclevels: 2
 
 Complete reference for the neo4j-agent-memory MCP server tools, resources, and prompts.
@@ -9,6 +8,8 @@ Complete reference for the neo4j-agent-memory MCP server tools, resources, and p
 == Overview
 
 The MCP server exposes memory capabilities via the Model Context Protocol for Claude Desktop, Claude Code, Cursor, and other MCP-compatible hosts.
+
+image::diagrams/mcp-server-architecture.png[MCP server architecture: MCP client connects via protocol to server profiles, MemoryClient, and Neo4j,width=540,align=left]
 
 Tools are organized into two profiles:
 

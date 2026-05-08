@@ -1,8 +1,7 @@
 * xref:index.adoc[Agent Memory]
 ** xref:getting-started.adoc[Getting Started]
 
-** Tutorials
-*** xref:tutorials/index.adoc[Overview]
+** xref:tutorials/index.adoc[Tutorials]
 *** xref:tutorials/first-agent-memory.adoc[First Agent Memory]
 *** xref:tutorials/conversation-memory.adoc[Conversation Memory]
 *** xref:tutorials/knowledge-graph.adoc[Knowledge Graphs]
@@ -10,17 +9,35 @@
 *** xref:tutorials/mcp-server.adoc[MCP Server for Claude Desktop]
 *** xref:tutorials/microsoft-agent-memory.adoc[Microsoft Agent Memory]
 
-** How-To Guides
-*** xref:how-to/index.adoc[Overview]
-*** xref:how-to/messages.adoc[Store & Search Messages]
-*** xref:how-to/entities.adoc[Work with Entities]
-*** xref:how-to/preferences.adoc[Manage Preferences]
-*** xref:how-to/reasoning-traces.adoc[Record Reasoning Traces]
-*** xref:how-to/entity-extraction.adoc[Configure Entity Extraction]
-*** xref:how-to/batch-processing.adoc[Batch Processing]
-*** xref:how-to/deduplication.adoc[Handle Duplicates]
-*** Integrations
-**** xref:how-to/integrations/index.adoc[Overview]
+** xref:how-to/index.adoc[How-To Guides]
+
+*** Core Operations
+**** xref:how-to/messages.adoc[Store & Search Messages]
+**** xref:how-to/entities.adoc[Work with Entities]
+**** xref:how-to/preferences.adoc[Manage Preferences]
+**** xref:how-to/deduplication.adoc[Handle Duplicates]
+
+*** Entity Extraction
+**** xref:how-to/entity-extraction.adoc[Entity Extraction]
+**** xref:how-to/entity-extraction-schemas.adoc[Domain Schemas]
+**** xref:how-to/entity-extraction-batch.adoc[Batch & Streaming]
+
+*** Reasoning & Audit
+**** xref:how-to/reasoning-traces.adoc[Record Reasoning Traces]
+**** xref:how-to/audit-reasoning.adoc[Audit with TOUCHED Edges]
+
+*** Production Features
+**** xref:how-to/multi-tenancy.adoc[Multi-Tenant Memory]
+**** xref:how-to/buffered-writes.adoc[Buffered Writes]
+**** xref:how-to/consolidation.adoc[Memory Consolidation]
+**** xref:how-to/adopt-existing-graph.adoc[Adopt an Existing Graph]
+**** xref:how-to/privacy-and-audit.adoc[Privacy and Audit]
+**** xref:how-to/evaluation.adoc[Evaluating Memory Quality]
+**** xref:how-to/running-without-an-llm.adoc[Run Without an LLM]
+**** xref:how-to/batch-processing.adoc[Batch Processing]
+
+*** Framework Integrations
+**** xref:how-to/integrations/index.adoc[All Integrations]
 **** xref:how-to/integrations/langchain.adoc[LangChain]
 **** xref:how-to/integrations/llamaindex.adoc[LlamaIndex]
 **** xref:how-to/integrations/pydantic-ai.adoc[PydanticAI]
@@ -31,10 +48,9 @@
 **** xref:how-to/integrations/aws-bedrock-embeddings.adoc[Amazon Bedrock Embeddings]
 **** xref:how-to/integrations/aws-hybrid-memory.adoc[AWS Hybrid Memory]
 **** xref:how-to/integrations/microsoft-agent.adoc[Microsoft Agent Framework]
-*** xref:how-to/create-context-graph-mcp.adoc[MCP + create-context-graph]
+**** xref:how-to/create-context-graph-mcp.adoc[MCP + create-context-graph]
 
-** Reference
-*** xref:reference/index.adoc[Overview]
+** xref:reference/index.adoc[Reference]
 *** xref:reference/configuration.adoc[Configuration]
 *** xref:reference/environment-variables.adoc[Environment Variables]
 *** xref:reference/cli.adoc[CLI]
@@ -42,14 +58,14 @@
 *** xref:reference/deployment.adoc[Deployment]
 *** xref:reference/extractors.adoc[Extractors]
 *** xref:reference/schemas.adoc[Schemas]
+*** xref:reference/schema-objects.adoc[Schema Objects (Constraints & Indexes)]
 *** API Reference
 **** xref:reference/api/memory-client.adoc[MemoryClient]
 **** xref:reference/api/short-term.adoc[Short-Term Memory]
 **** xref:reference/api/long-term.adoc[Long-Term Memory]
 **** xref:reference/api/reasoning.adoc[Reasoning Memory]
 
-** Concepts
-*** xref:explanation/index.adoc[Overview]
+** xref:explanation/index.adoc[Concepts]
 *** xref:explanation/memory-types.adoc[Memory Types]
 *** xref:explanation/poleo-model.adoc[POLE+O Model]
 *** xref:explanation/graph-architecture.adoc[Graph Architecture]
@@ -57,4 +73,5 @@
 *** xref:explanation/resolution-deduplication.adoc[Resolution & Deduplication]
 *** xref:explanation/framework-comparison.adoc[Framework Comparison]
 
+** xref:glossary.adoc[Glossary]
 ** xref:faq.adoc[FAQ]

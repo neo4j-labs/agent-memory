@@ -4,9 +4,9 @@
 
 This tutorial guides you through building a shopping assistant that remembers customer preferences, provides personalized recommendations, and uses graph algorithms for product discovery.
 
-[WARNING]
+[NOTE]
 ====
-This tutorial uses Microsoft Agent Framework v1.0.0b (preview). APIs may change before GA release.
+This tutorial targets Microsoft Agent Framework v1.0.0b260212. The framework has reached GA; check the https://github.com/microsoft/agent-framework[Microsoft Agent Framework releases] for the latest version and any API changes.
 ====
 
 == What You'll Build

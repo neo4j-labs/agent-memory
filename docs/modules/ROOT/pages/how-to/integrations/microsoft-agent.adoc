@@ -4,12 +4,16 @@
 
 This guide explains how to use Neo4j Agent Memory with Microsoft Agent Framework to build agents with persistent memory, graph-enhanced context retrieval, and Graph Data Science (GDS) algorithms for advanced recommendations.
 
-[WARNING]
+[NOTE]
 ====
-This integration targets Microsoft Agent Framework v1.0.0b260212 (preview). APIs may change before GA release (expected Q1 2026). See <<api-compatibility>> for version requirements and migration guidance.
+This integration targets Microsoft Agent Framework v1.0.0b260212. The framework has reached GA; check the https://github.com/microsoft/agent-framework[Microsoft Agent Framework releases] for the latest version and any API changes.
 ====
 
 == Overview
+
+image::diagrams/tfl-explorer-full-stack-architecture.png[Full-stack architecture: Microsoft Agent Framework + Neo4j Agent Memory powering the TfL Explorer app,width=600,align=left]
+
+image::diagrams/tfl-explorer-app-screenshot.png[TfL Explorer chat interface: the agent answers route planning questions using real-time Transport for London data and Neo4j spatial memory,width=540,align=left]
 
 The Microsoft Agent Framework integration provides:
 

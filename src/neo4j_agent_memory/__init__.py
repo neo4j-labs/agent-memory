@@ -38,9 +38,15 @@ Example usage:
 """
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    from neo4j_agent_memory.memory.buffered import BufferedWriter
+    from neo4j_agent_memory.memory.consolidation import ConsolidationMemory
+    from neo4j_agent_memory.memory.eval import EvalMemory
+    from neo4j_agent_memory.memory.users import UserMemory
 
 from neo4j_agent_memory.config.settings import (
     EmbeddingConfig,
@@ -180,7 +186,7 @@ from neo4j_agent_memory.memory.short_term import (
     ShortTermMemory,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.2.1"
 
 __all__ = [
     # Main client
@@ -312,6 +318,10 @@ class MemoryClient:
         self._short_term: ShortTermMemory | None = None
         self._long_term: LongTermMemory | None = None
         self._reasoning: ReasoningMemory | None = None
+        self._users: UserMemory | None = None
+        self._buffered: BufferedWriter | None = None
+        self._consolidation: ConsolidationMemory | None = None
+        self._eval: EvalMemory | None = None
 
     async def __aenter__(self) -> "MemoryClient":
         """Async context manager entry."""
@@ -359,10 +369,12 @@ class MemoryClient:
         self._enrichment_service = await self._create_enrichment_service()
 
         # Create memory instances
+        multi_tenant = self._settings.memory.multi_tenant
         self._short_term = ShortTermMemory(
             self._client,
             self._embedder,
             self._extractor,
+            multi_tenant=multi_tenant,
         )
         self._long_term = LongTermMemory(
             self._client,
@@ -371,14 +383,44 @@ class MemoryClient:
             self._resolver,
             self._geocoder,
             self._enrichment_service,
+            multi_tenant=multi_tenant,
         )
         self._reasoning = ReasoningMemory(
             self._client,
             self._embedder,
+            multi_tenant=multi_tenant,
         )
+        from neo4j_agent_memory.memory.users import UserMemory
+
+        self._users = UserMemory(self._client)
+
+        # Buffered writer (opt-in fire-and-forget API).
+        from neo4j_agent_memory.memory.buffered import BufferedWriter
+
+        self._buffered = BufferedWriter(
+            self._client,
+            write_mode=self._settings.memory.write_mode,
+            max_pending=self._settings.memory.max_pending,
+        )
+
+        # Consolidation primitives (dry-runnable hygiene jobs).
+        from neo4j_agent_memory.memory.consolidation import ConsolidationMemory
+
+        self._consolidation = ConsolidationMemory(self._client)
+
+        # Evaluation harness.
+        from neo4j_agent_memory.memory.eval import EvalMemory
+
+        self._eval = EvalMemory(self)
 
     async def close(self) -> None:
         """Close the Neo4j connection and stop background services."""
+        # Drain buffered writes before closing the driver — otherwise
+        # in-flight writes would be lost.
+        if self._buffered is not None:
+            await self._buffered.stop()
+            self._buffered = None
+
         # Stop enrichment service gracefully
         if self._enrichment_service is not None:
             await self._enrichment_service.stop()
@@ -387,6 +429,22 @@ class MemoryClient:
         if self._client is not None:
             await self._client.close()
             self._client = None
+
+    async def flush(self) -> None:
+        """Drain all queued buffered writes (no-op in ``write_mode='sync'``)."""
+        if self._buffered is not None:
+            await self._buffered.flush()
+
+    async def wait_for_pending(self) -> None:
+        """Alias of :meth:`flush`."""
+        await self.flush()
+
+    @property
+    def write_errors(self) -> list:
+        """Background buffered-write errors recorded since startup."""
+        if self._buffered is None:
+            return []
+        return self._buffered.errors
 
     @property
     def is_connected(self) -> bool:
@@ -437,6 +495,62 @@ class MemoryClient:
         if self._reasoning is None:
             raise NotConnectedError("Client not connected. Use 'async with' or call connect().")
         return self._reasoning
+
+    @property
+    def eval(self) -> "EvalMemory":
+        """
+        Access the evaluation harness — recall@k for retrieval, audit
+        completeness, and preference fidelity.
+
+        See ``how-to/evaluation.adoc`` for usage.
+        """
+        if self._eval is None:
+            raise NotConnectedError("Client not connected. Use 'async with' or call connect().")
+        return self._eval
+
+    @property
+    def consolidation(self) -> "ConsolidationMemory":
+        """
+        Access consolidation primitives — dry-runnable hygiene jobs:
+
+        * ``dedupe_entities()`` — entity SAME_AS merging.
+        * ``summarize_long_traces()`` — flag traces with many steps.
+        * ``detect_superseded_preferences()`` — auto-supersede near-duplicates.
+        * ``archive_expired_conversations()`` — TTL-based archival.
+
+        All default to ``dry_run=True``; pass ``dry_run=False`` to mutate.
+        """
+        if self._consolidation is None:
+            raise NotConnectedError("Client not connected. Use 'async with' or call connect().")
+        return self._consolidation
+
+    @property
+    def buffered(self) -> "BufferedWriter":
+        """
+        Access the buffered (fire-and-forget) writer.
+
+        In ``write_mode='sync'`` this just delegates to the underlying
+        ``execute_write``. In ``write_mode='buffered'`` writes return as
+        soon as they're queued; call :meth:`flush` at shutdown.
+
+        Pair with ``MemorySettings.memory.write_mode = "buffered"``.
+        """
+        if self._buffered is None:
+            raise NotConnectedError("Client not connected. Use 'async with' or call connect().")
+        return self._buffered
+
+    @property
+    def users(self) -> "UserMemory":
+        """
+        Access user memory for first-class :User identity in multi-tenant
+        deployments.
+
+        Pair with the ``user_identifier=`` kwarg on short-term, long-term,
+        and reasoning APIs to scope reads and writes by user.
+        """
+        if self._users is None:
+            raise NotConnectedError("Client not connected. Use 'async with' or call connect().")
+        return self._users
 
     @property
     def schema(self) -> SchemaManager:
