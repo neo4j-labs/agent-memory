@@ -64,6 +64,12 @@ claude mcp add neo4j-agent-memory -- \
 }
 ```
 
+> **Tip:** Use any LLM provider via LiteLLM. Set the appropriate API key (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_APPLICATION_CREDENTIALS`, etc.) and specify the model when running the server:
+> ```bash
+> neo4j-agent-memory mcp serve --password <pw> --extractor llm --model gemini/gemini-1.5-flash-001
+> ```
+> See [Configuration](https://neo4j.com/labs/agent-memory/reference/configuration.html) for model naming examples.
+
 ### Option B: Python API
 
 ![The memory abstractions exposed by the Neo4j Agent Memory package](img/memory-types.png)

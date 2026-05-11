@@ -16,6 +16,7 @@ from neo4j_agent_memory import ExtractionConfig, MemoryClient, MemorySettings
 from neo4j_agent_memory.config.settings import (
     EmbeddingConfig,
     EmbeddingProvider,
+    LLMConfig,
     Neo4jConfig,
 )
 from neo4j_agent_memory.memory.long_term import DeduplicationConfig
@@ -57,7 +58,7 @@ class FinancialMemoryService:
         """
         settings = get_settings()
 
-        # Configure memory settings with Vertex AI embeddings
+        # Configure memory settings with Vertex AI embeddings and Gemini for extraction
         self._memory_settings = MemorySettings(
             neo4j=Neo4jConfig(
                 uri=settings.neo4j.uri,
@@ -72,6 +73,10 @@ class FinancialMemoryService:
                 location=settings.vertex_ai.location,
             ),
             extraction=ExtractionConfig(),
+            # Use Gemini for entity extraction (native Google integration)
+            llm=LLMConfig(
+                model="gemini/gemini-2.5-flash-001",
+            ),
         )
         # DeduplicationConfig is available for preventing duplicate customer entities.
         # Configure via LongTermMemory(deduplication=DeduplicationConfig(...))

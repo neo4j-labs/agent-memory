@@ -66,6 +66,7 @@ from neo4j_agent_memory import (
     ExtractorType,
     GeocodingConfig,
     GeocodingProvider,
+    LLMConfig,
     MemoryClient,
     MemorySettings,
     MessageRole,
@@ -122,6 +123,12 @@ async def main():
     )
 
     # Configure the memory client
+    llm_config = None
+    if openai_api_key:
+        llm_config = LLMConfig(
+            model="gpt-4o-mini",  # Or use provider/model format: "openai/gpt-4o-mini"
+        )
+
     settings = MemorySettings(
         neo4j=Neo4jConfig(
             uri=os.getenv("NEO4J_URI", "bolt://localhost:7687"),
@@ -131,6 +138,7 @@ async def main():
         embedding=embedding_config,
         extraction=extraction_config,
         geocoding=geocoding_config,
+        llm=llm_config,
     )
 
     async with MemoryClient(settings) as memory:

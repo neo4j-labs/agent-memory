@@ -18,7 +18,7 @@ if not os.environ.get("NEO4J_PASSWORD"):
 async def main():
     """Run the Google ADK memory demo."""
     from neo4j_agent_memory import MemoryClient, MemorySettings
-    from neo4j_agent_memory.config.settings import Neo4jConfig
+    from neo4j_agent_memory.config.settings import Neo4jConfig, LLMConfig
     from neo4j_agent_memory.integration import MemoryIntegration, SessionStrategy
     from neo4j_agent_memory.integrations.google_adk import Neo4jMemoryService
 
@@ -29,7 +29,12 @@ async def main():
             username=os.environ.get("NEO4J_USER", "neo4j"),
             password=SecretStr(os.environ.get("NEO4J_PASSWORD", "password")),
             database=os.environ.get("NEO4J_DATABASE", "neo4j"),
-        )
+        ),
+        # Use Gemini for entity extraction (native Google integration)
+        llm=LLMConfig(
+            model="gemini/gemini-2.5-flash",
+            api_key=SecretStr(os.environ.get("GOOGLE_API_KEY", "")),
+        ),
     )
 
     print("=" * 60)

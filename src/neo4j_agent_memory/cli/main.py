@@ -190,7 +190,12 @@ def cli():
 @click.option(
     "--model",
     default=None,
-    help="Model name for GLiNER or LLM extractor.",
+    help=(
+        "Model name for GLiNER or LLM extractor. "
+        "For LLM: use 'provider/model' format (e.g., 'openai/gpt-4o-mini', "
+        "'gemini/gemini-2.5-flash-001', 'bedrock/anthropic.claude-3-sonnet-20240229-v1:0', "
+        "'anthropic/claude-3-5-sonnet-20241022'). Supports 100+ providers via LiteLLM."
+    ),
 )
 @click.option(
     "--relations/--no-relations",

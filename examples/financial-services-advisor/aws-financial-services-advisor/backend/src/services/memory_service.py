@@ -8,7 +8,12 @@ from typing import Any
 from uuid import UUID
 
 from neo4j_agent_memory import ExtractionConfig, MemoryClient, MemorySettings
-from neo4j_agent_memory.config import EmbeddingConfig, EmbeddingProvider, Neo4jConfig
+from neo4j_agent_memory.config import (
+    EmbeddingConfig,
+    EmbeddingProvider,
+    LLMConfig,
+    Neo4jConfig,
+)
 from neo4j_agent_memory.memory.long_term import DeduplicationConfig  # noqa: F401
 
 from ..config import get_settings
@@ -41,6 +46,10 @@ class FinancialMemoryService:
                 aws_region=settings.aws.region,
             ),
             extraction=ExtractionConfig(),
+            # Use Bedrock Anthropic Claude for entity extraction (native AWS integration)
+            llm=LLMConfig(
+                model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            ),
         )
         self._client = MemoryClient(memory_settings)
         self._initialized = False
@@ -212,7 +221,9 @@ class FinancialMemoryService:
                             "tool_name": tc.tool_name,
                             "arguments": tc.arguments,
                             "result": tc.result,
-                            "status": tc.status.value if hasattr(tc.status, "value") else str(tc.status),
+                            "status": tc.status.value
+                            if hasattr(tc.status, "value")
+                            else str(tc.status),
                             "duration_ms": tc.duration_ms,
                         }
                         for tc in (s.tool_calls or [])
@@ -222,7 +233,6 @@ class FinancialMemoryService:
             ],
             "metadata": trace.metadata,
         }
-
 
     # ==========================================================================
     # Context Search & Session Management
