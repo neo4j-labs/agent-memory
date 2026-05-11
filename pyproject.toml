@@ -80,7 +80,7 @@ opentelemetry = [
     "opentelemetry-sdk>=1.20.0",
     "opentelemetry-exporter-otlp>=1.20.0",
 ]
-opik = ["opik>=1.0.0"]
+opik = ["opik>=1.0.0", "tqdm>=4.0.0"]
 observability = [
     "opentelemetry-api>=1.20.0",
     "opentelemetry-sdk>=1.20.0",

@@ -53,14 +53,19 @@ def _build_settings(neo4j_connection_info) -> MemorySettings:
 @pytest.mark.integration
 class TestMemoryClientNoLLM:
     @pytest.mark.asyncio
-    async def test_get_context_works_without_llm(
-        self, neo4j_connection_info, mock_embedder, session_id
-    ):
+    async def test_get_context_works_without_llm(self, neo4j_connection_info, session_id):
         """T6: end-to-end add_message + get_context with llm=None succeeds."""
+        from tests.conftest import MockEmbedder
+
         settings = _build_settings(neo4j_connection_info)
 
-        async with MemoryClient(settings, embedder=mock_embedder) as client:
+        # Create embedder with dimensions matching the configured embedding config
+        embedder = MockEmbedder(dimensions=settings.embedding.dimensions)
+
+        async with MemoryClient(settings, embedder=embedder) as client:
             assert client._settings.llm is None
+            # Verify embedder is using correct dimensions
+            assert embedder.dimensions == settings.embedding.dimensions
 
             await client.short_term.add_message(session_id, "user", "John works at Acme in NYC")
             context = await client.get_context("Tell me about John")
@@ -77,6 +82,7 @@ class TestMemoryClientNoLLM:
                 EmbeddingConfig, EmbeddingProvider,
                 ExtractionConfig, ExtractorType,
             )
+            from neo4j_agent_memory.core.exceptions import EmbeddingError
 
             settings = MemorySettings(
                 neo4j=Neo4jConfig(
@@ -97,10 +103,16 @@ class TestMemoryClientNoLLM:
             )
 
             async def main():
-                async with MemoryClient(settings) as client:
-                    await client.short_term.add_message(
-                        "no-llm-smoke", "user", "Hello"
-                    )
+                try:
+                    async with MemoryClient(settings) as client:
+                        await client.short_term.add_message(
+                            "no-llm-smoke", "user", "Hello"
+                        )
+                except EmbeddingError as e:
+                    if "sentence-transformers" in str(e) or "sentence_transformers" in str(e):
+                        print("SKIP_SENTENCE_TRANSFORMERS_NOT_INSTALLED")
+                        sys.exit(0)
+                    raise
 
             asyncio.run(main())
 
@@ -119,6 +131,11 @@ class TestMemoryClientNoLLM:
             text=True,
             timeout=120,
         )
+
+        # Skip if sentence_transformers is not installed
+        if "SKIP_SENTENCE_TRANSFORMERS_NOT_INSTALLED" in result.stdout:
+            pytest.skip("sentence-transformers not installed in subprocess")
+
         if result.returncode != 0:
             pytest.fail(
                 f"no-llm subprocess failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"

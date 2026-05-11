@@ -3,8 +3,6 @@
 import json
 from typing import Any
 
-from litellm import acompletion
-
 from neo4j_agent_memory.core.exceptions import ExtractionError
 
 
@@ -30,6 +28,13 @@ class LiteLLM:
         Raises:
             ExtractionError: If extraction fails
         """
+        try:
+            from litellm import acompletion
+        except ImportError as e:
+            raise ExtractionError(
+                "LiteLLM is not installed. "
+                "Install it with: pip install 'neo4j-agent-memory[litellm]'"
+            ) from e
         try:
             response = await acompletion(
                 model=self.model,

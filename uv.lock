@@ -4663,6 +4663,7 @@ opentelemetry = [
 ]
 opik = [
     { name = "opik" },
+    { name = "tqdm" },
 ]
 pydantic-ai = [
     { name = "pydantic-ai" },
@@ -4738,6 +4739,7 @@ requires-dist = [
     { name = "spacy", marker = "extra == 'extraction'", specifier = ">=3.7.0" },
     { name = "spacy", marker = "extra == 'spacy'", specifier = ">=3.7.0" },
     { name = "strands-agents", marker = "extra == 'strands'", specifier = ">=0.1.0" },
+    { name = "tqdm", marker = "extra == 'opik'", specifier = ">=4.0.0" },
 ]
 provides-extras = ["openai", "anthropic", "sentence-transformers", "vertex-ai", "bedrock", "google", "aws", "strands", "spacy", "gliner", "litellm", "extraction", "fuzzy", "cli", "opentelemetry", "opik", "observability", "langchain", "llamaindex", "pydantic-ai", "crewai", "openai-agents", "microsoft-agent", "mcp", "google-adk", "all", "full"]
 

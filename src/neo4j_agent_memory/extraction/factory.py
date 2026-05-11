@@ -19,7 +19,6 @@ from neo4j_agent_memory.extraction.pipeline import (
     ExtractionPipeline,
     MergeStrategy,
 )
-from neo4j_agent_memory.llm.factory import create_llm
 
 if TYPE_CHECKING:
     from neo4j_agent_memory.schema.models import EntitySchemaConfig
@@ -161,6 +160,7 @@ def create_llm_extractor(
         LLMEntityExtractor instance
     """
     from neo4j_agent_memory.extraction.llm_extractor import LLMEntityExtractor
+    from neo4j_agent_memory.llm.factory import create_llm
 
     entity_types = extraction_config.entity_types
     if schema_config and schema_config.entity_types:
