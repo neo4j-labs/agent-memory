@@ -138,3 +138,132 @@ def _format_preference(preference: Any) -> str:
 
 def _format_fact(fact: Any) -> str:
     return f"[fact] {fact.subject} {fact.predicate} {fact.object}"
+
+
+class Neo4jSessionManager(SessionManager):
+    """Strands SessionManager persisting conversations to neo4j-agent-memory.
+
+    Memory-grade persistence (see design spec): text turns are stored
+    and restored; tool-use blocks and ``agent.state`` are not. One
+    Strands session maps to one ``Conversation``.
+
+    Provide exactly one of ``memory_client`` (bolt or NAMS; left open on
+    close unless we connected it) or ``settings`` (a client is
+    constructed and owned by the manager).
+    """
+
+    def __init__(
+        self,
+        session_id: str,
+        memory_client: MemoryClient | None = None,
+        settings: MemorySettings | None = None,
+        *,
+        user_id: str | None = None,
+        retrieval_config: Neo4jRetrievalConfig | None = None,
+        extract_entities: bool = True,
+        record_tool_calls: bool = False,
+        request_timeout: float = 30.0,
+        **kwargs: Any,
+    ) -> None:
+        if (memory_client is None) == (settings is None):
+            raise ValueError(
+                "Provide exactly one of memory_client= or settings= to "
+                "Neo4jSessionManager."
+            )
+        self.session_id = session_id
+        self._user_id = user_id
+        self._retrieval_config = retrieval_config
+        self._extract_entities = extract_entities
+        self._record_tool_calls = record_tool_calls
+        self._bridge = _AsyncBridge(timeout=request_timeout)
+        self._owns_client = settings is not None
+        if settings is not None:
+            from neo4j_agent_memory import MemoryClient
+
+            self._client: Any = MemoryClient(settings)
+        else:
+            self._client = memory_client
+        self._we_connected = False
+        self._conversation_key: str | None = None
+        self._pending: StrandsMessage | None = None  # write-behind buffer
+        self._last_persisted: Any = None  # last stored Message (late redaction)
+        self._trace_id: Any = None  # lazy reasoning trace (record_tool_calls)
+        self._closed = False
+
+    # ------------------------------------------------------------ lifecycle
+
+    async def _aconnect(self) -> None:
+        if not self._client.is_connected:
+            await self._client.connect()
+            self._we_connected = True
+
+    async def _aresolve_conversation(self) -> str:
+        """Return the backend session key for short_term calls.
+
+        NAMS issues conversation UUIDs, so we locate (or create) the
+        conversation whose metadata carries our Strands session id. Bolt
+        keys conversations by session_id directly (auto-created on first
+        message).
+        """
+        if not self._client.is_nams:
+            return self.session_id
+        conversations = await self._client.short_term.list_conversations()
+        for conversation in conversations:
+            if (conversation.metadata or {}).get(_SESSION_KEY) == self.session_id:
+                return str(conversation.id)
+        created = await self._client.short_term.create_conversation(
+            session_id=self.session_id,
+            metadata={_SESSION_KEY: self.session_id, "session_type": "AGENT"},
+            user_identifier=self._user_id,
+        )
+        return str(created.id)
+
+    async def _ainitialize(self) -> list[StrandsMessage]:
+        await self._aconnect()
+        self._conversation_key = await self._aresolve_conversation()
+        conversation = await self._client.short_term.get_conversation(
+            self._conversation_key
+        )
+        return [_to_strands_message(m) for m in conversation.messages]
+
+    def _ensure_session(self) -> str:
+        """Resolve the conversation key on demand (for use outside initialize)."""
+        if self._conversation_key is None:
+            self._bridge.run(self._ainitialize())
+        assert self._conversation_key is not None
+        return self._conversation_key
+
+    # ----------------------------------------------------- SessionManager API
+
+    def initialize(self, agent: Any, **kwargs: Any) -> None:
+        """Restore the agent's conversation history from the graph."""
+        try:
+            restored = self._bridge.run(self._ainitialize())
+        except Exception as e:
+            raise SessionException(
+                f"Failed to initialize session {self.session_id!r}"
+            ) from e
+        if restored:
+            agent.messages.clear()
+            agent.messages.extend(restored)
+        elif agent.messages:
+            # New session seeded with pre-existing in-memory history.
+            for message in list(agent.messages):
+                self.append_message(message, agent)
+            self._flush_buffer()
+
+    # Implemented in the next task; stubs keep the ABC instantiable.
+    def append_message(self, message: Any, agent: Any, **kwargs: Any) -> None:
+        raise NotImplementedError
+
+    def redact_latest_message(self, redact_message: Any, agent: Any, **kwargs: Any) -> None:
+        raise NotImplementedError
+
+    def sync_agent(self, agent: Any, **kwargs: Any) -> None:
+        raise NotImplementedError
+
+    def _flush_buffer(self) -> None:
+        raise NotImplementedError
+
+    def close(self) -> None:
+        self._bridge.close()

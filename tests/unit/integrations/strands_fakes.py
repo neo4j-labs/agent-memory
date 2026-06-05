@@ -11,6 +11,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+from neo4j_agent_memory.core.exceptions import MemoryError as NamMemoryError
 from neo4j_agent_memory.memory.short_term import Conversation, Message, MessageRole
 
 
@@ -42,6 +43,8 @@ class FakeShortTerm:
     async def get_conversation(self, session_id: str, **kwargs: Any) -> Conversation:
         conv = self.conversations.get(session_id)
         if conv is None:
+            if self._nams_mode:
+                raise NamMemoryError(f"NAMS: conversation {session_id} not found")
             # Bolt contract: empty conversation, no exception.
             return Conversation(session_id=session_id)
         return conv
@@ -57,7 +60,7 @@ class FakeShortTerm:
         )
         if session_id not in self.conversations:
             if self._nams_mode:
-                raise RuntimeError(f"NAMS: unknown conversation {session_id}")
+                raise NamMemoryError(f"NAMS: unknown conversation {session_id}")
             await self.create_conversation(session_id=session_id)
         msg = Message(role=MessageRole(role), content=content)
         self.conversations[session_id].messages.append(msg)
@@ -71,6 +74,7 @@ class FakeShortTerm:
                 backend="nams",
                 method="ShortTermMemory.delete_message",
                 message="NAMS does not expose a message-delete endpoint.",
+                workaround="Use clear_session(session_id) to clear an entire conversation.",
             )
         self.deleted_message_ids.append(str(message_id))
         for conv in self.conversations.values():

@@ -153,3 +153,116 @@ class TestMappingHelpers:
         assert _format_preference(pref) == "[preference] food: loves Italian"
         fact = SimpleNamespace(subject="Jane", predicate="works_at", object="Acme")
         assert _format_fact(fact) == "[fact] Jane works_at Acme"
+
+
+from types import SimpleNamespace
+
+
+def _make_manager(nams_mode: bool = False, **kwargs):
+    """Build a manager wired to a FakeMemoryClient. Caller must close()."""
+    from neo4j_agent_memory.integrations.strands.session_manager import (
+        Neo4jSessionManager,
+    )
+    from tests.unit.integrations.strands_fakes import FakeMemoryClient
+
+    client = FakeMemoryClient(nams_mode=nams_mode)
+    manager = Neo4jSessionManager("sess-1", memory_client=client, **kwargs)
+    return manager, client
+
+
+def _fake_agent():
+    return SimpleNamespace(messages=[], agent_id="agent-1")
+
+
+class TestConstructor:
+    def test_requires_exactly_one_of_client_or_settings(self) -> None:
+        from neo4j_agent_memory.integrations.strands.session_manager import (
+            Neo4jSessionManager,
+        )
+
+        with pytest.raises(ValueError):
+            Neo4jSessionManager("s1")
+        with pytest.raises(ValueError):
+            Neo4jSessionManager("s1", memory_client=object(), settings=object())
+
+
+class TestInitialize:
+    def test_bolt_uses_session_id_directly_and_restores_history(self) -> None:
+        manager, client = _make_manager(nams_mode=False)
+        try:
+            # Pre-seed stored history.
+            import asyncio
+
+            asyncio.run(client.short_term.create_conversation(session_id="sess-1"))
+            asyncio.run(client.short_term.add_message("sess-1", "user", "hello"))
+            asyncio.run(client.short_term.add_message("sess-1", "assistant", "hi there"))
+
+            agent = _fake_agent()
+            manager.initialize(agent)
+
+            assert manager._conversation_key == "sess-1"
+            assert agent.messages == [
+                {"role": "user", "content": [{"text": "hello"}]},
+                {"role": "assistant", "content": [{"text": "hi there"}]},
+            ]
+            assert client.connect_calls == 1
+        finally:
+            manager.close()
+
+    def test_nams_resolves_existing_conversation_by_metadata(self) -> None:
+        import asyncio
+
+        manager, client = _make_manager(nams_mode=True)
+        try:
+            existing = asyncio.run(
+                client.short_term.create_conversation(
+                    session_id="sess-1",
+                    metadata={"strands_session_id": "sess-1"},
+                )
+            )
+            agent = _fake_agent()
+            manager.initialize(agent)
+            assert manager._conversation_key == str(existing.id)
+            # No second conversation was created.
+            assert len(client.short_term.conversations) == 1
+        finally:
+            manager.close()
+
+    def test_nams_creates_conversation_when_absent(self) -> None:
+        manager, client = _make_manager(nams_mode=True)
+        try:
+            agent = _fake_agent()
+            manager.initialize(agent)
+            assert len(client.short_term.conversations) == 1
+            conv = next(iter(client.short_term.conversations.values()))
+            assert conv.metadata["strands_session_id"] == "sess-1"
+            assert manager._conversation_key == str(conv.id)
+        finally:
+            manager.close()
+
+    @pytest.mark.xfail(reason="append_message lands in the next commit", strict=True)
+    def test_seeds_preexisting_agent_messages_into_empty_session(self) -> None:
+        manager, client = _make_manager(nams_mode=False)
+        try:
+            agent = _fake_agent()
+            agent.messages.append({"role": "user", "content": [{"text": "seeded"}]})
+            manager.initialize(agent)
+            stored = client.short_term.conversations["sess-1"].messages
+            assert [m.content for m in stored] == ["seeded"]
+        finally:
+            manager.close()
+
+    def test_initialize_wraps_backend_errors_in_session_exception(self) -> None:
+        from strands.types.exceptions import SessionException
+
+        manager, client = _make_manager(nams_mode=False)
+
+        async def boom(*args, **kwargs):
+            raise RuntimeError("no database")
+
+        client.short_term.get_conversation = boom  # type: ignore[method-assign]
+        try:
+            with pytest.raises(SessionException):
+                manager.initialize(_fake_agent())
+        finally:
+            manager.close()
