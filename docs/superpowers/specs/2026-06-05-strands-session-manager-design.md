@@ -82,6 +82,8 @@ Neo4jSessionManager(
     retrieval_config: Neo4jRetrievalConfig | None = None,  # opt-in LTM injection
     extract_entities: bool = True,                 # extraction on stored messages (bolt;
                                                    # NAMS extracts server-side regardless)
+    record_tool_calls: bool = False,               # mirror toolUse/toolResult blocks into
+                                                   # reasoning memory (audit graph)
     request_timeout: float = 30.0,                 # sync→async bridge timeout
 )
 ```
@@ -149,7 +151,7 @@ Verified NAMS API constraints that shape this design:
 |---|---|
 | `Session` | **One `Conversation`.** Created via `create_conversation(metadata={"strands_session_id": ..., "session_type": ...}, user_id=...)`. On NAMS, `read_session` resolves Strands session_id → conversation UUID by scanning `list_conversations` metadata (cached in-memory after first hit). On bolt, the Strands session_id is used directly as the conversation session_id. |
 | `SessionMessage` | **One `Message`** — `role` + concatenated text blocks as `content`. This is what gets embedded and extracted (server-side on NAMS, pipeline on bolt) and feeds the shared brain. Message indexes are **positional** (ordered by `createdAt`); `read_message(message_id)` resolves by position. |
-| toolUse / toolResult content blocks | **Not stored as messages.** Optionally recorded to reasoning memory (`POST /v1/reasoning/tool-calls`, conversation-scoped) as write-only enrichment for the audit graph. Not used for restore. |
+| toolUse / toolResult content blocks | **Not stored as messages.** When `record_tool_calls=True`, mirrored to reasoning memory (`POST /v1/reasoning/tool-calls`, conversation-scoped) as write-only enrichment for the audit graph. Off by default. Never used for restore. |
 | `SessionAgent` (`agent.state` KV, conversation-manager state) | **Not persisted** — there is nowhere to put it without inventing Strands-specific nodes. `create_agent` / `update_agent` are no-ops; `read_agent` returns a synthetic record. |
 
 `initialize` (restore) yields the conversational text history plus the
@@ -196,10 +198,11 @@ class Neo4jRetrievalConfig:
 Mechanism (mirrors AgentCore):
 
 1. `Neo4jSessionManager.register_hooks()` calls `super().register_hooks()`
-   first, then registers one extra `MessageAddedEvent` callback. Strands
-   fires hooks in registration order, so **persistence always runs before
-   injection** — the stored message is the user's original, never the
-   augmented one.
+   first, then always registers an `AfterInvocationEvent` callback for the
+   write-behind buffer flush, and — only when `retrieval_config` is set —
+   one extra `MessageAddedEvent` callback. Strands fires hooks in
+   registration order, so **persistence always runs before injection** —
+   the stored message is the user's original, never the augmented one.
 2. The callback fires only for **user-role messages containing text**.
 3. It uses the message text as the query; runs `search_entities` /
    `search_preferences` / `search_facts` concurrently on the background
@@ -207,14 +210,14 @@ Mechanism (mirrors AgentCore):
 4. Results below `min_score` are dropped; survivors are formatted and
    **prepended to the message's first text block in-memory**:
 
-```
-<user_context>
-Relevant memory:
-- [entity] Acme Corp (ORGANIZATION) — customer since 2024, owner: Jane Doe
-- [preference] communication: prefers concise answers
-</user_context>
-{original user text}
-```
+   ```
+   <user_context>
+   Relevant memory:
+   - [entity] Acme Corp (ORGANIZATION) — customer since 2024, owner: Jane Doe
+   - [preference] communication: prefers concise answers
+   </user_context>
+   {original user text}
+   ```
 
 5. If nothing clears the floor, nothing is injected (no empty tags).
 
