@@ -385,6 +385,13 @@ only and idempotent per message. If nothing clears the `min_score` floor,
 nothing is injected (no empty tags). The cost is 1–3 backend round-trips per
 user turn (why it is opt-in).
 
+[NOTE]
+====
+On NAMS, only entity search is available — NAMS does not yet expose
+preference or fact search endpoints, so `include_preferences` /
+`include_facts` are skipped automatically on that backend.
+====
+
 [source,python]
 ----
 from neo4j_agent_memory.integrations.strands import Neo4jRetrievalConfig
@@ -503,7 +510,7 @@ requires no LLM or API key.
 
 * **`agent.state` and conversation-manager window state do not survive
   restarts.** No Strands-specific node types are written to the graph;
-  `sync_agent` only flushes the message buffer.
+  `sync_agent` is a no-op — the message buffer is flushed by the `AfterInvocationEvent` hook.
 
 * **Redaction.** Fully supported *within* an invocation — the write-behind
   buffer lets guardrails rewrite the latest message before it ever reaches

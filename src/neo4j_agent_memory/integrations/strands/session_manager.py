@@ -343,12 +343,14 @@ class Neo4jSessionManager(SessionManager):
                 long_term.search_entities(query, limit=cfg.top_k, threshold=cfg.min_score)
             )
             formatters.append(_format_entity)
-        if cfg.include_preferences:
+        # NAMS has no preferences/facts search endpoints (NotSupportedError) —
+        # skip structurally-unsupported searches instead of warning every turn.
+        if cfg.include_preferences and not self._client.is_nams:
             searches.append(
                 long_term.search_preferences(query, limit=cfg.top_k, threshold=cfg.min_score)
             )
             formatters.append(_format_preference)
-        if cfg.include_facts:
+        if cfg.include_facts and not self._client.is_nams:
             searches.append(long_term.search_facts(query, limit=cfg.top_k, threshold=cfg.min_score))
             formatters.append(_format_fact)
         results = await asyncio.gather(*searches, return_exceptions=True)

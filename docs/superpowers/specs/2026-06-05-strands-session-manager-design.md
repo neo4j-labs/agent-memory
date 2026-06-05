@@ -68,8 +68,7 @@ bolt and NAMS, since both backends expose the same `short_term` API):
   `add_message`.
 - `redact_latest_message(...)` — rewrite the buffer (bolt in-place
   fallback after flush).
-- `sync_agent(agent)` — flush trigger only (agent state is not
-  persisted; see Data mapping).
+- `sync_agent(agent)` — no-op (agent state is not persisted; the buffer flush runs on the `AfterInvocationEvent` hook; see Data mapping).
 
 Hook wiring (AgentInitializedEvent → initialize, MessageAddedEvent →
 append, AfterInvocationEvent → sync, redaction event → redact) is
@@ -174,7 +173,7 @@ Verified NAMS API constraints that shape this design:
 | `Session` | **One `Conversation`.** Created via `create_conversation(metadata={"strands_session_id": ..., "session_type": ...}, user_id=...)`. On NAMS, `initialize` resolves Strands session_id → conversation UUID by scanning `list_conversations` metadata (cached in-memory after first hit). On bolt, the Strands session_id is used directly as the conversation session_id. |
 | `SessionMessage` | **One `Message`** — `role` + concatenated text blocks as `content`. This is what gets embedded and extracted (server-side on NAMS, pipeline on bolt) and feeds the shared brain. Restore ordering is by `createdAt` (positional). |
 | toolUse / toolResult content blocks | **Not stored as messages.** When `record_tool_calls=True`, mirrored to reasoning memory (`POST /v1/reasoning/tool-calls`, conversation-scoped) as write-only enrichment for the audit graph. Off by default. Never used for restore. |
-| `SessionAgent` (`agent.state` KV, conversation-manager state) | **Not persisted** — there is nowhere to put it without inventing Strands-specific nodes. `sync_agent` only flushes the message buffer. |
+| `SessionAgent` (`agent.state` KV, conversation-manager state) | **Not persisted** — there is nowhere to put it without inventing Strands-specific nodes. `sync_agent` is a no-op (the buffer is flushed by the `AfterInvocationEvent` hook). |
 
 `initialize` (restore) yields the conversational text history plus the
 shared long-term graph. It does **not** yield exact tool-use blocks

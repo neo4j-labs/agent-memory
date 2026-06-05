@@ -647,6 +647,32 @@ class TestRetrievalInjection:
         finally:
             manager.close()
 
+    def test_nams_skips_unsupported_preference_and_fact_searches(self) -> None:
+        from neo4j_agent_memory.integrations.strands.session_manager import (
+            Neo4jRetrievalConfig,
+        )
+
+        manager, client = _make_manager(
+            nams_mode=True, retrieval_config=Neo4jRetrievalConfig(include_facts=True)
+        )
+        client.long_term.entities = [
+            SimpleNamespace(display_name="Acme", type="ORGANIZATION", description=None)
+        ]
+        # Make preference/fact searches behave like real NAMS: raise if called.
+        async def boom(query, **kwargs):
+            raise AssertionError("must not be called on NAMS")
+
+        client.long_term.search_preferences = boom
+        client.long_term.search_facts = boom
+        try:
+            manager.initialize(_fake_agent())
+            message = {"role": "user", "content": [{"text": "Acme?"}]}
+            manager._inject_context(message)
+            text = message["content"][0]["text"]
+            assert "[entity] Acme (ORGANIZATION)" in text  # entity search still works
+        finally:
+            manager.close()
+
 
 class TestRegisterHooks:
     def test_registers_flush_after_base_hooks(self) -> None:

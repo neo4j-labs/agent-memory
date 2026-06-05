@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Strands SessionManager** (`Neo4jSessionManager`): automatic conversation
+- **Strands SessionManager** (`Neo4jSessionManager`) — automatic conversation
   persistence/restore for AWS Strands agents via `Agent(session_manager=...)`,
   backed by any `MemoryClient` (bolt or NAMS). Includes opt-in long-term
   memory injection (`Neo4jRetrievalConfig`), a write-behind buffer for
