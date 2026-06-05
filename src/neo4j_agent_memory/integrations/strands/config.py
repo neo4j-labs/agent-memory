@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from neo4j_agent_memory import MemorySettings
+    from neo4j_agent_memory.nams.endpoints import TransportMode
 
 
 @dataclass
@@ -178,7 +179,7 @@ def resolve_nams_connection(
 def build_nams_settings(
     endpoint: str,
     api_key: str,
-    transport_mode: str = "auto",
+    transport_mode: TransportMode = "auto",
     *,
     validate_on_connect: bool = False,
 ) -> MemorySettings:

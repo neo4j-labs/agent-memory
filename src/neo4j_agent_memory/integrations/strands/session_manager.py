@@ -34,16 +34,17 @@ try:
     )
     from strands.session.session_manager import SessionManager
     from strands.types.exceptions import SessionException
-except ImportError as e:  # pragma: no cover - exercised via package __init__
+except ImportError as import_error:  # pragma: no cover - exercised via package __init__
     raise ImportError(
         "strands-agents is required for the Strands session manager. "
         "Install with: pip install neo4j-agent-memory[strands]"
-    ) from e
+    ) from import_error
 
 if TYPE_CHECKING:
     from strands.types.content import Message as StrandsMessage
 
     from neo4j_agent_memory import MemoryClient, MemorySettings
+    from neo4j_agent_memory.nams.endpoints import TransportMode
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +121,7 @@ class Neo4jSessionManager(SessionManager):
         *,
         endpoint: str | None = None,
         api_key: str | None = None,
-        transport_mode: str = "auto",
+        transport_mode: TransportMode = "auto",
         **kwargs: Any,
     ) -> Neo4jSessionManager:
         """Build a NAMS-backed manager using the same env-var conventions as
@@ -215,11 +216,15 @@ class Neo4jSessionManager(SessionManager):
         that need the persisted message should read it on the next turn instead.
         """
         super().register_hooks(registry, **kwargs)
-        registry.add_callback(AfterInvocationEvent, lambda _event: self._flush_buffer())
+        registry.add_callback(AfterInvocationEvent, self._on_after_invocation)
         if self._retrieval_config is not None:
-            registry.add_callback(
-                MessageAddedEvent, lambda event: self._inject_context(event.message)
-            )
+            registry.add_callback(MessageAddedEvent, self._on_message_added)
+
+    def _on_after_invocation(self, event: AfterInvocationEvent) -> None:
+        self._flush_buffer()
+
+    def _on_message_added(self, event: MessageAddedEvent) -> None:
+        self._inject_context(event.message)
 
     def _inject_context(self, message: StrandsMessage) -> None:
         """Prepend relevant long-term memories to a user message (in-memory only).
