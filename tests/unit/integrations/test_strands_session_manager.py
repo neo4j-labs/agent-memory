@@ -526,6 +526,120 @@ class FakeRegistry:
         self.callbacks.append((event_type, callback))
 
 
+class TestRetrievalInjection:
+    def _manager_with_memories(self):
+        from neo4j_agent_memory.integrations.strands.session_manager import (
+            Neo4jRetrievalConfig,
+        )
+
+        manager, client = _make_manager(
+            retrieval_config=Neo4jRetrievalConfig(include_facts=True)
+        )
+        client.long_term.entities = [
+            SimpleNamespace(display_name="Acme", type="ORGANIZATION", description="customer")
+        ]
+        client.long_term.preferences = [
+            SimpleNamespace(category="style", preference="concise answers")
+        ]
+        client.long_term.facts = [
+            SimpleNamespace(subject="Jane", predicate="works_at", object="Acme")
+        ]
+        return manager, client
+
+    def test_injects_context_block_into_user_message(self) -> None:
+        manager, client = self._manager_with_memories()
+        try:
+            manager.initialize(_fake_agent())
+            message = {"role": "user", "content": [{"text": "tell me about Acme"}]}
+            manager._inject_context(message)
+            text = message["content"][0]["text"]
+            assert text.startswith("<user_context>")
+            assert "[entity] Acme (ORGANIZATION) — customer" in text
+            assert "[preference] style: concise answers" in text
+            assert "[fact] Jane works_at Acme" in text
+            assert text.endswith("tell me about Acme")
+        finally:
+            manager.close()
+
+    def test_skips_assistant_messages(self) -> None:
+        manager, client = self._manager_with_memories()
+        try:
+            manager.initialize(_fake_agent())
+            message = {"role": "assistant", "content": [{"text": "answer"}]}
+            manager._inject_context(message)
+            assert message["content"][0]["text"] == "answer"
+        finally:
+            manager.close()
+
+    def test_no_results_means_no_tags(self) -> None:
+        manager, client = self._manager_with_memories()
+        client.long_term.entities = []
+        client.long_term.preferences = []
+        client.long_term.facts = []
+        try:
+            manager.initialize(_fake_agent())
+            message = {"role": "user", "content": [{"text": "hello"}]}
+            manager._inject_context(message)
+            assert message["content"][0]["text"] == "hello"
+        finally:
+            manager.close()
+
+    def test_search_failure_degrades_gracefully(self, caplog) -> None:
+        import logging
+
+        manager, client = self._manager_with_memories()
+        client.long_term.fail_searches = True
+        try:
+            manager.initialize(_fake_agent())
+            message = {"role": "user", "content": [{"text": "hello"}]}
+            with caplog.at_level(logging.WARNING):
+                manager._inject_context(message)
+            assert message["content"][0]["text"] == "hello"  # turn not broken
+        finally:
+            manager.close()
+
+    def test_injection_happens_after_persistence_so_original_is_stored(self) -> None:
+        manager, client = self._manager_with_memories()
+        try:
+            agent = _fake_agent()
+            manager.initialize(agent)
+            message = {"role": "user", "content": [{"text": "tell me about Acme"}]}
+            # Simulate the hook firing order: append (base) then inject (ours).
+            manager.append_message(message, agent)
+            manager._inject_context(message)
+            manager._flush_buffer()
+            stored = client.short_term.add_message_calls[0]["content"]
+            assert stored == "tell me about Acme"  # original, not augmented
+        finally:
+            manager.close()
+
+    def test_hook_order_persists_original_before_injection(self) -> None:
+        """End-to-end through the registry: MessageAddedEvent callbacks must
+        run append (base) before inject (ours), so the stored message is the
+        original even though the in-memory message gets augmented."""
+        from strands.hooks import MessageAddedEvent
+
+        manager, client = self._manager_with_memories()
+        try:
+            registry = FakeRegistry()
+            manager.register_hooks(registry)
+            agent = _fake_agent()
+            manager.initialize(agent)
+            message = {"role": "user", "content": [{"text": "tell me about Acme"}]}
+            # Fire the MessageAddedEvent callbacks in REGISTRATION order,
+            # exactly as Strands dispatches this (non-reversed) event.
+            event = SimpleNamespace(message=message, agent=agent)
+            for event_type, callback in registry.callbacks:
+                if event_type is MessageAddedEvent:
+                    callback(event)
+            manager._flush_buffer()
+            stored = client.short_term.add_message_calls[0]["content"]
+            assert stored == "tell me about Acme"  # persisted original
+            assert message["content"][0]["text"].startswith("<user_context>")  # in-memory augmented
+        finally:
+            manager.close()
+
+
 class TestRegisterHooks:
     def test_registers_flush_after_base_hooks(self) -> None:
         from strands.hooks import AfterInvocationEvent

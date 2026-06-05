@@ -259,10 +259,12 @@ class Neo4jSessionManager(SessionManager):
     def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
         """Wire base persistence hooks, then our flush + injection hooks.
 
-        Order matters: Strands fires callbacks in registration order, so
-        persistence (base ``MessageAddedEvent`` -> append_message) always
-        runs before context injection, and our flush runs after the base
-        ``AfterInvocationEvent`` -> sync_agent.
+        Order matters: Strands fires ``MessageAddedEvent`` callbacks in
+        registration order, so persistence (base ``MessageAddedEvent`` ->
+        append_message) always runs before context injection.  Our
+        AfterInvocationEvent flush is registered after the base sync_agent;
+        that event uses reverse callback order at dispatch, but since
+        sync_agent is a no-op the relative order is immaterial.
         """
         super().register_hooks(registry, **kwargs)
         registry.add_callback(AfterInvocationEvent, lambda _event: self._flush_buffer())
@@ -272,7 +274,63 @@ class Neo4jSessionManager(SessionManager):
             )
 
     def _inject_context(self, message: StrandsMessage) -> None:
-        raise NotImplementedError  # Task 9
+        """Prepend relevant long-term memories to a user message (in-memory only).
+
+        Failures degrade: a memory lookup must never break the agent's turn.
+        """
+        cfg = self._retrieval_config
+        if cfg is None or message.get("role") != "user":
+            return
+        query = _message_text(message)
+        if not query:
+            return
+        try:
+            block = self._bridge.run(self._aretrieve(query, cfg))
+        except Exception as e:
+            logger.warning(
+                "Memory retrieval failed for session %s; continuing without "
+                "injected context: %s",
+                self.session_id,
+                e,
+            )
+            return
+        if not block:
+            return
+        for content_block in message.get("content") or []:
+            if isinstance(content_block, dict) and "text" in content_block:
+                content_block["text"] = f"{block}\n{content_block['text']}"
+                return
+
+    async def _aretrieve(self, query: str, cfg: Neo4jRetrievalConfig) -> str:
+        long_term = self._client.long_term
+        searches: list[Any] = []
+        formatters: list[Any] = []
+        if cfg.include_entities:
+            searches.append(
+                long_term.search_entities(query, limit=cfg.top_k, threshold=cfg.min_score)
+            )
+            formatters.append(_format_entity)
+        if cfg.include_preferences:
+            searches.append(
+                long_term.search_preferences(query, limit=cfg.top_k, threshold=cfg.min_score)
+            )
+            formatters.append(_format_preference)
+        if cfg.include_facts:
+            searches.append(
+                long_term.search_facts(query, limit=cfg.top_k, threshold=cfg.min_score)
+            )
+            formatters.append(_format_fact)
+        results = await asyncio.gather(*searches, return_exceptions=True)
+        lines: list[str] = []
+        for formatter, result in zip(formatters, results):
+            if isinstance(result, BaseException):
+                logger.warning("Long-term memory search failed: %s", result)
+                continue
+            lines.extend(formatter(item) for item in result)
+        if not lines:
+            return ""
+        body = "\n".join(f"- {line}" for line in lines)
+        return f"<{cfg.context_tag}>\nRelevant memory:\n{body}\n</{cfg.context_tag}>"
 
     def append_message(self, message: Any, agent: Any, **kwargs: Any) -> None:
         """Buffer the new message, persisting the previously buffered one.
