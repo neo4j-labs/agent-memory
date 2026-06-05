@@ -16,13 +16,13 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 try:
-    from strands.hooks import (  # used by Neo4jSessionManager.register_hooks
-        AfterInvocationEvent,  # noqa: F401
-        HookRegistry,  # noqa: F401
-        MessageAddedEvent,  # noqa: F401
+    from strands.hooks import (
+        AfterInvocationEvent,
+        HookRegistry,
+        MessageAddedEvent,
     )
-    from strands.session.session_manager import SessionManager  # noqa: F401
-    from strands.types.exceptions import SessionException  # noqa: F401
+    from strands.session.session_manager import SessionManager
+    from strands.types.exceptions import SessionException
 except ImportError as e:  # pragma: no cover - exercised via package __init__
     raise ImportError(
         "strands-agents is required for the Strands session manager. "
@@ -30,9 +30,9 @@ except ImportError as e:  # pragma: no cover - exercised via package __init__
     ) from e
 
 if TYPE_CHECKING:
-    from strands.types.content import Message as StrandsMessage  # noqa: F401
+    from strands.types.content import Message as StrandsMessage
 
-    from neo4j_agent_memory import MemoryClient, MemorySettings  # noqa: F401
+    from neo4j_agent_memory import MemoryClient, MemorySettings
 
 logger = logging.getLogger(__name__)
 
@@ -255,6 +255,24 @@ class Neo4jSessionManager(SessionManager):
             for message in list(agent.messages):
                 self.append_message(message, agent)
             self._flush_buffer()
+
+    def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
+        """Wire base persistence hooks, then our flush + injection hooks.
+
+        Order matters: Strands fires callbacks in registration order, so
+        persistence (base ``MessageAddedEvent`` -> append_message) always
+        runs before context injection, and our flush runs after the base
+        ``AfterInvocationEvent`` -> sync_agent.
+        """
+        super().register_hooks(registry, **kwargs)
+        registry.add_callback(AfterInvocationEvent, lambda _event: self._flush_buffer())
+        if self._retrieval_config is not None:
+            registry.add_callback(
+                MessageAddedEvent, lambda event: self._inject_context(event.message)
+            )
+
+    def _inject_context(self, message: StrandsMessage) -> None:
+        raise NotImplementedError  # Task 9
 
     def append_message(self, message: Any, agent: Any, **kwargs: Any) -> None:
         """Buffer the new message, persisting the previously buffered one.

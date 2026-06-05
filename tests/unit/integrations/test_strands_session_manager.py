@@ -514,3 +514,56 @@ class TestRedaction:
             assert client.short_term.add_message_calls == []
         finally:
             manager.close()
+
+
+class FakeRegistry:
+    """Records (event_type, callback) registrations in order."""
+
+    def __init__(self) -> None:
+        self.callbacks: list[tuple[type, object]] = []
+
+    def add_callback(self, event_type: type, callback: object) -> None:
+        self.callbacks.append((event_type, callback))
+
+
+class TestRegisterHooks:
+    def test_registers_flush_after_base_hooks(self) -> None:
+        from strands.hooks import AfterInvocationEvent
+
+        manager, client = _make_manager()
+        try:
+            registry = FakeRegistry()
+            manager.register_hooks(registry)
+            event_types = [et for et, _ in registry.callbacks]
+            assert AfterInvocationEvent in event_types
+            # Our flush callback is the LAST AfterInvocationEvent registration.
+            flush_cb = [cb for et, cb in registry.callbacks if et is AfterInvocationEvent][-1]
+            agent = _fake_agent()
+            manager.initialize(agent)
+            manager.append_message({"role": "user", "content": [{"text": "x"}]}, agent)
+            flush_cb(SimpleNamespace(agent=agent))
+            assert [c["content"] for c in client.short_term.add_message_calls] == ["x"]
+        finally:
+            manager.close()
+
+    def test_retrieval_callback_only_registered_with_config(self) -> None:
+        from strands.hooks import MessageAddedEvent
+
+        from neo4j_agent_memory.integrations.strands.session_manager import (
+            Neo4jRetrievalConfig,
+        )
+
+        manager_plain, _ = _make_manager()
+        manager_inject, _ = _make_manager(retrieval_config=Neo4jRetrievalConfig())
+        try:
+            plain, inject = FakeRegistry(), FakeRegistry()
+            manager_plain.register_hooks(plain)
+            manager_inject.register_hooks(inject)
+
+            def count(reg: FakeRegistry) -> int:
+                return sum(1 for et, _ in reg.callbacks if et is MessageAddedEvent)
+
+            assert count(inject) == count(plain) + 1
+        finally:
+            manager_plain.close()
+            manager_inject.close()
