@@ -49,9 +49,7 @@ class FakeShortTerm:
             return Conversation(session_id=session_id)
         return conv
 
-    async def add_message(
-        self, session_id: str, role: str, content: str, **kwargs: Any
-    ) -> Message:
+    async def add_message(self, session_id: str, role: str, content: str, **kwargs: Any) -> Message:
         if self.fail_next_add:
             self.fail_next_add = False
             raise RuntimeError("backend down")
@@ -133,9 +131,7 @@ class FakeReasoning:
     async def record_tool_call(
         self, step_id: Any, tool_name: str, arguments: dict[str, Any], **kwargs: Any
     ) -> Any:
-        self.tool_calls.append(
-            {"step_id": step_id, "tool_name": tool_name, "arguments": arguments}
-        )
+        self.tool_calls.append({"step_id": step_id, "tool_name": tool_name, "arguments": arguments})
         return None
 
 

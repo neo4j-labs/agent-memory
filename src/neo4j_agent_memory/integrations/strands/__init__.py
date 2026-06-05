@@ -51,6 +51,10 @@ try:
         BEDROCK_LLM_MODELS,
         StrandsConfig,
     )
+    from neo4j_agent_memory.integrations.strands.session_manager import (
+        Neo4jRetrievalConfig,
+        Neo4jSessionManager,
+    )
     from neo4j_agent_memory.integrations.strands.tools import (
         clear_client_cache,
         context_graph_tools,
@@ -65,6 +69,8 @@ try:
         "BEDROCK_EMBEDDING_MODELS",
         "BEDROCK_LLM_MODELS",
         "llm_provider_from_strands",
+        "Neo4jSessionManager",
+        "Neo4jRetrievalConfig",
     ]
 except ImportError:
     # strands-agents not installed

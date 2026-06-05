@@ -70,9 +70,7 @@ class TestAsyncBridge:
             # is pending!" stderr noise when the loop stops.
             loop = bridge._loop
             if loop is not None and loop.is_running():
-                loop.call_soon_threadsafe(
-                    lambda: [t.cancel() for t in asyncio.all_tasks(loop)]
-                )
+                loop.call_soon_threadsafe(lambda: [t.cancel() for t in asyncio.all_tasks(loop)])
             bridge.close()
 
     def test_close_is_idempotent_and_stops_thread(self) -> None:
@@ -532,9 +530,7 @@ class TestRetrievalInjection:
             Neo4jRetrievalConfig,
         )
 
-        manager, client = _make_manager(
-            retrieval_config=Neo4jRetrievalConfig(include_facts=True)
-        )
+        manager, client = _make_manager(retrieval_config=Neo4jRetrievalConfig(include_facts=True))
         client.long_term.entities = [
             SimpleNamespace(display_name="Acme", type="ORGANIZATION", description="customer")
         ]
@@ -719,3 +715,14 @@ class TestForNams:
             assert settings.nams.validate_on_connect is False
         finally:
             manager._bridge.close()  # never connected; just stop the thread
+
+
+class TestPublicExports:
+    def test_session_manager_exported_from_package(self) -> None:
+        from neo4j_agent_memory.integrations.strands import (
+            Neo4jRetrievalConfig,
+            Neo4jSessionManager,
+        )
+
+        assert Neo4jSessionManager is not None
+        assert Neo4jRetrievalConfig is not None

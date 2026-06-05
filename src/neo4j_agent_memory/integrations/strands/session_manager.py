@@ -172,8 +172,7 @@ class Neo4jSessionManager(SessionManager):
     ) -> None:
         if (memory_client is None) == (settings is None):
             raise ValueError(
-                "Provide exactly one of memory_client= or settings= to "
-                "Neo4jSessionManager."
+                "Provide exactly one of memory_client= or settings= to Neo4jSessionManager."
             )
         self.session_id = session_id
         self._user_id = user_id
@@ -210,15 +209,11 @@ class Neo4jSessionManager(SessionManager):
         """Build a NAMS-backed manager using the same env-var conventions as
         ``nams_context_graph_tools()`` (MEMORY_ENDPOINT / MEMORY_API_KEY)."""
         endpoint = (
-            endpoint
-            or os.environ.get("MEMORY_ENDPOINT")
-            or "https://memory.neo4jlabs.com/v1"
+            endpoint or os.environ.get("MEMORY_ENDPOINT") or "https://memory.neo4jlabs.com/v1"
         )
         api_key = api_key or os.environ.get("MEMORY_API_KEY")
         if not api_key:
-            raise ValueError(
-                "api_key is required. Pass api_key= or set MEMORY_API_KEY env var."
-            )
+            raise ValueError("api_key is required. Pass api_key= or set MEMORY_API_KEY env var.")
         from pydantic import SecretStr
 
         from neo4j_agent_memory import MemorySettings, NamsConfig
@@ -265,9 +260,7 @@ class Neo4jSessionManager(SessionManager):
     async def _ainitialize(self) -> list[StrandsMessage]:
         await self._aconnect()
         self._conversation_key = await self._aresolve_conversation()
-        conversation = await self._client.short_term.get_conversation(
-            self._conversation_key
-        )
+        conversation = await self._client.short_term.get_conversation(self._conversation_key)
         return [_to_strands_message(m) for m in conversation.messages]
 
     def _ensure_session(self) -> str:
@@ -284,9 +277,7 @@ class Neo4jSessionManager(SessionManager):
         try:
             restored = self._bridge.run(self._ainitialize())
         except Exception as e:
-            raise SessionException(
-                f"Failed to initialize session {self.session_id!r}"
-            ) from e
+            raise SessionException(f"Failed to initialize session {self.session_id!r}") from e
         if restored:
             agent.messages.clear()
             agent.messages.extend(restored)
@@ -328,15 +319,14 @@ class Neo4jSessionManager(SessionManager):
             block = self._bridge.run(self._aretrieve(query, cfg))
         except Exception as e:
             logger.warning(
-                "Memory retrieval failed for session %s; continuing without "
-                "injected context: %s",
+                "Memory retrieval failed for session %s; continuing without injected context: %s",
                 self.session_id,
                 e,
             )
             return
         if not block:
             return
-        tag_prefix = f"<{cfg.context_tag}>"
+        tag_prefix = f"<{cfg.context_tag}>\nRelevant memory:\n"
         for content_block in message.get("content") or []:
             if isinstance(content_block, dict) and "text" in content_block:
                 if content_block["text"].startswith(tag_prefix):
@@ -359,9 +349,7 @@ class Neo4jSessionManager(SessionManager):
             )
             formatters.append(_format_preference)
         if cfg.include_facts:
-            searches.append(
-                long_term.search_facts(query, limit=cfg.top_k, threshold=cfg.min_score)
-            )
+            searches.append(long_term.search_facts(query, limit=cfg.top_k, threshold=cfg.min_score))
             formatters.append(_format_fact)
         results = await asyncio.gather(*searches, return_exceptions=True)
         lines: list[str] = []
@@ -417,9 +405,7 @@ class Neo4jSessionManager(SessionManager):
             return
         text = _message_text(redact_message) or "[REDACTED]"
         try:
-            self._bridge.run(
-                self._client.short_term.delete_message(self._last_persisted.id)
-            )
+            self._bridge.run(self._client.short_term.delete_message(self._last_persisted.id))
             self._last_persisted = self._bridge.run(
                 self._client.short_term.add_message(
                     self._ensure_session(),
@@ -486,18 +472,14 @@ class Neo4jSessionManager(SessionManager):
 
     async def _arecord_tool_uses(self, key: str, blocks: list[Any]) -> None:
         if self._trace_id is None:
-            trace = await self._client.reasoning.start_trace(
-                key, task="Strands agent session"
-            )
+            trace = await self._client.reasoning.start_trace(key, task="Strands agent session")
             self._trace_id = trace.id
         for block in blocks:
             name = block.get("name") or "unknown"
             step = await self._client.reasoning.add_step(
                 self._trace_id, thought=f"Tool use: {name}", action=name
             )
-            await self._client.reasoning.record_tool_call(
-                step.id, name, block.get("input") or {}
-            )
+            await self._client.reasoning.record_tool_call(step.id, name, block.get("input") or {})
 
     def close(self) -> None:
         """Flush, release the client (if owned/connected by us), stop the bridge."""
