@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import logging
+import os
 import threading
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -194,6 +195,45 @@ class Neo4jSessionManager(SessionManager):
         self._trace_id: Any = None  # lazy reasoning trace (record_tool_calls)
         self._closed = False
 
+    # --------------------------------------------------------- factory methods
+
+    @classmethod
+    def for_nams(
+        cls,
+        session_id: str,
+        *,
+        endpoint: str | None = None,
+        api_key: str | None = None,
+        transport_mode: str = "auto",
+        **kwargs: Any,
+    ) -> Neo4jSessionManager:
+        """Build a NAMS-backed manager using the same env-var conventions as
+        ``nams_context_graph_tools()`` (MEMORY_ENDPOINT / MEMORY_API_KEY)."""
+        endpoint = (
+            endpoint
+            or os.environ.get("MEMORY_ENDPOINT")
+            or "https://memory.neo4jlabs.com/v1"
+        )
+        api_key = api_key or os.environ.get("MEMORY_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "api_key is required. Pass api_key= or set MEMORY_API_KEY env var."
+            )
+        from pydantic import SecretStr
+
+        from neo4j_agent_memory import MemorySettings, NamsConfig
+
+        settings = MemorySettings(
+            backend="nams",
+            nams=NamsConfig(
+                endpoint=endpoint,
+                api_key=SecretStr(api_key),
+                validate_on_connect=False,
+                transport_mode=transport_mode,
+            ),
+        )
+        return cls(session_id, settings=settings, **kwargs)
+
     # ------------------------------------------------------------ lifecycle
 
     async def _aconnect(self) -> None:
@@ -296,8 +336,11 @@ class Neo4jSessionManager(SessionManager):
             return
         if not block:
             return
+        tag_prefix = f"<{cfg.context_tag}>"
         for content_block in message.get("content") or []:
             if isinstance(content_block, dict) and "text" in content_block:
+                if content_block["text"].startswith(tag_prefix):
+                    return  # already injected (event re-fired for this message)
                 content_block["text"] = f"{block}\n{content_block['text']}"
                 return
 

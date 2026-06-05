@@ -639,6 +639,18 @@ class TestRetrievalInjection:
         finally:
             manager.close()
 
+    def test_injection_is_idempotent_for_same_message(self) -> None:
+        manager, client = self._manager_with_memories()
+        try:
+            manager.initialize(_fake_agent())
+            message = {"role": "user", "content": [{"text": "tell me about Acme"}]}
+            manager._inject_context(message)
+            once = message["content"][0]["text"]
+            manager._inject_context(message)
+            assert message["content"][0]["text"] == once  # no double block
+        finally:
+            manager.close()
+
 
 class TestRegisterHooks:
     def test_registers_flush_after_base_hooks(self) -> None:
@@ -681,3 +693,29 @@ class TestRegisterHooks:
         finally:
             manager_plain.close()
             manager_inject.close()
+
+
+class TestForNams:
+    def test_for_nams_requires_api_key(self, monkeypatch) -> None:
+        from neo4j_agent_memory.integrations.strands.session_manager import (
+            Neo4jSessionManager,
+        )
+
+        monkeypatch.delenv("MEMORY_API_KEY", raising=False)
+        with pytest.raises(ValueError):
+            Neo4jSessionManager.for_nams("sess-1")
+
+    def test_for_nams_builds_owned_nams_client(self, monkeypatch) -> None:
+        from neo4j_agent_memory.integrations.strands.session_manager import (
+            Neo4jSessionManager,
+        )
+
+        monkeypatch.setenv("MEMORY_API_KEY", "test-key")
+        manager = Neo4jSessionManager.for_nams("sess-1")
+        try:
+            assert manager._owns_client is True
+            settings = manager._client._settings
+            assert settings.backend == "nams"
+            assert settings.nams.validate_on_connect is False
+        finally:
+            manager._bridge.close()  # never connected; just stop the thread
