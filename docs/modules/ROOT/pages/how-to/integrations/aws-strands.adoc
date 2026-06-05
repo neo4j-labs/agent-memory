@@ -390,6 +390,7 @@ user turn (why it is opt-in).
 On NAMS, only entity search is available — NAMS does not yet expose
 preference or fact search endpoints, so `include_preferences` /
 `include_facts` are skipped automatically on that backend.
+`min_score` is not enforced on NAMS — the hosted search API has no threshold parameter.
 ====
 
 [source,python]
@@ -514,9 +515,10 @@ requires no LLM or API key.
 
 * **Redaction.** Fully supported *within* an invocation — the write-behind
   buffer lets guardrails rewrite the latest message before it ever reaches
-  the backend. After the buffer has been flushed, bolt updates the message
-  in place; NAMS logs a `WARNING` that server-side redaction is not possible
-  (no message-update endpoint on NAMS).
+  the backend. After the buffer has been flushed, falls back to
+  delete-and-re-add on bolt (the redacted message moves to the end of
+  restored history) and logs a warning on NAMS (no message-update endpoint
+  on NAMS, so server-side redaction is not possible).
 
 * **Search scope.** Long-term searches are workspace/database-scoped.
   `user_id` scopes *writes* (multi-tenant), not searches — the search APIs

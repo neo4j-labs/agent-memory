@@ -75,9 +75,8 @@ What do we know about Acme Corp?
 Restored 2 messages for 'kyc-session'.
 ```
 
-On subsequent runs, `Restored N messages` grows by 2 each run — intentional:
-the session is persistent, and each run appends two more turns to it. Wipe
-the database (`make neo4j-stop && make neo4j-start`) for a fresh start.
+The demo clears its two sessions at startup so each run starts fresh; remove
+the reset block to watch history accumulate across runs.
 
 ## With a real agent
 

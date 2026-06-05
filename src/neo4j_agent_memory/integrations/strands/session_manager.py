@@ -52,7 +52,7 @@ class Neo4jRetrievalConfig:
     """
 
     top_k: int = 10
-    min_score: float = 0.2
+    min_score: float = 0.2  # (bolt only; not enforced on NAMS)
     include_entities: bool = True
     include_preferences: bool = True
     include_facts: bool = False
@@ -384,8 +384,10 @@ class Neo4jSessionManager(SessionManager):
         buffer, so we rewrite the buffer and the original never reaches
         the backend. Late path (buffer already flushed — defensive; the
         Strands lifecycle redacts within the same invocation): bolt
-        deletes the stored message and re-adds the redacted text; NAMS
-        has no delete/update endpoint, so we log a warning.
+        deletes the stored message and re-adds the redacted text (the
+        re-added message gets a fresh timestamp, so it moves to the end
+        of restored history); NAMS has no delete/update endpoint, so we
+        log a warning.
         """
         if self._pending is not None:
             self._pending = copy.deepcopy(redact_message)

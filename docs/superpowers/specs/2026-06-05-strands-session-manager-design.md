@@ -256,9 +256,10 @@ is opt-in.
   unacceptable failure mode.
 - **Retrieval injection failures degrade** (log + skip).
 - **Late redaction** (after the buffer flushed — shouldn't happen in
-  Strands' lifecycle, handled defensively): bolt updates the message in
-  place; NAMS logs a clear `WARNING` that redaction couldn't be applied
-  server-side. Documented limitation.
+  Strands' lifecycle, handled defensively): bolt deletes the stored message
+  and re-adds the redacted text (fresh timestamp — it moves to the end of
+  restored history); NAMS logs a clear `WARNING` that redaction couldn't be
+  applied server-side. Documented limitation.
 - **Bridge timeouts:** every sync→async call blocks with
   `future.result(timeout=request_timeout)` (default 30s) so a hung
   backend raises instead of deadlocking the agent thread.

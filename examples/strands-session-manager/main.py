@@ -49,6 +49,18 @@ def build_settings() -> MemorySettings:
 
 
 def main() -> None:
+    # Re-runs accumulate history in the demo sessions (persistence working
+    # as designed) — start fresh each run so the printed counts match the README.
+    async def _reset_demo_sessions() -> None:
+        async with MemoryClient(build_settings()) as client:
+            for session_id in ("kyc-session", "credit-session"):
+                try:
+                    await client.short_term.clear_session(session_id)
+                except Exception:  # noqa: BLE001 - first run: nothing to clear
+                    pass
+
+    asyncio.run(_reset_demo_sessions())
+
     agent_a = SimpleNamespace(messages=[], agent_id="kyc-agent")
     agent_b = SimpleNamespace(messages=[], agent_id="credit-agent")
 
