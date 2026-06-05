@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-pytest.importorskip("strands")
+pytest.importorskip("strands", reason="strands-agents not installed")
 
 
 class TestRetrievalConfig:

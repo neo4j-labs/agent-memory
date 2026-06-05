@@ -13,6 +13,11 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 try:
+    from strands.hooks import (  # used by Neo4jSessionManager.register_hooks
+        AfterInvocationEvent,  # noqa: F401
+        HookRegistry,  # noqa: F401
+        MessageAddedEvent,  # noqa: F401
+    )
     from strands.session.session_manager import SessionManager  # noqa: F401
     from strands.types.exceptions import SessionException  # noqa: F401
 except ImportError as e:  # pragma: no cover - exercised via package __init__
@@ -22,6 +27,8 @@ except ImportError as e:  # pragma: no cover - exercised via package __init__
     ) from e
 
 if TYPE_CHECKING:
+    from strands.types.content import Message as StrandsMessage  # noqa: F401
+
     from neo4j_agent_memory import MemoryClient, MemorySettings  # noqa: F401
 
 logger = logging.getLogger(__name__)
