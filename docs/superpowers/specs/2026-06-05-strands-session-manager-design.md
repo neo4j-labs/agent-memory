@@ -45,31 +45,52 @@ Researched against `strands-agents` 1.42.0 and the verified NAMS REST API
 
 ## Architecture
 
-Option chosen: **repository split** (Strands' own layering).
+Option chosen: **direct `SessionManager` implementation** (no
+`SessionRepository` layer).
 
 ```
 src/neo4j_agent_memory/integrations/strands/
 ├── tools.py                 # existing — unchanged
 ├── config.py                # existing — unchanged
-├── session_repository.py    # NEW: Neo4jSessionRepository(SessionRepository)
-└── session_manager.py       # NEW: Neo4jSessionManager(RepositorySessionManager)
+└── session_manager.py       # NEW: Neo4jSessionManager(SessionManager)
                              #      + Neo4jRetrievalConfig
+                             # internal: _AsyncBridge (background event loop)
+                             #      + conversation-mapping helpers
 ```
 
-- `Neo4jSessionRepository` implements Strands' `SessionRepository` CRUD
-  ABC (`create_session`, `read_session`, `create_agent`, `read_agent`,
-  `update_agent`, `create_message`, `read_message`, `update_message`,
-  `list_messages`) against a `MemoryClient`. Identical behavior on bolt
-  and NAMS, since both backends expose the same `short_term` API.
-- `Neo4jSessionManager(RepositorySessionManager)` constructs the
-  repository, inherits all lifecycle logic from Strands, and registers
-  one extra `MessageAddedEvent` hook when a `Neo4jRetrievalConfig` is
-  provided.
+`Neo4jSessionManager` subclasses Strands' `SessionManager` ABC directly
+and implements the 4 core methods against a `MemoryClient` (identical on
+bolt and NAMS, since both backends expose the same `short_term` API):
 
-Strands' `RepositorySessionManager` already implements the subtle
-lifecycle ordering (initialize → restore, append, sync, redaction); we
-inherit correctness instead of re-implementing it. The repository is
-independently unit-testable against a fake `MemoryClient`.
+- `initialize(agent)` — resolve/create the conversation, load history,
+  populate `agent.messages`.
+- `append_message(message, agent)` — write-behind buffer →
+  `add_message`.
+- `redact_latest_message(...)` — rewrite the buffer (bolt in-place
+  fallback after flush).
+- `sync_agent(agent)` — flush trigger only (agent state is not
+  persisted; see Data mapping).
+
+Hook wiring (AgentInitializedEvent → initialize, MessageAddedEvent →
+append, AfterInvocationEvent → sync, redaction event → redact) is
+inherited from the `SessionManager` base class; we extend
+`register_hooks()` with the buffer-flush and retrieval-injection
+callbacks.
+
+### Why not Strands' repository split
+
+An earlier revision of this design subclassed `RepositorySessionManager`
++ `SessionRepository` (the File/S3/AgentCore layering). The
+no-Strands-specific-data constraint hollowed that contract out:
+`create_agent`/`update_agent` would be no-ops, `read_agent` synthetic,
+and `create_message`/`update_message` would buffer rather than persist —
+a stateful "repository" that violates the CRUD contract it advertises.
+Exposing such a `Neo4jSessionRepository` publicly would invite misuse in
+users' own `RepositorySessionManager` wiring, and the inherited
+lifecycle logic mostly manages state we deliberately don't persist. A
+direct implementation is smaller, honest, and only couples us to the
+public 4-method ABC. The conversation-mapping helpers and `_AsyncBridge`
+stay private and independently unit-testable.
 
 ### Constructor
 
@@ -112,11 +133,12 @@ Sets `validate_on_connect=False` like the NAMS tools do.
 Strands hooks are synchronous; `MemoryClient` is async; the manager is
 long-lived. The existing `_run_async` helper in `tools.py` creates a new
 event loop per call, which breaks persistent transports (httpx/bolt
-transports are loop-bound). The repository therefore owns a **dedicated
-background event-loop thread**, started lazily on first use. Every CRUD
-call submits its coroutine via `asyncio.run_coroutine_threadsafe(...)`
-and blocks on `future.result(timeout=request_timeout)`. One loop, one
-open transport, for the manager's lifetime.
+transports are loop-bound). The manager's internal `_AsyncBridge`
+therefore owns a **dedicated background event-loop thread**, started
+lazily on first use. Every backend call submits its coroutine via
+`asyncio.run_coroutine_threadsafe(...)` and blocks on
+`future.result(timeout=request_timeout)`. One loop, one open transport,
+for the manager's lifetime.
 
 ## Coexistence with the existing Strands integration
 
@@ -149,10 +171,10 @@ Verified NAMS API constraints that shape this design:
 
 | Strands record | Mapping |
 |---|---|
-| `Session` | **One `Conversation`.** Created via `create_conversation(metadata={"strands_session_id": ..., "session_type": ...}, user_id=...)`. On NAMS, `read_session` resolves Strands session_id → conversation UUID by scanning `list_conversations` metadata (cached in-memory after first hit). On bolt, the Strands session_id is used directly as the conversation session_id. |
-| `SessionMessage` | **One `Message`** — `role` + concatenated text blocks as `content`. This is what gets embedded and extracted (server-side on NAMS, pipeline on bolt) and feeds the shared brain. Message indexes are **positional** (ordered by `createdAt`); `read_message(message_id)` resolves by position. |
+| `Session` | **One `Conversation`.** Created via `create_conversation(metadata={"strands_session_id": ..., "session_type": ...}, user_id=...)`. On NAMS, `initialize` resolves Strands session_id → conversation UUID by scanning `list_conversations` metadata (cached in-memory after first hit). On bolt, the Strands session_id is used directly as the conversation session_id. |
+| `SessionMessage` | **One `Message`** — `role` + concatenated text blocks as `content`. This is what gets embedded and extracted (server-side on NAMS, pipeline on bolt) and feeds the shared brain. Restore ordering is by `createdAt` (positional). |
 | toolUse / toolResult content blocks | **Not stored as messages.** When `record_tool_calls=True`, mirrored to reasoning memory (`POST /v1/reasoning/tool-calls`, conversation-scoped) as write-only enrichment for the audit graph. Off by default. Never used for restore. |
-| `SessionAgent` (`agent.state` KV, conversation-manager state) | **Not persisted** — there is nowhere to put it without inventing Strands-specific nodes. `create_agent` / `update_agent` are no-ops; `read_agent` returns a synthetic record. |
+| `SessionAgent` (`agent.state` KV, conversation-manager state) | **Not persisted** — there is nowhere to put it without inventing Strands-specific nodes. `sync_agent` only flushes the message buffer. |
 
 `initialize` (restore) yields the conversational text history plus the
 shared long-term graph. It does **not** yield exact tool-use blocks
@@ -162,7 +184,7 @@ defaults).
 
 ### Redaction without an update endpoint — write-behind buffer
 
-The repository holds the **latest message in a one-slot buffer**, flushed
+The manager holds the **latest message in a one-slot buffer**, flushed
 when:
 
 1. the next message arrives,
@@ -254,21 +276,23 @@ final in-flight message is at risk.
 - No new required dependency; `strands-agents` stays optional behind the
   same try/except-ImportError guard as `tools.py`.
 - New public exports from `integrations/strands/__init__.py`:
-  `Neo4jSessionManager`, `Neo4jSessionRepository`, `Neo4jRetrievalConfig`.
+  `Neo4jSessionManager`, `Neo4jRetrievalConfig`.
 
 ## Testing
 
 - **Unit** (`tests/unit/integrations/strands/`), skipped when
   `strands-agents` isn't installed:
-  - Repository CRUD round-trips against a fake in-memory `MemoryClient`.
+  - Conversation-mapping round-trips (Strands messages ↔ stored
+    messages) against a fake in-memory `MemoryClient`.
   - NAMS-mode semantics: conversation-UUID resolution via metadata scan,
-    positional message indexing.
+    positional restore ordering.
   - Buffer flush/redact paths, including deep-copy isolation.
   - Hook registration order (persistence before injection).
   - Injection formatting, skip-on-empty, skip-on-error.
-- **Integration** (`tests/integration/`): repository + manager against
-  Docker Neo4j (bolt), driving SessionManager methods directly, plus one
-  optional end-to-end with a real `Agent` and a stub model.
+  - `_AsyncBridge`: lazy start, timeout, clean shutdown.
+- **Integration** (`tests/integration/`): manager against Docker Neo4j
+  (bolt), driving SessionManager methods directly, plus one optional
+  end-to-end with a real `Agent` and a stub model.
 - **Example**: `examples/strands-session-manager/` — shared-brain demo
   (two agents, two session managers, one graph), runnable with
   `llm=None` + local sentence-transformers on bolt; NAMS variant via
@@ -308,6 +332,6 @@ Update `docs/how-to/integrations/strands.adoc`:
 | Backend scope | Backend-agnostic (`MemoryClient`) | Bolt and NAMS share the memory-layer API; self-hosted users get it free |
 | LTM injection | Opt-in via `Neo4jRetrievalConfig` | AgentCore-familiar; latency/token cost shouldn't be default |
 | Topologies | Core 4 methods + shared-brain docs | Shared brain needs no Graph/Swarm hooks; smallest correct surface |
-| Architecture | Repository split (Option 1) | Inherit Strands lifecycle correctness; CRUD independently testable |
+| Architecture | Direct `SessionManager` subclass | Repository split was revisited and dropped: with no agent-state persistence and a write-behind buffer, the `SessionRepository` CRUD contract can't be honored honestly; direct implementation is smaller and only couples to the public 4-method ABC |
 | Graph shape | Session ↔ Conversation, no Strands-specific nodes | Keep the graph memory-shaped; NAMS API has no per-message metadata anyway |
 | Redaction | Write-behind one-slot buffer | No message update/delete on NAMS; privacy-correct before flush |
