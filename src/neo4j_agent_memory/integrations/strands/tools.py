@@ -780,21 +780,12 @@ def _get_or_create_nams_client(
         if cached.api_key == api_key:
             return cached.client
 
-    from pydantic import SecretStr
+    from neo4j_agent_memory import MemoryClient
+    from neo4j_agent_memory.integrations.strands.config import build_nams_settings
 
-    from neo4j_agent_memory import MemoryClient, MemorySettings, NamsConfig
-
-    settings = MemorySettings(
-        backend="nams",
-        nams=NamsConfig(
-            endpoint=endpoint,
-            api_key=SecretStr(api_key),
-            # Strands runs tools in short bursts via sync wrappers —
-            # skipping probe avoids a round-trip on every call.
-            validate_on_connect=False,
-            transport_mode=transport_mode,
-        ),
-    )
+    # Strands runs tools in short bursts via sync wrappers —
+    # skipping probe avoids a round-trip on every call.
+    settings = build_nams_settings(endpoint, api_key, transport_mode)
     client = MemoryClient(settings)
     cached_clients.append(_CachedNamsClient(api_key=api_key, client=client))
     return client
@@ -995,12 +986,9 @@ def nams_context_graph_tools(
         tools = nams_context_graph_tools()  # picks up MEMORY_API_KEY from env
         agent = Agent(model="anthropic.claude-sonnet-4-20250514-v1:0", tools=tools)
     """
-    import os
+    from neo4j_agent_memory.integrations.strands.config import resolve_nams_connection
 
-    endpoint = endpoint or os.environ.get("MEMORY_ENDPOINT") or "https://memory.neo4jlabs.com/v1"
-    api_key = api_key or os.environ.get("MEMORY_API_KEY")
-    if not api_key:
-        raise ValueError("api_key is required. Pass api_key= or set MEMORY_API_KEY env var.")
+    endpoint, api_key = resolve_nams_connection(endpoint, api_key)
 
     return [
         _nams_search_context_tool(endpoint, api_key, transport_mode),

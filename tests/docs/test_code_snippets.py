@@ -343,6 +343,22 @@ class TestSnippetCoverage:
 
 
 @pytest.mark.docs
+@pytest.mark.imports
+class TestStrandsDocImports:
+    """Guard: docs import these names from integrations.strands.
+    allowed_missing in TestSnippetImports would silently mask a rename, so
+    verify the real import path whenever strands-agents is installed."""
+
+    def test_strands_session_manager_doc_imports_resolve(self) -> None:
+        pytest.importorskip("strands", reason="strands-agents not installed")
+        from neo4j_agent_memory.integrations.strands import (  # noqa: F401
+            Neo4jRetrievalConfig,
+            Neo4jSessionManager,
+            nams_context_graph_tools,
+        )
+
+
+@pytest.mark.docs
 class TestSnippetConsistency:
     """Test that snippets are consistent across documentation."""
 

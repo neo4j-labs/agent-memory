@@ -500,6 +500,10 @@ requires no LLM or API key.
 | `request_timeout`
 | `30.0`
 | Seconds to wait for each sync→async backend call before raising.
+
+| `restore_limit`
+| `None`
+| Max messages loaded into the agent on restore; `None` loads the backend default (bolt caps at 1000).
 |===
 
 [[_limitations]]
@@ -520,6 +524,11 @@ requires no LLM or API key.
   restored history) and logs a warning on NAMS (no message-update endpoint
   on NAMS, so server-side redaction is not possible).
 
+* **External `AfterInvocationEvent` hooks registered after the session
+  manager run before the final turn is flushed** (Strands dispatches that
+  event in reverse registration order) — read persisted state on the next
+  turn instead.
+
 * **Search scope.** Long-term searches are workspace/database-scoped.
   `user_id` scopes *writes* (multi-tenant), not searches — the search APIs
   take no user filter.
@@ -536,7 +545,8 @@ requires no LLM or API key.
 * **Multiple conversations with the same session ID (NAMS).** If external
   writers create more than one NAMS conversation with the same
   `strands_session_id` metadata, the manager resolves to the first one
-  listed. Avoid duplicate session IDs in shared workspaces.
+  listed. Avoid duplicate session IDs in shared workspaces; resolution
+  passes `user_id` and an explicit page limit to narrow the scan.
 
 == See Also
 

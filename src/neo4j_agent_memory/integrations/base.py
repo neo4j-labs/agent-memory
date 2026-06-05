@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import threading
 from collections.abc import Callable
 from functools import wraps
 from typing import Any, TypeVar
@@ -19,6 +20,61 @@ T = TypeVar("T")
 _executor: concurrent.futures.ThreadPoolExecutor | None = None
 _EXECUTOR_MAX_WORKERS = 4
 _SYNC_TIMEOUT_SECONDS = 30
+
+
+class AsyncBridge:
+    """Persistent background-event-loop bridge for sync code driving async clients.
+
+    Unlike :func:`run_sync` (one-shot ``asyncio.run`` per call), AsyncBridge keeps
+    ONE loop alive across calls — required when the async client holds loop-bound
+    state (httpx/bolt transports), e.g. a long-lived integration object making
+    many sequential calls. Use run_sync for stateless one-shot calls; use
+    AsyncBridge when the same client instance must serve multiple calls.
+
+    The loop thread starts lazily on first use and is restarted if used
+    again after ``close()`` (cheap, and keeps the API forgiving).
+    """
+
+    def __init__(self, timeout: float = 30.0) -> None:
+        self._timeout = timeout
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
+        self._lock = threading.Lock()
+
+    def _ensure_loop(self) -> asyncio.AbstractEventLoop:
+        with self._lock:
+            if self._loop is None or self._thread is None or not self._thread.is_alive():
+                self._loop = asyncio.new_event_loop()
+                self._thread = threading.Thread(
+                    target=self._loop.run_forever,
+                    name="neo4j-strands-session-manager",
+                    daemon=True,
+                )
+                self._thread.start()
+            return self._loop
+
+    def run(self, coro: Any, timeout: float | None = None) -> Any:
+        """Submit ``coro`` to the background loop and block for the result."""
+        loop = self._ensure_loop()
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+        return future.result(timeout=timeout if timeout is not None else self._timeout)
+
+    def close(self) -> None:
+        """Stop and discard the loop thread. Safe to call repeatedly.
+
+        Callers with a ``run()`` in flight will block until their own
+        timeout fires. Drain in-flight work before closing (the session
+        manager flushes its buffer first, which guarantees this).
+        """
+        with self._lock:
+            if self._loop is None:
+                return
+            self._loop.call_soon_threadsafe(self._loop.stop)
+            if self._thread is not None:
+                self._thread.join(timeout=5)
+            self._loop.close()
+            self._loop = None
+            self._thread = None
 
 
 def _get_executor() -> concurrent.futures.ThreadPoolExecutor:

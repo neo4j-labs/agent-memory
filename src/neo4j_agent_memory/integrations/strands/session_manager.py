@@ -11,10 +11,12 @@ from __future__ import annotations
 import asyncio
 import copy
 import logging
-import os
-import threading
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, cast
+
+# Re-export AsyncBridge under its historical private name so existing tests and
+# internal call-sites keep working without any changes.
+from neo4j_agent_memory.integrations.base import AsyncBridge as _AsyncBridge  # noqa: F401
 
 # ---------------------------------------------------------------------------
 # Backend capability model
@@ -72,55 +74,6 @@ class Neo4jRetrievalConfig:
     include_preferences: bool = True
     include_facts: bool = False
     context_tag: str = "user_context"
-
-
-class _AsyncBridge:
-    """Run coroutines from sync code on one persistent background loop.
-
-    The loop thread starts lazily on first use and is restarted if used
-    again after ``close()`` (cheap, and keeps the API forgiving).
-    """
-
-    def __init__(self, timeout: float = 30.0) -> None:
-        self._timeout = timeout
-        self._loop: asyncio.AbstractEventLoop | None = None
-        self._thread: threading.Thread | None = None
-        self._lock = threading.Lock()
-
-    def _ensure_loop(self) -> asyncio.AbstractEventLoop:
-        with self._lock:
-            if self._loop is None or self._thread is None or not self._thread.is_alive():
-                self._loop = asyncio.new_event_loop()
-                self._thread = threading.Thread(
-                    target=self._loop.run_forever,
-                    name="neo4j-strands-session-manager",
-                    daemon=True,
-                )
-                self._thread.start()
-            return self._loop
-
-    def run(self, coro: Any, timeout: float | None = None) -> Any:
-        """Submit ``coro`` to the background loop and block for the result."""
-        loop = self._ensure_loop()
-        future = asyncio.run_coroutine_threadsafe(coro, loop)
-        return future.result(timeout=timeout if timeout is not None else self._timeout)
-
-    def close(self) -> None:
-        """Stop and discard the loop thread. Safe to call repeatedly.
-
-        Callers with a ``run()`` in flight will block until their own
-        timeout fires. Drain in-flight work before closing (the session
-        manager flushes its buffer first, which guarantees this).
-        """
-        with self._lock:
-            if self._loop is None:
-                return
-            self._loop.call_soon_threadsafe(self._loop.stop)
-            if self._thread is not None:
-                self._thread.join(timeout=5)
-            self._loop.close()
-            self._loop = None
-            self._thread = None
 
 
 # ---------------------------------------------------------------------------
@@ -248,25 +201,13 @@ class Neo4jSessionManager(SessionManager):
     ) -> Neo4jSessionManager:
         """Build a NAMS-backed manager using the same env-var conventions as
         ``nams_context_graph_tools()`` (MEMORY_ENDPOINT / MEMORY_API_KEY)."""
-        endpoint = (
-            endpoint or os.environ.get("MEMORY_ENDPOINT") or "https://memory.neo4jlabs.com/v1"
+        from neo4j_agent_memory.integrations.strands.config import (
+            build_nams_settings,
+            resolve_nams_connection,
         )
-        api_key = api_key or os.environ.get("MEMORY_API_KEY")
-        if not api_key:
-            raise ValueError("api_key is required. Pass api_key= or set MEMORY_API_KEY env var.")
-        from pydantic import SecretStr
 
-        from neo4j_agent_memory import MemorySettings, NamsConfig
-
-        settings = MemorySettings(
-            backend="nams",
-            nams=NamsConfig(
-                endpoint=endpoint,
-                api_key=SecretStr(api_key),
-                validate_on_connect=False,
-                transport_mode=transport_mode,
-            ),
-        )
+        endpoint, api_key = resolve_nams_connection(endpoint, api_key)
+        settings = build_nams_settings(endpoint, api_key, transport_mode)
         return cls(session_id, settings=settings, **kwargs)
 
     # ------------------------------------------------------------ lifecycle
