@@ -9,10 +9,11 @@ tool-use blocks and ``agent.state`` are not round-tripped.
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import threading
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 try:
     from strands.hooks import (  # used by Neo4jSessionManager.register_hooks
@@ -123,7 +124,10 @@ def _to_strands_message(stored: Any) -> StrandsMessage:
     role = stored.role.value if hasattr(stored.role, "value") else str(stored.role)
     if role not in ("user", "assistant"):
         role = "assistant"
-    return {"role": role, "content": [{"text": stored.content}]}
+    return {
+        "role": cast("Literal['user', 'assistant']", role),
+        "content": [{"text": stored.content}],
+    }
 
 
 def _format_entity(entity: Any) -> str:
@@ -252,18 +256,98 @@ class Neo4jSessionManager(SessionManager):
                 self.append_message(message, agent)
             self._flush_buffer()
 
-    # Implemented in the next task; stubs keep the ABC instantiable.
     def append_message(self, message: Any, agent: Any, **kwargs: Any) -> None:
-        raise NotImplementedError
+        """Buffer the new message, persisting the previously buffered one.
+
+        The one-slot write-behind buffer exists so guardrail redaction can
+        rewrite the latest message before it ever reaches the backend
+        (NAMS has no message update/delete endpoint).
+        """
+        self._flush_buffer()
+        self._pending = copy.deepcopy(message)
 
     def redact_latest_message(self, redact_message: Any, agent: Any, **kwargs: Any) -> None:
         raise NotImplementedError
 
     def sync_agent(self, agent: Any, **kwargs: Any) -> None:
-        raise NotImplementedError
+        """Agent state is not persisted (design decision: no Strands-specific
+        nodes in the graph). Also fired on MessageAddedEvent by the base
+        class, so it must not flush the buffer."""
+        return None
 
     def _flush_buffer(self) -> None:
-        raise NotImplementedError
+        """Persist the buffered message, if any. Raises SessionException on failure."""
+        if self._pending is None:
+            return
+        message, self._pending = self._pending, None
+        if self._record_tool_calls:
+            self._record_tool_uses(message)
+        text = _message_text(message)
+        if not text:
+            return  # pure tool-use/result message: not memory, not stored
+        try:
+            key = self._ensure_session()
+            self._last_persisted = self._bridge.run(
+                self._client.short_term.add_message(
+                    key,
+                    message["role"],
+                    text,
+                    extract_entities=self._extract_entities,
+                    user_identifier=self._user_id,
+                    metadata={_SESSION_KEY: self.session_id},
+                )
+            )
+        except Exception as e:
+            raise SessionException(
+                f"Failed to persist message for session {self.session_id!r}"
+            ) from e
+
+    def _record_tool_uses(self, message: StrandsMessage) -> None:
+        """Mirror toolUse blocks into reasoning memory (enrichment; never raises)."""
+        blocks = [
+            b["toolUse"]
+            for b in (message.get("content") or [])
+            if isinstance(b, dict) and "toolUse" in b
+        ]
+        if not blocks:
+            return
+        try:
+            key = self._ensure_session()
+            self._bridge.run(self._arecord_tool_uses(key, blocks))
+        except Exception as e:
+            logger.warning("Failed to mirror tool calls to reasoning memory: %s", e)
+
+    async def _arecord_tool_uses(self, key: str, blocks: list[Any]) -> None:
+        if self._trace_id is None:
+            trace = await self._client.reasoning.start_trace(
+                key, task="Strands agent session"
+            )
+            self._trace_id = trace.id
+        for block in blocks:
+            name = block.get("name") or "unknown"
+            step = await self._client.reasoning.add_step(
+                self._trace_id, thought=f"Tool use: {name}", action=name
+            )
+            await self._client.reasoning.record_tool_call(
+                step.id, name, block.get("input") or {}
+            )
 
     def close(self) -> None:
-        self._bridge.close()
+        """Flush, release the client (if owned/connected by us), stop the bridge."""
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._flush_buffer()
+        finally:
+            try:
+                if (self._owns_client or self._we_connected) and self._client.is_connected:
+                    self._bridge.run(self._client.close())
+            finally:
+                self._bridge.close()
+
+    def __enter__(self) -> Neo4jSessionManager:
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        self.close()

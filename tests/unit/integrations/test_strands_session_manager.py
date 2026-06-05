@@ -240,7 +240,6 @@ class TestInitialize:
         finally:
             manager.close()
 
-    @pytest.mark.xfail(reason="append_message lands in the next commit", strict=True)
     def test_seeds_preexisting_agent_messages_into_empty_session(self) -> None:
         manager, client = _make_manager(nams_mode=False)
         try:
@@ -266,3 +265,166 @@ class TestInitialize:
                 manager.initialize(_fake_agent())
         finally:
             manager.close()
+
+
+class TestAppendAndBuffer:
+    def test_append_buffers_then_flushes_on_next_append(self) -> None:
+        manager, client = _make_manager()
+        try:
+            agent = _fake_agent()
+            manager.initialize(agent)
+
+            manager.append_message({"role": "user", "content": [{"text": "one"}]}, agent)
+            assert client.short_term.add_message_calls == []  # buffered, not stored
+
+            manager.append_message({"role": "assistant", "content": [{"text": "two"}]}, agent)
+            assert len(client.short_term.add_message_calls) == 1
+            assert client.short_term.add_message_calls[0]["content"] == "one"
+        finally:
+            manager.close()
+
+    def test_close_flushes_pending_message(self) -> None:
+        manager, client = _make_manager()
+        agent = _fake_agent()
+        manager.initialize(agent)
+        manager.append_message({"role": "user", "content": [{"text": "last"}]}, agent)
+        manager.close()
+        assert [c["content"] for c in client.short_term.add_message_calls] == ["last"]
+
+    def test_pure_tool_message_is_not_persisted(self) -> None:
+        manager, client = _make_manager()
+        try:
+            agent = _fake_agent()
+            manager.initialize(agent)
+            manager.append_message(
+                {"role": "user", "content": [{"toolResult": {"toolUseId": "1"}}]}, agent
+            )
+            manager._flush_buffer()
+            assert client.short_term.add_message_calls == []
+        finally:
+            manager.close()
+
+    def test_flush_passes_extraction_and_tenant_kwargs(self) -> None:
+        manager, client = _make_manager(user_id="alice", extract_entities=False)
+        try:
+            agent = _fake_agent()
+            manager.initialize(agent)
+            manager.append_message({"role": "user", "content": [{"text": "hi"}]}, agent)
+            manager._flush_buffer()
+            call = client.short_term.add_message_calls[0]
+            assert call["extract_entities"] is False
+            assert call["user_identifier"] == "alice"
+            assert call["metadata"] == {"strands_session_id": "sess-1"}
+        finally:
+            manager.close()
+
+    def test_buffer_holds_a_deep_copy(self) -> None:
+        manager, client = _make_manager()
+        try:
+            agent = _fake_agent()
+            manager.initialize(agent)
+            message = {"role": "user", "content": [{"text": "original"}]}
+            manager.append_message(message, agent)
+            # Mutation after append (e.g. context injection) must not leak.
+            message["content"][0]["text"] = "<user_context>...</user_context>\noriginal"
+            manager._flush_buffer()
+            assert client.short_term.add_message_calls[0]["content"] == "original"
+        finally:
+            manager.close()
+
+    def test_flush_failure_raises_session_exception(self) -> None:
+        from strands.types.exceptions import SessionException
+
+        manager, client = _make_manager()
+        try:
+            agent = _fake_agent()
+            manager.initialize(agent)
+            manager.append_message({"role": "user", "content": [{"text": "x"}]}, agent)
+            client.short_term.fail_next_add = True
+            with pytest.raises(SessionException):
+                manager._flush_buffer()
+        finally:
+            manager.close()
+
+    def test_sync_agent_is_a_noop(self) -> None:
+        manager, client = _make_manager()
+        try:
+            agent = _fake_agent()
+            manager.initialize(agent)
+            manager.append_message({"role": "user", "content": [{"text": "x"}]}, agent)
+            manager.sync_agent(agent)  # must NOT flush (fires on MessageAddedEvent too)
+            assert client.short_term.add_message_calls == []
+        finally:
+            manager.close()
+
+
+class TestToolCallMirroring:
+    def test_tool_use_blocks_recorded_to_reasoning(self) -> None:
+        manager, client = _make_manager(record_tool_calls=True)
+        try:
+            agent = _fake_agent()
+            manager.initialize(agent)
+            manager.append_message(
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"text": "checking"},
+                        {"toolUse": {"toolUseId": "1", "name": "search", "input": {"q": "x"}}},
+                    ],
+                },
+                agent,
+            )
+            manager._flush_buffer()
+            assert len(client.reasoning.traces) == 1
+            assert client.reasoning.tool_calls[0]["tool_name"] == "search"
+            assert client.reasoning.tool_calls[0]["arguments"] == {"q": "x"}
+            # The text part is still persisted as a normal message.
+            assert client.short_term.add_message_calls[0]["content"] == "checking"
+        finally:
+            manager.close()
+
+    def test_mirroring_disabled_by_default(self) -> None:
+        manager, client = _make_manager()
+        try:
+            agent = _fake_agent()
+            manager.initialize(agent)
+            manager.append_message(
+                {
+                    "role": "assistant",
+                    "content": [{"toolUse": {"toolUseId": "1", "name": "t", "input": {}}}],
+                },
+                agent,
+            )
+            manager._flush_buffer()
+            assert client.reasoning.traces == []
+        finally:
+            manager.close()
+
+
+class TestCloseSemantics:
+    def test_close_closes_client_we_connected(self) -> None:
+        manager, client = _make_manager()
+        manager.initialize(_fake_agent())  # connects -> _we_connected
+        manager.close()
+        assert client.close_calls == 1
+
+    def test_close_leaves_preconnected_injected_client_open(self) -> None:
+        import asyncio
+
+        from neo4j_agent_memory.integrations.strands.session_manager import (
+            Neo4jSessionManager,
+        )
+        from tests.unit.integrations.strands_fakes import FakeMemoryClient
+
+        client = FakeMemoryClient()
+        asyncio.run(client.connect())  # user connected it; we must not close it
+        manager = Neo4jSessionManager("sess-1", memory_client=client)
+        manager.initialize(_fake_agent())
+        manager.close()
+        assert client.close_calls == 0
+
+    def test_context_manager_calls_close(self) -> None:
+        manager, client = _make_manager()
+        with manager:
+            manager.initialize(_fake_agent())
+        assert client.close_calls == 1
