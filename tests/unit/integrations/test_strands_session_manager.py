@@ -89,3 +89,67 @@ class TestAsyncBridge:
         bridge.close()
         bridge.close()  # second close must not raise
         assert not thread.is_alive()
+
+
+class TestMappingHelpers:
+    def test_message_text_concatenates_text_blocks(self) -> None:
+        from neo4j_agent_memory.integrations.strands.session_manager import _message_text
+
+        msg = {"role": "user", "content": [{"text": "hello"}, {"text": "world"}]}
+        assert _message_text(msg) == "hello\nworld"
+
+    def test_message_text_ignores_tool_blocks(self) -> None:
+        from neo4j_agent_memory.integrations.strands.session_manager import _message_text
+
+        msg = {
+            "role": "assistant",
+            "content": [
+                {"text": "let me check"},
+                {"toolUse": {"toolUseId": "1", "name": "search", "input": {"q": "x"}}},
+            ],
+        }
+        assert _message_text(msg) == "let me check"
+
+    def test_message_text_empty_for_pure_tool_message(self) -> None:
+        from neo4j_agent_memory.integrations.strands.session_manager import _message_text
+
+        msg = {
+            "role": "user",
+            "content": [{"toolResult": {"toolUseId": "1", "content": [{"text": "ok"}]}}],
+        }
+        assert _message_text(msg) == ""
+
+    def test_to_strands_message_roundtrip_roles(self) -> None:
+        from neo4j_agent_memory.integrations.strands.session_manager import (
+            _to_strands_message,
+        )
+        from neo4j_agent_memory.memory.short_term import Message, MessageRole
+
+        stored = Message(role=MessageRole.USER, content="hi")
+        assert _to_strands_message(stored) == {
+            "role": "user",
+            "content": [{"text": "hi"}],
+        }
+        # Roles Strands cannot represent fall back to assistant.
+        stored_sys = Message(role=MessageRole.SYSTEM, content="sys")
+        assert _to_strands_message(stored_sys)["role"] == "assistant"
+
+    def test_formatters(self) -> None:
+        from types import SimpleNamespace
+
+        from neo4j_agent_memory.integrations.strands.session_manager import (
+            _format_entity,
+            _format_fact,
+            _format_preference,
+        )
+
+        entity = SimpleNamespace(
+            display_name="Acme Corp", type="ORGANIZATION", description="customer"
+        )
+        assert _format_entity(entity) == "[entity] Acme Corp (ORGANIZATION) — customer"
+        entity_no_desc = SimpleNamespace(display_name="X", type="PERSON", description=None)
+        assert _format_entity(entity_no_desc) == "[entity] X (PERSON)"
+        pref = SimpleNamespace(category="food", preference="loves Italian")
+        assert _format_preference(pref) == "[preference] food: loves Italian"
+        fact = SimpleNamespace(subject="Jane", predicate="works_at", object="Acme")
+        assert _format_fact(fact) == "[fact] Jane works_at Acme"

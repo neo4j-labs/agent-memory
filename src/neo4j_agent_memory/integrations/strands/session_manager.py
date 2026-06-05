@@ -104,3 +104,37 @@ class _AsyncBridge:
             self._loop.close()
             self._loop = None
             self._thread = None
+
+
+# ---------------------------------------------------------------------------
+# Strands ↔ NAMS message mapping helpers
+# ---------------------------------------------------------------------------
+
+
+def _message_text(message: StrandsMessage) -> str:
+    """Concatenate the text blocks of a Strands message (tool blocks ignored)."""
+    blocks = message.get("content") or []
+    texts = [b["text"] for b in blocks if isinstance(b, dict) and b.get("text")]
+    return "\n".join(texts)
+
+
+def _to_strands_message(stored: Any) -> StrandsMessage:
+    """Convert a stored neo4j-agent-memory Message to a Strands message dict."""
+    role = stored.role.value if hasattr(stored.role, "value") else str(stored.role)
+    if role not in ("user", "assistant"):
+        role = "assistant"
+    return {"role": role, "content": [{"text": stored.content}]}
+
+
+def _format_entity(entity: Any) -> str:
+    desc = getattr(entity, "description", None)
+    suffix = f" — {desc}" if desc else ""
+    return f"[entity] {entity.display_name} ({entity.type}){suffix}"
+
+
+def _format_preference(preference: Any) -> str:
+    return f"[preference] {preference.category}: {preference.preference}"
+
+
+def _format_fact(fact: Any) -> str:
+    return f"[fact] {fact.subject} {fact.predicate} {fact.object}"
