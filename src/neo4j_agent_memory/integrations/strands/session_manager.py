@@ -89,7 +89,12 @@ class _AsyncBridge:
         return future.result(timeout=timeout if timeout is not None else self._timeout)
 
     def close(self) -> None:
-        """Stop and discard the loop thread. Safe to call repeatedly."""
+        """Stop and discard the loop thread. Safe to call repeatedly.
+
+        Callers with a ``run()`` in flight will block until their own
+        timeout fires. Drain in-flight work before closing (the session
+        manager flushes its buffer first, which guarantees this).
+        """
         with self._lock:
             if self._loop is None:
                 return

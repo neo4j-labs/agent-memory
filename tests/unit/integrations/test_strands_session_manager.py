@@ -66,6 +66,13 @@ class TestAsyncBridge:
             with pytest.raises(FutureTimeoutError):
                 bridge.run(slow())
         finally:
+            # Cancel the orphaned task to avoid "Task was destroyed but it
+            # is pending!" stderr noise when the loop stops.
+            loop = bridge._loop
+            if loop is not None and loop.is_running():
+                loop.call_soon_threadsafe(
+                    lambda: [t.cancel() for t in asyncio.all_tasks(loop)]
+                )
             bridge.close()
 
     def test_close_is_idempotent_and_stops_thread(self) -> None:
