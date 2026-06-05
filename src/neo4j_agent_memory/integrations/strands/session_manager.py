@@ -266,8 +266,55 @@ class Neo4jSessionManager(SessionManager):
         self._flush_buffer()
         self._pending = copy.deepcopy(message)
 
-    def redact_latest_message(self, redact_message: Any, agent: Any, **kwargs: Any) -> None:
-        raise NotImplementedError
+    def redact_latest_message(
+        self, redact_message: StrandsMessage, agent: Any, **kwargs: Any
+    ) -> None:
+        """Replace the latest message with redacted content.
+
+        Normal path: the latest message is still in the write-behind
+        buffer, so we rewrite the buffer and the original never reaches
+        the backend. Late path (buffer already flushed — defensive; the
+        Strands lifecycle redacts within the same invocation): bolt
+        deletes the stored message and re-adds the redacted text; NAMS
+        has no delete/update endpoint, so we log a warning.
+        """
+        if self._pending is not None:
+            self._pending = copy.deepcopy(redact_message)
+            return
+        if self._last_persisted is None:
+            logger.warning(
+                "redact_latest_message called for session %s but no message "
+                "has been stored yet; nothing to redact.",
+                self.session_id,
+            )
+            return
+        if self._client.is_nams:
+            logger.warning(
+                "Cannot redact already-persisted message %s on NAMS (no "
+                "message update/delete endpoint). The redacted content was "
+                "NOT applied server-side.",
+                self._last_persisted.id,
+            )
+            return
+        text = _message_text(redact_message) or "[REDACTED]"
+        try:
+            self._bridge.run(
+                self._client.short_term.delete_message(self._last_persisted.id)
+            )
+            self._last_persisted = self._bridge.run(
+                self._client.short_term.add_message(
+                    self._ensure_session(),
+                    redact_message.get("role", "user"),
+                    text,
+                    extract_entities=False,
+                    user_identifier=self._user_id,
+                    metadata={_SESSION_KEY: self.session_id},
+                )
+            )
+        except Exception as e:
+            raise SessionException(
+                f"Failed to redact latest message for session {self.session_id!r}"
+            ) from e
 
     def sync_agent(self, agent: Any, **kwargs: Any) -> None:
         """Agent state is not persisted (design decision: no Strands-specific

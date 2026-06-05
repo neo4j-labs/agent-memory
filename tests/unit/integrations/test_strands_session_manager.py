@@ -400,6 +400,24 @@ class TestToolCallMirroring:
         finally:
             manager.close()
 
+    def test_pure_tool_message_mirrors_without_persisting(self) -> None:
+        manager, client = _make_manager(record_tool_calls=True)
+        try:
+            agent = _fake_agent()
+            manager.initialize(agent)
+            manager.append_message(
+                {
+                    "role": "assistant",
+                    "content": [{"toolUse": {"toolUseId": "1", "name": "lookup", "input": {}}}],
+                },
+                agent,
+            )
+            manager._flush_buffer()
+            assert len(client.reasoning.tool_calls) == 1
+            assert client.short_term.add_message_calls == []
+        finally:
+            manager.close()
+
 
 class TestCloseSemantics:
     def test_close_closes_client_we_connected(self) -> None:
@@ -428,3 +446,54 @@ class TestCloseSemantics:
         with manager:
             manager.initialize(_fake_agent())
         assert client.close_calls == 1
+
+
+class TestRedaction:
+    def test_redact_rewrites_buffer_before_persistence(self) -> None:
+        manager, client = _make_manager()
+        try:
+            agent = _fake_agent()
+            manager.initialize(agent)
+            manager.append_message(
+                {"role": "user", "content": [{"text": "my SSN is 123-45-6789"}]}, agent
+            )
+            manager.redact_latest_message(
+                {"role": "user", "content": [{"text": "[REDACTED]"}]}, agent
+            )
+            manager._flush_buffer()
+            contents = [c["content"] for c in client.short_term.add_message_calls]
+            assert contents == ["[REDACTED]"]  # original never reached the backend
+        finally:
+            manager.close()
+
+    def test_late_redaction_on_bolt_deletes_and_rewrites(self) -> None:
+        manager, client = _make_manager(nams_mode=False)
+        try:
+            agent = _fake_agent()
+            manager.initialize(agent)
+            manager.append_message({"role": "user", "content": [{"text": "secret"}]}, agent)
+            manager._flush_buffer()  # already persisted -> late path
+            manager.redact_latest_message(
+                {"role": "user", "content": [{"text": "[REDACTED]"}]}, agent
+            )
+            assert len(client.short_term.deleted_message_ids) == 1
+            assert client.short_term.add_message_calls[-1]["content"] == "[REDACTED]"
+        finally:
+            manager.close()
+
+    def test_late_redaction_on_nams_warns_and_does_not_raise(self, caplog) -> None:
+        import logging
+
+        manager, client = _make_manager(nams_mode=True)
+        try:
+            agent = _fake_agent()
+            manager.initialize(agent)
+            manager.append_message({"role": "user", "content": [{"text": "secret"}]}, agent)
+            manager._flush_buffer()
+            with caplog.at_level(logging.WARNING):
+                manager.redact_latest_message(
+                    {"role": "user", "content": [{"text": "[REDACTED]"}]}, agent
+                )
+            assert any("redact" in r.message.lower() for r in caplog.records)
+        finally:
+            manager.close()
