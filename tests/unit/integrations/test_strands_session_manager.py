@@ -478,6 +478,7 @@ class TestRedaction:
             )
             assert len(client.short_term.deleted_message_ids) == 1
             assert client.short_term.add_message_calls[-1]["content"] == "[REDACTED]"
+            assert client.short_term.add_message_calls[-1].get("extract_entities") is False
         finally:
             manager.close()
 
@@ -495,5 +496,21 @@ class TestRedaction:
                     {"role": "user", "content": [{"text": "[REDACTED]"}]}, agent
                 )
             assert any("redact" in r.message.lower() for r in caplog.records)
+        finally:
+            manager.close()
+
+    def test_redact_with_nothing_stored_warns_and_returns(self, caplog) -> None:
+        import logging
+
+        manager, client = _make_manager()
+        try:
+            agent = _fake_agent()
+            manager.initialize(agent)
+            with caplog.at_level(logging.WARNING):
+                manager.redact_latest_message(
+                    {"role": "user", "content": [{"text": "[REDACTED]"}]}, agent
+                )
+            assert any("nothing to redact" in r.message.lower() for r in caplog.records)
+            assert client.short_term.add_message_calls == []
         finally:
             manager.close()

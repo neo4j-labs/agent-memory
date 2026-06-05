@@ -312,6 +312,7 @@ class Neo4jSessionManager(SessionManager):
                 )
             )
         except Exception as e:
+            self._last_persisted = None  # id may already be deleted; don't reuse it
             raise SessionException(
                 f"Failed to redact latest message for session {self.session_id!r}"
             ) from e
