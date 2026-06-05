@@ -16,6 +16,21 @@ import threading
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+# ---------------------------------------------------------------------------
+# Backend capability model
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _BackendCapabilities:
+    """What the active backend can do (NAMS lacks several bolt endpoints)."""
+
+    supports_preference_search: bool
+    supports_facts_search: bool
+    supports_message_delete: bool
+    needs_conversation_uuid_resolution: bool
+
+
 try:
     from strands.hooks import (
         AfterInvocationEvent,
@@ -134,7 +149,8 @@ def _to_strands_message(stored: Any) -> StrandsMessage:
 def _format_entity(entity: Any) -> str:
     desc = getattr(entity, "description", None)
     suffix = f" — {desc}" if desc else ""
-    return f"[entity] {entity.display_name} ({entity.type}){suffix}"
+    entity_type = getattr(entity, "full_type", None) or entity.type
+    return f"[entity] {entity.display_name} ({entity_type}){suffix}"
 
 
 def _format_preference(preference: Any) -> str:
@@ -168,7 +184,7 @@ class Neo4jSessionManager(SessionManager):
         extract_entities: bool = True,
         record_tool_calls: bool = False,
         request_timeout: float = 30.0,
-        **kwargs: Any,
+        restore_limit: int | None = None,
     ) -> None:
         if (memory_client is None) == (settings is None):
             raise ValueError(
@@ -179,20 +195,44 @@ class Neo4jSessionManager(SessionManager):
         self._retrieval_config = retrieval_config
         self._extract_entities = extract_entities
         self._record_tool_calls = record_tool_calls
+        self._restore_limit = restore_limit
         self._bridge = _AsyncBridge(timeout=request_timeout)
-        self._owns_client = settings is not None
+        # True when this manager owns the client lifecycle (settings-constructed
+        # client, or when we performed the connect on an externally-supplied client).
+        self._should_close_client: bool = settings is not None
         if settings is not None:
             from neo4j_agent_memory import MemoryClient
 
             self._client: Any = MemoryClient(settings)
         else:
             self._client = memory_client
-        self._we_connected = False
         self._conversation_key: str | None = None
         self._pending: StrandsMessage | None = None  # write-behind buffer
         self._last_persisted: Any = None  # last stored Message (late redaction)
         self._trace_id: Any = None  # lazy reasoning trace (record_tool_calls)
+        self._caps_cache: _BackendCapabilities | None = None
         self._closed = False
+
+    # --------------------------------------------------------- capabilities
+
+    @property
+    def _caps(self) -> _BackendCapabilities:
+        """Capability flags for the active backend, derived once.
+
+        Centralizes backend knowledge so call sites read intent
+        (``supports_preference_search``) rather than backend identity.
+        When the backends grow a real capability probe, only this
+        property needs to change.
+        """
+        if self._caps_cache is None:
+            nams = self._client.is_nams
+            self._caps_cache = _BackendCapabilities(
+                supports_preference_search=not nams,
+                supports_facts_search=not nams,
+                supports_message_delete=not nams,
+                needs_conversation_uuid_resolution=nams,
+            )
+        return self._caps_cache
 
     # --------------------------------------------------------- factory methods
 
@@ -234,7 +274,7 @@ class Neo4jSessionManager(SessionManager):
     async def _aconnect(self) -> None:
         if not self._client.is_connected:
             await self._client.connect()
-            self._we_connected = True
+            self._should_close_client = True
 
     async def _aresolve_conversation(self) -> str:
         """Return the backend session key for short_term calls.
@@ -244,9 +284,14 @@ class Neo4jSessionManager(SessionManager):
         keys conversations by session_id directly (auto-created on first
         message).
         """
-        if not self._client.is_nams:
+        if not self._caps.needs_conversation_uuid_resolution:
             return self.session_id
-        conversations = await self._client.short_term.list_conversations()
+        # Narrow server-side where possible; explicit limit extends coverage
+        # beyond the server's default page (full pagination isn't exposed by
+        # the API).
+        conversations = await self._client.short_term.list_conversations(
+            user_identifier=self._user_id, limit=1000
+        )
         for conversation in conversations:
             if (conversation.metadata or {}).get(_SESSION_KEY) == self.session_id:
                 return str(conversation.id)
@@ -257,16 +302,29 @@ class Neo4jSessionManager(SessionManager):
         )
         return str(created.id)
 
-    async def _ainitialize(self) -> list[StrandsMessage]:
+    async def _aresolve_key(self) -> str:
+        """Connect and resolve the conversation key (without loading history)."""
         await self._aconnect()
-        self._conversation_key = await self._aresolve_conversation()
-        conversation = await self._client.short_term.get_conversation(self._conversation_key)
+        if self._conversation_key is None:
+            self._conversation_key = await self._aresolve_conversation()
+        return self._conversation_key
+
+    async def _ainitialize(self) -> list[StrandsMessage]:
+        key = await self._aresolve_key()
+        conversation = await self._client.short_term.get_conversation(
+            key, limit=self._restore_limit
+        )
         return [_to_strands_message(m) for m in conversation.messages]
 
     def _ensure_session(self) -> str:
-        """Resolve the conversation key on demand (for use outside initialize)."""
+        """Resolve the conversation key on demand (lazy; does NOT load history).
+
+        Used by flush and redact paths that only need the key to write a
+        message. Callers that need conversation history must go through
+        ``initialize()`` / ``_ainitialize()``.
+        """
         if self._conversation_key is None:
-            self._bridge.run(self._ainitialize())
+            self._bridge.run(self._aresolve_key())
         assert self._conversation_key is not None
         return self._conversation_key
 
@@ -292,10 +350,12 @@ class Neo4jSessionManager(SessionManager):
 
         Order matters: Strands fires ``MessageAddedEvent`` callbacks in
         registration order, so persistence (base ``MessageAddedEvent`` ->
-        append_message) always runs before context injection.  Our
-        AfterInvocationEvent flush is registered after the base sync_agent;
-        that event uses reverse callback order at dispatch, but since
-        sync_agent is a no-op the relative order is immaterial.
+        append_message) always runs before context injection.
+        AfterInvocationEvent dispatches in reverse registration order, so our
+        flush runs before the base no-op sync_agent — and also before any user
+        hooks registered after this manager. External AfterInvocationEvent
+        hooks therefore observe the final turn BEFORE it is persisted; hooks
+        that need the persisted message should read it on the next turn instead.
         """
         super().register_hooks(registry, **kwargs)
         registry.add_callback(AfterInvocationEvent, lambda _event: self._flush_buffer())
@@ -315,6 +375,12 @@ class Neo4jSessionManager(SessionManager):
         query = _message_text(message)
         if not query:
             return
+        tag_prefix = f"<{cfg.context_tag}>\nRelevant memory:\n"
+        for content_block in message.get("content") or []:
+            if isinstance(content_block, dict) and "text" in content_block:
+                if content_block["text"].startswith(tag_prefix):
+                    return  # already injected (event re-fired for this message)
+                break
         try:
             block = self._bridge.run(self._aretrieve(query, cfg))
         except Exception as e:
@@ -326,11 +392,8 @@ class Neo4jSessionManager(SessionManager):
             return
         if not block:
             return
-        tag_prefix = f"<{cfg.context_tag}>\nRelevant memory:\n"
         for content_block in message.get("content") or []:
             if isinstance(content_block, dict) and "text" in content_block:
-                if content_block["text"].startswith(tag_prefix):
-                    return  # already injected (event re-fired for this message)
                 content_block["text"] = f"{block}\n{content_block['text']}"
                 return
 
@@ -343,14 +406,14 @@ class Neo4jSessionManager(SessionManager):
                 long_term.search_entities(query, limit=cfg.top_k, threshold=cfg.min_score)
             )
             formatters.append(_format_entity)
-        # NAMS has no preferences/facts search endpoints (NotSupportedError) —
-        # skip structurally-unsupported searches instead of warning every turn.
-        if cfg.include_preferences and not self._client.is_nams:
+        # Bolt-only searches: NAMS has no preference/fact search endpoints
+        # (NotSupportedError) — skip via capability flag to avoid warning every turn.
+        if cfg.include_preferences and self._caps.supports_preference_search:
             searches.append(
                 long_term.search_preferences(query, limit=cfg.top_k, threshold=cfg.min_score)
             )
             formatters.append(_format_preference)
-        if cfg.include_facts and not self._client.is_nams:
+        if cfg.include_facts and self._caps.supports_facts_search:
             searches.append(long_term.search_facts(query, limit=cfg.top_k, threshold=cfg.min_score))
             formatters.append(_format_fact)
         results = await asyncio.gather(*searches, return_exceptions=True)
@@ -399,7 +462,7 @@ class Neo4jSessionManager(SessionManager):
                 self.session_id,
             )
             return
-        if self._client.is_nams:
+        if not self._caps.supports_message_delete:
             logger.warning(
                 "Cannot redact already-persisted message %s on NAMS (no "
                 "message update/delete endpoint). The redacted content was "
@@ -494,7 +557,7 @@ class Neo4jSessionManager(SessionManager):
             self._flush_buffer()
         finally:
             try:
-                if (self._owns_client or self._we_connected) and self._client.is_connected:
+                if self._should_close_client and self._client.is_connected:
                     self._bridge.run(self._client.close())
             finally:
                 self._bridge.close()

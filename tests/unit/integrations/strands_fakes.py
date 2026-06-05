@@ -23,6 +23,9 @@ class FakeShortTerm:
         self.add_message_calls: list[dict[str, Any]] = []
         self.deleted_message_ids: list[str] = []
         self.fail_next_add = False
+        self.list_conversations_calls: list[dict[str, Any]] = []
+        self.get_conversation_calls: int = 0
+        self.get_conversation_kwargs: list[dict[str, Any]] = []
 
     async def create_conversation(
         self, session_id: str | None = None, **kwargs: Any
@@ -38,9 +41,12 @@ class FakeShortTerm:
         return conv
 
     async def list_conversations(self, **kwargs: Any) -> list[Conversation]:
+        self.list_conversations_calls.append(kwargs)
         return list(self.conversations.values())
 
     async def get_conversation(self, session_id: str, **kwargs: Any) -> Conversation:
+        self.get_conversation_calls += 1
+        self.get_conversation_kwargs.append({"session_id": session_id, **kwargs})
         conv = self.conversations.get(session_id)
         if conv is None:
             if self._nams_mode:
@@ -86,20 +92,24 @@ class FakeLongTerm:
         self.preferences: list[Any] = []
         self.facts: list[Any] = []
         self.fail_searches = False
+        self.search_calls: int = 0
 
     async def _maybe_fail(self) -> None:
         if self.fail_searches:
             raise RuntimeError("search backend down")
 
     async def search_entities(self, query: str, **kwargs: Any) -> list[Any]:
+        self.search_calls += 1
         await self._maybe_fail()
         return self.entities
 
     async def search_preferences(self, query: str, **kwargs: Any) -> list[Any]:
+        self.search_calls += 1
         await self._maybe_fail()
         return self.preferences
 
     async def search_facts(self, query: str, **kwargs: Any) -> list[Any]:
+        self.search_calls += 1
         await self._maybe_fail()
         return self.facts
 

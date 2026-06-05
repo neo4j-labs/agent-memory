@@ -658,6 +658,7 @@ class TestRetrievalInjection:
         client.long_term.entities = [
             SimpleNamespace(display_name="Acme", type="ORGANIZATION", description=None)
         ]
+
         # Make preference/fact searches behave like real NAMS: raise if called.
         async def boom(query, **kwargs):
             raise AssertionError("must not be called on NAMS")
@@ -735,7 +736,7 @@ class TestForNams:
         monkeypatch.setenv("MEMORY_API_KEY", "test-key")
         manager = Neo4jSessionManager.for_nams("sess-1")
         try:
-            assert manager._owns_client is True
+            assert manager._should_close_client is True
             settings = manager._client._settings
             assert settings.backend == "nams"
             assert settings.nams.validate_on_connect is False
@@ -752,3 +753,117 @@ class TestPublicExports:
 
         assert Neo4jSessionManager is not None
         assert Neo4jRetrievalConfig is not None
+
+
+# ---------------------------------------------------------------------------
+# New tests added by review-fix pass
+# ---------------------------------------------------------------------------
+
+
+class TestConstructorExtended:
+    """Fix 3: unknown kwargs now raise TypeError instead of being silently swallowed."""
+
+    def test_unknown_kwarg_raises_type_error(self) -> None:
+        from neo4j_agent_memory.integrations.strands.session_manager import (
+            Neo4jSessionManager,
+        )
+        from tests.unit.integrations.strands_fakes import FakeMemoryClient
+
+        with pytest.raises(TypeError):
+            Neo4jSessionManager(
+                "s1", memory_client=FakeMemoryClient(), extract_entites=False
+            )  # typo: extract_entites
+
+
+class TestInitializeExtended:
+    """Fix 1: list_conversations passes user scoping + explicit limit for NAMS."""
+
+    def test_nams_list_conversations_passes_user_identifier_and_limit(self) -> None:
+        manager, client = _make_manager(nams_mode=True, user_id="alice")
+        try:
+            agent = _fake_agent()
+            manager.initialize(agent)
+            # _aresolve_conversation calls list_conversations with scoping kwargs.
+            calls = client.short_term.list_conversations_calls
+            assert len(calls) == 1
+            assert calls[0].get("user_identifier") == "alice"
+            assert calls[0].get("limit") == 1000
+        finally:
+            manager.close()
+
+
+class TestRetrievalInjectionExtended:
+    """Fix 4: idempotency guard fires BEFORE the retrieval call."""
+
+    def _manager_with_memories(self):
+        from neo4j_agent_memory.integrations.strands.session_manager import (
+            Neo4jRetrievalConfig,
+        )
+
+        manager, client = _make_manager(retrieval_config=Neo4jRetrievalConfig())
+        client.long_term.entities = [
+            SimpleNamespace(display_name="Acme", type="ORGANIZATION", description=None)
+        ]
+        return manager, client
+
+    def test_second_injection_does_not_trigger_search(self) -> None:
+        """The idempotency guard must short-circuit before the retrieval coroutine runs."""
+        manager, client = self._manager_with_memories()
+        try:
+            manager.initialize(_fake_agent())
+            message = {"role": "user", "content": [{"text": "tell me about Acme"}]}
+            manager._inject_context(message)
+            count_after_first = client.long_term.search_calls
+            assert count_after_first > 0  # sanity: first injection did search
+            manager._inject_context(message)  # second call on already-injected message
+            assert client.long_term.search_calls == count_after_first  # no extra search
+        finally:
+            manager.close()
+
+
+class TestFormattersExtended:
+    """Fix 6: _format_entity prefers full_type when present."""
+
+    def test_full_type_preferred_over_type(self) -> None:
+        from neo4j_agent_memory.integrations.strands.session_manager import _format_entity
+
+        entity_sub = SimpleNamespace(
+            display_name="Acme",
+            type="ORGANIZATION",
+            full_type="ORGANIZATION:COMPANY",
+            description=None,
+        )
+        assert _format_entity(entity_sub) == "[entity] Acme (ORGANIZATION:COMPANY)"
+
+    def test_falls_back_to_type_when_no_full_type(self) -> None:
+        from neo4j_agent_memory.integrations.strands.session_manager import _format_entity
+
+        entity = SimpleNamespace(display_name="X", type="PERSON", description=None)
+        assert _format_entity(entity) == "[entity] X (PERSON)"
+
+
+class TestRestoreLimit:
+    """Fix 7: restore_limit forwarded to get_conversation; key resolved without loading history."""
+
+    def test_restore_limit_passed_to_get_conversation(self) -> None:
+        manager, client = _make_manager(restore_limit=2)
+        try:
+            agent = _fake_agent()
+            manager.initialize(agent)
+            kwargs = client.short_term.get_conversation_kwargs
+            assert len(kwargs) == 1
+            assert kwargs[0].get("limit") == 2
+        finally:
+            manager.close()
+
+    def test_lazy_flush_resolves_key_without_loading_history(self) -> None:
+        manager, client = _make_manager()
+        try:
+            agent = _fake_agent()
+            # No initialize() — append directly (lazy path).
+            manager.append_message({"role": "user", "content": [{"text": "x"}]}, agent)
+            manager._flush_buffer()
+            assert client.short_term.get_conversation_calls == 0
+            assert client.short_term.add_message_calls[0]["content"] == "x"
+        finally:
+            manager.close()
