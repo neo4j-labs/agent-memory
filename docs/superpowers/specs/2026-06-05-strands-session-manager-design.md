@@ -228,7 +228,8 @@ Mechanism (mirrors AgentCore):
 2. The callback fires only for **user-role messages containing text**.
 3. It uses the message text as the query; runs `search_entities` /
    `search_preferences` / `search_facts` concurrently on the background
-   loop (scoped by `user_identifier` when `user_id` is set).
+   loop (searches are workspace/database-scoped; `user_id` scopes writes, not
+   searches — the search APIs take no user filter).
 4. Results below `min_score` are dropped; survivors are formatted and
    **prepended to the message's first text block in-memory**:
 
@@ -266,7 +267,8 @@ is opt-in.
 ## Lifecycle
 
 `close()` = flush buffer → close the `MemoryClient` (only if constructed
-from `settings`) → stop the background loop thread. Sync context-manager
+from `settings`, or if the manager performed the connect on an injected
+client) → stop the background loop thread. Sync context-manager
 support (`with Neo4jSessionManager(...) as sm:`). The
 `AfterInvocationEvent` flush means even without `close()`, at most the
 final in-flight message is at risk.

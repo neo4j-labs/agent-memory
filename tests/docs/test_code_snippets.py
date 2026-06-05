@@ -238,6 +238,9 @@ class TestSnippetImports:
             # AWS/Strands integration classes (imported from submodules)
             "BedrockEmbedder",
             "context_graph_tools",
+            "nams_context_graph_tools",
+            "Neo4jSessionManager",
+            "Neo4jRetrievalConfig",
             "HybridMemoryProvider",
             "StrandsConfig",
             "MemoryType",

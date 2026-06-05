@@ -312,6 +312,223 @@ without that context. Don't expose internal errors to users.""",
 2. **Batch memory additions** rather than storing every message
 3. **Filter by category** in `get_user_preferences`
 
+== Session Manager (Push-Based Persistence)
+
+The tools described above are *pull-based*: the agent decides when to call
+`add_memory` or `search_context`. The `Neo4jSessionManager` is *push-based*:
+every turn is persisted automatically, conversation history is restored on
+agent restart, and (opt-in) relevant long-term memories are injected into each
+user message before the model sees it. Pass it to `Agent(session_manager=...)`.
+
+=== Quickstart (NAMS)
+
+[source,python]
+----
+from strands import Agent
+from neo4j_agent_memory.integrations.strands import (
+    Neo4jRetrievalConfig,
+    Neo4jSessionManager,
+    nams_context_graph_tools,
+)
+
+manager = Neo4jSessionManager.for_nams(   # MEMORY_API_KEY from env
+    "support-42",
+    retrieval_config=Neo4jRetrievalConfig(),  # opt-in context injection
+)
+
+agent = Agent(
+    model="anthropic.claude-sonnet-4-20250514-v1:0",
+    tools=nams_context_graph_tools(),
+    session_manager=manager,
+)
+
+agent("My name is Jane and I work at Acme Corp.")
+----
+
+`for_nams` reads `MEMORY_API_KEY` (and optionally `MEMORY_ENDPOINT`) from the
+environment, matching the same conventions as `nams_context_graph_tools()`.
+
+=== Quickstart (Self-Hosted Neo4j)
+
+[source,python]
+----
+from neo4j_agent_memory import MemorySettings
+from neo4j_agent_memory.integrations.strands import Neo4jSessionManager
+
+settings = MemorySettings(
+    neo4j={"uri": "bolt://localhost:7687", "password": "password"},
+)
+manager = Neo4jSessionManager("support-42", settings=settings)
+----
+
+Pass `settings=` and the manager owns the client lifecycle. Alternatively,
+pass an already-constructed (but not yet connected) `MemoryClient` via
+`memory_client=`; see the loop-binding note under <<_limitations>>.
+
+=== Retrieval Injection
+
+When a `Neo4jRetrievalConfig` is supplied, each user message triggers
+concurrent long-term searches (entities, preferences, and optionally facts).
+Matching results are prepended inside a `<user_context>` block:
+
+----
+<user_context>
+Relevant memory:
+- [entity] Acme Corp (ORGANIZATION) — customer since 2024, owner: Jane Doe
+- [preference] communication: prefers concise answers
+</user_context>
+{original user text}
+----
+
+The *stored* message is always the user's original — injection is in-memory
+only and idempotent per message. If nothing clears the `min_score` floor,
+nothing is injected (no empty tags). The cost is 1–3 backend round-trips per
+user turn (why it is opt-in).
+
+[source,python]
+----
+from neo4j_agent_memory.integrations.strands import Neo4jRetrievalConfig
+
+retrieval_config = Neo4jRetrievalConfig(
+    top_k=10,                   # max results per memory kind
+    min_score=0.2,              # similarity floor
+    include_entities=True,
+    include_preferences=True,
+    include_facts=False,        # set True to also search stored facts
+    context_tag="user_context", # XML wrapper tag (AgentCore-compatible default)
+)
+----
+
+=== Tools and Session Manager Together
+
+The tools and the session manager are complementary — the same posture AWS
+AgentCore uses. With a session manager attached:
+
+* `add_memory` is for *extra-conversational facts* (information not part of
+  the ongoing turn) — conversation capture is now automatic.
+* `search_context` remains the explicit deep-query escape hatch for when you
+  want the agent to retrieve memories on-demand rather than relying on
+  automatic injection.
+
+[IMPORTANT]
+====
+Do *not* share a `MemoryClient` between the tools and the session manager.
+The tools use their own cached clients with per-call open/close semantics;
+the session manager holds a persistent client on its own event-loop thread.
+Sharing one client would let a tool's teardown close the manager's transport
+mid-session. Two transports per process is correct and cheap.
+====
+
+=== The Shared-Brain Pattern
+
+Each agent gets its own `Neo4jSessionManager` (its own `session_id`), all
+pointing at the same graph. Conversations flow into one knowledge graph;
+entities extracted from one session are searchable by all others.
+
+[source,python]
+----
+from neo4j_agent_memory import MemorySettings
+from neo4j_agent_memory.integrations.strands import (
+    Neo4jRetrievalConfig,
+    Neo4jSessionManager,
+)
+
+settings = MemorySettings(
+    neo4j={"uri": "bolt://localhost:7687", "password": "password"},
+)
+
+# Agent A — ingests from KYC conversations
+manager_a = Neo4jSessionManager(
+    "kyc-session",
+    settings=settings,
+    extract_entities=True,
+)
+
+# Agent B — queries the shared graph with context injection
+manager_b = Neo4jSessionManager(
+    "credit-session",
+    settings=settings,
+    retrieval_config=Neo4jRetrievalConfig(),
+)
+----
+
+See `examples/strands-session-manager/` for a runnable three-phase demo that
+requires no LLM or API key.
+
+=== Constructor Reference
+
+[cols="1,1,3"]
+|===
+| Parameter | Default | Description
+
+| `session_id`
+| _(required)_
+| Strands session identifier (maps to one `Conversation` in the graph).
+
+| `memory_client`
+| `None`
+| Pre-constructed `MemoryClient`. Exactly one of `memory_client` / `settings` must be provided.
+
+| `settings`
+| `None`
+| `MemorySettings` from which a client is constructed and owned by the manager.
+
+| `user_id`
+| `None`
+| Scopes writes to a specific user/tenant (multi-tenant deployments).
+
+| `retrieval_config`
+| `None`
+| Enable long-term memory injection. `None` disables it (persistence-only mode).
+
+| `extract_entities`
+| `True`
+| Run entity extraction on stored messages (bolt only; NAMS extracts server-side regardless).
+
+| `record_tool_calls`
+| `False`
+| Mirror tool-use and tool-result blocks into reasoning memory for audit.
+
+| `request_timeout`
+| `30.0`
+| Seconds to wait for each sync→async backend call before raising.
+|===
+
+[[_limitations]]
+=== Limitations
+
+* **Memory-grade persistence.** Text turns are stored and restored; tool-use
+  blocks are not replayed on restart (set `record_tool_calls=True` to mirror
+  them into reasoning memory for audit instead).
+
+* **`agent.state` and conversation-manager window state do not survive
+  restarts.** No Strands-specific node types are written to the graph;
+  `sync_agent` only flushes the message buffer.
+
+* **Redaction.** Fully supported *within* an invocation — the write-behind
+  buffer lets guardrails rewrite the latest message before it ever reaches
+  the backend. After the buffer has been flushed, bolt updates the message
+  in place; NAMS logs a `WARNING` that server-side redaction is not possible
+  (no message-update endpoint on NAMS).
+
+* **Search scope.** Long-term searches are workspace/database-scoped.
+  `user_id` scopes *writes* (multi-tenant), not searches — the search APIs
+  take no user filter.
+
+* **One agent per session manager instance.** Pass multiple agents their
+  own managers (the shared-brain pattern). Strands Graph/Swarm
+  orchestration persistence is not supported in v1.
+
+* **Loop-bound transports.** Pass `settings=` (or an *unconnected*
+  `memory_client=`). A client already connected on another event loop
+  cannot be driven from the manager's background loop — the transport is
+  bound to the loop that performed the first `connect()`.
+
+* **Multiple conversations with the same session ID (NAMS).** If external
+  writers create more than one NAMS conversation with the same
+  `strands_session_id` metadata, the manager resolves to the first one
+  listed. Avoid duplicate session IDs in shared workspaces.
+
 == See Also
 
 * xref:tutorials/strands-agent-quickstart.adoc[Strands Agent Tutorial]

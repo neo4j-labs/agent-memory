@@ -50,8 +50,11 @@ From the repo root:
 
 ```bash
 make neo4j-start          # start local Neo4j (skippable if NEO4J_URI is set)
-uv run python examples/strands-session-manager/main.py
+NEO4J_PASSWORD=test-password uv run python examples/strands-session-manager/main.py
 ```
+
+The repo's Docker Neo4j container uses `test-password`. If your instance uses
+a different password, set `NEO4J_PASSWORD` accordingly.
 
 No LLM API key required — the demo drives the `SessionManager` API
 directly and uses a local `sentence-transformers` embedder.
@@ -71,6 +74,10 @@ Relevant memory:
 What do we know about Acme Corp?
 Restored 2 messages for 'kyc-session'.
 ```
+
+On subsequent runs, `Restored N messages` grows by 2 each run — intentional:
+the session is persistent, and each run appends two more turns to it. Wipe
+the database (`make neo4j-stop && make neo4j-start`) for a fresh start.
 
 ## With a real agent
 
