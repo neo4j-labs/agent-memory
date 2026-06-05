@@ -8,9 +8,11 @@ tool-use blocks and ``agent.state`` are not round-tripped.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import threading
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 try:
     from strands.hooks import (  # used by Neo4jSessionManager.register_hooks
@@ -53,3 +55,47 @@ class Neo4jRetrievalConfig:
     include_preferences: bool = True
     include_facts: bool = False
     context_tag: str = "user_context"
+
+
+class _AsyncBridge:
+    """Run coroutines from sync code on one persistent background loop.
+
+    The loop thread starts lazily on first use and is restarted if used
+    again after ``close()`` (cheap, and keeps the API forgiving).
+    """
+
+    def __init__(self, timeout: float = 30.0) -> None:
+        self._timeout = timeout
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
+        self._lock = threading.Lock()
+
+    def _ensure_loop(self) -> asyncio.AbstractEventLoop:
+        with self._lock:
+            if self._loop is None or self._thread is None or not self._thread.is_alive():
+                self._loop = asyncio.new_event_loop()
+                self._thread = threading.Thread(
+                    target=self._loop.run_forever,
+                    name="neo4j-strands-session-manager",
+                    daemon=True,
+                )
+                self._thread.start()
+            return self._loop
+
+    def run(self, coro: Any, timeout: float | None = None) -> Any:
+        """Submit ``coro`` to the background loop and block for the result."""
+        loop = self._ensure_loop()
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+        return future.result(timeout=timeout if timeout is not None else self._timeout)
+
+    def close(self) -> None:
+        """Stop and discard the loop thread. Safe to call repeatedly."""
+        with self._lock:
+            if self._loop is None:
+                return
+            self._loop.call_soon_threadsafe(self._loop.stop)
+            if self._thread is not None:
+                self._thread.join(timeout=5)
+            self._loop.close()
+            self._loop = None
+            self._thread = None
