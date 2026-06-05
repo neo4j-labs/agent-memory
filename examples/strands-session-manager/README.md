@@ -27,6 +27,8 @@ database — the "shared brain" pattern.
   user message (in-memory only; the stored message is always the original).
 - **The shared-brain pattern** — N agents, N session managers, one graph:
   entities extracted from agent A's session are searchable by agent B.
+  Phase 1.5 seeds long-term memory directly (what the extraction pipeline
+  would populate automatically in a production deployment).
 - **Write-behind buffer** — `append_message` queues the previous message;
   it is flushed on the next append or on `close()`, so guardrail redaction
   can rewrite the latest message before it ever reaches the backend.
@@ -54,12 +56,18 @@ uv run python examples/strands-session-manager/main.py
 No LLM API key required — the demo drives the `SessionManager` API
 directly and uses a local `sentence-transformers` embedder.
 
-Expected output (the `<user_context>` block appears only when entities were
-extracted and embedded; it is legitimately absent when extraction is disabled):
+Expected output (Phase 1.5 seeds long-term memory directly so the
+`<user_context>` injection block always fires):
 
 ```
 Agent A persisted 2 messages to session 'kyc-session'.
-Agent B's question, with injected shared-brain context (if any):
+Seeded long-term memory (entity + preference).
+Agent B's question, with injected shared-brain context:
+<user_context>
+Relevant memory:
+- [entity] Acme Corp (ORGANIZATION) — Company beneficially owned by Jane Doe
+- [preference] compliance: Always verify beneficial ownership before credit decisions
+</user_context>
 What do we know about Acme Corp?
 Restored 2 messages for 'kyc-session'.
 ```

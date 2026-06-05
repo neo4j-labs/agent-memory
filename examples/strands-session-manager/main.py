@@ -11,12 +11,13 @@ the manager to a real Agent:  Agent(model=..., session_manager=manager).
 
 from __future__ import annotations
 
+import asyncio
 import os
 from types import SimpleNamespace
 
 from pydantic import SecretStr
 
-from neo4j_agent_memory import MemorySettings, Neo4jConfig
+from neo4j_agent_memory import MemoryClient, MemorySettings, Neo4jConfig
 from neo4j_agent_memory.config.settings import ExtractionConfig, ExtractorType
 from neo4j_agent_memory.integrations.strands import (
     Neo4jRetrievalConfig,
@@ -67,6 +68,25 @@ def main() -> None:
         )
     print("Agent A persisted 2 messages to session 'kyc-session'.")
 
+    # Phase 1.5: Seed long-term memory. In production this happens
+    # automatically — NAMS extracts entities server-side, and the bolt
+    # backend runs the extraction pipeline when configured. This no-API-key
+    # demo disables extraction, so we seed what extraction would have found.
+    async def _seed_long_term() -> None:
+        async with MemoryClient(build_settings()) as client:
+            await client.long_term.add_entity(
+                "Acme Corp",
+                "ORGANIZATION",
+                description="Company beneficially owned by Jane Doe",
+            )
+            await client.long_term.add_preference(
+                "compliance",
+                "Always verify beneficial ownership before credit decisions",
+            )
+
+    asyncio.run(_seed_long_term())
+    print("Seeded long-term memory (entity + preference).")
+
     # Phase 2: Agent B (separate session!) gets agent A's knowledge injected.
     retrieval = Neo4jRetrievalConfig(top_k=5, min_score=0.1)
     with Neo4jSessionManager(
@@ -76,7 +96,7 @@ def main() -> None:
         question = {"role": "user", "content": [{"text": "What do we know about Acme Corp?"}]}
         manager_b.append_message(question, agent_b)
         manager_b._inject_context(question)  # what Agent(...) would do via hooks
-        print("Agent B's question, with injected shared-brain context (if any):")
+        print("Agent B's question, with injected shared-brain context:")
         print(question["content"][0]["text"])
 
     # Phase 3: Restore demo — a new manager instance restores agent A's history.
