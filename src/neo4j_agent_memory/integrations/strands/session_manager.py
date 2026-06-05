@@ -4,19 +4,27 @@ Maps a Strands session onto one ``Conversation`` — no Strands-specific
 node types are written to the graph. Persistence is memory-grade: text
 turns are stored (and feed entity extraction / the shared brain);
 tool-use blocks and ``agent.state`` are not round-tripped.
+
+Sibling modules own the non-session concerns: ``_messages`` (Strands ↔
+Memory message mapping), ``_retrieval`` (long-term search + context-block
+formatting), and ``integrations.base`` (the sync↔async bridge).
 """
 
 from __future__ import annotations
 
-import asyncio
 import copy
 import logging
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any
 
-# Re-export AsyncBridge under its historical private name so existing tests and
-# internal call-sites keep working without any changes.
-from neo4j_agent_memory.integrations.base import AsyncBridge as _AsyncBridge  # noqa: F401
+from neo4j_agent_memory.integrations.base import AsyncBridge as _AsyncBridge
+from neo4j_agent_memory.integrations.strands._messages import (
+    _message_text,
+    _to_strands_message,
+)
+from neo4j_agent_memory.integrations.strands._retrieval import (
+    Neo4jRetrievalConfig,
+    _retrieve_context,
+)
 
 try:
     from strands.hooks import (
@@ -42,61 +50,7 @@ logger = logging.getLogger(__name__)
 #: Conversation-metadata key linking a Conversation to a Strands session id.
 _SESSION_KEY = "strands_session_id"
 
-
-@dataclass
-class Neo4jRetrievalConfig:
-    """Opt-in per-turn long-term memory injection settings.
-
-    When passed to :class:`Neo4jSessionManager`, each user message
-    triggers concurrent long-term searches and the results are prepended
-    to the message in-memory inside a ``<context_tag>`` block. The stored
-    message is always the user's original.
-    """
-
-    top_k: int = 10
-    min_score: float = 0.2  # (bolt only; not enforced on NAMS)
-    include_entities: bool = True
-    include_preferences: bool = True
-    include_facts: bool = False
-    context_tag: str = "user_context"
-
-
-# ---------------------------------------------------------------------------
-# Strands ↔ NAMS message mapping helpers
-# ---------------------------------------------------------------------------
-
-
-def _message_text(message: StrandsMessage) -> str:
-    """Concatenate the text blocks of a Strands message (tool blocks ignored)."""
-    blocks = message.get("content") or []
-    texts = [b["text"] for b in blocks if isinstance(b, dict) and b.get("text")]
-    return "\n".join(texts)
-
-
-def _to_strands_message(stored: Any) -> StrandsMessage:
-    """Convert a stored neo4j-agent-memory Message to a Strands message dict."""
-    role = stored.role.value if hasattr(stored.role, "value") else str(stored.role)
-    if role not in ("user", "assistant"):
-        role = "assistant"
-    return {
-        "role": cast("Literal['user', 'assistant']", role),
-        "content": [{"text": stored.content}],
-    }
-
-
-def _format_entity(entity: Any) -> str:
-    desc = getattr(entity, "description", None)
-    suffix = f" — {desc}" if desc else ""
-    entity_type = getattr(entity, "full_type", None) or entity.type
-    return f"[entity] {entity.display_name} ({entity_type}){suffix}"
-
-
-def _format_preference(preference: Any) -> str:
-    return f"[preference] {preference.category}: {preference.preference}"
-
-
-def _format_fact(fact: Any) -> str:
-    return f"[fact] {fact.subject} {fact.predicate} {fact.object}"
+__all__ = ["Neo4jRetrievalConfig", "Neo4jSessionManager"]
 
 
 class Neo4jSessionManager(SessionManager):
@@ -285,7 +239,9 @@ class Neo4jSessionManager(SessionManager):
         if target is None or target["text"].startswith(f"<{cfg.context_tag}>\nRelevant memory:\n"):
             return  # no text block, or already injected (event re-fired)
         try:
-            block = self._bridge.run(self._aretrieve(query, cfg))
+            block = self._bridge.run(
+                _retrieve_context(self._client.long_term, query, cfg, nams=self._is_nams)
+            )
         except Exception as e:
             logger.warning(
                 "Memory retrieval failed for session %s; continuing without injected context: %s",
@@ -295,33 +251,6 @@ class Neo4jSessionManager(SessionManager):
             return
         if block:
             target["text"] = f"{block}\n{target['text']}"
-
-    async def _aretrieve(self, query: str, cfg: Neo4jRetrievalConfig) -> str:
-        long_term = self._client.long_term
-        # NAMS has no preference/fact search endpoints — skip rather than warn every turn.
-        nams = self._is_nams
-        wanted = [
-            (cfg.include_entities, long_term.search_entities, _format_entity),
-            (
-                cfg.include_preferences and not nams,
-                long_term.search_preferences,
-                _format_preference,
-            ),
-            (cfg.include_facts and not nams, long_term.search_facts, _format_fact),
-        ]
-        searches = [s(query, limit=cfg.top_k, threshold=cfg.min_score) for on, s, _ in wanted if on]
-        formatters = [f for on, _, f in wanted if on]
-        results = await asyncio.gather(*searches, return_exceptions=True)
-        lines: list[str] = []
-        for formatter, result in zip(formatters, results):
-            if isinstance(result, BaseException):
-                logger.warning("Long-term memory search failed: %s", result)
-                continue
-            lines.extend(formatter(item) for item in result)
-        if not lines:
-            return ""
-        body = "\n".join(f"- {line}" for line in lines)
-        return f"<{cfg.context_tag}>\nRelevant memory:\n{body}\n</{cfg.context_tag}>"
 
     def append_message(self, message: Any, agent: Any, **kwargs: Any) -> None:
         """Buffer the new message, persisting the previously buffered one.

@@ -51,11 +51,13 @@ Option chosen: **direct `SessionManager` implementation** (no
 ```
 src/neo4j_agent_memory/integrations/strands/
 ├── tools.py                 # existing — unchanged
-├── config.py                # existing — unchanged
-└── session_manager.py       # NEW: Neo4jSessionManager(SessionManager)
-                             #      + Neo4jRetrievalConfig
-                             # internal: _AsyncBridge (background event loop)
-                             #      + conversation-mapping helpers
+├── config.py                # existing + shared NAMS settings-from-env helpers
+├── session_manager.py       # NEW: Neo4jSessionManager(SessionManager) —
+│                            #      lifecycle, hooks, write-behind buffer
+├── _messages.py             # NEW: Strands ↔ Memory message mapping (pure)
+└── _retrieval.py            # NEW: Neo4jRetrievalConfig + long-term search
+                             #      + context-block formatting
+# AsyncBridge (background event loop) lives in integrations/base.py, shared.
 ```
 
 `Neo4jSessionManager` subclasses Strands' `SessionManager` ABC directly

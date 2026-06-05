@@ -135,7 +135,7 @@ class TestMappingHelpers:
     def test_formatters(self) -> None:
         from types import SimpleNamespace
 
-        from neo4j_agent_memory.integrations.strands.session_manager import (
+        from neo4j_agent_memory.integrations.strands._retrieval import (
             _format_entity,
             _format_fact,
             _format_preference,
@@ -825,7 +825,7 @@ class TestFormattersExtended:
     """Fix 6: _format_entity prefers full_type when present."""
 
     def test_full_type_preferred_over_type(self) -> None:
-        from neo4j_agent_memory.integrations.strands.session_manager import _format_entity
+        from neo4j_agent_memory.integrations.strands._retrieval import _format_entity
 
         entity_sub = SimpleNamespace(
             display_name="Acme",
@@ -836,7 +836,7 @@ class TestFormattersExtended:
         assert _format_entity(entity_sub) == "[entity] Acme (ORGANIZATION:COMPANY)"
 
     def test_falls_back_to_type_when_no_full_type(self) -> None:
-        from neo4j_agent_memory.integrations.strands.session_manager import _format_entity
+        from neo4j_agent_memory.integrations.strands._retrieval import _format_entity
 
         entity = SimpleNamespace(display_name="X", type="PERSON", description=None)
         assert _format_entity(entity) == "[entity] X (PERSON)"
