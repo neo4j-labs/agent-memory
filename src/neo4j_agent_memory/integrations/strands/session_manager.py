@@ -18,21 +18,6 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 # internal call-sites keep working without any changes.
 from neo4j_agent_memory.integrations.base import AsyncBridge as _AsyncBridge  # noqa: F401
 
-# ---------------------------------------------------------------------------
-# Backend capability model
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class _BackendCapabilities:
-    """What the active backend can do (NAMS lacks several bolt endpoints)."""
-
-    supports_preference_search: bool
-    supports_facts_search: bool
-    supports_message_delete: bool
-    needs_conversation_uuid_resolution: bool
-
-
 try:
     from strands.hooks import (
         AfterInvocationEvent,
@@ -163,29 +148,14 @@ class Neo4jSessionManager(SessionManager):
         self._pending: StrandsMessage | None = None  # write-behind buffer
         self._last_persisted: Any = None  # last stored Message (late redaction)
         self._trace_id: Any = None  # lazy reasoning trace (record_tool_calls)
-        self._caps_cache: _BackendCapabilities | None = None
         self._closed = False
 
-    # --------------------------------------------------------- capabilities
-
     @property
-    def _caps(self) -> _BackendCapabilities:
-        """Capability flags for the active backend, derived once.
-
-        Centralizes backend knowledge so call sites read intent
-        (``supports_preference_search``) rather than backend identity.
-        When the backends grow a real capability probe, only this
-        property needs to change.
-        """
-        if self._caps_cache is None:
-            nams = self._client.is_nams
-            self._caps_cache = _BackendCapabilities(
-                supports_preference_search=not nams,
-                supports_facts_search=not nams,
-                supports_message_delete=not nams,
-                needs_conversation_uuid_resolution=nams,
-            )
-        return self._caps_cache
+    def _is_nams(self) -> bool:
+        """Single home for the backend dichotomy: NAMS lacks preference/fact
+        search and message delete, and keys conversations by server-issued
+        UUID. Replace with a client-level capability probe when one exists."""
+        return bool(self._client.is_nams)
 
     # --------------------------------------------------------- factory methods
 
@@ -225,7 +195,7 @@ class Neo4jSessionManager(SessionManager):
         keys conversations by session_id directly (auto-created on first
         message).
         """
-        if not self._caps.needs_conversation_uuid_resolution:
+        if not self._is_nams:
             return self.session_id
         # Narrow server-side where possible; explicit limit extends coverage
         # beyond the server's default page (full pagination isn't exposed by
@@ -258,16 +228,8 @@ class Neo4jSessionManager(SessionManager):
         return [_to_strands_message(m) for m in conversation.messages]
 
     def _ensure_session(self) -> str:
-        """Resolve the conversation key on demand (lazy; does NOT load history).
-
-        Used by flush and redact paths that only need the key to write a
-        message. Callers that need conversation history must go through
-        ``initialize()`` / ``_ainitialize()``.
-        """
-        if self._conversation_key is None:
-            self._bridge.run(self._aresolve_key())
-        assert self._conversation_key is not None
-        return self._conversation_key
+        """Resolve the conversation key on demand (lazy; does NOT load history)."""
+        return self._conversation_key or self._bridge.run(self._aresolve_key())
 
     # ----------------------------------------------------- SessionManager API
 
@@ -316,12 +278,12 @@ class Neo4jSessionManager(SessionManager):
         query = _message_text(message)
         if not query:
             return
-        tag_prefix = f"<{cfg.context_tag}>\nRelevant memory:\n"
-        for content_block in message.get("content") or []:
-            if isinstance(content_block, dict) and "text" in content_block:
-                if content_block["text"].startswith(tag_prefix):
-                    return  # already injected (event re-fired for this message)
-                break
+        target = next(
+            (b for b in message.get("content") or [] if isinstance(b, dict) and "text" in b),
+            None,
+        )
+        if target is None or target["text"].startswith(f"<{cfg.context_tag}>\nRelevant memory:\n"):
+            return  # no text block, or already injected (event re-fired)
         try:
             block = self._bridge.run(self._aretrieve(query, cfg))
         except Exception as e:
@@ -331,32 +293,24 @@ class Neo4jSessionManager(SessionManager):
                 e,
             )
             return
-        if not block:
-            return
-        for content_block in message.get("content") or []:
-            if isinstance(content_block, dict) and "text" in content_block:
-                content_block["text"] = f"{block}\n{content_block['text']}"
-                return
+        if block:
+            target["text"] = f"{block}\n{target['text']}"
 
     async def _aretrieve(self, query: str, cfg: Neo4jRetrievalConfig) -> str:
         long_term = self._client.long_term
-        searches: list[Any] = []
-        formatters: list[Any] = []
-        if cfg.include_entities:
-            searches.append(
-                long_term.search_entities(query, limit=cfg.top_k, threshold=cfg.min_score)
-            )
-            formatters.append(_format_entity)
-        # Bolt-only searches: NAMS has no preference/fact search endpoints
-        # (NotSupportedError) — skip via capability flag to avoid warning every turn.
-        if cfg.include_preferences and self._caps.supports_preference_search:
-            searches.append(
-                long_term.search_preferences(query, limit=cfg.top_k, threshold=cfg.min_score)
-            )
-            formatters.append(_format_preference)
-        if cfg.include_facts and self._caps.supports_facts_search:
-            searches.append(long_term.search_facts(query, limit=cfg.top_k, threshold=cfg.min_score))
-            formatters.append(_format_fact)
+        # NAMS has no preference/fact search endpoints — skip rather than warn every turn.
+        nams = self._is_nams
+        wanted = [
+            (cfg.include_entities, long_term.search_entities, _format_entity),
+            (
+                cfg.include_preferences and not nams,
+                long_term.search_preferences,
+                _format_preference,
+            ),
+            (cfg.include_facts and not nams, long_term.search_facts, _format_fact),
+        ]
+        searches = [s(query, limit=cfg.top_k, threshold=cfg.min_score) for on, s, _ in wanted if on]
+        formatters = [f for on, _, f in wanted if on]
         results = await asyncio.gather(*searches, return_exceptions=True)
         lines: list[str] = []
         for formatter, result in zip(formatters, results):
@@ -403,7 +357,7 @@ class Neo4jSessionManager(SessionManager):
                 self.session_id,
             )
             return
-        if not self._caps.supports_message_delete:
+        if self._is_nams:
             logger.warning(
                 "Cannot redact already-persisted message %s on NAMS (no "
                 "message update/delete endpoint). The redacted content was "
@@ -414,16 +368,7 @@ class Neo4jSessionManager(SessionManager):
         text = _message_text(redact_message) or "[REDACTED]"
         try:
             self._bridge.run(self._client.short_term.delete_message(self._last_persisted.id))
-            self._last_persisted = self._bridge.run(
-                self._client.short_term.add_message(
-                    self._ensure_session(),
-                    redact_message.get("role", "user"),
-                    text,
-                    extract_entities=False,
-                    user_identifier=self._user_id,
-                    metadata={_SESSION_KEY: self.session_id},
-                )
-            )
+            self._store_message(redact_message.get("role", "user"), text, extract=False)
         except Exception as e:
             self._last_persisted = None  # id may already be deleted; don't reuse it
             raise SessionException(
@@ -447,21 +392,24 @@ class Neo4jSessionManager(SessionManager):
         if not text:
             return  # pure tool-use/result message: not memory, not stored
         try:
-            key = self._ensure_session()
-            self._last_persisted = self._bridge.run(
-                self._client.short_term.add_message(
-                    key,
-                    message["role"],
-                    text,
-                    extract_entities=self._extract_entities,
-                    user_identifier=self._user_id,
-                    metadata={_SESSION_KEY: self.session_id},
-                )
-            )
+            self._store_message(message["role"], text, extract=self._extract_entities)
         except Exception as e:
             raise SessionException(
                 f"Failed to persist message for session {self.session_id!r}"
             ) from e
+
+    def _store_message(self, role: str, text: str, *, extract: bool) -> None:
+        """Resolve the session key and persist one message (tracked for late redaction)."""
+        self._last_persisted = self._bridge.run(
+            self._client.short_term.add_message(
+                self._ensure_session(),
+                role,
+                text,
+                extract_entities=extract,
+                user_identifier=self._user_id,
+                metadata={_SESSION_KEY: self.session_id},
+            )
+        )
 
     def _record_tool_uses(self, message: StrandsMessage) -> None:
         """Mirror toolUse blocks into reasoning memory (enrichment; never raises)."""
