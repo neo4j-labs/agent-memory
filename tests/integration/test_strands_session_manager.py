@@ -49,9 +49,7 @@ def strands_memory_settings(neo4j_connection_info):
 
 @pytest.mark.integration
 class TestSessionManagerRoundTrip:
-    def test_persist_and_restore_across_manager_instances(
-        self, strands_memory_settings
-    ) -> None:
+    def test_persist_and_restore_across_manager_instances(self, strands_memory_settings) -> None:
         from types import SimpleNamespace
 
         from neo4j_agent_memory.integrations.strands import Neo4jSessionManager
@@ -79,9 +77,7 @@ class TestSessionManagerRoundTrip:
                 {"role": "assistant", "content": [{"text": "Noted!"}]},
             ]
 
-    def test_redaction_before_flush_never_stores_original(
-        self, strands_memory_settings
-    ) -> None:
+    def test_redaction_before_flush_never_stores_original(self, strands_memory_settings) -> None:
         from types import SimpleNamespace
 
         from neo4j_agent_memory.integrations.strands import Neo4jSessionManager
