@@ -39,6 +39,12 @@ def _get_entity_labels_for_schema(schema_config: SchemaConfig) -> list[str]:
         # Use custom entity types as labels (lowercase for GLiNER)
         return [t.lower() for t in schema_config.entity_types]
 
+    # Fall back to a rich entity_schema's type names when only it is set, so
+    # pipeline mode's GLiNER stage stays coherent with the configured types.
+    rich = getattr(schema_config, "entity_schema", None)
+    if rich is not None and getattr(rich, "entity_types", None):
+        return [t.name.lower() for t in rich.entity_types]
+
     # Default POLE+O labels
     return [
         "person",
@@ -144,10 +150,78 @@ def create_gliner_extractor(
     )
 
 
+def resolve_llm_type_source(
+    extraction_config: ExtractionConfig,
+    schema_config: SchemaConfig | None = None,
+) -> tuple[Any, Any, bool]:
+    """Resolve the entity/relation type source for the LLM extractor.
+
+    Applies the precedence chain (highest first):
+
+    1. ``ExtractionConfig.entity_type_specs`` (rich, extraction-layer override)
+    2. ``SchemaConfig.entity_schema`` (rich, programmatic)
+    3. ``SchemaConfig.custom_schema_path`` (rich, loaded from file — **fail-fast**
+       on a missing/invalid path; a set path implies custom types)
+    4. ``SchemaConfig.entity_types`` (names)
+    5. ``ExtractionConfig.entity_types`` (names)
+
+    Returns ``(entity_types, relation_types, strict_types)`` where
+    ``entity_types`` is a name list or a ``list[EntityTypeConfig]``,
+    ``relation_types`` is a ``list[RelationTypeConfig] | None`` (from a rich
+    schema only), and ``strict_types`` comes from the rich schema if present
+    else ``SchemaConfig.strict_types``.
+    """
+    specs = getattr(extraction_config, "entity_type_specs", None)
+
+    rich = None
+    if schema_config is not None:
+        rich = getattr(schema_config, "entity_schema", None)
+        schema_path = getattr(schema_config, "custom_schema_path", None)
+        if rich is None and schema_path:
+            # Eager, fail-fast load. Raises FileNotFoundError/ValueError on a
+            # bad path rather than silently falling back to POLE+O.
+            from neo4j_agent_memory.schema.models import load_schema_from_file
+
+            rich = load_schema_from_file(schema_path)
+
+    # strict_types: a rich schema's flag wins, else the flat schema_config flag.
+    strict_types = False
+    if rich is not None:
+        strict_types = bool(getattr(rich, "strict_types", False))
+    elif schema_config is not None:
+        strict_types = bool(getattr(schema_config, "strict_types", False))
+
+    relation_types = getattr(rich, "relation_types", None) if rich is not None else None
+
+    if specs:
+        entity_types: Any = specs
+        # R5: surface a names-vs-specs desync; specs win.
+        config_names = getattr(schema_config, "entity_types", None) if schema_config else None
+        if config_names:
+            spec_names = {getattr(s, "name", str(s)).upper() for s in specs}
+            extra = {n.upper() for n in config_names} - spec_names
+            if extra:
+                logger.warning(
+                    "schema_config.entity_types %s are absent from "
+                    "extraction.entity_type_specs; specs take precedence.",
+                    sorted(extra),
+                )
+    elif rich is not None:
+        entity_types = rich.entity_types
+    elif schema_config is not None and schema_config.entity_types:
+        entity_types = schema_config.entity_types
+    else:
+        entity_types = extraction_config.entity_types
+
+    return entity_types, relation_types, strict_types
+
+
 def create_llm_extractor(
     extraction_config: ExtractionConfig,
     schema_config: SchemaConfig | None = None,
     llm_config: Any = None,
+    *,
+    resolved_source: tuple[Any, Any, bool] | None = None,
 ) -> "EntityExtractor":
     """Create an LLM entity extractor.
 
@@ -161,6 +235,11 @@ def create_llm_extractor(
             * a fully-constructed :class:`LLMProvider` instance,
             * ``None`` — falls back to the legacy ``extraction_config.llm_model``
               and lets :class:`LLMEntityExtractor` build its own default.
+        resolved_source: Pre-resolved ``(entity_types, relation_types,
+            strict_types)`` tuple from :func:`resolve_llm_type_source`. When
+            ``None`` (direct call) it is resolved here; the pipeline pre-resolves
+            it outside its per-stage error handling so a bad ``custom_schema_path``
+            fails fast instead of being swallowed.
 
     Returns:
         LLMEntityExtractor instance
@@ -168,14 +247,19 @@ def create_llm_extractor(
     from neo4j_agent_memory.config.settings import LLMConfig
     from neo4j_agent_memory.extraction.llm_extractor import LLMEntityExtractor
 
-    entity_types = extraction_config.entity_types
-    if schema_config and schema_config.entity_types:
-        entity_types = schema_config.entity_types
+    if resolved_source is None:
+        resolved_source = resolve_llm_type_source(extraction_config, schema_config)
+    entity_types, relation_types, strict_types = resolved_source
 
     common_kwargs: dict[str, Any] = {
         "entity_types": entity_types,
+        "relation_types": relation_types,
+        "strict_types": strict_types,
         "extract_relations": extraction_config.extract_relations,
         "extract_preferences": extraction_config.extract_preferences,
+        "max_type_description_chars": extraction_config.max_type_description_chars,
+        "max_type_examples": extraction_config.max_type_examples,
+        "max_typed_block_chars": extraction_config.max_typed_block_chars,
     }
 
     # Provider instance: pass through directly.
@@ -257,8 +341,14 @@ def create_extraction_pipeline(
 
     # Stage 3: LLM fallback for complex cases and relations
     if extraction_config.enable_llm_fallback:
+        # Pre-resolve the type source OUTSIDE the per-stage try/except so a bad
+        # custom_schema_path (or other config error) fails fast rather than
+        # being swallowed and silently degrading to POLE+O defaults.
+        llm_source = resolve_llm_type_source(extraction_config, schema_config)
         try:
-            llm_extractor = create_llm_extractor(extraction_config, schema_config, llm_config)
+            llm_extractor = create_llm_extractor(
+                extraction_config, schema_config, llm_config, resolved_source=llm_source
+            )
             stages.append(llm_extractor)
             logger.info("Added LLM extractor to pipeline")
         except Exception as e:
@@ -384,6 +474,11 @@ class ExtractorBuilder:
             "EVENT",
             "OBJECT",
         ]
+        # Rich type/relation configs (set via with_schema) so the LLM stage can
+        # render descriptions/examples; None when only names are configured.
+        self._entity_type_configs: Any = None
+        self._relation_type_configs: Any = None
+        self._strict_types: bool = False
         self._extract_relations = True
         self._extract_preferences = True
         self._confidence_threshold: float | None = None
@@ -491,6 +586,11 @@ class ExtractorBuilder:
         if type_names:
             self._entity_types = type_names
             self._gliner_entity_labels = [t.lower() for t in type_names]
+        # Retain the rich configs so the LLM stage renders descriptions and
+        # examples (and honours strict_types / relation types).
+        self._entity_type_configs = list(schema_config.entity_types)
+        self._relation_type_configs = list(getattr(schema_config, "relation_types", []) or [])
+        self._strict_types = bool(getattr(schema_config, "strict_types", False))
         return self
 
     def merge_by_union(self) -> "ExtractorBuilder":
@@ -562,10 +662,17 @@ class ExtractorBuilder:
         if self._enable_llm:
             from neo4j_agent_memory.extraction.llm_extractor import LLMEntityExtractor
 
+            # Prefer the rich type configs (with descriptions/examples) when a
+            # schema was supplied via with_schema(); else fall back to names.
+            llm_entity_types = (
+                self._entity_type_configs if self._entity_type_configs else self._entity_types
+            )
             stages.append(
                 LLMEntityExtractor(
                     model=self._llm_model,
-                    entity_types=self._entity_types,
+                    entity_types=llm_entity_types,
+                    relation_types=self._relation_type_configs,
+                    strict_types=self._strict_types,
                     extract_relations=self._extract_relations,
                     extract_preferences=self._extract_preferences,
                 )

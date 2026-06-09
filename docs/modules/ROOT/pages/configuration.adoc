@@ -236,8 +236,19 @@ extraction_config = ExtractionConfig(
     # LLM settings
     llm_model="gpt-4o-mini",
 
-    # Entity types
+    # Entity types (names only)
     entity_types=["PERSON", "ORGANIZATION", "LOCATION", "EVENT", "OBJECT"],
+
+    # Rich entity-type definitions (name + description + examples). When set,
+    # these supersede `entity_types` for the LLM extractor so the descriptions
+    # reach the extraction prompt. Pass a list[EntityTypeConfig].
+    entity_type_specs=None,
+
+    # Typed-block rendering caps (LLM extractor) — bound the prompt-token cost
+    # of rendering many described types.
+    max_type_description_chars=500,   # per-type description truncation
+    max_type_examples=5,              # examples rendered per type
+    max_typed_block_chars=4000,       # global typed-block cap (0 = uncapped)
 
     # Extraction options
     extract_relations=True,
@@ -349,12 +360,34 @@ from neo4j_agent_memory import SchemaConfig, SchemaModel
 
 schema_config = SchemaConfig(
     model=SchemaModel.POLEO,              # Schema model
-    entity_types=None,                     # Custom types (for CUSTOM model)
+    entity_types=None,                     # Custom type names (for CUSTOM model)
+    entity_schema=None,                    # Rich EntitySchemaConfig (descriptions,
+                                           #   examples, subtypes, relation types)
     enable_subtypes=True,                  # Track entity subtypes
-    strict_types=False,                    # Reject unknown types
-    custom_schema_path=None,               # Path to schema file
+    strict_types=False,                    # Reject unknown types (constrains the
+                                           #   structured output on the LLM path)
+    custom_schema_path=None,               # Path to schema file (.json/.yaml);
+                                           #   loaded eagerly, fails fast on a bad path
 )
 ----
+
+[IMPORTANT]
+====
+When you supply a rich schema, the LLM extractor renders each type's
+`description` and `examples` into the extraction prompt — this is what makes
+custom domain types (e.g. `DECISION`, `TASK`, `OUTCOME`) extract reliably.
+The type source for the LLM extractor is resolved by precedence (highest first):
+
+. `ExtractionConfig.entity_type_specs` (rich, extraction-layer override)
+. `SchemaConfig.entity_schema` (rich, programmatic)
+. `SchemaConfig.custom_schema_path` (rich, loaded from file)
+. `SchemaConfig.entity_types` (names)
+. `ExtractionConfig.entity_types` (names)
+
+A set `custom_schema_path` implies custom types regardless of `model`, and a
+missing or invalid path raises rather than silently falling back to POLE+O. See
+xref:how-to/entity-extraction-schemas.adoc[Domain Schemas] for worked examples.
+====
 
 === Environment Variables
 

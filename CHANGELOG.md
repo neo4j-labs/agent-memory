@@ -28,6 +28,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`long_term.expand_graph(node_id, loaded_ids=...)`** — 1-hop entity-neighborhood
   expansion (`POST /v1/graph/expand`) for graph visualization; mirrored in the
   TypeScript SDK as `longTerm.expandGraph(nodeId, loadedIds)`.
+- **Ontology-aware LLM extraction — entity-type descriptions and examples now reach
+  the prompt.** Custom (domain-specific) entity types defined with rich
+  `EntityTypeConfig` descriptions now extract reliably on the LLM path, bringing it to
+  parity with the GLiNER path. New surface:
+  - `EntityTypeConfig.examples: list[str]` — few-shot surface examples that anchor a
+    type during extraction (rendered alongside the description).
+  - `ExtractionConfig.entity_type_specs` — rich `list[EntityTypeConfig]` that supersedes
+    `entity_types` (names) for LLM-extractor construction so descriptions reach the
+    prompt; `entity_types` is retained for non-LLM stages and back-compat.
+  - `SchemaConfig.entity_schema` — attach a full `EntitySchemaConfig` programmatically;
+    its type descriptions, examples, subtypes and relationship types drive extraction.
+  - `SchemaConfig.custom_schema_path` is now honored (previously orphaned): it is loaded
+    eagerly into a rich schema at extractor construction and **fails fast** on a
+    missing/invalid file rather than silently falling back to POLE+O.
+  - Precedence (highest first): `entity_type_specs` → `entity_schema` → `custom_schema_path`
+    → `schema_config.entity_types` (names) → `extraction_config.entity_types` (names).
+  - `ExtractionConfig.max_type_description_chars` / `max_type_examples` /
+    `max_typed_block_chars` — configurable caps bounding the typed-block prompt-token cost.
+  - Relationship-type descriptions (with `Source → Target` hints) now render in the
+    prompt when a schema supplies them.
+  - When `strict_types` is set, the structured-output schema is constrained to the
+    configured entity (and relationship) types, rejecting invented types.
+  - `ExtractionResult.type_coverage: dict[str, int]` — additive per-type
+    requested-vs-extracted counts (zeros included); also emitted to logs and tracer spans.
+  - `LLMEntityExtractor(...)` / `LLMEntityExtractor.for_custom_types(...)` now accept a
+    `list[EntityTypeConfig]` (not just names), plus `relation_types=` and `strict_types=`.
+  Fully backward compatible: name-only configurations and the default POLE+O behaviour
+  are unchanged. See NAMS-PRD-002 for the related hosted-service ontology runtime gap.
 
 ### Changed
 
@@ -43,6 +71,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `reference/rest-api.adoc`, `reference/ontology-api.adoc`, and
 > `reference/authentication.adoc`, and the Python↔TS parity note in
 > `reference/typescript-api.adoc`, to reflect the new SDK surface.
+
+### Fixed
+
+- **`LLMEntityExtractor` ignored `EntityTypeConfig.description`.** Custom-schema type
+  descriptions were dropped before the extraction prompt was built, so the LLM received
+  only a bare list of type names — domain types such as `DECISION`, `TASK`, and `OUTCOME`
+  were rarely extracted. Descriptions (and examples) are now threaded end-to-end into the
+  prompt on both the structured and plain-completion paths.
+- **Same-name over-classification within a single extraction call.** A single surface form
+  (e.g. `Hume`) could be emitted as several nodes under different types. The LLM extractor
+  now collapses entities sharing a normalized name within one call, keeping the
+  highest-confidence classification. (Cross-call/cross-document resolution remains the job
+  of the deduplication/resolution stage.)
+- **`_map_to_allowed_type` mislabeled off-list types under a custom schema.** A type not in
+  the configured set was coerced to a POLE+O default (or `allowed_types[0]`) even when that
+  default wasn't part of the schema — e.g. an extracted date could become the first custom
+  type. Mapping is now schema-aware: a configured type is never coerced, and under a custom
+  schema an unmappable type is kept (flag-not-drop) instead of being collapsed.
 
 ## [0.5.0] - 2026-05-30
 

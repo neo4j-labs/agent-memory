@@ -228,7 +228,11 @@ When using multiple extractors, you need to combine their results. Available str
 
 [IMPORTANT]
 ====
-**Yes, domain schemas are specific to GLiNER.** They leverage GLiNER's ability to accept entity type descriptions at inference time, which helps the model understand what to extract.
+**No — as of v0.6 the LLM extractor honors type descriptions and examples too.**
+Both GLiNER and the LLM path use the full schema (descriptions + examples) to
+understand what to extract. Before v0.6 the LLM path saw only type names, so
+abstract domain types were often dropped; see
+xref:how-to/entity-extraction-schemas.adoc#_custom_types_on_the_llm_extraction_path[Custom Types on the LLM Extraction Path].
 ====
 
 [cols="1,3"]
@@ -239,10 +243,10 @@ When using multiple extractors, you need to combine their results. Available str
 |Uses a fixed set of trained entity types (PERSON, ORG, GPE, etc.) -- cannot use domain schemas
 
 |**LLM**
-|Uses a prompt-based approach with entity type names but not the detailed descriptions from schemas
+|Renders the full schema -- type descriptions and examples -- into the extraction prompt (v0.6+). Optionally constrains the structured output to the configured types with `strict_types`.
 
 |**GLiNER**
-|The only extractor that uses the full schema with descriptions
+|Uses the full schema with descriptions at inference time
 |===
 
 [[labels-vs-schemas]]
@@ -282,6 +286,11 @@ extractor = (
     .build()
 )
 ----
+
+To also feed the LLM stage the full schema (descriptions + examples), pass an
+`EntitySchemaConfig` via `.with_schema(...)` instead of relying on names — the
+builder threads its descriptions, examples, relation types, and `strict_types`
+into the LLM extractor (v0.6+).
 
 [[which-schema]]
 === Which schema should I use?

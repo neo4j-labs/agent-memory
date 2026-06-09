@@ -330,6 +330,14 @@ class ExtractionResult(BaseModel):
     relations: list[ExtractedRelation] = Field(default_factory=list)
     preferences: list[ExtractedPreference] = Field(default_factory=list)
     source_text: str | None = Field(default=None, description="Original source text")
+    type_coverage: dict[str, int] = Field(
+        default_factory=dict,
+        description=(
+            "Per-type extracted-entity counts keyed by requested type name, including "
+            "requested types that produced zero entities. Empty unless the extractor "
+            "populates it (currently the LLM extractor). Additive/observational only."
+        ),
+    )
 
     @property
     def entity_count(self) -> int:
@@ -392,6 +400,7 @@ class ExtractionResult(BaseModel):
             relations=valid_relations,
             preferences=self.preferences,  # Preferences don't need filtering
             source_text=self.source_text,
+            type_coverage=self.type_coverage,
         )
 
 

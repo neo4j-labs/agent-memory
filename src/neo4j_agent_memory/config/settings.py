@@ -10,6 +10,13 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 from pydantic_settings.sources import DotEnvSettingsSource
 
+# NOTE: schema.models (EntitySchemaConfig / EntityTypeConfig) is intentionally
+# NOT imported here. Doing so creates an import cycle
+# (config -> schema -> schema.persistence -> graph -> config). The rich-schema
+# fields below are therefore typed ``Any`` at runtime and carry
+# EntitySchemaConfig / list[EntityTypeConfig] objects verbatim; the extraction
+# factory duck-types them.
+
 # Strict config shared by every child config model. Misspelled fields raise
 # at construction time instead of being silently dropped.
 _STRICT_CONFIG = ConfigDict(extra="forbid")
@@ -165,10 +172,26 @@ class SchemaConfig(BaseModel):
     entity_types: list[str] | None = Field(
         default=None, description="Custom entity types (overrides model default when model=custom)"
     )
+    entity_schema: Any = Field(
+        default=None,
+        description=(
+            "Rich entity schema (an EntitySchemaConfig with per-type descriptions, "
+            "examples, subtypes, and relation types). When set, its type descriptions "
+            "reach the LLM extraction prompt. Takes precedence over 'entity_types' "
+            "(names) and over 'custom_schema_path'. Typed Any at runtime to avoid an "
+            "import cycle; pass an EntitySchemaConfig instance."
+        ),
+    )
     enable_subtypes: bool = Field(default=True, description="Whether to track entity subtypes")
     strict_types: bool = Field(default=False, description="Whether to reject unknown entity types")
     custom_schema_path: str | None = Field(
-        default=None, description="Path to custom schema definition file (.json or .yaml)"
+        default=None,
+        description=(
+            "Path to a custom schema definition file (.json or .yaml). When set, it is "
+            "loaded eagerly into a rich EntitySchemaConfig at extractor construction; a "
+            "missing/invalid file raises. A set path implies custom types regardless of "
+            "'model'. 'entity_schema' (if also set) wins over the loaded file."
+        ),
     )
 
 
@@ -236,6 +259,32 @@ class ExtractionConfig(BaseModel):
             "OBJECT",
         ],
         description="Entity types to extract (POLE+O by default)",
+    )
+    entity_type_specs: Any = Field(
+        default=None,
+        description=(
+            "Rich entity-type definitions (a list[EntityTypeConfig] of name + "
+            "description + examples). When set, supersedes 'entity_types' and any "
+            "schema source for LLM-extractor construction so type descriptions reach "
+            "the extraction prompt. 'entity_types' (names) is retained for non-LLM "
+            "stages and back-compat. Typed Any at runtime to avoid an import cycle."
+        ),
+    )
+    # Typed-block rendering caps (LLM extractor). Bound the prompt-token cost of
+    # rendering many described types; see the typed-block renderer for the
+    # deterministic degrade order when the global cap is exceeded.
+    max_type_description_chars: int = Field(
+        default=500,
+        ge=0,
+        description="Per-type description truncation length (chars) in the typed block",
+    )
+    max_type_examples: int = Field(
+        default=5, ge=0, description="Maximum examples rendered per type in the typed block"
+    )
+    max_typed_block_chars: int = Field(
+        default=4000,
+        ge=0,
+        description="Global cap (chars) for the rendered typed-entity block (0 = uncapped)",
     )
     extract_relations: bool = Field(default=True, description="Whether to extract relations")
     extract_preferences: bool = Field(default=True, description="Whether to extract preferences")

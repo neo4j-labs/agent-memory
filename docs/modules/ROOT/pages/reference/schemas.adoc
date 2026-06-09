@@ -285,6 +285,45 @@ real_estate_schema = DomainSchema(
 extractor = GLiNEREntityExtractor(schema=real_estate_schema, threshold=0.5)
 ----
 
+=== EntityTypeConfig fields
+
+`EntitySchemaConfig.entity_types` is a list of `EntityTypeConfig`. These fields
+drive extraction on both the GLiNER and (as of v0.6) the LLM path:
+
+[cols="1,2,3", options="header"]
+|===
+|Field |Type |Description
+
+|`name`
+|`str`
+|Entity type name, e.g. `DECISION`. Stored uppercase in the `type` property
+(for example, `DECISION`) and also applied as a PascalCase Neo4j label
+(for example, `:Decision`).
+
+|`description`
+|`str \| None`
+|What the type means. Rendered into the LLM extraction prompt; the model's
+extraction contract for this type. Write it like a prompt, not a label.
+
+|`examples`
+|`list[str]`
+|Few-shot surface examples that anchor the type (e.g. `["Adopt local tool"]`).
+Rendered alongside the description; capped by
+`ExtractionConfig.max_type_examples`. _(Added in v0.6.)_
+
+|`subtypes`
+|`list[str]`
+|Valid subtypes for finer classification (e.g. `VEHICLE` under `OBJECT`).
+
+|`attributes`
+|`list[str]`
+|Common node properties for this type. Not part of the extraction prompt.
+
+|`color`
+|`str \| None`
+|Hex color for visualization.
+|===
+
 === Schema Best Practices
 
 1. **Use descriptive names**: `"A real estate property"` is better than `"property"`

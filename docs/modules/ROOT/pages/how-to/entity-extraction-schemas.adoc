@@ -241,6 +241,150 @@ loaded = await manager.load_schema("insurance")
 extractor = GLiNEREntityExtractor.for_schema(loaded.config)
 ----
 
+== Custom Types on the LLM Extraction Path
+
+The examples above wire a schema directly into a GLiNER extractor. To drive the
+**LLM** extractor — including the multi-stage pipeline used by `MemoryClient` —
+attach the rich schema to your settings. As of v0.6 the type `description` and
+`examples` are threaded into the extraction prompt, so domain types extract
+reliably instead of being silently dropped.
+
+[NOTE]
+====
+Before v0.6, custom-type descriptions were accepted and stored but dropped
+before the LLM prompt was built — the extractor saw only a list of names, so
+abstract types such as `DECISION`, `TASK`, and `OUTCOME` were rarely extracted.
+The change is fully backward compatible: name-only configurations and the
+default POLE+O behaviour are unchanged.
+====
+
+=== Attach a schema to MemoryClient
+
+[source,python]
+----
+from neo4j_agent_memory import MemoryClient, MemorySettings
+from neo4j_agent_memory.config.settings import SchemaConfig, SchemaModel
+from neo4j_agent_memory.schema import EntitySchemaConfig, EntityTypeConfig
+
+meeting_schema = EntitySchemaConfig(
+    name="meeting",
+    entity_types=[
+        EntityTypeConfig(
+            name="DECISION",
+            description=(
+                "A concrete agreement, resolution, or choice made during a "
+                "meeting. Signalled by 'Decisions:' sections or verbs such as "
+                "decided, agreed, approved, ratified, resolved."
+            ),
+            examples=["Adopt local transcription tool", "Ship file-drop by Q3"],
+        ),
+        EntityTypeConfig(
+            name="TASK",
+            description="An action item, follow-up, or to-do assigned to a person or team.",
+        ),
+        EntityTypeConfig(
+            name="OUTCOME",
+            description="A result or stated impact. Distinct from DECISION (a choice).",
+        ),
+        # Undescribed POLE+O types backfill their built-in description.
+        EntityTypeConfig(name="PERSON"),
+        EntityTypeConfig(name="ORGANIZATION"),
+    ],
+)
+
+settings = MemorySettings(
+    neo4j={"uri": "bolt://localhost:7687", "password": "password"},
+    schema_config=SchemaConfig(
+        model=SchemaModel.CUSTOM,
+        entity_schema=meeting_schema,   # descriptions reach the LLM prompt
+    ),
+)
+
+async with MemoryClient(settings) as client:
+    await client.short_term.add_message(
+        "standup-2026-06-08",
+        "user",
+        "Decisions: adopt the local transcription tool; ship the Hume file-drop by Q3.",
+        extract_entities=True,
+    )
+----
+
+=== Load a schema from a file
+
+A `custom_schema_path` is loaded eagerly when the extractor is built and
+**fails fast** on a missing or invalid file — there is no silent fallback to
+POLE+O. A set path implies custom types regardless of `model`.
+
+[source,python]
+----
+settings = MemorySettings(
+    schema_config=SchemaConfig(
+        model=SchemaModel.CUSTOM,
+        custom_schema_path="schemas/meeting.json",   # .json or .yaml
+    ),
+)
+----
+
+=== Override only the LLM extractor
+
+To thread rich types into the LLM extractor without changing the schema used by
+the other stages, set `entity_type_specs` on the extraction config. It takes
+precedence over every other type source for LLM-extractor construction.
+
+[source,python]
+----
+from neo4j_agent_memory.config.settings import ExtractionConfig
+from neo4j_agent_memory.schema import EntityTypeConfig
+
+extraction = ExtractionConfig(
+    entity_type_specs=[
+        EntityTypeConfig(name="DECISION", description="A ratified choice.", examples=["Ship by Q3"]),
+        EntityTypeConfig(name="TASK", description="An assigned action item."),
+    ],
+)
+----
+
+The type source for the LLM extractor is resolved by precedence (highest first):
+`entity_type_specs` → `entity_schema` → `custom_schema_path` →
+`schema_config.entity_types` (names) → `extraction_config.entity_types` (names).
+
+=== Constrain the output with strict_types
+
+By default an off-list type returned by the model is kept as-is (flag, don't
+drop) under a custom schema. Set `strict_types=True` to constrain the
+structured output to exactly the configured types, so the model cannot invent
+types outside your ontology:
+
+[source,python]
+----
+schema_config = SchemaConfig(
+    model=SchemaModel.CUSTOM,
+    entity_schema=meeting_schema,
+    strict_types=True,   # reject types outside the schema
+)
+----
+
+=== Inspect per-type coverage
+
+Each extraction reports how many entities were produced per requested type
+(zeros included), so you can see at a glance which domain types the model is
+missing. The counts are also emitted to logs and tracer spans.
+
+[source,python]
+----
+result = await extractor.extract(meeting_notes)
+print(result.type_coverage)
+# {"DECISION": 4, "TASK": 2, "OUTCOME": 0, "PERSON": 2, "ORGANIZATION": 1}
+----
+
+[TIP]
+====
+A single surface form is collapsed to one node per extraction call (keeping the
+highest-confidence type), so a name like `Hume` won't appear as separate
+`PRODUCT`, `PERSON`, and `ORGANIZATION` nodes. Cross-document resolution remains
+the job of xref:how-to/deduplication.adoc[deduplication].
+====
+
 == Relationship Extraction
 
 === GLiREL (No LLM Required)

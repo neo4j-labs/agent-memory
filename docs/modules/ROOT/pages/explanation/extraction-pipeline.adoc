@@ -216,6 +216,39 @@ GLiNER doesn't just match labels - it uses the semantic meaning of descriptions:
 
 This is why domain schemas significantly improve extraction quality.
 
+=== Descriptions on the LLM path
+
+The same principle holds for the LLM extractor, and as of v0.6 it honors type
+descriptions and examples end-to-end — reaching parity with GLiNER. When a
+custom schema supplies descriptions, the extractor renders a typed block into
+the prompt instead of a bare comma-separated list of names:
+
+[source,text]
+----
+## Entity Types
+Extract entities of these types. Assign exactly one type per distinct entity;
+prefer the most specific type that applies.
+- DECISION: A concrete agreement, resolution, or choice made during a meeting.
+  Signalled by "Decisions:" sections or verbs such as decided, agreed, approved.
+  Examples: "Adopt local transcription tool", "Ship file-drop by Q3".
+- TASK: An action item, follow-up, or to-do assigned to a person or team.
+...
+----
+
+Without the descriptions, the model has no signal for abstract domain types
+such as `DECISION`, `TASK`, or `OUTCOME` and tends to skip them — its priors
+only carry well-known NER types like `PERSON` and `ORGANIZATION`. The
+description is the extraction contract; the examples anchor it.
+
+*POLE+O defaults vs. custom schemas.* With the default POLE+O schema (or any
+name-only configuration), the prompt keeps the built-in POLE+O type guidance
+unchanged — existing behavior is untouched. The typed block is rendered only
+when a type carries a description or examples. A configured POLE+O type left
+undescribed backfills the library's built-in description, so a
+partially-customized schema never regresses its untouched core types. Under
+`strict_types`, the structured-output schema is additionally constrained to the
+configured types, so the model cannot invent types outside the ontology.
+
 == Relationship Extraction with GLiREL
 
 Beyond entities, GLiREL extracts relationships:

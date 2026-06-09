@@ -13,7 +13,9 @@ forcing the LLM to invent values for downstream-only fields like
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from typing import Literal
+
+from pydantic import BaseModel, Field, create_model
 
 
 class EntityPayload(BaseModel):
@@ -22,8 +24,9 @@ class EntityPayload(BaseModel):
     name: str = Field(description="Entity name, as it appears in the text.")
     type: str = Field(
         description=(
-            "Entity type. One of the allowed types (PERSON, OBJECT, "
-            "LOCATION, EVENT, ORGANIZATION for POLE+O, or as configured)."
+            "Entity type. Use exactly one of the configured entity types "
+            "(the default POLE+O set is PERSON, OBJECT, LOCATION, EVENT, "
+            "ORGANIZATION; a custom schema overrides this set)."
         )
     )
     subtype: str | None = Field(
@@ -73,9 +76,61 @@ class ExtractionPayload(BaseModel):
     preferences: list[PreferencePayload] = Field(default_factory=list)
 
 
+def build_constrained_payload(
+    entity_types: list[str],
+    relation_types: list[str] | None = None,
+) -> type[ExtractionPayload]:
+    """Build a per-call payload model that constrains the extracted types.
+
+    Used by the LLM extractor when ``strict_types`` is enabled: the
+    ``type`` field on entities (and optionally ``relation_type`` on
+    relations) becomes a :data:`typing.Literal` over the configured names,
+    so the structured-output schema rejects invented types at the provider
+    layer (OpenAI strict mode / Anthropic tool schema) or, failing that, at
+    Pydantic-validation time on the schema-aligned fallback path.
+
+    Falls back to the unconstrained :class:`ExtractionPayload` when no
+    entity types are supplied (nothing to constrain to).
+    """
+    if not entity_types:
+        return ExtractionPayload
+
+    # ``Literal[tuple(...)]`` expands the tuple into the Literal's args at
+    # runtime — the supported idiom for building a Literal dynamically.
+    entity_type_literal = Literal[tuple(entity_types)]  # type: ignore[valid-type]
+    constrained_entity = create_model(
+        "ConstrainedEntityPayload",
+        __base__=EntityPayload,
+        type=(
+            entity_type_literal,
+            Field(description="Entity type. Must be one of the configured types."),
+        ),
+    )
+
+    relation_model: type[BaseModel] = RelationPayload
+    if relation_types:
+        relation_type_literal = Literal[tuple(relation_types)]  # type: ignore[valid-type]
+        relation_model = create_model(
+            "ConstrainedRelationPayload",
+            __base__=RelationPayload,
+            relation_type=(
+                relation_type_literal,
+                Field(description="Relationship type. Must be one of the configured types."),
+            ),
+        )
+
+    return create_model(
+        "ConstrainedExtractionPayload",
+        __base__=ExtractionPayload,
+        entities=(list[constrained_entity], Field(default_factory=list)),  # type: ignore[valid-type]
+        relations=(list[relation_model], Field(default_factory=list)),  # type: ignore[valid-type]
+    )
+
+
 __all__ = [
     "EntityPayload",
     "RelationPayload",
     "PreferencePayload",
     "ExtractionPayload",
+    "build_constrained_payload",
 ]

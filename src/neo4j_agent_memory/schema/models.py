@@ -73,6 +73,10 @@ class EntityTypeConfig(BaseModel):
 
     name: str = Field(description="Entity type name (e.g., PERSON)")
     description: str | None = Field(default=None, description="Description of the entity type")
+    examples: list[str] = Field(
+        default_factory=list,
+        description="Few-shot surface examples that anchor this type during extraction",
+    )
     subtypes: list[str] = Field(default_factory=list, description="Valid subtypes for this entity")
     attributes: list[str] = Field(
         default_factory=list, description="Common attributes for this entity type"
