@@ -31,6 +31,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Fixed: `LongTermMemory.add()` now returns `Entity`** (per its `BaseMemory[Entity]`
+  contract) instead of a `tuple[Entity, DeduplicationResult]`. The tuple return was a
+  latent contract violation surfaced by the Phase 1 typing pass; no in-tree caller
+  destructured it. Use `add_entity(...)` (unchanged) if you need the
+  `(Entity, DeduplicationResult)` pair. (Type-safety effort, spec §6 Phase 1.)
+- **Memory timestamps are now timezone-aware (UTC).** Default timestamps in the
+  `memory/` layer (`Conversation.created_at`, `ConversationSummary.generated_at`,
+  `ReasoningTrace.started_at`, and `_to_python_datetime` fallbacks) switched from
+  naive `datetime.utcnow()` to `datetime.now(timezone.utc)`. Reads already produced
+  aware datetimes; this makes the write side consistent. (Type-safety effort, spec §6 Phase 1.)
 - **BREAKING: `InstructorProvider.__init__` no longer accepts `async_client`.**
   The parameter (default `True`) was removed during the Phase 1 typing pass.
   `async_client=False` produced a synchronous `instructor.Instructor`, which
