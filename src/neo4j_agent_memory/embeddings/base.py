@@ -170,13 +170,16 @@ class _ProviderToEmbedderAdapter:
 
     @property
     def dimensions(self) -> int:
-        return self._provider.dimensions  # type: ignore[attr-defined]
+        raw: int = self._provider.dimensions  # type: ignore[attr-defined]  # dynamic dispatch on untyped provider object
+        return raw
 
     async def embed(self, text: str) -> list[float]:
-        return await self._provider.embed_one(text)  # type: ignore[attr-defined]
+        raw: list[float] = await self._provider.embed_one(text)  # type: ignore[attr-defined]  # dynamic dispatch on untyped provider object
+        return raw
 
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        return await self._provider.embed(texts)  # type: ignore[attr-defined]
+        raw: list[list[float]] = await self._provider.embed(texts)  # type: ignore[attr-defined]  # dynamic dispatch on untyped provider object
+        return raw
 
 
 def adapt_to_legacy_embedder(provider: object) -> object:
