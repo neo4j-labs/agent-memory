@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import copy
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
+from uuid import UUID
 
 from neo4j_agent_memory.integrations.base import AsyncBridge as _AsyncBridge
 from neo4j_agent_memory.integrations.strands._messages import (
@@ -41,9 +42,15 @@ except ImportError as import_error:  # pragma: no cover - exercised via package 
     ) from import_error
 
 if TYPE_CHECKING:
+    from types import TracebackType
+
+    from strands import Agent
     from strands.types.content import Message as StrandsMessage
+    from strands.types.tools import ToolUse
 
     from neo4j_agent_memory import MemoryClient, MemorySettings
+    from neo4j_agent_memory.core.protocols import ShortTermProtocol
+    from neo4j_agent_memory.memory.short_term import Message as StoredMessage
     from neo4j_agent_memory.nams.endpoints import TransportMode
 
 logger = logging.getLogger(__name__)
@@ -93,16 +100,18 @@ class Neo4jSessionManager(SessionManager):
         # True when this manager owns the client lifecycle (settings-constructed
         # client, or when we performed the connect on an externally-supplied client).
         self._should_close_client: bool = settings is not None
+        self._client: MemoryClient
         if settings is not None:
-            from neo4j_agent_memory import MemoryClient
+            from neo4j_agent_memory import MemoryClient as _MemoryClient
 
-            self._client: Any = MemoryClient(settings)
+            self._client = _MemoryClient(settings)
         else:
+            assert memory_client is not None  # guaranteed by the XOR check above
             self._client = memory_client
         self._conversation_key: str | None = None
         self._pending: StrandsMessage | None = None  # write-behind buffer
-        self._last_persisted: Any = None  # last stored Message (late redaction)
-        self._trace_id: Any = None  # lazy reasoning trace (record_tool_calls)
+        self._last_persisted: StoredMessage | None = None  # last stored (late redaction)
+        self._trace_id: UUID | None = None  # lazy reasoning trace (record_tool_calls)
         self._closed = False
 
     @property
@@ -152,16 +161,22 @@ class Neo4jSessionManager(SessionManager):
         """
         if not self._is_nams:
             return self.session_id
+        # NAMS-only path. ``MemoryClient.short_term`` is statically typed as the
+        # concrete bolt ``ShortTermMemory``, but ``list_conversations`` /
+        # ``create_conversation`` are declared on ``ShortTermProtocol`` and
+        # implemented by the NAMS backend (the bolt class omits them). On NAMS the
+        # runtime object satisfies the full protocol, so cast to it.
+        nams_short_term = cast("ShortTermProtocol", self._client.short_term)
         # Narrow server-side where possible; explicit limit extends coverage
         # beyond the server's default page (full pagination isn't exposed by
         # the API).
-        conversations = await self._client.short_term.list_conversations(
+        conversations = await nams_short_term.list_conversations(
             user_identifier=self._user_id, limit=1000
         )
         for conversation in conversations:
             if (conversation.metadata or {}).get(_SESSION_KEY) == self.session_id:
                 return str(conversation.id)
-        created = await self._client.short_term.create_conversation(
+        created = await nams_short_term.create_conversation(
             session_id=self.session_id,
             metadata={_SESSION_KEY: self.session_id, "session_type": "AGENT"},
             user_identifier=self._user_id,
@@ -188,7 +203,7 @@ class Neo4jSessionManager(SessionManager):
 
     # ----------------------------------------------------- SessionManager API
 
-    def initialize(self, agent: Any, **kwargs: Any) -> None:
+    def initialize(self, agent: Agent, **kwargs: Any) -> None:
         """Restore the agent's conversation history from the graph."""
         try:
             restored = self._bridge.run(self._ainitialize())
@@ -257,7 +272,7 @@ class Neo4jSessionManager(SessionManager):
         if block:
             target["text"] = f"{block}\n{target['text']}"
 
-    def append_message(self, message: Any, agent: Any, **kwargs: Any) -> None:
+    def append_message(self, message: StrandsMessage, agent: Agent, **kwargs: Any) -> None:
         """Buffer the new message, persisting the previously buffered one.
 
         The one-slot write-behind buffer exists so guardrail redaction can
@@ -268,7 +283,7 @@ class Neo4jSessionManager(SessionManager):
         self._pending = copy.deepcopy(message)
 
     def redact_latest_message(
-        self, redact_message: StrandsMessage, agent: Any, **kwargs: Any
+        self, redact_message: StrandsMessage, agent: Agent, **kwargs: Any
     ) -> None:
         """Replace the latest message with redacted content.
 
@@ -309,7 +324,7 @@ class Neo4jSessionManager(SessionManager):
                 f"Failed to redact latest message for session {self.session_id!r}"
             ) from e
 
-    def sync_agent(self, agent: Any, **kwargs: Any) -> None:
+    def sync_agent(self, agent: Agent, **kwargs: Any) -> None:
         """Agent state is not persisted (design decision: no Strands-specific
         nodes in the graph). Also fired on MessageAddedEvent by the base
         class, so it must not flush the buffer."""
@@ -360,14 +375,16 @@ class Neo4jSessionManager(SessionManager):
         except Exception as e:
             logger.warning("Failed to mirror tool calls to reasoning memory: %s", e)
 
-    async def _arecord_tool_uses(self, key: str, blocks: list[Any]) -> None:
-        if self._trace_id is None:
+    async def _arecord_tool_uses(self, key: str, blocks: list[ToolUse]) -> None:
+        trace_id = self._trace_id
+        if trace_id is None:
             trace = await self._client.reasoning.start_trace(key, task="Strands agent session")
-            self._trace_id = trace.id
+            trace_id = trace.id
+            self._trace_id = trace_id
         for block in blocks:
             name = block.get("name") or "unknown"
             step = await self._client.reasoning.add_step(
-                self._trace_id, thought=f"Tool use: {name}", action=name
+                trace_id, thought=f"Tool use: {name}", action=name
             )
             await self._client.reasoning.record_tool_call(step.id, name, block.get("input") or {})
 
@@ -388,5 +405,10 @@ class Neo4jSessionManager(SessionManager):
     def __enter__(self) -> Neo4jSessionManager:
         return self
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         self.close()

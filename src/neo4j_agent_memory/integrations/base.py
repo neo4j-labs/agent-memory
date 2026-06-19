@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from functools import wraps
 from typing import Any, TypeVar
 
@@ -53,8 +53,13 @@ class AsyncBridge:
                 self._thread.start()
             return self._loop
 
-    def run(self, coro: Any, timeout: float | None = None) -> Any:
-        """Submit ``coro`` to the background loop and block for the result."""
+    def run(self, coro: Coroutine[Any, Any, T], timeout: float | None = None) -> T:
+        """Submit ``coro`` to the background loop and block for its result.
+
+        Generic over the coroutine's result type, so callers get the
+        awaited value's real type back (e.g. ``run(client.add_message(...))``
+        returns ``Message``, not ``Any``).
+        """
         loop = self._ensure_loop()
         future = asyncio.run_coroutine_threadsafe(coro, loop)
         return future.result(timeout=timeout if timeout is not None else self._timeout)

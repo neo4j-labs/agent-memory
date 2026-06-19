@@ -9,8 +9,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from neo4j_agent_memory.memory.long_term import (
+        Entity,
+        Fact,
+        LongTermMemory,
+        Preference,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -33,23 +42,23 @@ class Neo4jRetrievalConfig:
     context_tag: str = "user_context"
 
 
-def _format_entity(entity: Any) -> str:
-    desc = getattr(entity, "description", None)
+def _format_entity(entity: Entity) -> str:
+    desc = entity.description
     suffix = f" — {desc}" if desc else ""
-    entity_type = getattr(entity, "full_type", None) or entity.type
+    entity_type = entity.full_type or entity.type
     return f"[entity] {entity.display_name} ({entity_type}){suffix}"
 
 
-def _format_preference(preference: Any) -> str:
+def _format_preference(preference: Preference) -> str:
     return f"[preference] {preference.category}: {preference.preference}"
 
 
-def _format_fact(fact: Any) -> str:
+def _format_fact(fact: Fact) -> str:
     return f"[fact] {fact.subject} {fact.predicate} {fact.object}"
 
 
 async def _retrieve_context(
-    long_term: Any, query: str, cfg: Neo4jRetrievalConfig, *, nams: bool
+    long_term: LongTermMemory, query: str, cfg: Neo4jRetrievalConfig, *, nams: bool
 ) -> str:
     """Run the configured long-term searches concurrently and format the block.
 
@@ -57,8 +66,12 @@ async def _retrieve_context(
     Individual search failures are logged and skipped — a memory lookup
     must never break the agent's turn.
     """
+    # A heterogeneous dispatch table: each row pairs a long-term search with the
+    # formatter for its result type. The per-type formatters above are precisely
+    # typed; the table itself can only be typed at the loose ``Callable[...]``
+    # supertype because the rows hold different concrete signatures.
     # NAMS has no preference/fact search endpoints — skip rather than warn every turn.
-    wanted = [
+    wanted: list[tuple[bool, Callable[..., Awaitable[list[Any]]], Callable[..., str]]] = [
         (cfg.include_entities, long_term.search_entities, _format_entity),
         (cfg.include_preferences and not nams, long_term.search_preferences, _format_preference),
         (cfg.include_facts and not nams, long_term.search_facts, _format_fact),

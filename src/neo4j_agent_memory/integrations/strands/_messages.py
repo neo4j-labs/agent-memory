@@ -6,10 +6,12 @@ the library's stored ``Message`` model. No session state, no I/O.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 if TYPE_CHECKING:
     from strands.types.content import Message as StrandsMessage
+
+    from neo4j_agent_memory.memory.short_term import Message as StoredMessage
 
 
 def _message_text(message: StrandsMessage) -> str:
@@ -19,7 +21,7 @@ def _message_text(message: StrandsMessage) -> str:
     return "\n".join(texts)
 
 
-def _to_strands_message(stored: Any) -> StrandsMessage:
+def _to_strands_message(stored: StoredMessage) -> StrandsMessage:
     """Convert a stored neo4j-agent-memory Message to a Strands message dict."""
     role = stored.role.value if hasattr(stored.role, "value") else str(stored.role)
     if role not in ("user", "assistant"):

@@ -142,10 +142,15 @@ class TestMappingHelpers:
         )
 
         entity = SimpleNamespace(
-            display_name="Acme Corp", type="ORGANIZATION", description="customer"
+            display_name="Acme Corp",
+            type="ORGANIZATION",
+            full_type="ORGANIZATION",
+            description="customer",
         )
         assert _format_entity(entity) == "[entity] Acme Corp (ORGANIZATION) — customer"
-        entity_no_desc = SimpleNamespace(display_name="X", type="PERSON", description=None)
+        entity_no_desc = SimpleNamespace(
+            display_name="X", type="PERSON", full_type="PERSON", description=None
+        )
         assert _format_entity(entity_no_desc) == "[entity] X (PERSON)"
         pref = SimpleNamespace(category="food", preference="loves Italian")
         assert _format_preference(pref) == "[preference] food: loves Italian"
@@ -532,7 +537,12 @@ class TestRetrievalInjection:
 
         manager, client = _make_manager(retrieval_config=Neo4jRetrievalConfig(include_facts=True))
         client.long_term.entities = [
-            SimpleNamespace(display_name="Acme", type="ORGANIZATION", description="customer")
+            SimpleNamespace(
+                display_name="Acme",
+                type="ORGANIZATION",
+                full_type="ORGANIZATION",
+                description="customer",
+            )
         ]
         client.long_term.preferences = [
             SimpleNamespace(category="style", preference="concise answers")
@@ -656,7 +666,12 @@ class TestRetrievalInjection:
             nams_mode=True, retrieval_config=Neo4jRetrievalConfig(include_facts=True)
         )
         client.long_term.entities = [
-            SimpleNamespace(display_name="Acme", type="ORGANIZATION", description=None)
+            SimpleNamespace(
+                display_name="Acme",
+                type="ORGANIZATION",
+                full_type="ORGANIZATION",
+                description=None,
+            )
         ]
 
         # Make preference/fact searches behave like real NAMS: raise if called.
@@ -802,7 +817,12 @@ class TestRetrievalInjectionExtended:
 
         manager, client = _make_manager(retrieval_config=Neo4jRetrievalConfig())
         client.long_term.entities = [
-            SimpleNamespace(display_name="Acme", type="ORGANIZATION", description=None)
+            SimpleNamespace(
+                display_name="Acme",
+                type="ORGANIZATION",
+                full_type="ORGANIZATION",
+                description=None,
+            )
         ]
         return manager, client
 
@@ -835,10 +855,14 @@ class TestFormattersExtended:
         )
         assert _format_entity(entity_sub) == "[entity] Acme (ORGANIZATION:COMPANY)"
 
-    def test_falls_back_to_type_when_no_full_type(self) -> None:
+    def test_falls_back_to_type_when_full_type_falsy(self) -> None:
+        # Defensive guard: a real Entity.full_type is always set, but the
+        # formatter falls back to .type if full_type is ever falsy.
         from neo4j_agent_memory.integrations.strands._retrieval import _format_entity
 
-        entity = SimpleNamespace(display_name="X", type="PERSON", description=None)
+        entity = SimpleNamespace(
+            display_name="X", type="PERSON", full_type=None, description=None
+        )
         assert _format_entity(entity) == "[entity] X (PERSON)"
 
 
