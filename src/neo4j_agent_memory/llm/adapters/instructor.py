@@ -18,7 +18,7 @@ Install with::
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from pydantic import BaseModel
 
@@ -40,6 +40,10 @@ class InstructorProvider:
     Implements :class:`~neo4j_agent_memory.llm.protocol.StructuredExtractor`
     only. ``isinstance(provider, LLMProvider)`` returns False — by design.
 
+    This adapter always uses an async Instructor client because
+    :meth:`complete_structured` is a coroutine. Passing a sync client
+    (``async_client=False``) would raise at call time — it is not supported.
+
     Example::
 
         from neo4j_agent_memory.llm.adapters.instructor import InstructorProvider
@@ -51,8 +55,6 @@ class InstructorProvider:
     def __init__(
         self,
         model: str,
-        *,
-        async_client: bool = True,
         **provider_kwargs: Any,
     ) -> None:
         try:
@@ -65,7 +67,10 @@ class InstructorProvider:
         self.model = model
         # ``instructor.from_provider`` resolves provider strings of the same
         # ``"provider/model"`` shape we use, so the integration is seamless.
-        self._client = instructor.from_provider(model, async_client=async_client, **provider_kwargs)
+        # We always request the async client (Literal[True]) because
+        # ``complete_structured`` is a coroutine; a sync client cannot be
+        # awaited and would raise at call time.
+        self._client = instructor.from_provider(model, async_client=True, **provider_kwargs)
 
     async def complete_structured(
         self,
@@ -84,7 +89,10 @@ class InstructorProvider:
         }
         if timeout is not None:
             kwargs["timeout"] = timeout
-        return await self._client.create(**kwargs)
+        # instructor.AsyncInstructor.create() is typed as returning ``T | Any``
+        # (the union widens to Any). cast(T, ...) is safe here: the library
+        # validates the response against ``response_model`` before returning it.
+        return cast(T, await self._client.create(**kwargs))
 
 
 __all__ = [

@@ -31,7 +31,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -151,7 +151,7 @@ async def schema_aligned_extract(
     ) from last_exception
 
 
-def _tolerant_json_parse(text: str) -> dict:
+def _tolerant_json_parse(text: str) -> dict[str, Any]:
     """Extract a JSON object from messy LLM output.
 
     Handles five common failure modes:
