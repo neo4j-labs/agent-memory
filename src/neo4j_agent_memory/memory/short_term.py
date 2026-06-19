@@ -1,10 +1,12 @@
 """Short-term memory for conversations and messages."""
 
+from __future__ import annotations
+
 import json
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
@@ -15,7 +17,7 @@ from neo4j_agent_memory.graph.query_builder import build_create_entity_query
 
 
 def _llm_summarizer(
-    provider: "LLMProvider",
+    provider: LLMProvider,
     *,
     max_tokens: int = 500,
     temperature: float = 0.0,
@@ -74,22 +76,23 @@ def _deserialize_metadata(metadata_str: str | None) -> dict[str, Any]:
     if metadata_str is None:
         return {}
     try:
-        return json.loads(metadata_str)
+        result: dict[str, Any] = json.loads(metadata_str)
+        return result
     except (json.JSONDecodeError, TypeError):
         return {}
 
 
-def _to_python_datetime(neo4j_datetime) -> datetime:
+def _to_python_datetime(neo4j_datetime: Any) -> datetime:
     """Convert Neo4j DateTime to Python datetime."""
     if neo4j_datetime is None:
-        return datetime.utcnow()
+        return datetime.now(timezone.utc)
     if isinstance(neo4j_datetime, datetime):
         return neo4j_datetime
-    # Neo4j DateTime has to_native() method
+    # Neo4j DateTime has to_native() method — cast because neo4j ships no stubs
     try:
-        return neo4j_datetime.to_native()
+        return cast(datetime, neo4j_datetime.to_native())
     except AttributeError:
-        return datetime.utcnow()
+        return datetime.now(timezone.utc)
 
 
 def _build_metadata_filter_clause_json(
@@ -264,7 +267,7 @@ class Conversation(BaseModel):
     session_id: str = Field(description="User/agent session identifier")
     title: str | None = Field(default=None, description="Conversation title")
     messages: list[Message] = Field(default_factory=list)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -301,7 +304,7 @@ class ConversationSummary(BaseModel):
     )
     key_topics: list[str] = Field(default_factory=list, description="Key topics discussed")
     generated_at: datetime = Field(
-        default_factory=datetime.utcnow, description="When summary was generated"
+        default_factory=lambda: datetime.now(timezone.utc), description="When summary was generated"
     )
 
 
@@ -318,12 +321,12 @@ class ShortTermMemory(BaseMemory[Message]):
 
     def __init__(
         self,
-        client: "Neo4jClient",
-        embedder: "Embedder | None" = None,
-        extractor: "EntityExtractor | None" = None,
+        client: Neo4jClient,
+        embedder: Embedder | None = None,
+        extractor: EntityExtractor | None = None,
         *,
         multi_tenant: bool = False,
-        default_llm_provider: "LLMProvider | None" = None,
+        default_llm_provider: LLMProvider | None = None,
     ):
         """Initialize short-term memory.
 
@@ -567,7 +570,7 @@ class ShortTermMemory(BaseMemory[Message]):
         generate_embedding: bool = True,
         metadata: dict[str, Any] | None = None,
         extraction_mode: Literal["auto", "skip", "explicit"] = "auto",
-        explicit_mentions: "list[Any] | None" = None,
+        explicit_mentions: list[Any] | None = None,
         user_identifier: str | None = None,
     ) -> Message:
         """
@@ -653,7 +656,7 @@ class ShortTermMemory(BaseMemory[Message]):
     async def _link_explicit_mentions(
         self,
         message: Message,
-        mentions: list,
+        mentions: list[Any],
     ) -> None:
         """Write a ``MENTIONS`` edge from ``message`` to each supplied EntityRef.
 
@@ -1199,7 +1202,7 @@ class ShortTermMemory(BaseMemory[Message]):
         )
         if not results:
             return None
-        return results[0]["m"]["id"]
+        return cast(str, results[0]["m"]["id"])
 
     async def _create_message_links(
         self,
@@ -1291,7 +1294,7 @@ class ShortTermMemory(BaseMemory[Message]):
 
     async def _store_relations(
         self,
-        relations: list,
+        relations: list[Any],
         entity_name_to_id: dict[str, str],
     ) -> int:
         """Store extracted relations as RELATED_TO relationships between entities.
@@ -1439,11 +1442,12 @@ class ShortTermMemory(BaseMemory[Message]):
             import inspect
 
             if inspect.iscoroutinefunction(summarizer):
-                summary_text = await summarizer(transcript)
+                summary_text: str = await summarizer(transcript)
             else:
                 # Run sync function in executor to avoid blocking
                 loop = asyncio.get_event_loop()
-                summary_text = await loop.run_in_executor(None, summarizer, transcript)
+                # run_in_executor returns Awaitable[Any]; cast to str at this boundary
+                summary_text = cast(str, await loop.run_in_executor(None, summarizer, transcript))
         else:
             # Build basic summary without LLM
             summary_text = self._build_basic_summary(conv.messages, max_tokens)
@@ -1466,7 +1470,7 @@ class ShortTermMemory(BaseMemory[Message]):
             return "Empty conversation."
 
         # Count messages by role
-        role_counts = {}
+        role_counts: dict[str, int] = {}
         for msg in messages:
             role = msg.role.value
             role_counts[role] = role_counts.get(role, 0) + 1
@@ -1613,7 +1617,7 @@ class ShortTermMemory(BaseMemory[Message]):
         words = re.findall(r"\b[a-zA-Z]{4,}\b", text.lower())
 
         # Count frequency
-        word_freq = {}
+        word_freq: dict[str, int] = {}
         for word in words:
             if word not in stop_words:
                 word_freq[word] = word_freq.get(word, 0) + 1

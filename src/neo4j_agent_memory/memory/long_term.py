@@ -1,11 +1,13 @@
 """Long-term memory for entities, preferences, and facts."""
 
+from __future__ import annotations
+
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID, uuid4
 
 from pydantic import Field
@@ -134,22 +136,23 @@ def _deserialize_metadata(metadata_str: str | None) -> dict[str, Any]:
     if metadata_str is None:
         return {}
     try:
-        return json.loads(metadata_str)
+        result: dict[str, Any] = json.loads(metadata_str)
+        return result
     except (json.JSONDecodeError, TypeError):
         return {}
 
 
-def _to_python_datetime(neo4j_datetime) -> datetime:
+def _to_python_datetime(neo4j_datetime: Any) -> datetime:
     """Convert Neo4j DateTime to Python datetime."""
     if neo4j_datetime is None:
-        return datetime.utcnow()
+        return datetime.now(timezone.utc)
     if isinstance(neo4j_datetime, datetime):
         return neo4j_datetime
-    # Neo4j DateTime has to_native() method
+    # Neo4j DateTime has to_native() method — cast because neo4j ships no stubs
     try:
-        return neo4j_datetime.to_native()
+        return cast(datetime, neo4j_datetime.to_native())
     except AttributeError:
-        return datetime.utcnow()
+        return datetime.now(timezone.utc)
 
 
 if TYPE_CHECKING:
@@ -324,12 +327,12 @@ class LongTermMemory(BaseMemory[Entity]):
 
     def __init__(
         self,
-        client: "Neo4jClient",
-        embedder: "Embedder | None" = None,
-        extractor: "EntityExtractor | None" = None,
-        resolver: "EntityResolver | None" = None,
-        geocoder: "Geocoder | None" = None,
-        enrichment_service: "BackgroundEnrichmentService | None" = None,
+        client: Neo4jClient,
+        embedder: Embedder | None = None,
+        extractor: EntityExtractor | None = None,
+        resolver: EntityResolver | None = None,
+        geocoder: Geocoder | None = None,
+        enrichment_service: BackgroundEnrichmentService | None = None,
         entity_types: list[str] | None = None,
         strict_types: bool = False,
         deduplication: DeduplicationConfig | None = None,
@@ -382,10 +385,15 @@ class LongTermMemory(BaseMemory[Entity]):
         return normalized
 
     async def add(self, content: str, **kwargs: Any) -> Entity:
-        """Add content as an entity."""
+        """Add content as an entity.
+
+        Note: ``add_entity`` returns a ``(Entity, DeduplicationResult)`` tuple;
+        this adapter unpacks it so the ``BaseMemory[Entity]`` protocol is satisfied.
+        """
         name = kwargs.get("name", content)
         entity_type = kwargs.get("type", "OBJECT")
-        return await self.add_entity(name, entity_type, **kwargs)
+        entity, _ = await self.add_entity(name, entity_type, **kwargs)
+        return entity
 
     async def add_entity(
         self,
@@ -561,7 +569,7 @@ class LongTermMemory(BaseMemory[Entity]):
         generate_embedding: bool = True,
         metadata: dict[str, Any] | None = None,
         user_identifier: str | None = None,
-        applies_to: "list | None" = None,
+        applies_to: list[Any] | None = None,
     ) -> Preference:
         """
         Add a user preference with deduplication.
@@ -730,8 +738,8 @@ class LongTermMemory(BaseMemory[Entity]):
 
     async def supersede_preference(
         self,
-        old_preference_id: "UUID | str",
-        new_preference_id: "UUID | str",
+        old_preference_id: UUID | str,
+        new_preference_id: UUID | str,
     ) -> None:
         """Mark ``old`` as superseded by ``new``.
 
@@ -760,7 +768,7 @@ class LongTermMemory(BaseMemory[Entity]):
         *,
         applies_to: Any | None = None,
         active_only: bool = True,
-        as_of: "datetime | None" = None,
+        as_of: datetime | None = None,
     ) -> list[Preference]:
         """Return preferences scoped to a user.
 

@@ -32,7 +32,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -52,7 +52,7 @@ class BufferedWriteError:
     query: str
     parameters: dict[str, Any]
     error: BaseException
-    when: datetime = field(default_factory=datetime.utcnow)
+    when: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 @dataclass

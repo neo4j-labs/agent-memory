@@ -1,11 +1,13 @@
 """Reasoning memory for reasoning traces and tool usage."""
 
+from __future__ import annotations
+
 import json
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
@@ -24,34 +26,35 @@ logger = logging.getLogger(__name__)
 ToolCallHook = Callable[["ToolCall", "HookContext"], Awaitable[None]]
 
 
-def _serialize_json(data: dict[str, Any] | list | None) -> str | None:
+def _serialize_json(data: dict[str, Any] | list[Any] | None) -> str | None:
     """Serialize dict/list to JSON string for Neo4j storage."""
     if data is None or data == {} or data == []:
         return None
     return json.dumps(data)
 
 
-def _deserialize_json(data_str: str | None) -> dict[str, Any] | list | None:
+def _deserialize_json(data_str: str | None) -> dict[str, Any] | list[Any] | None:
     """Deserialize JSON string."""
     if data_str is None:
         return None
     try:
-        return json.loads(data_str)
+        result: dict[str, Any] | list[Any] = json.loads(data_str)
+        return result
     except (json.JSONDecodeError, TypeError):
         return None
 
 
-def _to_python_datetime(neo4j_datetime) -> datetime:
+def _to_python_datetime(neo4j_datetime: Any) -> datetime:
     """Convert Neo4j DateTime to Python datetime."""
     if neo4j_datetime is None:
-        return datetime.utcnow()
+        return datetime.now(timezone.utc)
     if isinstance(neo4j_datetime, datetime):
         return neo4j_datetime
-    # Neo4j DateTime has to_native() method
+    # Neo4j DateTime has to_native() method — cast because neo4j ships no stubs
     try:
-        return neo4j_datetime.to_native()
+        return cast(datetime, neo4j_datetime.to_native())
     except AttributeError:
-        return datetime.utcnow()
+        return datetime.now(timezone.utc)
 
 
 if TYPE_CHECKING:
@@ -102,7 +105,9 @@ class ReasoningTrace(MemoryEntry):
     steps: list[ReasoningStep] = Field(default_factory=list, description="Reasoning steps")
     outcome: str | None = Field(default=None, description="Final outcome")
     success: bool | None = Field(default=None, description="Whether task succeeded")
-    started_at: datetime = Field(default_factory=datetime.utcnow, description="Start time")
+    started_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc), description="Start time"
+    )
     completed_at: datetime | None = Field(default=None, description="Completion time")
 
 
@@ -158,7 +163,7 @@ class StreamingTraceRecorder:
 
     def __init__(
         self,
-        reasoning_memory: "ReasoningMemory",
+        reasoning_memory: ReasoningMemory,
         session_id: str,
         task: str,
         *,
@@ -189,9 +194,9 @@ class StreamingTraceRecorder:
         self._tool_call_times: dict[str, datetime] = {}
         self._outcome: str | None = None
         self._success: bool | None = None
-        self._error: Exception | None = None
+        self._error: BaseException | None = None
 
-    async def __aenter__(self) -> "StreamingTraceRecorder":
+    async def __aenter__(self) -> StreamingTraceRecorder:
         """Start the trace when entering the context."""
         self.trace = await self.memory.start_trace(
             self.session_id,
@@ -200,7 +205,9 @@ class StreamingTraceRecorder:
         )
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+    async def __aexit__(
+        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: Any
+    ) -> None:
         """Complete the trace when exiting the context."""
         if self.trace is None:
             return
@@ -237,7 +244,7 @@ class StreamingTraceRecorder:
         if self.trace is None:
             raise RuntimeError("Trace not started. Use within 'async with' context.")
 
-        self._step_start_time = datetime.utcnow()
+        self._step_start_time = datetime.now(timezone.utc)
         self.current_step = await self.memory.add_step(
             self.trace.id,
             thought=thought,
@@ -281,12 +288,19 @@ class StreamingTraceRecorder:
         if self.current_step is None:
             await self.start_step(action=f"call:{tool_name}")
 
+        # Narrow: start_step() always assigns self.current_step — guard for the type checker
+        current_step = self.current_step
+        if current_step is None:
+            raise RuntimeError("Step was not created by start_step().")
+
         # Calculate duration if not provided
         if duration_ms is None and self._step_start_time is not None:
-            duration_ms = int((datetime.utcnow() - self._step_start_time).total_seconds() * 1000)
+            duration_ms = int(
+                (datetime.now(timezone.utc) - self._step_start_time).total_seconds() * 1000
+            )
 
         return await self.memory.record_tool_call(
-            self.current_step.id,
+            current_step.id,
             tool_name=tool_name,
             arguments=arguments,
             result=result,
@@ -364,9 +378,9 @@ class HookContext:
 
     def __init__(
         self,
-        memory: "ReasoningMemory",
+        memory: ReasoningMemory,
         step_id: UUID,
-        tool_call: "ToolCall",
+        tool_call: ToolCall,
     ):
         self.memory = memory
         self.step_id = step_id
@@ -389,8 +403,8 @@ class ReasoningMemory(BaseMemory[ReasoningStep]):
 
     def __init__(
         self,
-        client: "Neo4jClient",
-        embedder: "Embedder | None" = None,
+        client: Neo4jClient,
+        embedder: Embedder | None = None,
         *,
         multi_tenant: bool = False,
     ):
@@ -746,7 +760,7 @@ class ReasoningMemory(BaseMemory[ReasoningStep]):
         self,
         trace_id: UUID,
         *,
-        outcome: "str | TraceOutcome | None" = None,
+        outcome: str | TraceOutcome | None = None,
         success: bool | None = None,
         generate_step_embeddings: bool = False,
     ) -> ReasoningTrace:
