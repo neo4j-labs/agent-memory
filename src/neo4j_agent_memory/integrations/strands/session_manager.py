@@ -161,13 +161,14 @@ class Neo4jSessionManager(SessionManager):
         """
         if not self._is_nams:
             return self.session_id
-        # NAMS-only path. ``MemoryClient.short_term`` is statically typed as the
-        # concrete bolt ``ShortTermMemory``, but ``list_conversations`` /
-        # ``create_conversation`` are declared on ``ShortTermProtocol`` and
-        # implemented by the NAMS backend (the bolt class omits them). On NAMS the
-        # runtime object satisfies the full protocol. Bolt and the protocol are not
-        # in one inheritance hierarchy, so reinterpret via ``object`` (the
-        # checker-sanctioned form for a deliberate cross-type cast).
+        # Deferred core fix (tracked as a follow-up): ``MemoryClient.short_term``
+        # is statically the concrete bolt ``ShortTermMemory``, but
+        # ``list_conversations`` / ``create_conversation`` live on
+        # ``ShortTermProtocol`` (implemented by the NAMS backend; bolt omits them).
+        # Until the property return type is widened to ``ShortTermProtocol``, this
+        # cast is required on the NAMS path. Bolt and the protocol are not in one
+        # inheritance hierarchy, so reinterpret via ``object`` — the
+        # checker-sanctioned form for a deliberate cross-type cast.
         nams_short_term = cast("ShortTermProtocol", cast(object, self._client.short_term))
         # Narrow server-side where possible; explicit limit extends coverage
         # beyond the server's default page (full pagination isn't exposed by
