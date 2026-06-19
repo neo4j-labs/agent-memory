@@ -136,6 +136,9 @@ dev = [
     "pytest-cov>=4.1.0",
     "pytest-timeout>=2.3.0",
     "mypy>=1.8.0",
+    # ty is pre-1.0 and changes its rule set between releases, so pin it exactly
+    # for reproducible CI. Bump deliberately. See the type-safety tracking issue #144.
+    "ty==0.0.13",
     "ruff>=0.3.0",
     "pre-commit>=3.6.0",
     "testcontainers[neo4j]>=4.0.0",
@@ -197,19 +200,16 @@ warn_return_any = true
 warn_unused_configs = true
 plugins = ["pydantic.mypy"]
 
-[[tool.mypy.overrides]]
-module = [
-    "neo4j.*",
-    "sentence_transformers.*",
-    "spacy.*",
-    "gliner.*",
-    "rapidfuzz.*",
-    "langchain_core.*",
-    "llama_index.*",
-    "crewai.*",
-    "agent_framework.*",
-]
-ignore_missing_imports = true
+# ignore_missing_imports override list — audited 2026-06-19 with the integration
+# extras installed (`uv sync --all-extras --group dev`); see the type-safety
+# tracking issue #144. Every previously-listed module (neo4j, sentence_transformers, spacy,
+# gliner, rapidfuzz, langchain_core, llama_index, crewai, agent_framework) now
+# ships py.typed and resolves cleanly, so the stale block was removed (verified
+# count-neutral: 253 -> 253 errors). The only deps that genuinely ship no type
+# information are glirel, nest_asyncio, and google.adk.* (typeshed's
+# types-PyYAML covers yaml). Their import diagnostics are intentionally left in
+# the budget and will be addressed in the relevant package phases (local stubs
+# vs. per-module ignore), not suppressed here.
 
 [tool.ruff]
 target-version = "py310"
