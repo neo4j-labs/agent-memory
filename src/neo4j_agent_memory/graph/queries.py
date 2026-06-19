@@ -603,7 +603,7 @@ OPTIONAL MATCH (rt)-[:HAS_STEP]->(rs:ReasoningStep)
 OPTIONAL MATCH (rs)-[:USES_TOOL]->(tc:ToolCall)
 RETURN rt,
        collect(DISTINCT rs) AS steps,
-       collect(DISTINCT tc) AS tool_calls
+       collect(DISTINCT {step_id: rs.id, tool_call: tc}) AS tool_calls
 """
 
 LIST_TRACES = """

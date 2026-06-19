@@ -334,6 +334,44 @@ class TestReasoningMemoryToolCalls:
 
         assert tool_call.arguments == complex_args
 
+    @pytest.mark.asyncio
+    async def test_get_trace_with_steps_includes_tool_calls(self, memory_client, session_id):
+        """Tool calls are attached to their step when reading a full trace.
+
+        Regression: ``get_trace_with_steps`` grouped tool calls by a
+        ``step_id`` property that ``record_tool_call`` never persisted (it
+        links via the ``USES_TOOL`` relationship), so ``step.tool_calls``
+        always came back empty.
+        """
+        trace = await memory_client.reasoning.start_trace(
+            session_id,
+            task="Screen owner",
+            generate_embedding=False,
+        )
+        step = await memory_client.reasoning.add_step(
+            trace.id,
+            thought="Need to screen the beneficial owner",
+            action="check_sanctions_list",
+            generate_embedding=False,
+        )
+        await memory_client.reasoning.record_tool_call(
+            step.id,
+            tool_name="check_sanctions_list",
+            arguments={"name": "Jane Doe"},
+            result="NO MATCH",
+            status=ToolCallStatus.SUCCESS,
+        )
+
+        full = await memory_client.reasoning.get_trace_with_steps(trace.id)
+
+        assert full is not None
+        assert len(full.steps) == 1
+        recorded = full.steps[0].tool_calls
+        assert len(recorded) == 1
+        assert recorded[0].tool_name == "check_sanctions_list"
+        assert recorded[0].arguments == {"name": "Jane Doe"}
+        assert recorded[0].step_id == step.id
+
 
 @pytest.mark.integration
 class TestReasoningMemorySearch:

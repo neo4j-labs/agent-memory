@@ -1236,25 +1236,29 @@ class ReasoningMemory(BaseMemory[ReasoningStep]):
         steps_data = row.get("steps", [])
         tool_calls_data = row.get("tool_calls", [])
 
-        # Parse tool calls
+        # Parse tool calls. Each entry pairs a step id with a tool-call node,
+        # derived from the (ReasoningStep)-[:USES_TOOL]->(ToolCall) relationship
+        # (the association is not stored as a property on the node).
         tool_calls_by_step: dict[str, list[ToolCall]] = {}
-        for tc_data in tool_calls_data:
+        for entry in tool_calls_data:
+            entry = dict(entry)
+            tc_data = entry.get("tool_call")
+            step_id = entry.get("step_id")
+            if tc_data is None or step_id is None:
+                continue  # step with no tool call, or trace with no steps
             tc = dict(tc_data)
-            step_id = tc.get("step_id")
-            if step_id:
-                if step_id not in tool_calls_by_step:
-                    tool_calls_by_step[step_id] = []
-                tool_calls_by_step[step_id].append(
-                    ToolCall(
-                        id=UUID(tc["id"]),
-                        tool_name=tc["tool_name"],
-                        arguments=json.loads(tc.get("arguments", "{}")),
-                        result=json.loads(tc["result"]) if tc.get("result") else None,
-                        status=ToolCallStatus(tc.get("status", "success")),
-                        duration_ms=tc.get("duration_ms"),
-                        error=tc.get("error"),
-                    )
+            tool_calls_by_step.setdefault(step_id, []).append(
+                ToolCall(
+                    id=UUID(tc["id"]),
+                    step_id=UUID(step_id),
+                    tool_name=tc["tool_name"],
+                    arguments=json.loads(tc.get("arguments", "{}")),
+                    result=json.loads(tc["result"]) if tc.get("result") else None,
+                    status=ToolCallStatus(tc.get("status", "success")),
+                    duration_ms=tc.get("duration_ms"),
+                    error=tc.get("error"),
                 )
+            )
 
         # Parse steps
         steps = []
