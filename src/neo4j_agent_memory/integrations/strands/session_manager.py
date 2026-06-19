@@ -165,8 +165,10 @@ class Neo4jSessionManager(SessionManager):
         # concrete bolt ``ShortTermMemory``, but ``list_conversations`` /
         # ``create_conversation`` are declared on ``ShortTermProtocol`` and
         # implemented by the NAMS backend (the bolt class omits them). On NAMS the
-        # runtime object satisfies the full protocol, so cast to it.
-        nams_short_term = cast("ShortTermProtocol", self._client.short_term)
+        # runtime object satisfies the full protocol. Bolt and the protocol are not
+        # in one inheritance hierarchy, so reinterpret via ``object`` (the
+        # checker-sanctioned form for a deliberate cross-type cast).
+        nams_short_term = cast("ShortTermProtocol", cast(object, self._client.short_term))
         # Narrow server-side where possible; explicit limit extends coverage
         # beyond the server's default page (full pagination isn't exposed by
         # the API).
@@ -186,9 +188,11 @@ class Neo4jSessionManager(SessionManager):
     async def _aresolve_key(self) -> str:
         """Connect and resolve the conversation key (without loading history)."""
         await self._aconnect()
-        if self._conversation_key is None:
-            self._conversation_key = await self._aresolve_conversation()
-        return self._conversation_key
+        key = self._conversation_key
+        if key is None:
+            key = await self._aresolve_conversation()
+            self._conversation_key = key
+        return key
 
     async def _ainitialize(self) -> list[StrandsMessage]:
         key = await self._aresolve_key()

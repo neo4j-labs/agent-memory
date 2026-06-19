@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar
 
@@ -71,7 +71,8 @@ def _run_async(coro: Coroutine[Any, Any, _T]) -> _T:
         import concurrent.futures
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(asyncio.run, coro)
+            # Wrap in a zero-arg callable so the result type flows through submit().
+            future = executor.submit(lambda: asyncio.run(coro))
             return future.result()
     else:
         # No running loop - safe to use asyncio.run
@@ -106,6 +107,8 @@ def _get_or_create_client(
     cache_key = f"{neo4j_uri}:{neo4j_user}:{neo4j_database}"
 
     if cache_key not in _client_cache:
+        from pydantic import SecretStr
+
         from neo4j_agent_memory import MemoryClient, MemorySettings
         from neo4j_agent_memory.config.settings import Neo4jConfig
         from neo4j_agent_memory.llm import from_provider
@@ -145,8 +148,8 @@ def _get_or_create_client(
 
         neo4j_config = Neo4jConfig(
             uri=neo4j_uri,
-            user=neo4j_user,
-            password=neo4j_password,
+            username=neo4j_user,
+            password=SecretStr(neo4j_password),
             database=neo4j_database,
         )
 
@@ -732,22 +735,24 @@ def context_graph_tools(
             "neo4j_password is required. Provide it directly or set NEO4J_PASSWORD environment variable."
         )
 
-    # Common config for all tools
-    config = {
-        "neo4j_uri": uri,
-        "neo4j_user": neo4j_user,
-        "neo4j_password": password,
-        "neo4j_database": neo4j_database,
-        "embedding_provider": embedding_provider,
-        "embedding_model": embedding_model,
-        **kwargs,
-    }
+    # Pass args explicitly (not via a **dict) so each factory receives the
+    # narrowed per-argument types — uri/password are str here, not str | None.
+    def _build(factory: Callable[..., AgentTool]) -> AgentTool:
+        return factory(
+            neo4j_uri=uri,
+            neo4j_user=neo4j_user,
+            neo4j_password=password,
+            neo4j_database=neo4j_database,
+            embedding_provider=embedding_provider,
+            embedding_model=embedding_model,
+            **kwargs,
+        )
 
     return [
-        _create_search_context_tool(**config),
-        _create_get_entity_graph_tool(**config),
-        _create_add_memory_tool(**config),
-        _create_get_user_preferences_tool(**config),
+        _build(_create_search_context_tool),
+        _build(_create_get_entity_graph_tool),
+        _build(_create_add_memory_tool),
+        _build(_create_get_user_preferences_tool),
     ]
 
 
