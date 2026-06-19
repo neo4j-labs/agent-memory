@@ -7,5 +7,5 @@
 # Measured with integration extras installed: `uv sync --all-extras --group dev`.
 # Refresh after improving a count: `make typecheck-ratchet-update`.
 
-mypy=252
-ty=143
+mypy=245
+ty=139

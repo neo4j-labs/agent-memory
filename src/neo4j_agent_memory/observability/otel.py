@@ -14,9 +14,12 @@ Usage:
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from neo4j_agent_memory.observability.base import Span, Tracer
+
+if TYPE_CHECKING:
+    from opentelemetry.sdk.trace.export import SpanExporter
 
 
 class OpenTelemetrySpan(Span):
@@ -106,8 +109,9 @@ class OpenTelemetryTracer(Tracer):
                     OTLPSpanExporter,
                 )
 
-                exporter = OTLPSpanExporter(endpoint=endpoint, headers=headers)
-                provider.add_span_processor(BatchSpanProcessor(exporter))
+                # Annotate as SpanExporter so the HTTP fallback branch is also assignable.
+                grpc_exporter: SpanExporter = OTLPSpanExporter(endpoint=endpoint, headers=headers)
+                provider.add_span_processor(BatchSpanProcessor(grpc_exporter))
             except ImportError:
                 # Try HTTP exporter
                 try:
@@ -115,8 +119,8 @@ class OpenTelemetryTracer(Tracer):
                         OTLPSpanExporter as HTTPSpanExporter,
                     )
 
-                    exporter = HTTPSpanExporter(endpoint=endpoint, headers=headers)
-                    provider.add_span_processor(BatchSpanProcessor(exporter))
+                    http_exporter: SpanExporter = HTTPSpanExporter(endpoint=endpoint, headers=headers)
+                    provider.add_span_processor(BatchSpanProcessor(http_exporter))
                 except ImportError:
                     pass  # No exporter available, traces will be collected but not exported
 
