@@ -207,15 +207,20 @@ plugins = ["pydantic.mypy"]
 # ignore_missing_imports override list — audited 2026-06-19 with the integration
 # extras installed (`uv sync --all-extras --group dev`); see the type-safety
 # tracking issue #144. Every previously-listed module (neo4j, sentence_transformers, spacy,
-# gliner, rapidfuzz, langchain_core, llama_index, crewai, agent_framework) now
-# ships py.typed and resolves cleanly, so the stale block was removed (verified
-# count-neutral: 253 -> 253 errors). yaml is covered by typeshed's types-PyYAML,
-# now a declared dev dependency so clean CI resolves it (it was previously only
-# ambiently present, which made the ratchet count non-reproducible). The only
-# deps that genuinely ship no type information are glirel, nest_asyncio, and
+# rapidfuzz, langchain_core, llama_index, crewai, agent_framework) now
+# ships py.typed and resolves cleanly, so the stale block was removed. yaml is
+# covered by typeshed's types-PyYAML, now a declared dev dependency so clean CI
+# resolves it (it was previously only ambiently present, which made the ratchet
+# count non-reproducible). Confirmed (Phase 1) that gliner 0.2.24 ships no
+# py.typed marker; it is suppressed via the override below. The remaining deps
+# that genuinely ship no type information are glirel, nest_asyncio, and
 # google.adk.*; their import diagnostics are intentionally left in the budget and
 # will be addressed in the relevant package phases (local stubs vs. per-module
 # ignore), not suppressed here.
+
+[[tool.mypy.overrides]]
+module = "gliner"
+ignore_missing_imports = true
 
 [tool.ruff]
 target-version = "py310"

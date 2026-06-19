@@ -334,9 +334,9 @@ def merge_extraction_results(
     merged_preferences: list[ExtractedPreference] = []
     for preferences in all_preferences:
         for pref in preferences:
-            key = f"{pref.category}::{pref.preference}"
-            if key not in pref_keys:
-                pref_keys.add(key)
+            pref_key = f"{pref.category}::{pref.preference}"
+            if pref_key not in pref_keys:
+                pref_keys.add(pref_key)
                 merged_preferences.append(pref)
 
     # Use first non-None source text
@@ -626,7 +626,7 @@ class ExtractionPipeline:
 
             # Process results
             for result in batch_results:
-                if isinstance(result, Exception):
+                if isinstance(result, BaseException):
                     # This shouldn't happen with return_exceptions=True, but handle it
                     logger.error(f"Unexpected exception in batch: {result}")
                     continue

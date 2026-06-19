@@ -12,6 +12,8 @@ The default configuration uses a pipeline approach:
 3. LLM as fallback for complex cases and relation extraction
 """
 
+from typing import Any
+
 from neo4j_agent_memory.extraction.base import (
     ENTITY_STOPWORDS,
     EntityExtractor,
@@ -107,7 +109,7 @@ __all__ = [
 
 
 # Lazy imports for optional extractors and schema utilities
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
     """Lazy import optional extractors and GLiNER2/GLiREL schemas."""
     if name == "SpacyEntityExtractor":
         from neo4j_agent_memory.extraction.spacy_extractor import SpacyEntityExtractor
