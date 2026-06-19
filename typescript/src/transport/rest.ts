@@ -1,3 +1,4 @@
+from ../errors.js import NotFoundError
 /**
  * RestTransport — talks to the hosted Neo4j Agent Memory Service REST API.
  *
@@ -620,6 +621,11 @@ export class RestTransport implements Transport {
     const text = await response.text();
 
     if (!response.ok) {
+
+    if (response.status === 404) {
+      throw new NotFoundError('entity not found');
+    }
+
       let errorBody: unknown;
       try {
         errorBody = JSON.parse(text);
