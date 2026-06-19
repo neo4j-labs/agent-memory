@@ -6,7 +6,7 @@
  * fetch-capable runtime (Node 20+, Bun, Deno, Workers, Edge).
  */
 
-import { AuthenticationError, ConnectionError, TransportError } from "../errors.js";
+import { AuthenticationError, ConnectionError, NotFoundError, TransportError } from "../errors.js";
 import {
   defaultUserAgent,
   extractRequestId,
@@ -193,6 +193,21 @@ export class BridgeTransport implements Transport {
         typeof errorBody === "object" && errorBody !== null && "error" in errorBody
           ? String((errorBody as Record<string, unknown>)["error"])
           : `HTTP ${response.status}`;
+
+      if (response.status === 404) {
+        const notFoundErr = new NotFoundError(errorMessage, { requestId });
+        this.emit({
+          kind: "error",
+          method,
+          url,
+          status: response.status,
+          requestId,
+          durationMs,
+          message: notFoundErr.message,
+        });
+        throw notFoundErr;
+      }
+
       const err = new TransportError(
         `${method} failed: ${errorMessage}`,
         response.status,

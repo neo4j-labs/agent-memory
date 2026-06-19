@@ -13,6 +13,7 @@
 import {
   AuthenticationError,
   ConnectionError,
+  NotFoundError,
   NotSupportedError,
   TransportError,
 } from "../errors.js";
@@ -630,6 +631,21 @@ export class RestTransport implements Transport {
         typeof errorBody === "object" && errorBody !== null && "error" in errorBody
           ? String((errorBody as Record<string, unknown>)["error"])
           : `HTTP ${response.status}`;
+
+      if (response.status === 404) {
+        const notFoundErr = new NotFoundError(errMsg, { requestId });
+        this.emit({
+          kind: "error",
+          method,
+          url,
+          status: response.status,
+          requestId,
+          durationMs,
+          message: notFoundErr.message,
+        });
+        throw notFoundErr;
+      }
+
       const err = new TransportError(
         `${method} failed: ${errMsg}`,
         response.status,
