@@ -44,7 +44,7 @@ class SentenceTransformerEmbedder(BaseEmbedder):
         self._model: SentenceTransformer | None = None
         self._dimensions: int | None = None
 
-    def _ensure_model(self) -> "SentenceTransformer":
+    def _ensure_model(self) -> SentenceTransformer:
         """Lazy load the model."""
         if self._model is None:
             try:

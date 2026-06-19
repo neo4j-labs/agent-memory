@@ -62,7 +62,7 @@ class SchemaManager:
 
     def __init__(
         self,
-        client: "Neo4jClient",
+        client: Neo4jClient,
         *,
         vector_dimensions: int = DEFAULT_VECTOR_DIMENSIONS,
     ):

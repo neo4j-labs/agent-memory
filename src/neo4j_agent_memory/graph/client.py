@@ -76,7 +76,7 @@ class Neo4jClient:
             await self._driver.close()
             self._driver = None
 
-    async def __aenter__(self) -> "Neo4jClient":
+    async def __aenter__(self) -> Neo4jClient:
         """Async context manager entry."""
         await self.connect()
         return self

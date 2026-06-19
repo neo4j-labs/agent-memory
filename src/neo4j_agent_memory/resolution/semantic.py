@@ -23,7 +23,7 @@ class SemanticMatchResolver(BaseResolver):
 
     def __init__(
         self,
-        embedder: "Embedder",
+        embedder: Embedder,
         *,
         threshold: float = 0.8,
     ):

@@ -51,7 +51,7 @@ class OpenAIEmbedder(BaseEmbedder):
         else:
             self._dimensions = MODEL_DIMENSIONS.get(model, 1536)
 
-    def _ensure_client(self) -> "AsyncOpenAI":
+    def _ensure_client(self) -> AsyncOpenAI:
         """Ensure the OpenAI client is initialized."""
         if self._client is None:
             try:

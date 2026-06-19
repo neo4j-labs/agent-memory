@@ -101,7 +101,7 @@ class VertexAIEmbedder(BaseEmbedder):
         # Determine dimensions from model name
         self._dimensions = VERTEX_MODEL_DIMENSIONS.get(model, 768)
 
-    def _ensure_initialized(self) -> "TextEmbeddingModel":
+    def _ensure_initialized(self) -> TextEmbeddingModel:
         """Ensure Vertex AI is initialized and return the embedding model.
 
         Note: For thread-safe async initialization, use _ensure_initialized_async instead.
@@ -134,7 +134,7 @@ class VertexAIEmbedder(BaseEmbedder):
         except Exception as e:
             raise EmbeddingError(f"Failed to initialize Vertex AI: {e}") from e
 
-    async def _ensure_initialized_async(self) -> "TextEmbeddingModel":
+    async def _ensure_initialized_async(self) -> TextEmbeddingModel:
         """Thread-safe async initialization."""
         if self._embedding_model is not None:
             return self._embedding_model

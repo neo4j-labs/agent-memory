@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable
+from collections.abc import Callable
 
 from neo4j_agent_memory.core.exceptions import ResolutionError
 from neo4j_agent_memory.resolution.base import (
@@ -10,9 +10,6 @@ from neo4j_agent_memory.resolution.base import (
     ResolutionMatch,
     ResolvedEntity,
 )
-
-if TYPE_CHECKING:
-    pass
 
 
 def is_rapidfuzz_available() -> bool:
