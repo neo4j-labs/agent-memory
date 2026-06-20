@@ -68,6 +68,11 @@ class ToolCallStatus(str, Enum):
     ERROR = "error"
     TIMEOUT = "timeout"
     CANCELLED = "cancelled"
+    COMPLETED = "completed"
+    """Returned by the hosted NAMS service on successful tool-call completion;
+    semantically equivalent to SUCCESS but kept distinct to match the server's
+    actual wire value (see https://github.com/neo4j-labs/project-nams/issues/74).
+    """
 
 
 class ToolCall(MemoryEntry):
