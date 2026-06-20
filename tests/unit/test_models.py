@@ -244,3 +244,16 @@ class TestToolCallModel:
 
         assert tool_call.status == ToolCallStatus.FAILURE
         assert tool_call.error == "Connection timeout"
+
+    def test_tool_call_accepts_completed_status(self):
+        """The hosted NAMS service returns status='completed' on success;
+        the SDK must parse it without raising a ValidationError (issue #128).
+        """
+        tool_call = ToolCall(
+            tool_name="search_api",
+            arguments={"query": "restaurants"},
+            status=ToolCallStatus.COMPLETED,
+        )
+
+        assert tool_call.status == ToolCallStatus.COMPLETED
+        assert tool_call.status == "completed"
