@@ -335,13 +335,16 @@ class TestExtendedToolExecution:
     @pytest.mark.asyncio
     async def test_memory_record_step(self, server, mock_client):
         mock_step = MagicMock()
-        mock_step.id = "step-1"
+        mock_step.id = "00000000-0000-0000-0000-000000000001"
         mock_client.reasoning.add_step = AsyncMock(return_value=mock_step)
 
         async with Client(server) as client:
             result = await client.call_tool(
                 "memory_record_step",
-                {"trace_id": "t-1", "thought": "I should search"},
+                {
+                    "trace_id": "00000000-0000-0000-0000-000000000099",
+                    "thought": "I should search",
+                },
             )
             data = json.loads(result.content[0].text)
             assert data["recorded"] is True
@@ -349,7 +352,7 @@ class TestExtendedToolExecution:
     @pytest.mark.asyncio
     async def test_memory_record_step_with_tool_call(self, server, mock_client):
         mock_step = MagicMock()
-        mock_step.id = "step-1"
+        mock_step.id = "00000000-0000-0000-0000-000000000001"
         mock_tc = MagicMock()
         mock_tc.id = "tc-1"
         mock_client.reasoning.add_step = AsyncMock(return_value=mock_step)
@@ -359,7 +362,7 @@ class TestExtendedToolExecution:
             result = await client.call_tool(
                 "memory_record_step",
                 {
-                    "trace_id": "t-1",
+                    "trace_id": "00000000-0000-0000-0000-000000000099",
                     "thought": "Search for restaurants",
                     "tool_name": "search_api",
                     "tool_args": {"query": "Italian restaurants"},
@@ -376,7 +379,11 @@ class TestExtendedToolExecution:
         async with Client(server) as client:
             result = await client.call_tool(
                 "memory_complete_trace",
-                {"trace_id": "t-1", "outcome": "Found 3 restaurants", "success": True},
+                {
+                    "trace_id": "00000000-0000-0000-0000-000000000099",
+                    "outcome": "Found 3 restaurants",
+                    "success": True,
+                },
             )
             data = json.loads(result.content[0].text)
             assert data["completed"] is True

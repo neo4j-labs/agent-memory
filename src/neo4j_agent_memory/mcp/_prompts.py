@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from fastmcp.prompts import Message
+from mcp.types import PromptMessage
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -34,7 +35,7 @@ def _register_core_prompts(mcp: FastMCP) -> None:
     """Register the core prompt (memory-conversation)."""
 
     @mcp.prompt(name="memory-conversation")
-    def memory_conversation(session_id: str = "") -> list[Message]:
+    def memory_conversation(session_id: str = "") -> list[PromptMessage]:
         """Initialize a memory-aware conversation.
 
         Loads context from memory and instructs Claude on how to use
@@ -70,7 +71,7 @@ def _register_extended_prompts(mcp: FastMCP) -> None:
     """Register extended prompts (memory-reasoning, memory-review)."""
 
     @mcp.prompt(name="memory-reasoning")
-    def memory_reasoning(task: str) -> list[Message]:
+    def memory_reasoning(task: str) -> list[PromptMessage]:
         """Record a reasoning trace for a complex task.
 
         Guides Claude through structured reasoning with step-by-step
@@ -99,7 +100,7 @@ def _register_extended_prompts(mcp: FastMCP) -> None:
         ]
 
     @mcp.prompt(name="memory-review")
-    def memory_review() -> list[Message]:
+    def memory_review() -> list[PromptMessage]:
         """Review stored knowledge and flag contradictions.
 
         Summarizes everything stored in memory: entities, preferences,

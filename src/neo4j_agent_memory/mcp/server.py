@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
@@ -62,7 +63,7 @@ try:
         if settings is not None:
 
             @asynccontextmanager
-            async def lifespan(server: FastMCP):
+            async def lifespan(server: FastMCP) -> AsyncIterator[dict[str, Any]]:
                 """Manage MemoryClient, MemoryIntegration, and Observer lifecycle."""
                 from neo4j_agent_memory import MemoryClient as _MemoryClient
                 from neo4j_agent_memory.integration import MemoryIntegration
@@ -186,7 +187,7 @@ try:
             integration.observer = observer
 
             @asynccontextmanager
-            async def _preconnected_lifespan(server: FastMCP):
+            async def _preconnected_lifespan(server: FastMCP) -> AsyncIterator[dict[str, Any]]:
                 yield {
                     "client": memory_client,
                     "integration": integration,
@@ -331,15 +332,18 @@ try:
         )
 
         if transport == "sse":
-            await server.run_async(transport="sse", host=host, port=port)
+            await server.run_async(transport="sse", host=host, port=port)  # ty: ignore[possibly-missing-attribute]  # run_async exists on FastMCP; ty unifies with the ImportError-fallback stubs
         elif transport == "http":
-            await server.run_async(transport="http", host=host, port=port)
+            await server.run_async(transport="http", host=host, port=port)  # ty: ignore[possibly-missing-attribute]  # same
         else:
-            await server.run_async(transport="stdio")
+            await server.run_async(transport="stdio")  # ty: ignore[possibly-missing-attribute]  # same
 
 except ImportError:
-    # FastMCP not installed
-    class Neo4jMemoryMCPServer:  # type: ignore[no-redef]
+    # FastMCP not installed — these stubs have different signatures from the real
+    # definitions above, which mypy flags as no-redef / misc. Each stub carries a
+    # paired mypy and ty suppression because the two tools disagree on which codes
+    # are needed here.
+    class Neo4jMemoryMCPServer:  # type: ignore[no-redef]  # ty: ignore[unused-ignore-comment]
         """Placeholder when FastMCP is not installed."""
 
         def __init__(self, *args: Any, **kwargs: Any):
@@ -347,12 +351,17 @@ except ImportError:
                 "FastMCP not installed. Install with: pip install neo4j-agent-memory[mcp]"
             )
 
-    def create_mcp_server(*args: Any, **kwargs: Any) -> Neo4jMemoryMCPServer:  # type: ignore[misc]
+        async def run_async(self, *args: Any, **kwargs: Any) -> None:
+            raise ImportError(
+                "FastMCP not installed. Install with: pip install neo4j-agent-memory[mcp]"
+            )
+
+    def create_mcp_server(*args: Any, **kwargs: Any) -> Neo4jMemoryMCPServer:  # type: ignore[misc]  # ty: ignore[unused-ignore-comment]
         raise ImportError(
             "FastMCP not installed. Install with: pip install neo4j-agent-memory[mcp]"
         )
 
-    async def run_server(*args: Any, **kwargs: Any) -> None:
+    async def run_server(*args: Any, **kwargs: Any) -> None:  # type: ignore[misc]  # ty: ignore[unused-ignore-comment]  # fallback stub has wider *args/**kwargs signature than the real one
         raise ImportError(
             "FastMCP not installed. Install with: pip install neo4j-agent-memory[mcp]"
         )

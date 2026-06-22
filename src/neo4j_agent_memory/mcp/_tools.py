@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, cast
+from uuid import UUID
 
 from fastmcp import Context
 
@@ -464,8 +465,15 @@ def _register_extended_tools(mcp: FastMCP) -> None:
         client = get_client(ctx)
 
         try:
+            # The tool accepts list[str] from MCP callers; cast to the narrower
+            # Literal type expected by get_graph — values are validated by the
+            # underlying method at runtime.
+            typed_memory_types = cast(
+                list[Literal["short_term", "long_term", "reasoning"]] | None,
+                memory_types,
+            )
             graph = await client.get_graph(
-                memory_types=memory_types,
+                memory_types=typed_memory_types,
                 session_id=session_id,
                 limit=limit,
                 include_embeddings=False,
@@ -621,7 +629,7 @@ def _register_extended_tools(mcp: FastMCP) -> None:
 
         try:
             step = await client.reasoning.add_step(
-                trace_id=trace_id,
+                trace_id=UUID(trace_id),
                 thought=thought,
                 action=action,
                 observation=observation,
@@ -673,7 +681,7 @@ def _register_extended_tools(mcp: FastMCP) -> None:
 
         try:
             await client.reasoning.complete_trace(
-                trace_id=trace_id,
+                trace_id=UUID(trace_id),
                 outcome=outcome,
                 success=success,
             )
@@ -709,8 +717,11 @@ def _register_extended_tools(mcp: FastMCP) -> None:
             session_id: Session ID to get observations for.
         """
         try:
-            # Try to get observer from lifespan context
-            observer = ctx.request_context.lifespan_context.get("observer")
+            # Try to get observer from lifespan context (request_context may be None
+            # outside an active MCP session — guard before accessing lifespan_context).
+            from neo4j_agent_memory.mcp._common import get_observer
+
+            observer = get_observer(ctx)
             if observer is not None:
                 result = await observer.get_observations(session_id)
                 return json.dumps(result, default=str)
