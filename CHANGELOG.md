@@ -31,6 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Fixed: `MemoryIntegration.add_fact()` parses `valid_from` / `valid_until`.**
+  These public parameters accept ISO date strings but were forwarded as `str`
+  straight into `LongTermMemory.add_fact`, which expects `datetime | None` — a
+  silent type mismatch surfaced by the Phase 2 typing pass. They are now parsed
+  with `datetime.fromisoformat()` (a malformed string now raises `ValueError` at
+  the call site instead of corrupting the stored value). (Type-safety effort, spec §6 Phase 2.)
 - **Fixed: `LongTermMemory.add()` now returns `Entity`** (per its `BaseMemory[Entity]`
   contract) instead of a `tuple[Entity, DeduplicationResult]`. The tuple return was a
   latent contract violation surfaced by the Phase 1 typing pass; no in-tree caller
