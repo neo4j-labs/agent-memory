@@ -13,8 +13,9 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from collections.abc import Coroutine
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar, cast
 
 import click
 from rich.console import Console
@@ -36,7 +37,10 @@ console = Console()
 error_console = Console(stderr=True)
 
 
-def run_async(coro):
+_T = TypeVar("_T")
+
+
+def run_async(coro: Coroutine[Any, Any, _T]) -> _T:
     """Run an async coroutine synchronously."""
     try:
         loop = asyncio.get_running_loop()
@@ -48,7 +52,9 @@ def run_async(coro):
         import concurrent.futures
 
         with concurrent.futures.ThreadPoolExecutor() as pool:
-            return pool.submit(asyncio.run, coro).result()
+            # pool.submit's ParamSpec cannot unify asyncio.run's private _T with our
+            # _T@run_async.  Cast coro to Any at this genuine external boundary.
+            return cast(_T, pool.submit(asyncio.run, cast(Any, coro)).result())
     else:
         return asyncio.run(coro)
 
@@ -146,7 +152,7 @@ def result_to_dict(result: ExtractionResult) -> dict[str, Any]:
 
 @click.group()
 @click.version_option()
-def cli():
+def cli() -> None:
     """Neo4j Agent Memory - Entity Extraction CLI.
 
     Extract entities, relations, and preferences from text using
@@ -226,7 +232,7 @@ def extract(
     preferences: bool,
     confidence_threshold: float,
     quiet: bool,
-):
+) -> None:
     """Extract entities from text.
 
     TEXT can be provided as an argument, from a file (--file), or piped via stdin.
@@ -251,11 +257,17 @@ def extract(
         error_console.print("[red]Error:[/red] No text provided. Use --help for usage.")
         sys.exit(1)
 
+    # Narrow: all branches above either assign text or call sys.exit(1).
+    assert isinstance(text, str)  # type narrowing for ty — sys.exit() is not NoReturn in stubs
+
     if not text.strip():
         error_console.print("[red]Error:[/red] Empty text provided.")
         sys.exit(1)
 
-    async def do_extract():
+    # Capture the narrowed str for the inner closure so ty sees str, not str|None.
+    text_str: str = text
+
+    async def do_extract() -> ExtractionResult:
         # Build the extractor
         builder = ExtractorBuilder()
 
@@ -295,7 +307,7 @@ def extract(
 
         # Run extraction
         result = await ext.extract(
-            text,
+            text_str,
             extract_relations=relations,
             extract_preferences=preferences,
         )
@@ -386,7 +398,7 @@ def extract(
 
 
 @cli.group()
-def schemas():
+def schemas() -> None:
     """Manage extraction schemas."""
     pass
 
@@ -416,7 +428,7 @@ def schemas():
     envvar="NEO4J_PASSWORD",
     help="Neo4j password (or NEO4J_PASSWORD env var).",
 )
-def schemas_list(format: str, uri: str, user: str, password: str | None):
+def schemas_list(format: str, uri: str, user: str, password: str | None) -> None:
     """List saved schemas from Neo4j."""
     if not password:
         error_console.print(
@@ -428,9 +440,12 @@ def schemas_list(format: str, uri: str, user: str, password: str | None):
 
     from neo4j_agent_memory.config.settings import Neo4jConfig
     from neo4j_agent_memory.graph.client import Neo4jClient
-    from neo4j_agent_memory.schema import SchemaManager
+    from neo4j_agent_memory.schema import SchemaListItem, SchemaManager
 
-    async def do_list():
+    # ty does not recognise sys.exit() as NoReturn; assert narrows cleanly.
+    assert password is not None
+
+    async def do_list() -> list[SchemaListItem]:
         config = Neo4jConfig(uri=uri, username=user, password=SecretStr(password))
         async with Neo4jClient(config) as client:
             manager = SchemaManager(client)
@@ -513,7 +528,7 @@ def schemas_list(format: str, uri: str, user: str, password: str | None):
 )
 def schemas_show(
     name: str, version: str | None, format: str, uri: str, user: str, password: str | None
-):
+) -> None:
     """Show details of a saved schema."""
     if not password:
         error_console.print("[red]Error:[/red] Neo4j password required.")
@@ -525,7 +540,10 @@ def schemas_show(
     from neo4j_agent_memory.graph.client import Neo4jClient
     from neo4j_agent_memory.schema import SchemaManager
 
-    async def do_show():
+    # ty does not recognise sys.exit() as NoReturn; assert narrows cleanly.
+    assert password is not None
+
+    async def do_show() -> EntitySchemaConfig | None:
         config = Neo4jConfig(uri=uri, username=user, password=SecretStr(password))
         async with Neo4jClient(config) as client:
             manager = SchemaManager(client)
@@ -543,18 +561,21 @@ def schemas_show(
         error_console.print(f"[red]Error:[/red] Schema '{name}' not found.")
         sys.exit(1)
 
+    # ty does not recognise sys.exit() as NoReturn; assert narrows cleanly.
+    assert schema_config is not None
+
     if format == "json":
-        click.echo(json.dumps(schema_config.to_dict(), indent=2))
+        click.echo(json.dumps(schema_config.model_dump(), indent=2))
     else:
         # YAML output
         import yaml
 
-        click.echo(yaml.dump(schema_config.to_dict(), default_flow_style=False, sort_keys=False))
+        click.echo(yaml.dump(schema_config.model_dump(), default_flow_style=False, sort_keys=False))
 
 
 @schemas.command("validate")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
-def schemas_validate(file: Path):
+def schemas_validate(file: Path) -> None:
     """Validate a schema YAML file."""
     try:
         schema = load_schema_from_file(file)
@@ -594,7 +615,7 @@ def schemas_validate(file: Path):
     envvar="NEO4J_PASSWORD",
     help="Neo4j password.",
 )
-def stats(format: str, uri: str, user: str, password: str | None):
+def stats(format: str, uri: str, user: str, password: str | None) -> None:
     """Show extraction statistics from Neo4j.
 
     Displays counts of entities, relations, and extractors stored in the database.
@@ -611,7 +632,10 @@ def stats(format: str, uri: str, user: str, password: str | None):
     from neo4j_agent_memory.graph.client import Neo4jClient
     from neo4j_agent_memory.memory import LongTermMemory
 
-    async def do_stats():
+    # ty does not recognise sys.exit() as NoReturn; assert narrows cleanly.
+    assert password is not None
+
+    async def do_stats() -> tuple[dict[str, Any], list[dict[str, Any]]]:
         config = Neo4jConfig(uri=uri, username=user, password=SecretStr(password))
         async with Neo4jClient(config) as client:
             memory = LongTermMemory(client)
@@ -678,7 +702,7 @@ def stats(format: str, uri: str, user: str, password: str | None):
 
 
 @cli.group()
-def mcp():
+def mcp() -> None:
     """MCP (Model Context Protocol) server commands.
 
     Start an MCP server that exposes memory tools, resources, and prompts
@@ -844,7 +868,7 @@ def mcp_serve(
     backend: str | None,
     api_key: str | None,
     endpoint: str | None,
-):
+) -> None:
     """Start the MCP server for Claude Desktop and other MCP hosts.
 
     The server exposes memory tools, resources, and prompts via the
@@ -921,7 +945,7 @@ def mcp_serve(
     )
 
 
-def main():
+def main() -> None:
     """Entry point for the CLI."""
     cli()
 
