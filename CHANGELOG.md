@@ -31,6 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Fixed: `neo4j-agent-memory schemas show` crashed with `AttributeError`.** The
+  command called `EntitySchemaConfig.to_dict()`, which does not exist on the
+  Pydantic v2 model — so every `schemas show` invocation raised before producing
+  JSON or YAML output. Now uses `model_dump()`. Surfaced by the Phase 2 typing
+  pass. (Type-safety effort, spec §6 Phase 2.)
 - **Fixed: MCP `memory_record_step` / `memory_complete_trace` validate `trace_id`.**
   They passed the raw `trace_id` string straight into `ReasoningMemory.add_step` /
   `complete_trace` (which key on a `UUID`); a non-UUID id silently matched nothing
