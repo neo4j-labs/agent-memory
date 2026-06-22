@@ -31,6 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Fixed: MCP `memory_record_step` / `memory_complete_trace` validate `trace_id`.**
+  They passed the raw `trace_id` string straight into `ReasoningMemory.add_step` /
+  `complete_trace` (which key on a `UUID`); a non-UUID id silently matched nothing
+  and created an orphaned step instead of raising. The tools now parse `trace_id`
+  to `UUID`, so an invalid id returns a clear error response rather than silently
+  writing orphaned data. Surfaced by the Phase 2 typing pass. (Type-safety effort, spec §6 Phase 2.)
 - **Fixed: `MemoryIntegration.add_fact()` parses `valid_from` / `valid_until`.**
   These public parameters accept ISO date strings but were forwarded as `str`
   straight into `LongTermMemory.add_fact`, which expects `datetime | None` — a
