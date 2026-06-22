@@ -16,7 +16,10 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from neo4j_agent_memory.llm.protocol import EmbeddingProvider
 
 
 @runtime_checkable
@@ -163,23 +166,20 @@ class _ProviderToEmbedderAdapter:
     configured embedding is a new-protocol Provider.
     """
 
-    def __init__(self, provider: object) -> None:
+    def __init__(self, provider: EmbeddingProvider) -> None:
         self._provider = provider
         # Forward the canonical attributes downstream code reads.
         self.model = getattr(provider, "model", type(provider).__name__)
 
     @property
     def dimensions(self) -> int:
-        raw: int = self._provider.dimensions  # type: ignore[attr-defined]  # dynamic dispatch on untyped provider object
-        return raw
+        return self._provider.dimensions
 
     async def embed(self, text: str) -> list[float]:
-        raw: list[float] = await self._provider.embed_one(text)  # type: ignore[attr-defined]  # dynamic dispatch on untyped provider object
-        return raw
+        return await self._provider.embed_one(text)
 
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        raw: list[list[float]] = await self._provider.embed(texts)  # type: ignore[attr-defined]  # dynamic dispatch on untyped provider object
-        return raw
+        return await self._provider.embed(texts)
 
 
 def adapt_to_legacy_embedder(provider: object) -> object:
