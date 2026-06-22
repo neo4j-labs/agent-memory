@@ -315,6 +315,12 @@ _SPEC_MIGRATION_STATUS = EndpointSpec(
 # Accessor
 # -----------------------------------------------------------------------------
 
+# ``NamsOntology`` defines a method named ``list`` which shadows the builtin
+# ``list`` inside class-scope annotation resolution for some type checkers.
+# We expose the builtin under an alias so the affected annotations can refer
+# to it unambiguously.
+_List = list
+
 
 class NamsOntology:
     """``client.ontology`` — the NAMS ontology lifecycle.
@@ -343,7 +349,7 @@ class NamsOntology:
                 "endpoint); it is not available over the TCK bridge.",
             )
 
-    async def list(self) -> list[OntologySummary]:
+    async def list(self) -> _List[OntologySummary]:
         """List system templates + workspace-owned ontologies (active flagged)."""
         self._guard_rest()
         payload = await self._transport.request(_SPEC_LIST)
@@ -513,7 +519,7 @@ class NamsOntology:
         *,
         from_version_id: str,
         to_version_id: str,
-        type_mappings: list[tuple[str, str]] | list[dict[str, str]],
+        type_mappings: _List[tuple[str, str]] | _List[dict[str, str]],
         dry_run: bool = False,
         batch_size: int | None = None,
     ) -> MigrationJob:
