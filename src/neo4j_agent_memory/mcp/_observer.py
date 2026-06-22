@@ -214,7 +214,8 @@ class MemoryObserver:
             elif hasattr(role, "value"):
                 role_name = str(role.value)
             else:
-                role_name = str(role)
+                # Match the original `role or "user"`: a falsy role (e.g. "") -> "user".
+                role_name = str(role) if role else "user"
             transcript_parts.append(f"{role_name}: {msg.content}")
         transcript = "\n".join(transcript_parts)
 
