@@ -9,6 +9,7 @@ Reference: https://github.com/urchade/GLiNER
 
 import asyncio
 import logging
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -867,6 +868,54 @@ class GLiRELConfig(BaseModel):
     device: str = Field(default="cpu", description="Device to run model on (cpu, cuda, mps)")
 
 
+# --- glirel >= 1.x compatibility ---------------------------------------------------------------
+# glirel's ``predict_relations`` consumes the entity ``ner`` argument as TOKEN-index triples
+# ``[start_token, end_token, label]`` aligned to the token list passed as ``text``, and it returns
+# ``head_text``/``tail_text`` as token-list SLICES. Passing GLiNER's CHARACTER offsets in a 4-tuple
+# (and reading head_text/tail_text as strings) produces empty/garbage spans -> zero relations at the
+# default threshold, or a pydantic ValidationError at lower thresholds. The helpers below convert
+# correctly. glirel tokenizes with the regex mirrored here, so the indices line up without spaCy.
+_GLIREL_TOKEN_RE = re.compile(r"\w+(?:[-_]\w+)*|\S")
+
+
+def _glirel_tokenize_with_offsets(text: str) -> tuple[list[str], list[tuple[int, int]]]:
+    """Tokenize ``text`` the way glirel does, returning ``(tokens, char_spans)``."""
+    tokens: list[str] = []
+    spans: list[tuple[int, int]] = []
+    for match in _GLIREL_TOKEN_RE.finditer(text):
+        tokens.append(match.group())
+        spans.append((match.start(), match.end()))
+    return tokens, spans
+
+
+def _apply_glirel_hub_compat_shim() -> bool:
+    """Make ``GLiREL.from_pretrained`` work on newer ``huggingface_hub``.
+
+    glirel (<= 1.2.1) declares ``GLiREL._from_pretrained(..., proxies, resume_download)`` as
+    REQUIRED keyword-only arguments, but newer ``huggingface_hub`` no longer passes them, so
+    ``from_pretrained`` raises ``TypeError: missing 2 required keyword-only arguments``. Inject
+    safe defaults. Idempotent and a no-op if glirel is not importable.
+    """
+    try:
+        import glirel
+
+        cls = glirel.GLiREL
+        if getattr(cls, "_hub_compat_shim", False):
+            return True
+        original = cls.__dict__["_from_pretrained"].__func__
+
+        def _patched(c, *args, **kwargs):
+            kwargs.setdefault("proxies", None)
+            kwargs.setdefault("resume_download", None)
+            return original(c, *args, **kwargs)
+
+        cls._from_pretrained = classmethod(_patched)
+        cls._hub_compat_shim = True
+        return True
+    except Exception:  # noqa: BLE001 - best-effort; load errors surface in the `model` property
+        return False
+
+
 class GLiRELExtractor:
     """Relation extraction using GLiREL (GLiNER for Relations).
 
@@ -931,6 +980,7 @@ class GLiRELExtractor:
             try:
                 from glirel import GLiREL
 
+                _apply_glirel_hub_compat_shim()
                 logger.info(f"Loading GLiREL model: {self._model_name}")
                 self._model = GLiREL.from_pretrained(self._model_name)
                 # GLiREL uses .to() for device placement
@@ -973,25 +1023,30 @@ class GLiRELExtractor:
     def _entities_to_glirel_format(
         self,
         entities: list[ExtractedEntity],
+        token_spans: list[tuple[int, int]],
     ) -> list[list[int | str]]:
-        """Convert ExtractedEntity list to GLiREL NER format.
+        """Convert entities to GLiREL's NER format: ``[[start_token, end_token, label], ...]``.
 
-        GLiREL expects entities as: [[start_token, end_token, type, text], ...]
-        But it also accepts character positions when using predict_relations with text.
+        GLiREL expects TOKEN indices into the token list passed to ``predict_relations`` — not the
+        CHARACTER offsets that GLiNER produces. Each entity's character span (``start_pos``..
+        ``end_pos``) is mapped to the range of tokens it overlaps in ``token_spans``. Entities whose
+        span can't be resolved are skipped (fewer relations, never a crash).
         """
-        glirel_entities = []
+        ner: list[list[int | str]] = []
         for entity in entities:
-            # GLiREL format: [start, end, type, text]
-            # Using character positions
-            glirel_entities.append(
-                [
-                    entity.start_pos or 0,
-                    entity.end_pos or len(entity.name),
-                    entity.type,
-                    entity.name,
-                ]
-            )
-        return glirel_entities
+            char_start = entity.start_pos
+            char_end = entity.end_pos
+            if char_start is None or char_end is None:
+                continue
+            start_tok = end_tok = None
+            for index, (tok_start, tok_end) in enumerate(token_spans):
+                if tok_end > char_start and tok_start < char_end:  # token overlaps the entity span
+                    if start_tok is None:
+                        start_tok = index
+                    end_tok = index
+            if start_tok is not None:
+                ner.append([start_tok, end_tok, str(entity.type or "ENTITY")])
+        return ner
 
     def _extract_relations_sync(
         self,
@@ -1012,35 +1067,54 @@ class GLiRELExtractor:
         else:
             labels = list(self.relation_types.keys())
 
-        # Tokenize text
-        tokens = self._tokenize(text)
+        # Tokenize the way GLiREL does and map entity character spans to token indices.
+        tokens, token_spans = _glirel_tokenize_with_offsets(text)
 
-        # Convert entities to GLiREL format
-        ner_entities = self._entities_to_glirel_format(entities)
+        # Convert entities to GLiREL's token-index NER format.
+        ner_entities = self._entities_to_glirel_format(entities, token_spans)
+        if len(ner_entities) < 2:
+            # Fewer than 2 locatable entities -> no pairs to relate.
+            return []
 
-        # Run GLiREL prediction
+        # Run GLiREL prediction. ``top_k=1`` keeps the best-scoring label per entity pair.
         predictions = self.model.predict_relations(
             tokens,
             labels,
             threshold=self.threshold,
             ner=ner_entities,
+            top_k=1,
         )
 
         relations = []
-        for pred in predictions:
+        seen: set[tuple[str, str, str]] = set()
+        for pred in predictions or []:
             head_text = pred.get("head_text", "")
             tail_text = pred.get("tail_text", "")
-            label = pred.get("label", "RELATED_TO")
-            score = pred.get("score", 0.0)
+            # GLiREL returns head_text/tail_text as token-list slices; join them into strings.
+            if isinstance(head_text, (list, tuple)):
+                head_text = " ".join(head_text)
+            if isinstance(tail_text, (list, tuple)):
+                tail_text = " ".join(tail_text)
+            head_text = (head_text or "").strip()
+            tail_text = (tail_text or "").strip()
+            if not head_text or not tail_text or head_text == tail_text:
+                continue
 
-            # Create relation
-            relation = ExtractedRelation(
-                source=head_text,
-                target=tail_text,
-                relation_type=label.upper().replace(" ", "_"),
-                confidence=score,
+            label = pred.get("label", "RELATED_TO")
+            relation_type = str(label).upper().replace(" ", "_")
+            key = (head_text, relation_type, tail_text)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            relations.append(
+                ExtractedRelation(
+                    source=head_text,
+                    target=tail_text,
+                    relation_type=relation_type,
+                    confidence=float(pred.get("score", 0.0) or 0.0),
+                )
             )
-            relations.append(relation)
 
         return relations
 
