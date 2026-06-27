@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from enum import Enum
@@ -16,6 +17,8 @@ from neo4j_agent_memory.core.memory import BaseMemory, MemoryEntry
 from neo4j_agent_memory.core.protocols import ShortTermProtocol
 from neo4j_agent_memory.graph import queries
 from neo4j_agent_memory.graph.query_builder import build_create_entity_query
+
+logger = logging.getLogger(__name__)
 
 
 def _llm_summarizer(
@@ -497,7 +500,11 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         # Extract entities if enabled (done separately for performance)
         if extract_entities and self._extractor is not None:
             for msg in all_created:
-                await self._extract_and_link_entities(msg, extract_relations=extract_relations)
+                await self._extract_and_link_entities(
+                    msg,
+                    extract_relations=extract_relations,
+                    generate_embeddings=generate_embeddings,
+                )
 
         return all_created
 
@@ -749,7 +756,11 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         else:
             # 'auto' — preserve historical behavior.
             if extract_entities and self._extractor is not None:
-                await self._extract_and_link_entities(message, extract_relations=extract_relations)
+                await self._extract_and_link_entities(
+                    message,
+                    extract_relations=extract_relations,
+                    generate_embeddings=generate_embedding,
+                )
 
         return message
 
@@ -1115,6 +1126,7 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         batch_size: int = 50,
         skip_existing: bool = True,
         extract_relations: bool = True,
+        generate_embeddings: bool = True,
         on_progress: Callable[[int, int], None] | None = None,
     ) -> dict[str, int]:
         """
@@ -1128,6 +1140,8 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
             batch_size: Messages to process per batch
             skip_existing: Skip messages that already have entity links (MENTIONS relationships)
             extract_relations: Whether to also extract and store relations between entities
+            generate_embeddings: Whether to embed entity names (default True for
+                searchable recall; pass False for fast structural-only import).
             on_progress: Progress callback (processed_count, total_count)
 
         Returns:
@@ -1169,6 +1183,13 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
                 # Track entity name to ID mapping for relation linking
                 entity_name_to_id: dict[str, str] = {}
 
+                # Embed all extracted names up front in one batch (matches add_entity semantics).
+                name_vectors = (
+                    await self._embed_names([e.name for e in extraction_result.entities])
+                    if generate_embeddings
+                    else {}
+                )
+
                 for entity in extraction_result.entities:
                     # Create or get entity with dynamic labels for type/subtype
                     entity_id = str(uuid4())
@@ -1183,7 +1204,7 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
                             "subtype": entity_subtype,
                             "canonical_name": entity.name,
                             "description": None,
-                            "embedding": None,
+                            "embedding": name_vectors.get(entity.name),
                             "confidence": entity.confidence,
                             "metadata": None,
                             "location": None,  # Required for LOCATION entities
@@ -1325,14 +1346,40 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
             },
         )
 
+    async def _embed_names(self, names: list[str]) -> dict[str, list[float]]:
+        """Embed a batch of entity names; returns {name: vector}.
+
+        Mirrors the entity embedding done in LongTermMemory.add_entity (embeds the
+        canonical name). Failures for individual names are swallowed (the entity is
+        written with embedding=NULL and can be repaired later via
+        LongTermMemory.generate_entity_embeddings_batch()), so one bad input never
+        aborts extraction of a whole message.
+        """
+        if self._embedder is None or not names:
+            return {}
+        uniq = list(dict.fromkeys(n for n in names if n))
+        try:
+            vectors = await self._embedder.embed_batch(uniq)
+            return dict(zip(uniq, vectors))
+        except Exception:  # noqa: BLE001 — fall back to per-name so one failure isn't fatal
+            out: dict[str, list[float]] = {}
+            for n in uniq:
+                try:
+                    out[n] = await self._embedder.embed(n)
+                except Exception:  # noqa: BLE001
+                    logger.warning("entity-name embedding failed for %r; leaving NULL", n)
+            return out
+
     async def _extract_and_link_entities(
-        self, message: Message, *, extract_relations: bool = True
+        self, message: Message, *, extract_relations: bool = True, generate_embeddings: bool = True
     ) -> None:
         """Extract entities from message and link them.
 
         Args:
             message: The message to extract entities from
             extract_relations: Whether to also extract and store relations between entities
+            generate_embeddings: Whether to embed entity names (default True for
+                searchable recall; pass False for fast structural-only import).
         """
         if self._extractor is None:
             return
@@ -1344,6 +1391,13 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
 
         # Track entity name to ID mapping for relation linking
         entity_name_to_id: dict[str, str] = {}
+
+        # Embed all extracted names up front in one batch (matches add_entity semantics).
+        name_vectors = (
+            await self._embed_names([e.name for e in result.entities])
+            if generate_embeddings
+            else {}
+        )
 
         for entity in result.entities:
             # Create or get entity with dynamic labels for type/subtype
@@ -1366,7 +1420,7 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
                     "subtype": entity_subtype,
                     "canonical_name": entity.name,
                     "description": None,
-                    "embedding": None,
+                    "embedding": name_vectors.get(entity.name),
                     "confidence": entity.confidence,
                     "metadata": metadata_payload,
                     "location": None,  # Required for LOCATION entities
