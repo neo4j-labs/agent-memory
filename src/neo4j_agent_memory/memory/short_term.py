@@ -1413,6 +1413,7 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         batch_size: int = 50,
         skip_existing: bool = True,
         extract_relations: bool = True,
+        generate_embeddings: bool = True,
         on_progress: Callable[[int, int], None] | None = None,
         user_identifier: str | None = None,
     ) -> dict[str, int]:
@@ -1427,6 +1428,8 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
             batch_size: Messages to process per batch
             skip_existing: Skip messages that already have entity links (MENTIONS relationships)
             extract_relations: Whether to also extract and store relations between entities
+            generate_embeddings: Whether to embed entity names (default True for
+                searchable recall; pass False for fast structural-only import).
             on_progress: Progress callback (processed_count, total_count)
             user_identifier: Tenant these messages belong to, used to scope
                 resolution candidates when ``resolution.scope="user"``.
@@ -1486,6 +1489,7 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
                     extraction_result,
                     message_id,
                     user_identifier=user_identifier,
+                    embed_entities=generate_embeddings,
                     stats=node_stats,
                 )
                 entities_extracted += len(extraction_result.entities)
