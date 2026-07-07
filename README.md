@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/neo4j-labs-agent-memory-badge.png)](https://mseep.ai/app/neo4j-labs-agent-memory)
+
 # Neo4j Agent Memory
 
 A graph-native memory system for AI agents. Store conversations, build knowledge graphs, and let your agents learn from their own reasoning -- all backed by Neo4j.
