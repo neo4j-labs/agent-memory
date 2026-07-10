@@ -94,14 +94,20 @@ This is the canonical capability reference. Backend-sensitive how-to pages link 
 | No | Yes
 | `client.long_term.add_entity` / `search_entities`
 | Yes (with dedup) | Yes (server-side dedup)
+| `client.long_term.get_entity_by_name`
+| Yes (exact match) | Yes (resolver-normalized: case/punctuation/suffix-insensitive + aliases)
+| `client.long_term.add_relationship` / `get_related_entities`
+| Yes | Yes (types outside the workspace vocabulary collapse to `RELATED_TO`; reads are 1-hop — `depth > 1` raises)
 | `client.long_term.set_entity_feedback` / `get_entity_history`
 | No | Yes
 | `client.long_term.get_entity_provenance`
 | Yes | Yes
 | `client.long_term.geocode_locations` / `search_locations_near`
 | Yes | No
-| `client.long_term.find_potential_duplicates` / `merge_duplicate_entities`
+| `client.long_term.find_potential_duplicates`
 | Yes | (handled server-side)
+| `client.long_term.merge_duplicate_entities`
+| Yes | Yes (returns the surviving entity, not a tuple)
 | `client.reasoning.start_trace` / `add_step` / `record_tool_call`
 | Yes | Yes
 | `client.reasoning.get_tool_stats`

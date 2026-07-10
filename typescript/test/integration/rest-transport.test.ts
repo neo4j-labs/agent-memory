@@ -159,6 +159,245 @@ describe("RestTransport — long-term", () => {
     expect(result).toEqual({ id: "e1", updated: true });
   });
 
+  it("addRelationship POSTs /relationships and maps the response", async () => {
+    let observedBody: unknown = null;
+    server.use(
+      http.post(`${ENDPOINT}/relationships`, async ({ request }) => {
+        observedBody = await request.json();
+        return HttpResponse.json(
+          {
+            id: "rel-1",
+            sourceId: "e1",
+            targetId: "e2",
+            relationshipType: "WORKS_AT",
+            confidence: 1,
+            created: true,
+          },
+          { status: 201 },
+        );
+      }),
+    );
+
+    const client = newClient();
+    const rel = await client.longTerm.addRelationship("e1", "e2", "WORKS_AT", {
+      properties: { since: "2023" },
+    });
+    await client.close();
+
+    expect(observedBody).toEqual({
+      sourceId: "e1",
+      targetId: "e2",
+      relationshipType: "WORKS_AT",
+      properties: { since: "2023" },
+    });
+    expect(rel.id).toBe("rel-1");
+    expect(rel.sourceId).toBe("e1");
+    expect(rel.targetId).toBe("e2");
+    expect(rel.relationshipType).toBe("WORKS_AT");
+    expect(rel.properties).toEqual({ since: "2023" });
+  });
+
+  it("addRelationship passes through the server's collapsed type", async () => {
+    // A type outside the workspace allowlist collapses to RELATED_TO server-side
+    // (original name kept as `predicate`). The SDK reports the WRITTEN type.
+    server.use(
+      http.post(`${ENDPOINT}/relationships`, () =>
+        HttpResponse.json({
+          id: "rel-2",
+          sourceId: "e1",
+          targetId: "e2",
+          relationshipType: "RELATED_TO",
+          predicate: "COLLABORATES_WITH",
+          confidence: 0.8,
+          created: false,
+        }),
+      ),
+    );
+
+    const client = newClient();
+    const rel = await client.longTerm.addRelationship("e1", "e2", "COLLABORATES_WITH");
+    await client.close();
+
+    expect(rel.relationshipType).toBe("RELATED_TO");
+    expect(rel.properties).toEqual({});
+  });
+
+  it("getEntityByName GETs /entities/by-name and returns the first match", async () => {
+    let observedName: string | null = null;
+    server.use(
+      http.get(`${ENDPOINT}/entities/by-name`, ({ request }) => {
+        observedName = new URL(request.url).searchParams.get("name");
+        return HttpResponse.json({
+          entities: [
+            {
+              id: "e1",
+              name: "Acme Corp",
+              type: "organization",
+              description: "The best match",
+              confidence: 0.9,
+              sourceStage: "extraction",
+              createdAt: "2026-05-07T00:00:00Z",
+              updatedAt: "2026-05-08T00:00:00Z",
+              matchKind: "alias",
+              resolvedFrom: "ACME",
+            },
+            { id: "e2", name: "Acme Corp", type: "person" },
+          ],
+        });
+      }),
+    );
+
+    const client = newClient();
+    const entity = await client.longTerm.getEntityByName("acme");
+    await client.close();
+
+    expect(observedName).toBe("acme");
+    expect(entity).not.toBeNull();
+    expect(entity!.id).toBe("e1");
+    expect(entity!.name).toBe("Acme Corp");
+    expect(entity!.type).toBe("organization");
+    expect(entity!.description).toBe("The best match");
+    expect(entity!.confidence).toBe(0.9);
+    expect(entity!.sourceStage).toBe("extraction");
+    expect(entity!.createdAt).toBe("2026-05-07T00:00:00Z");
+    expect(entity!.updatedAt).toBe("2026-05-08T00:00:00Z");
+  });
+
+  it("getEntityByName returns null when the list is empty", async () => {
+    server.use(
+      http.get(`${ENDPOINT}/entities/by-name`, () => HttpResponse.json({ entities: [] })),
+    );
+
+    const client = newClient();
+    const entity = await client.longTerm.getEntityByName("nobody");
+    await client.close();
+
+    expect(entity).toBeNull();
+  });
+
+  it("getRelatedEntities maps inline relationships to entities", async () => {
+    server.use(
+      http.get(`${ENDPOINT}/entities/e1`, () =>
+        HttpResponse.json({
+          id: "e1",
+          name: "Alice",
+          type: "person",
+          relationships: [
+            { relType: "WORKS_AT", targetId: "e2", targetName: "Acme", targetType: "organization" },
+            { relType: "KNOWS", targetId: "e3", targetName: "Bob", targetType: "person" },
+          ],
+        }),
+      ),
+    );
+
+    const client = newClient();
+    const related = await client.longTerm.getRelatedEntities("e1");
+    await client.close();
+
+    expect(related).toHaveLength(2);
+    expect(related[0]).toMatchObject({ id: "e2", name: "Acme", type: "organization" });
+    expect(related[1]).toMatchObject({ id: "e3", name: "Bob", type: "person" });
+  });
+
+  it("getRelatedEntities filters by relationshipType", async () => {
+    server.use(
+      http.get(`${ENDPOINT}/entities/e1`, () =>
+        HttpResponse.json({
+          id: "e1",
+          name: "Alice",
+          type: "person",
+          relationships: [
+            { relType: "WORKS_AT", targetId: "e2", targetName: "Acme", targetType: "organization" },
+            { relType: "KNOWS", targetId: "e3", targetName: "Bob", targetType: "person" },
+          ],
+        }),
+      ),
+    );
+
+    const client = newClient();
+    const related = await client.longTerm.getRelatedEntities("e1", {
+      relationshipType: "KNOWS",
+    });
+    await client.close();
+
+    expect(related).toHaveLength(1);
+    expect(related[0]).toMatchObject({ id: "e3", name: "Bob", type: "person" });
+  });
+
+  it("getRelatedEntities throws NotSupportedError for depth > 1 without fetching", async () => {
+    // No handler registered — an HTTP call would trip onUnhandledRequest: "error".
+    const client = newClient();
+    await expect(
+      client.longTerm.getRelatedEntities("e1", { depth: 2 }),
+    ).rejects.toBeInstanceOf(NotSupportedError);
+    await client.close();
+  });
+
+  it("mergeDuplicateEntities composes merge + fetch using the canonical target", async () => {
+    const calls: string[] = [];
+    let mergeBody: unknown = null;
+    server.use(
+      http.post(`${ENDPOINT}/entities/e-src/merge`, async ({ request }) => {
+        mergeBody = await request.json();
+        calls.push("merge");
+        // The service resolves the requested target to its canonical entity.
+        return HttpResponse.json({ status: "merged", sourceId: "e-src", targetId: "e-canon" });
+      }),
+      http.get(`${ENDPOINT}/entities/e-canon`, () => {
+        calls.push("get");
+        return HttpResponse.json({
+          id: "e-canon",
+          name: "Acme Corp",
+          type: "organization",
+          createdAt: "2026-05-07T00:00:00Z",
+        });
+      }),
+    );
+
+    const client = newClient();
+    const entity = await client.longTerm.mergeDuplicateEntities("e-src", "e-tgt");
+    await client.close();
+
+    expect(mergeBody).toEqual({ targetId: "e-tgt" });
+    expect(calls).toEqual(["merge", "get"]);
+    expect(entity.id).toBe("e-canon");
+    expect(entity.name).toBe("Acme Corp");
+  });
+
+  it("mergeDuplicateEntities renames the canonical target when canonicalName is given", async () => {
+    const calls: string[] = [];
+    let putBody: unknown = null;
+    server.use(
+      http.post(`${ENDPOINT}/entities/e-src/merge`, () => {
+        calls.push("merge");
+        return HttpResponse.json({ status: "merged", sourceId: "e-src", targetId: "e-canon" });
+      }),
+      http.put(`${ENDPOINT}/entities/e-canon`, async ({ request }) => {
+        putBody = await request.json();
+        calls.push("rename");
+        return HttpResponse.json({ status: "updated" });
+      }),
+      http.get(`${ENDPOINT}/entities/e-canon`, () => {
+        calls.push("get");
+        return HttpResponse.json({
+          id: "e-canon",
+          name: "ACME Corporation",
+          type: "organization",
+        });
+      }),
+    );
+
+    const client = newClient();
+    const entity = await client.longTerm.mergeDuplicateEntities("e-src", "e-tgt", {
+      canonicalName: "ACME Corporation",
+    });
+    await client.close();
+
+    expect(calls).toEqual(["merge", "rename", "get"]);
+    expect(putBody).toEqual({ name: "ACME Corporation" });
+    expect(entity.name).toBe("ACME Corporation");
+  });
+
   it("getEntityGraph returns nodes and edges", async () => {
     server.use(
       http.get(`${ENDPOINT}/entities/graph`, () =>

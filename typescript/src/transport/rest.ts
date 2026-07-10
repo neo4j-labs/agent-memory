@@ -86,6 +86,12 @@ interface RestCall {
    * snake_case for request bodies (`entity_types`, `version_id`, …).
    */
   snakeBody?: boolean;
+  /**
+   * Optional pre-dispatch validation hook, run before any HTTP request is
+   * made. Throw to reject parameter combinations the REST endpoint cannot
+   * express (e.g. `get_related_entities` with depth > 1).
+   */
+  preflight?: (camelParams: Record<string, unknown>) => void;
   /** Optional response shaper for endpoints whose payload doesn't match bridge wire. */
   shape?: (raw: unknown, camelParams: Record<string, unknown>) => unknown;
 }
@@ -172,10 +178,80 @@ const ROUTES: Record<string, RestCall | "noop" | "unsupported"> = {
   add_preference: "unsupported",
   add_fact: "unsupported",
   search_preferences: "unsupported",
-  get_entity_by_name: "unsupported",
-  get_related_entities: "unsupported",
-  add_relationship: "unsupported",
-  merge_duplicate_entities: "unsupported",
+  get_entity_by_name: {
+    method: "GET",
+    path: "/entities/by-name",
+    queryParams: ["name"],
+    // Response is `{entities: [...]}` — resolver-normalized matching, ordered
+    // best-match-first, 200 with an empty list when nothing matches. The SDK
+    // method contract is Entity | null, so pluck the first hit.
+    shape: (raw) => {
+      const entities = ((raw as { entities?: unknown[] })?.entities ?? []) as Record<
+        string,
+        unknown
+      >[];
+      const first = entities[0];
+      if (!first) return null;
+      return {
+        id: first["id"],
+        name: first["name"],
+        type: first["type"],
+        description: first["description"],
+        confidence: first["confidence"],
+        source_stage: first["sourceStage"],
+        created_at: first["createdAt"],
+        updated_at: first["updatedAt"],
+        canonical_name: undefined,
+      };
+    },
+  },
+  get_related_entities: {
+    method: "GET",
+    path: "/entities/{entityId}",
+    pathParams: ["entityId"],
+    // GET /v1/entities/{id} inlines both-direction 1-hop relationships; the
+    // REST API cannot traverse deeper.
+    preflight: (camelParams) => {
+      const depth = camelParams["depth"];
+      if (typeof depth === "number" && depth > 1) {
+        throw new NotSupportedError(
+          "get_related_entities with depth > 1 is not supported by the hosted REST API " +
+            "(GET /v1/entities/{id} is 1-hop only). Use BridgeTransport for deeper traversal.",
+        );
+      }
+    },
+    shape: (raw, camelParams) => {
+      const rels = ((raw as { relationships?: unknown[] })?.relationships ?? []) as Record<
+        string,
+        unknown
+      >[];
+      const filter = camelParams["relationshipType"];
+      return rels
+        .filter((r) => filter === undefined || filter === null || r["relType"] === filter)
+        .map((r) => ({ id: r["targetId"], name: r["targetName"], type: r["targetType"] }));
+    },
+  },
+  add_relationship: {
+    method: "POST",
+    path: "/relationships",
+    hasBody: true,
+    // The response's relationshipType is the WRITTEN type — a type outside
+    // the workspace allowlist collapses to RELATED_TO (with the caller's
+    // original name preserved server-side as `predicate`). Pass it through.
+    shape: (raw, camelParams) => {
+      const rel = raw as Record<string, unknown>;
+      return {
+        id: rel["id"],
+        source_id: rel["sourceId"],
+        target_id: rel["targetId"],
+        relationship_type: rel["relationshipType"],
+        properties: (camelParams["properties"] as Record<string, unknown> | undefined) ?? {},
+      };
+    },
+  },
+  // merge_duplicate_entities is a multi-call composition (merge → optional
+  // rename → fetch) that a single ROUTES entry can't express — it is
+  // special-cased in request(). See mergeDuplicateEntitiesComposite().
 
   // Reasoning — legacy not directly representable in REST
   start_trace: "unsupported",
@@ -496,6 +572,15 @@ export class RestTransport implements Transport {
   async close(): Promise<void> {}
 
   async request<T>(method: string, params: Record<string, unknown>): Promise<T> {
+    const original = params ?? {};
+    const camelParams = snakeToCamel<Record<string, unknown>>(original);
+
+    // Composite methods — multi-call REST flows a single ROUTES entry can't
+    // express. Dispatched before the ROUTES lookup.
+    if (method === "merge_duplicate_entities") {
+      return camelToSnake<T>(await this.mergeDuplicateEntitiesComposite(camelParams));
+    }
+
     const route = ROUTES[method];
     if (!route) {
       throw new NotSupportedError(
@@ -511,8 +596,7 @@ export class RestTransport implements Transport {
       );
     }
 
-    const original = params ?? {};
-    const camelParams = snakeToCamel<Record<string, unknown>>(original);
+    route.preflight?.(camelParams);
 
     // Substitute path params (placeholders match camelCase route literals).
     let path = route.path;
@@ -568,14 +652,76 @@ export class RestTransport implements Transport {
       }
     }
 
-    const url = `${this.endpoint}${path}${query}`;
+    const parsed = await this.httpRequest(method, route.method, `${path}${query}`, body);
+    if (parsed === undefined) return undefined as T;
+    const shaped = route.shape ? route.shape(parsed, camelParams) : parsed;
+    return camelToSnake<T>(shaped);
+  }
+
+  /**
+   * merge_duplicate_entities is a two/three-call composition:
+   *
+   *   1. `POST /entities/{sourceId}/merge` with `{targetId}` — the response's
+   *      `targetId` is the canonical-resolved merge target; use IT below.
+   *   2. `PUT /entities/{canonicalId}` with `{name}` — only when a
+   *      `canonical_name` was supplied.
+   *   3. `GET /entities/{canonicalId}` — returned as the merged entity.
+   */
+  private async mergeDuplicateEntitiesComposite(
+    camelParams: Record<string, unknown>,
+  ): Promise<unknown> {
+    const method = "merge_duplicate_entities";
+    for (const name of ["sourceId", "targetId"]) {
+      const v = camelParams[name];
+      if (v === undefined || v === null || v === "") {
+        throw new TransportError(
+          `Missing required parameter '${name}' for method '${method}'`,
+          400,
+          camelParams,
+        );
+      }
+    }
+    const merged = (await this.httpRequest(
+      method,
+      "POST",
+      `/entities/${encodeURIComponent(String(camelParams["sourceId"]))}/merge`,
+      JSON.stringify({ targetId: camelParams["targetId"] }),
+    )) as { targetId?: unknown } | undefined;
+    const canonicalId = encodeURIComponent(String(merged?.targetId ?? camelParams["targetId"]));
+
+    const canonicalName = camelParams["canonicalName"];
+    if (canonicalName !== undefined && canonicalName !== null) {
+      await this.httpRequest(
+        method,
+        "PUT",
+        `/entities/${canonicalId}`,
+        JSON.stringify({ name: canonicalName }),
+      );
+    }
+
+    return this.httpRequest(method, "GET", `/entities/${canonicalId}`);
+  }
+
+  /**
+   * Dispatch one HTTP call and return the parsed JSON body (camelCase, as
+   * the service sent it), or `undefined` for 204/empty responses. Shared by
+   * request() and the composite methods so auth headers, error mapping, and
+   * logging behave identically on every hop.
+   */
+  private async httpRequest(
+    method: string,
+    httpMethod: HttpMethod,
+    pathAndQuery: string,
+    body?: string,
+  ): Promise<unknown> {
+    const url = `${this.endpoint}${pathAndQuery}`;
     const start = nowMs();
-    this.emit({ kind: "request", method, url, httpMethod: route.method });
+    this.emit({ kind: "request", method, url, httpMethod });
     let response: Response;
     try {
       response = await fetch(url, {
-        method: route.method,
-        headers: await this.buildHeaders(route.hasBody),
+        method: httpMethod,
+        headers: await this.buildHeaders(body !== undefined),
         body,
         signal: AbortSignal.timeout(this.timeout),
       });
@@ -614,7 +760,7 @@ export class RestTransport implements Transport {
 
     if (response.status === 204) {
       this.emit({ kind: "response", method, url, status: 204, requestId, durationMs });
-      return undefined as T;
+      return undefined;
     }
 
     const text = await response.text();
@@ -650,10 +796,8 @@ export class RestTransport implements Transport {
 
     this.emit({ kind: "response", method, url, status: response.status, requestId, durationMs });
 
-    if (!text) return undefined as T;
-    let parsed: unknown = JSON.parse(text);
-    if (route.shape) parsed = route.shape(parsed, camelParams);
-    return camelToSnake<T>(parsed);
+    if (!text) return undefined;
+    return JSON.parse(text) as unknown;
   }
 
   private emit(event: Parameters<Logger>[0]): void {
