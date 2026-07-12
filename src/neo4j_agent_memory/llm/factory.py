@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 from importlib.util import find_spec
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, overload
 
 if TYPE_CHECKING:
     from neo4j_agent_memory.llm.protocol import EmbeddingProvider, LLMProvider
@@ -95,6 +95,26 @@ def _looks_like_huggingface_id(model: str) -> bool:
         "palm",
     }
     return org not in known_prefixes
+
+
+@overload
+def from_provider(
+    model: str,
+    *,
+    kind: Literal["llm"] = ...,
+    prefer_litellm: bool = ...,
+    **kwargs: Any,
+) -> LLMProvider: ...
+
+
+@overload
+def from_provider(
+    model: str,
+    *,
+    kind: Literal["embedding"],
+    prefer_litellm: bool = ...,
+    **kwargs: Any,
+) -> EmbeddingProvider: ...
 
 
 def from_provider(

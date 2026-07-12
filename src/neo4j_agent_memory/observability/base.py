@@ -205,7 +205,10 @@ class Tracer(ABC):
                             )
                             raise
 
-                return async_wrapper  # type: ignore
+                # functools.wraps copies func's metadata but the static type of
+                # the wrapper is (...) -> Any, not the input F; the decorator
+                # contract preserves F's signature at runtime.
+                return async_wrapper  # type: ignore[return-value]
             else:
 
                 @functools.wraps(func)
@@ -226,7 +229,9 @@ class Tracer(ABC):
                             )
                             raise
 
-                return sync_wrapper  # type: ignore
+                # See async_wrapper above: functools.wraps preserves F at
+                # runtime; the wrapper's static type is (...) -> Any.
+                return sync_wrapper  # type: ignore[return-value]
 
         return decorator
 

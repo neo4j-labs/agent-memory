@@ -166,7 +166,7 @@ class LLMEntityExtractor(EntityExtractor):
             kwargs: dict[str, Any] = {}
             if api_key is not None:
                 kwargs["api_key"] = api_key
-            provider = from_provider(resolved_model, kind="llm", **kwargs)  # type: ignore[assignment]
+            provider = from_provider(resolved_model, kind="llm", **kwargs)
         self._provider = provider
         self._model_label = getattr(provider, "model", "unknown")
         self._entity_types = entity_types or list(DEFAULT_ENTITY_TYPES)
@@ -290,7 +290,15 @@ class LLMEntityExtractor(EntityExtractor):
         :class:`StructuredExtractor`. Less reliable than the structured
         path but still works for any LLM.
         """
+        from neo4j_agent_memory.llm.protocol import LLMProvider
         from neo4j_agent_memory.llm.types import ChatMessage
+
+        # Reached only for the non-structured path (extract() dispatches
+        # StructuredExtractor providers elsewhere), so the provider is a
+        # plain LLMProvider with .complete(); narrow off the None/structured
+        # union arms.
+        provider = self._provider
+        assert isinstance(provider, LLMProvider)
 
         prompt = self._build_prompt(text, types_to_use)
         messages = [
@@ -298,7 +306,7 @@ class LLMEntityExtractor(EntityExtractor):
             ChatMessage(role="user", content=prompt),
         ]
         try:
-            completion = await self._provider.complete(  # type: ignore[union-attr]
+            completion = await provider.complete(
                 messages,
                 temperature=self._temperature,
             )

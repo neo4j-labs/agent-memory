@@ -164,23 +164,15 @@ class TestBoltImplsImplementProtocols:
         from neo4j_agent_memory.memory.short_term import ShortTermMemory
 
         # We can't easily instantiate ShortTermMemory without dependencies,
-        # but we can check class-level method presence.
+        # but we can check class-level method presence. As of the type-safety
+        # Phase 5 audit, bolt implements the *full* protocol — the Gold-tier
+        # conversation methods are real, the Platinum-tier
+        # observation/reflection methods raise NotSupportedError — so no
+        # method may be missing.
         proto_methods = _method_names(ShortTermProtocol)
         impl_methods = {name for name in dir(ShortTermMemory) if not name.startswith("_")}
         missing = proto_methods - impl_methods
-        # Platinum tier methods are not on bolt impl in Phase 1 — they get
-        # added (or stubbed with NotSupportedError) in Phase 3+. Filter them.
-        platinum_only = {
-            "bulk_add_messages",
-            "get_observations",
-            "get_reflections",
-            "create_conversation",
-            "list_conversations",
-        }
-        unexpected_missing = missing - platinum_only
-        assert not unexpected_missing, (
-            f"ShortTermMemory missing protocol methods: {unexpected_missing}"
-        )
+        assert not missing, f"ShortTermMemory missing protocol methods: {missing}"
 
     def test_long_term_memory_satisfies_protocol(self):
         from neo4j_agent_memory.memory.long_term import LongTermMemory
@@ -188,11 +180,7 @@ class TestBoltImplsImplementProtocols:
         proto_methods = _method_names(LongTermProtocol)
         impl_methods = {name for name in dir(LongTermMemory) if not name.startswith("_")}
         missing = proto_methods - impl_methods
-        platinum_only = {"set_entity_feedback", "get_entity_history"}
-        unexpected_missing = missing - platinum_only
-        assert not unexpected_missing, (
-            f"LongTermMemory missing protocol methods: {unexpected_missing}"
-        )
+        assert not missing, f"LongTermMemory missing protocol methods: {missing}"
 
     def test_reasoning_memory_satisfies_protocol(self):
         from neo4j_agent_memory.memory.reasoning import ReasoningMemory

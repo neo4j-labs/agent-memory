@@ -833,8 +833,9 @@ def _register_platinum_tools(mcp: FastMCP) -> None:
         """
         client = get_client(ctx)
         try:
-            # Platinum-tier — present on NamsLongTermMemory at runtime.
-            await client.long_term.set_entity_feedback(  # type: ignore[attr-defined]
+            # Platinum-tier: bolt raises NotSupportedError (caught below);
+            # NAMS records the feedback.
+            await client.long_term.set_entity_feedback(
                 entity_id, feedback, user_identifier=user_identifier
             )
             return json.dumps({"status": "ok", "entity_id": entity_id, "feedback": feedback})
@@ -861,9 +862,7 @@ def _register_platinum_tools(mcp: FastMCP) -> None:
         """
         client = get_client(ctx)
         try:
-            history = await client.long_term.get_entity_history(  # type: ignore[attr-defined]
-                entity_id, limit=limit
-            )
+            history = await client.long_term.get_entity_history(entity_id, limit=limit)
             return json.dumps({"entity_id": entity_id, "history": history}, default=str)
         except Exception as e:
             logger.error(f"Error in memory_get_entity_history: {e}")
@@ -884,7 +883,7 @@ def _register_platinum_tools(mcp: FastMCP) -> None:
         """
         client = get_client(ctx)
         try:
-            prov = await client.long_term.get_entity_provenance(entity_id)  # type: ignore[arg-type]
+            prov = await client.long_term.get_entity_provenance(entity_id)
             return json.dumps(prov, default=str)
         except Exception as e:
             logger.error(f"Error in memory_get_entity_provenance: {e}")
@@ -909,9 +908,7 @@ def _register_platinum_tools(mcp: FastMCP) -> None:
         """
         client = get_client(ctx)
         try:
-            reflections = await client.short_term.get_reflections(  # type: ignore[attr-defined]
-                session_id, limit=limit
-            )
+            reflections = await client.short_term.get_reflections(session_id, limit=limit)
             return json.dumps({"session_id": session_id, "reflections": reflections}, default=str)
         except Exception as e:
             logger.error(f"Error in memory_get_reflections: {e}")

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from neo4j_agent_memory.config.settings import (
     ExtractionConfig,
@@ -23,7 +23,6 @@ from neo4j_agent_memory.extraction.pipeline import (
 )
 
 if TYPE_CHECKING:
-    from neo4j_agent_memory.llm.protocol import LLMProvider
     from neo4j_agent_memory.schema.models import EntitySchemaConfig
 
 logger = logging.getLogger(__name__)
@@ -206,9 +205,8 @@ def create_llm_extractor(
         kwargs: dict[str, Any] = {}
         if llm_config.api_key is not None:
             kwargs["api_key"] = llm_config.api_key.get_secret_value()
-        llm_provider = cast(
-            "LLMProvider", from_provider(model_id, kind="llm", **kwargs)
-        )  # kind="llm" guarantees LLMProvider
+        # from_provider is @overloaded: kind="llm" is typed to return LLMProvider.
+        llm_provider = from_provider(model_id, kind="llm", **kwargs)
         return LLMEntityExtractor(provider=llm_provider, **common_kwargs)
 
     # No llm_config: let LLMEntityExtractor build its own default provider

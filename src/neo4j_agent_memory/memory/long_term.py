@@ -12,6 +12,7 @@ from uuid import UUID, uuid4
 
 from pydantic import Field
 
+from neo4j_agent_memory.core.exceptions import NotSupportedError
 from neo4j_agent_memory.core.memory import BaseMemory, MemoryEntry
 from neo4j_agent_memory.graph import queries
 from neo4j_agent_memory.graph.query_builder import build_create_entity_query
@@ -1697,7 +1698,7 @@ class LongTermMemory(BaseMemory[Entity]):
 
     async def get_entity_provenance(
         self,
-        entity: Entity | UUID,
+        entity_id: Entity | UUID | str,
     ) -> dict[str, Any]:
         """Get provenance information for an entity.
 
@@ -1705,16 +1706,18 @@ class LongTermMemory(BaseMemory[Entity]):
         and which extractor(s) produced it.
 
         Args:
-            entity: Entity or entity ID
+            entity_id: Entity, entity UUID, or entity id string. (``str`` is
+                accepted to match ``LongTermProtocol.get_entity_provenance``;
+                an :class:`Entity` is also accepted for convenience.)
 
         Returns:
             Dict with 'sources' (messages) and 'extractors' lists
         """
-        entity_id = entity.id if isinstance(entity, Entity) else entity
+        resolved_id = entity_id.id if isinstance(entity_id, Entity) else entity_id
 
         results = await self._client.execute_read(
             queries.GET_ENTITY_PROVENANCE,
-            {"entity_id": str(entity_id)},
+            {"entity_id": str(resolved_id)},
         )
 
         if not results:
@@ -1773,6 +1776,42 @@ class LongTermMemory(BaseMemory[Entity]):
             "sources": sources,
             "extractors": extractors,
         }
+
+    # ── Platinum tier (NAMS-hosted only) ────────────────────────────────
+    #
+    # These complete LongTermProtocol so MemoryClient.long_term (which
+    # advertises the concrete bolt type) type-checks without per-call-site
+    # attr-defined suppressions. They have no self-hosted (bolt) semantics —
+    # entity feedback and edit history are NAMS server-side features — so
+    # they raise NotSupportedError, consistent with the NAMS impls raising
+    # for bolt-only methods.
+
+    async def set_entity_feedback(
+        self,
+        entity_id: UUID | str,
+        feedback: str,
+        **kwargs: Any,
+    ) -> None:
+        """Not supported on the self-hosted (bolt) backend — NAMS only."""
+        raise NotSupportedError(
+            backend="bolt",
+            method="LongTermMemory.set_entity_feedback",
+            message="Entity feedback is a NAMS-hosted (Platinum-tier) feature.",
+            workaround="Use the hosted NAMS backend to record entity feedback.",
+        )
+
+    async def get_entity_history(
+        self,
+        entity_id: UUID | str,
+        **kwargs: Any,
+    ) -> list[dict[str, Any]]:
+        """Not supported on the self-hosted (bolt) backend — NAMS only."""
+        raise NotSupportedError(
+            backend="bolt",
+            method="LongTermMemory.get_entity_history",
+            message="Entity edit/mention history is a NAMS-hosted (Platinum-tier) feature.",
+            workaround="Use get_entity_provenance() for source/extractor provenance on bolt.",
+        )
 
     async def get_entities_from_message(
         self,

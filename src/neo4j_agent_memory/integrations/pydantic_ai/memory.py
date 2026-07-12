@@ -458,9 +458,9 @@ def nams_memory_tools(memory: "MemoryClient") -> list[Callable[..., Any]]:
         Returns:
             Confirmation message.
         """
-        # Platinum-tier method — present on NamsLongTermMemory at runtime; the
-        # bolt LongTermMemory class doesn't declare it (Protocol-vs-class lie).
-        await memory.long_term.set_entity_feedback(  # type: ignore[attr-defined]
+        # Platinum-tier method: NAMS records the feedback; bolt raises
+        # NotSupportedError (both backends declare the method).
+        await memory.long_term.set_entity_feedback(
             entity_id,
             feedback,
             user_identifier=user_identifier,
@@ -478,9 +478,7 @@ def nams_memory_tools(memory: "MemoryClient") -> list[Callable[..., Any]]:
         Returns:
             Formatted history as plain text.
         """
-        entries = await memory.long_term.get_entity_history(  # type: ignore[attr-defined]
-            entity_id, limit=limit
-        )
+        entries = await memory.long_term.get_entity_history(entity_id, limit=limit)
         if not entries:
             return "No history for this entity."
         lines = []
@@ -500,7 +498,7 @@ def nams_memory_tools(memory: "MemoryClient") -> list[Callable[..., Any]]:
         Returns:
             Formatted provenance summary.
         """
-        prov = await memory.long_term.get_entity_provenance(entity_id)  # type: ignore[arg-type]
+        prov = await memory.long_term.get_entity_provenance(entity_id)
         sources = prov.get("sources") or []
         extractors = prov.get("extractors") or []
         lines = [f"Sources ({len(sources)}):"]

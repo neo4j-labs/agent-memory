@@ -32,6 +32,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   raw Cypher access (session-level control the `execute_read`/`execute_write`
   helpers don't offer, e.g. streaming GDS algorithm results). Thin wrapper over the
   existing private `_get_session()`.
+- **The self-hosted (bolt) memory classes now implement the full memory
+  Protocols.** `ShortTermMemory` gains the Gold-tier conversation-lifecycle
+  methods `create_conversation()`, `list_conversations()`, and `bulk_add_messages()`
+  (real, graph-backed — `bulk_add_messages` delegates to the existing
+  `add_messages_batch`). The Platinum-tier NAMS features that have no self-hosted
+  semantics — `ShortTermMemory.get_observations()` / `get_reflections()` and
+  `LongTermMemory.set_entity_feedback()` / `get_entity_history()` — are now present
+  and raise `NotSupportedError(backend="bolt", …)` with a workaround hint (previously
+  they raised `AttributeError`). This lets `client.short_term` / `client.long_term`
+  type-check without per-call-site `attr-defined` suppressions.
 
 ### Changed
 
@@ -131,6 +141,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   given, it waits for the conversation to finish *then* confirms via search. Fully
   backward-compatible: the search-only path is unchanged when no conversation id is
   passed.
+- **`LongTermMemory.get_entity_provenance()` first parameter is now
+  `entity_id: Entity | UUID | str`** (was `entity: Entity | UUID`, positional).
+  The runtime already accepted an id string (it does `entity.id if isinstance(…,
+  Entity) else …`); only the annotation was too narrow, forcing an `arg-type`
+  suppression at every id-string call site. **Public-API typing change** — the
+  parameter was renamed `entity` → `entity_id` (all in-tree callers pass it
+  positionally); code using the `entity=` keyword must switch to `entity_id=`.
+- **`neo4j_agent_memory.llm.from_provider()` is now `@overload`-typed on `kind`.**
+  `kind="llm"` (the default) is statically typed to return `LLMProvider` and
+  `kind="embedding"` to return `EmbeddingProvider`, instead of the
+  `LLMProvider | EmbeddingProvider` union. This removes a downstream `assignment`
+  suppression and a `cast` at the call sites. Annotation-only; runtime is unchanged.
+- **Type-safety Phase 5 — `# type: ignore` audit.** The `src/` suppression count
+  dropped from 29 to 18: the two remaining bare/uncoded ignores were coded and
+  justified, and the bolt-vs-NAMS `attr-defined`/`arg-type` cluster (9 suppressions
+  across `mcp/_tools.py`, `strands/tools.py`, `pydantic_ai/memory.py`) was eliminated
+  by the full-Protocol conformance above rather than suppressed. `ty` diagnostics for
+  `src/` reached **0** (the 3 optional-dep `no-redef` fallbacks now carry a paired
+  `# ty: ignore[unused-ignore-comment]`, matching the existing `mcp/server.py`
+  pattern). Every surviving `# type: ignore` is coded and carries an inline reason.
 
 > **Docs note:** when this ships, flip the "REST-only / no SDK method" notes in
 > `reference/rest-api.adoc`, `reference/ontology-api.adoc`, and

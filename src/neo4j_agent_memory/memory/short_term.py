@@ -11,6 +11,7 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 
+from neo4j_agent_memory.core.exceptions import NotSupportedError
 from neo4j_agent_memory.core.memory import BaseMemory, MemoryEntry
 from neo4j_agent_memory.graph import queries
 from neo4j_agent_memory.graph.query_builder import build_create_entity_query
@@ -498,6 +499,101 @@ class ShortTermMemory(BaseMemory[Message]):
                 await self._extract_and_link_entities(msg, extract_relations=extract_relations)
 
         return all_created
+
+    # ── Gold tier: explicit conversation lifecycle ──────────────────────
+    #
+    # These complete ShortTermProtocol so MemoryClient.short_term (which
+    # advertises the concrete bolt type) type-checks without per-call-site
+    # attr-defined suppressions.
+
+    async def create_conversation(
+        self,
+        session_id: str,
+        **kwargs: Any,
+    ) -> Conversation:
+        """Explicitly create (or return the existing) conversation node.
+
+        Idempotent on bolt: if a conversation already exists for
+        ``session_id`` it is returned unchanged. Pass ``user_identifier``
+        to link the conversation to a :User node (multi-tenant).
+        """
+        await self._ensure_conversation(
+            session_id,
+            user_identifier=kwargs.get("user_identifier"),
+        )
+        return await self.get_conversation(session_id)
+
+    async def list_conversations(self, **kwargs: Any) -> list[Conversation]:
+        """List conversations (most-recently-updated first).
+
+        Pass ``user_identifier`` to scope to a single tenant's
+        conversations; ``limit`` (default 100) bounds the result. Returned
+        ``Conversation`` objects carry metadata only (no messages) — use
+        :meth:`get_conversation` to load a conversation's messages.
+        """
+        user_identifier: str | None = kwargs.get("user_identifier")
+        limit: int = kwargs.get("limit", 100)
+        results = await self._client.execute_read(
+            queries.LIST_ALL_CONVERSATIONS,
+            {"user_identifier": user_identifier, "limit": limit},
+        )
+        conversations = []
+        for row in results:
+            conv_data = dict(row["c"])
+            conversations.append(
+                Conversation(
+                    id=UUID(conv_data["id"]),
+                    session_id=conv_data["session_id"],
+                    title=conv_data.get("title"),
+                    created_at=_to_python_datetime(conv_data.get("created_at")),
+                    updated_at=_to_python_datetime(conv_data.get("updated_at"))
+                    if conv_data.get("updated_at")
+                    else None,
+                )
+            )
+        return conversations
+
+    async def bulk_add_messages(
+        self,
+        session_id: str,
+        messages: list[dict[str, Any]],
+        **kwargs: Any,
+    ) -> list[Message]:
+        """Bulk-insert messages in one call (bolt: batched transactions).
+
+        Thin ``ShortTermProtocol`` alias over :meth:`add_messages_batch`;
+        extra keyword arguments (``batch_size``, ``generate_embeddings``,
+        ``extract_entities``, …) are forwarded.
+        """
+        return await self.add_messages_batch(session_id, messages, **kwargs)
+
+    # ── Platinum tier (NAMS-hosted only) ────────────────────────────────
+
+    async def get_observations(
+        self,
+        session_id: str,
+        **kwargs: Any,
+    ) -> list[dict[str, Any]]:
+        """Not supported on the self-hosted (bolt) backend — NAMS only."""
+        raise NotSupportedError(
+            backend="bolt",
+            method="ShortTermMemory.get_observations",
+            message="Inline observations are a NAMS-hosted (Platinum-tier) feature.",
+            workaround="Use the MemoryObserver / observational-memory layer for bolt.",
+        )
+
+    async def get_reflections(
+        self,
+        session_id: str,
+        **kwargs: Any,
+    ) -> list[dict[str, Any]]:
+        """Not supported on the self-hosted (bolt) backend — NAMS only."""
+        raise NotSupportedError(
+            backend="bolt",
+            method="ShortTermMemory.get_reflections",
+            message="LLM-generated reflections are a NAMS-hosted (Platinum-tier) feature.",
+            workaround="Use the MemoryObserver reflection generator for bolt.",
+        )
 
     async def generate_embeddings_batch(
         self,

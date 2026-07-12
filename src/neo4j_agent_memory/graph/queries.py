@@ -57,6 +57,14 @@ ORDER BY c.updated_at DESC
 LIMIT $limit
 """
 
+LIST_ALL_CONVERSATIONS = """
+MATCH (c:Conversation)
+WHERE $user_identifier IS NULL OR c.user_identifier = $user_identifier
+RETURN c
+ORDER BY c.updated_at DESC
+LIMIT $limit
+"""
+
 CREATE_MESSAGE = """
 MATCH (c:Conversation {id: $conversation_id})
 OPTIONAL MATCH (c)-[:HAS_MESSAGE]->(last:Message)

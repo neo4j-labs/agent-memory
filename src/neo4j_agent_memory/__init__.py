@@ -148,7 +148,7 @@ try:
     from neo4j_agent_memory.embeddings.vertex_ai import VertexAIEmbedder
 except ImportError:
 
-    class VertexAIEmbedder:  # type: ignore[no-redef]
+    class VertexAIEmbedder:  # type: ignore[no-redef]  # ty: ignore[unused-ignore-comment]  # optional-dep fallback: mypy needs no-redef, ty disagrees
         """Stub for VertexAIEmbedder when google-cloud-aiplatform is not installed."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -162,7 +162,7 @@ try:
     from neo4j_agent_memory.integrations.google_adk import Neo4jMemoryService
 except ImportError:
 
-    class Neo4jMemoryService:  # type: ignore[no-redef]
+    class Neo4jMemoryService:  # type: ignore[no-redef]  # ty: ignore[unused-ignore-comment]  # optional-dep fallback: mypy needs no-redef, ty disagrees
         """Stub for Neo4jMemoryService when google-adk is not installed."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -176,7 +176,7 @@ try:
     from neo4j_agent_memory.mcp.server import Neo4jMemoryMCPServer
 except ImportError:
 
-    class Neo4jMemoryMCPServer:  # type: ignore[no-redef]
+    class Neo4jMemoryMCPServer:  # type: ignore[no-redef]  # ty: ignore[unused-ignore-comment]  # optional-dep fallback: mypy needs no-redef, ty disagrees
         """Stub for Neo4jMemoryMCPServer when mcp is not installed."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -519,10 +519,16 @@ class MemoryClient:
         default_llm_provider = (
             self._settings.llm if isinstance(self._settings.llm, _LLMProvider) else None
         )
-        # Concrete bolt impls satisfy the Protocols structurally — mypy's
-        # @runtime_checkable check is conservative, so we suppress the
-        # assignment errors here. Runtime ``isinstance(..., ShortTermProtocol)``
-        # checks pass (covered in tests/unit/nams/test_protocols.py).
+        # The bolt impls implement every Protocol *method* (short-term
+        # conformance is asserted in tests/unit/nams/test_protocols.py;
+        # Platinum-only methods raise NotSupportedError), but their concrete
+        # signatures are narrower than the intentionally-permissive
+        # ``**kwargs`` Protocol signatures (e.g. bolt ``list_sessions(*,
+        # prefix, limit, …)`` vs Protocol ``list_sessions(**kwargs)``), so
+        # mypy does not treat them as structural subtypes. They still hold
+        # the full behavior; the property getters re-narrow to the concrete
+        # bolt type. The NAMS path (below) fills the same fields with the
+        # hosted impls, which is why the field type is the Protocol.
         self._short_term = ShortTermMemory(  # type: ignore[assignment]
             self._client,
             self._embedder,
@@ -777,10 +783,12 @@ class MemoryClient:
         """
         if self._short_term is None:
             raise NotConnectedError("Client not connected. Use 'async with' or call connect().")
-        # Declared return type is the bolt class so bolt users get
-        # type-checked access to bolt-only methods. On NAMS the runtime
-        # type is NamsShortTermMemory, which structurally implements the
-        # Protocol — see ShortTermProtocol in core.protocols.
+        # The field is Protocol-typed (it holds the bolt impl or the NAMS
+        # impl), but the property advertises the concrete bolt class so bolt
+        # users get type-checked access to bolt-only methods (geocoding,
+        # dedup, provenance, …). Returning the Protocol-typed field as the
+        # concrete class is an intentional downcast; on NAMS the runtime type
+        # is NamsShortTermMemory, which implements ShortTermProtocol.
         return self._short_term  # type: ignore[return-value]
 
     @property
@@ -796,6 +804,8 @@ class MemoryClient:
         """
         if self._long_term is None:
             raise NotConnectedError("Client not connected. Use 'async with' or call connect().")
+        # Intentional Protocol-field → concrete-class downcast; see the
+        # short_term property above for the rationale.
         return self._long_term  # type: ignore[return-value]
 
     @property
@@ -811,6 +821,8 @@ class MemoryClient:
         """
         if self._reasoning is None:
             raise NotConnectedError("Client not connected. Use 'async with' or call connect().")
+        # Intentional Protocol-field → concrete-class downcast; see the
+        # short_term property above for the rationale.
         return self._reasoning  # type: ignore[return-value]
 
     @property
@@ -888,6 +900,8 @@ class MemoryClient:
         if self._settings.backend == "nams":
             from neo4j_agent_memory.nams._unsupported import _NamsUnsupported
 
+            # NAMS shim stands in for SchemaManager and raises on use; the
+            # accessor's declared type is the bolt SchemaManager.
             return _NamsUnsupported(  # type: ignore[return-value]
                 accessor="schema",
                 message="Schema operations are server-managed on NAMS.",
@@ -1010,6 +1024,8 @@ class MemoryClient:
             )
         if self._client is None:
             raise NotConnectedError("Client not connected. Use 'async with' or call connect().")
+        # Proxy wraps Neo4jClient to warn on deprecated access while
+        # forwarding calls; the property's declared type is Neo4jClient.
         return _DeprecatedGraphProxy(self._client)  # type: ignore[return-value]
 
     async def get_context(

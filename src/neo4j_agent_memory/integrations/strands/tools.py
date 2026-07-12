@@ -895,8 +895,9 @@ def _nams_set_entity_feedback_tool(
         async def _set() -> str:
             client = _get_or_create_nams_client(endpoint, api_key, transport_mode)
             async with client:
-                # Platinum-tier — present on NamsLongTermMemory at runtime.
-                await client.long_term.set_entity_feedback(  # type: ignore[attr-defined]
+                # Platinum-tier — NAMS records the feedback (bolt would
+                # raise NotSupportedError, but this tool is NAMS-only).
+                await client.long_term.set_entity_feedback(
                     entity_id, feedback, user_identifier=user_id
                 )
             return f"Recorded {feedback!r} feedback on entity {entity_id}."
@@ -929,7 +930,7 @@ def _nams_get_entity_provenance_tool(
         async def _get() -> dict[str, Any]:
             client = _get_or_create_nams_client(endpoint, api_key, transport_mode)
             async with client:
-                return await client.long_term.get_entity_provenance(entity_id)  # type: ignore[arg-type]
+                return await client.long_term.get_entity_provenance(entity_id)
 
         result = _run_async(_get())
         return result if isinstance(result, dict) else {}

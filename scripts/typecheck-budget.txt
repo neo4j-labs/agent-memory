@@ -8,4 +8,4 @@
 # Refresh after improving a count: `make typecheck-ratchet-update`.
 
 mypy=0
-ty=3
+ty=0
