@@ -295,10 +295,15 @@ class LLMEntityExtractor(EntityExtractor):
 
         # Reached only for the non-structured path (extract() dispatches
         # StructuredExtractor providers elsewhere), so the provider is a
-        # plain LLMProvider with .complete(); narrow off the None/structured
-        # union arms.
+        # plain LLMProvider with .complete(). Guard explicitly (not via
+        # assert, which -O strips) to narrow off the None/structured union
+        # arms and fail loudly on a misconfigured provider.
         provider = self._provider
-        assert isinstance(provider, LLMProvider)
+        if not isinstance(provider, LLMProvider):
+            raise ExtractionError(
+                "LLM extraction requires a provider implementing LLMProvider.complete(); "
+                f"got {type(provider).__name__}."
+            )
 
         prompt = self._build_prompt(text, types_to_use)
         messages = [

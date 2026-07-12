@@ -46,12 +46,23 @@ class _ClientStub:
         return []
 
 
+# _ClientStub duck-types Neo4jClient (a concrete class, not a Protocol), so
+# the constructor's `client: Neo4jClient` param needs an arg-type override;
+# these helpers localize that single suppression instead of repeating it.
+def _long_term(client: _ClientStub | None = None) -> LongTermMemory:
+    return LongTermMemory(client or _ClientStub())  # type: ignore[arg-type]
+
+
+def _short_term(client: _ClientStub | None = None) -> ShortTermMemory:
+    return ShortTermMemory(client or _ClientStub(), embedder=None, extractor=None)  # type: ignore[arg-type]
+
+
 # ── Platinum-tier NAMS boundary: bolt raises NotSupportedError ──────────
 
 
 @pytest.mark.asyncio
 async def test_long_term_set_entity_feedback_not_supported_on_bolt():
-    lt = LongTermMemory(_ClientStub())  # type: ignore[arg-type]
+    lt = _long_term()
     with pytest.raises(NotSupportedError) as exc:
         await lt.set_entity_feedback(uuid4(), "positive")
     assert exc.value.backend == "bolt"
@@ -60,7 +71,7 @@ async def test_long_term_set_entity_feedback_not_supported_on_bolt():
 
 @pytest.mark.asyncio
 async def test_long_term_get_entity_history_not_supported_on_bolt():
-    lt = LongTermMemory(_ClientStub())  # type: ignore[arg-type]
+    lt = _long_term()
     with pytest.raises(NotSupportedError) as exc:
         await lt.get_entity_history(uuid4())
     assert exc.value.backend == "bolt"
@@ -69,7 +80,7 @@ async def test_long_term_get_entity_history_not_supported_on_bolt():
 
 @pytest.mark.asyncio
 async def test_short_term_get_observations_not_supported_on_bolt():
-    st = ShortTermMemory(_ClientStub(), embedder=None, extractor=None)  # type: ignore[arg-type]
+    st = _short_term()
     with pytest.raises(NotSupportedError) as exc:
         await st.get_observations("session-1")
     assert exc.value.backend == "bolt"
@@ -78,7 +89,7 @@ async def test_short_term_get_observations_not_supported_on_bolt():
 
 @pytest.mark.asyncio
 async def test_short_term_get_reflections_not_supported_on_bolt():
-    st = ShortTermMemory(_ClientStub(), embedder=None, extractor=None)  # type: ignore[arg-type]
+    st = _short_term()
     with pytest.raises(NotSupportedError) as exc:
         await st.get_reflections("session-1")
     assert exc.value.backend == "bolt"
@@ -90,7 +101,7 @@ async def test_short_term_get_reflections_not_supported_on_bolt():
 
 @pytest.mark.asyncio
 async def test_bulk_add_messages_delegates_to_batch(monkeypatch):
-    st = ShortTermMemory(_ClientStub(), embedder=None, extractor=None)  # type: ignore[arg-type]
+    st = _short_term()
     captured: dict[str, Any] = {}
 
     async def fake_batch(session_id: str, messages: list[dict[str, Any]], **kwargs: Any):
@@ -109,7 +120,7 @@ async def test_bulk_add_messages_delegates_to_batch(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_create_conversation_returns_conversation(monkeypatch):
-    st = ShortTermMemory(_ClientStub(), embedder=None, extractor=None)  # type: ignore[arg-type]
+    st = _short_term()
     conv_id = uuid4()
 
     async def fake_ensure(session_id: str, *args: Any, **kwargs: Any):
@@ -135,7 +146,7 @@ async def test_list_conversations_returns_conversations():
             {"c": {"id": str(uuid4()), "session_id": "s2", "title": None}},
         ]
     )
-    st = ShortTermMemory(client, embedder=None, extractor=None)  # type: ignore[arg-type]
+    st = _short_term(client)
     convs = await st.list_conversations(limit=10)
     assert len(convs) == 2
     assert all(isinstance(c, Conversation) for c in convs)
