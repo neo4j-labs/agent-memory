@@ -532,7 +532,10 @@ class ShortTermMemory(BaseMemory[Message]):
         :meth:`get_conversation` to load a conversation's messages.
         """
         user_identifier: str | None = kwargs.get("user_identifier")
-        limit: int = kwargs.get("limit", 100)
+        # Coerce an explicit ``limit=None`` to the default: Neo4j rejects a
+        # null LIMIT, and NAMS likewise drops a None limit.
+        limit = kwargs.get("limit")
+        limit = 100 if limit is None else limit
         results = await self._client.execute_read(
             queries.LIST_ALL_CONVERSATIONS,
             {"user_identifier": user_identifier, "limit": limit},

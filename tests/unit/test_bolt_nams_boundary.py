@@ -151,3 +151,14 @@ async def test_list_conversations_returns_conversations():
     assert len(convs) == 2
     assert all(isinstance(c, Conversation) for c in convs)
     assert {c.session_id for c in convs} == {"s1", "s2"}
+
+
+@pytest.mark.asyncio
+async def test_list_conversations_coerces_none_limit():
+    # An explicit limit=None must not reach Cypher (Neo4j rejects LIMIT null).
+    client = _ClientStub(read_result=[])
+    st = _short_term(client)
+    await st.list_conversations(limit=None)
+    assert client.reads, "expected a read query"
+    _, params = client.reads[-1]
+    assert params["limit"] == 100
