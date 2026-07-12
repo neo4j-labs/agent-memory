@@ -13,7 +13,6 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import UUID
 
 import pytest
 
@@ -410,16 +409,14 @@ class TestMCPReasoningTraceIntegration:
         client.reasoning = MagicMock()
         client.graph = MagicMock()
 
-        # Mock trace object. The real ReasoningTrace.id is a UUID (the MCP
-        # trace tools now parse trace_id via UUID(...)), so the fake must be a
-        # genuine UUID rather than an arbitrary string.
+        # Mock trace object
         mock_trace = MagicMock()
-        mock_trace.id = UUID("00000000-0000-0000-0000-000000000123")
+        mock_trace.id = "trace-123"
         mock_trace.task = "Test task"
 
         # Mock step object
         mock_step = MagicMock()
-        mock_step.id = UUID("00000000-0000-0000-0000-000000000456")
+        mock_step.id = "step-123"
 
         # All reasoning methods need to be AsyncMock
         client.reasoning.start_trace = AsyncMock(return_value=mock_trace)

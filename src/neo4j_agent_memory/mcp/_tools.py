@@ -14,7 +14,6 @@ from __future__ import annotations
 import json
 import logging
 from typing import TYPE_CHECKING, Any, Literal, cast
-from uuid import UUID
 
 from fastmcp import Context
 
@@ -631,7 +630,7 @@ def _register_extended_tools(mcp: FastMCP) -> None:
 
         try:
             step = await client.reasoning.add_step(
-                trace_id=UUID(trace_id),
+                trace_id=trace_id,
                 thought=thought,
                 action=action,
                 observation=observation,
@@ -683,7 +682,7 @@ def _register_extended_tools(mcp: FastMCP) -> None:
 
         try:
             await client.reasoning.complete_trace(
-                trace_id=UUID(trace_id),
+                trace_id=trace_id,
                 outcome=outcome,
                 success=success,
             )

@@ -88,7 +88,7 @@ class ToolCall(MemoryEntry):
 class ReasoningStep(MemoryEntry):
     """A step in the agent's reasoning process."""
 
-    trace_id: UUID = Field(description="Parent trace ID")
+    trace_id: UUID | str = Field(description="Parent trace ID")
     step_number: int = Field(description="Step number in sequence")
     thought: str | None = Field(default=None, description="Agent's thought/reasoning")
     action: str | None = Field(default=None, description="Action taken")
@@ -527,7 +527,7 @@ class ReasoningMemory(BaseMemory[ReasoningStep]):
 
     async def add_step(
         self,
-        trace_id: UUID,
+        trace_id: UUID | str,
         *,
         thought: str | None = None,
         action: str | None = None,
@@ -758,7 +758,7 @@ class ReasoningMemory(BaseMemory[ReasoningStep]):
 
     async def complete_trace(
         self,
-        trace_id: UUID,
+        trace_id: UUID | str,
         *,
         outcome: str | TraceOutcome | None = None,
         success: bool | None = None,
@@ -897,7 +897,7 @@ class ReasoningMemory(BaseMemory[ReasoningStep]):
             },
         )
 
-    async def _generate_step_embeddings_batch(self, trace_id: UUID) -> int:
+    async def _generate_step_embeddings_batch(self, trace_id: UUID | str) -> int:
         """
         Batch generate embeddings for all steps in a trace that don't have them.
 
