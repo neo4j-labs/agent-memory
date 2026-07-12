@@ -4,7 +4,7 @@ Defines the core interfaces for entity enrichment from external knowledge source
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Protocol, runtime_checkable
 from uuid import UUID
@@ -56,7 +56,7 @@ class EnrichmentResult:
     # Confidence and provenance
     confidence: float = 1.0
     source_url: str | None = None
-    retrieved_at: datetime = field(default_factory=datetime.utcnow)
+    retrieved_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     # Error information
     error_message: str | None = None
@@ -149,7 +149,7 @@ class EnrichmentTask:
     entity_type: str
     context: str | None = None
     priority: int = 0  # Higher = more urgent
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     retry_count: int = 0
     max_retries: int = 3
 

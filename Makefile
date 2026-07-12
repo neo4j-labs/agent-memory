@@ -112,12 +112,12 @@ format-check:
 	uv run ruff format --check src tests
 
 typecheck:
-	uv run mypy src
+	uv run mypy src benchmarks examples/*.py
 
 # Second, independent type checker (Astral's ty). Non-blocking by itself today;
 # the typecheck-ratchet target is what gates regressions in CI.
 ty:
-	uv run ty check src
+	uv run ty check src benchmarks examples/*.py
 
 # Monotonic error ratchet: fails if mypy/ty counts rise above the committed
 # budget (scripts/typecheck-budget.txt), or improve without recording it.

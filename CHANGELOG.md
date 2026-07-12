@@ -94,6 +94,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ReasoningTrace.started_at`, and `_to_python_datetime` fallbacks) switched from
   naive `datetime.utcnow()` to `datetime.now(timezone.utc)`. Reads already produced
   aware datetimes; this makes the write side consistent.
+- **The remaining default timestamps are now timezone-aware (UTC).** Extends the
+  change above to the base `core.MemoryEntry.created_at` (inherited by `Entity`,
+  `Preference`, `Fact`, and every other memory model) and to
+  `EnrichmentResult.retrieved_at` / `EnrichmentTask.created_at` — the last
+  `datetime.utcnow()` call sites in the library. The whole library now writes
+  aware UTC timestamps.
+- **The type-check ratchet now covers `benchmarks/` and the top-level
+  `examples/*.py` demos in addition to `src/`, and all of `src/` is
+  `mypy --strict`-clean (0 errors).** `testing/mocks.py` was the last holdout:
+  `MockReasoningMemory.complete_trace()` now raises on an unknown trace id (matching
+  the real `ReasoningMemory`) instead of returning `None`, and
+  `MockMemoryClient.__aexit__` is fully typed. Three latent bugs in the example
+  scripts were fixed in the process: `basic_usage.py` passed a tool result
+  positionally to the keyword-only `StreamingTraceRecorder.record_tool_call(result=…)`;
+  `langchain_agent.py` used the pre-rename `include_/search_episodic|semantic`
+  keyword arguments (now `*_short_term` / `*_long_term`), which pydantic silently
+  dropped; and `enrichment_example.py` passed a non-existent `confidence=` argument
+  to `add_entity`.
 - **Fixed: GLiNER entity spans with `end_pos == 0`.** In `extraction/gliner_extractor.py`
   the span fallback changed from `entity.end_pos or len(name)` to an explicit
   `is not None` check, so a zero-width span at offset 0 is preserved instead of being

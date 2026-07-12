@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Monotonic type-check error ratchet.
 
-Runs the project type checkers (``mypy`` and ``ty``) over ``src`` and compares
-their error/diagnostic counts against a committed budget
-(``scripts/typecheck-budget.txt``).
+Runs the project type checkers (``mypy`` and ``ty``) over the checked surface
+(``src``, ``benchmarks``, and the top-level ``examples/*.py`` demos — see
+``_targets()``) and compares their error/diagnostic counts against a committed
+budget (``scripts/typecheck-budget.txt``).
 
 The budget may only ever *decrease*. This makes CI blocking on regressions from
 day one even while the absolute count is still non-zero (see the type-safety
@@ -35,7 +36,25 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 BUDGET_FILE = SCRIPT_DIR / "typecheck-budget.txt"
-TARGET = "src"
+
+
+def _targets() -> list[str]:
+    """The checked surface: ``src``, ``benchmarks``, and the top-level
+    single-file example demos (``examples/*.py``).
+
+    The example subdirectories (``examples/<name>/main.py`` etc.) and the
+    full-stack example applications are intentionally excluded here: their many
+    identically-named ``main.py`` modules collide under a single mypy
+    invocation, and the full apps are standalone projects with their own
+    tooling. They are brought under the checker in a later workstream. Adding a
+    new ``examples/*.py`` demo automatically extends the surface — if it does
+    not type-check, the ratchet count rises and CI fails until it is annotated.
+    """
+    examples = sorted(str(p.relative_to(REPO_ROOT)) for p in (REPO_ROOT / "examples").glob("*.py"))
+    return ["src", "benchmarks", *examples]
+
+
+TARGETS = _targets()
 
 BUDGET_HEADER = """\
 # Type-check error budget (monotonic ratchet).
@@ -75,7 +94,7 @@ def _resolve(tool: str) -> str:
 
 
 def count_mypy() -> int:
-    out = _run([_resolve("mypy"), TARGET])
+    out = _run([_resolve("mypy"), *TARGETS])
     m = re.search(r"Found (\d+) error", out)
     if m:
         return int(m.group(1))
@@ -85,7 +104,7 @@ def count_mypy() -> int:
 
 
 def count_ty() -> int:
-    out = _run([_resolve("ty"), "check", TARGET])
+    out = _run([_resolve("ty"), "check", *TARGETS])
     m = re.search(r"Found (\d+) diagnostic", out)
     if m:
         return int(m.group(1))

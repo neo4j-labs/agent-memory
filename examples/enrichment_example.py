@@ -26,7 +26,7 @@ import os
 from pathlib import Path
 
 
-def load_env_files():
+def load_env_files() -> None:
     """Load environment variables from .env files."""
     try:
         from dotenv import load_dotenv
@@ -53,7 +53,7 @@ def load_env_files():
 load_env_files()
 
 
-async def demo_direct_provider_usage():
+async def demo_direct_provider_usage() -> None:
     """Demonstrate using enrichment providers directly without Neo4j."""
     print("=" * 60)
     print("DEMO 1: Direct Provider Usage (No Neo4j Required)")
@@ -135,7 +135,7 @@ async def demo_direct_provider_usage():
     print(f"  Status: {result.status.value}")  # Should be SKIPPED
 
 
-async def demo_diffbot_provider():
+async def demo_diffbot_provider() -> None:
     """Demonstrate using Diffbot provider (requires API key)."""
     print("\n" + "=" * 60)
     print("DEMO 2: Diffbot Provider (Requires API Key)")
@@ -184,7 +184,7 @@ async def demo_diffbot_provider():
         print(f"  Error: {result.error_message}")
 
 
-async def demo_caching_and_composite():
+async def demo_caching_and_composite() -> None:
     """Demonstrate caching and composite providers."""
     print("\n" + "=" * 60)
     print("DEMO 3: Caching and Composite Providers")
@@ -252,7 +252,7 @@ async def demo_caching_and_composite():
         )
 
 
-async def demo_with_neo4j():
+async def demo_with_neo4j() -> None:
     """Demonstrate full integration with Neo4j and background enrichment."""
     print("\n" + "=" * 60)
     print("DEMO 4: Full Integration with Neo4j")
@@ -335,7 +335,6 @@ async def demo_with_neo4j():
                 name=name,
                 entity_type=entity_type,
                 description=description,
-                confidence=0.9,
             )
             added_entities.append(entity)
             print(f"  Added: {name} ({entity_type})")
@@ -370,7 +369,7 @@ async def demo_with_neo4j():
         print("Check Neo4j for 'enriched_description' property on Entity nodes.")
 
 
-async def main():
+async def main() -> None:
     """Run all demos."""
     print("=" * 60)
     print("Neo4j Agent Memory - Entity Enrichment Examples")

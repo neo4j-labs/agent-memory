@@ -70,12 +70,14 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-extras --group dev
 
+      # Checked surface: src, benchmarks, and the top-level examples/*.py demos
+      # (kept in sync with scripts/typecheck_ratchet.py `_targets()`).
       - name: Run mypy
-        run: uv run mypy src
+        run: uv run mypy src benchmarks examples/*.py
         continue-on-error: true # Advisory full-error view; the ratchet below is the gate.
 
       - name: Run ty
-        run: uv run ty check src
+        run: uv run ty check src benchmarks examples/*.py
         continue-on-error: true # Advisory until Phase 6 makes it blocking.
 
       # Blocking on regressions from day one: fails if the mypy/ty error counts

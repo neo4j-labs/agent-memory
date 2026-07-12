@@ -21,7 +21,7 @@ from pathlib import Path
 from pydantic import SecretStr
 
 
-def load_env_files():
+def load_env_files() -> None:
     """Load environment variables from .env files."""
     try:
         from dotenv import load_dotenv
@@ -54,19 +54,19 @@ load_env_files()
 from neo4j_agent_memory import MemoryClient, MemorySettings, Neo4jConfig
 
 
-async def main():
+async def main() -> None:
     # v0.3+: when you have a PydanticAI model already configured for your
     # agent, hand it to memory via llm_provider_from_pydantic_ai. The
     # extractor will use the same provider for entity extraction.
     llm_provider = None
     try:
-        from pydantic_ai.models.openai import OpenAIModel
+        from pydantic_ai.models.openai import OpenAIChatModel
 
         from neo4j_agent_memory.integrations.pydantic_ai import (
             llm_provider_from_pydantic_ai,
         )
 
-        agent_model = OpenAIModel("gpt-4o-mini")
+        agent_model = OpenAIChatModel("gpt-4o-mini")
         llm_provider = llm_provider_from_pydantic_ai(agent_model)
         print("Using shared PydanticAI model for memory extraction")
     except ImportError:
@@ -134,7 +134,7 @@ async def main():
         tools = create_memory_tools(client)
         print(f"Created {len(tools)} tools:")
         for tool in tools:
-            print(f"   - {tool.__name__}")
+            print(f"   - {getattr(tool, '__name__', str(tool))}")
 
         # Use the search_memory tool
         search_result = await tools[0]("vegetarian food")

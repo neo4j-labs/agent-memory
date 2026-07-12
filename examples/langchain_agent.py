@@ -21,7 +21,7 @@ from pathlib import Path
 from pydantic import SecretStr
 
 
-def load_env_files():
+def load_env_files() -> None:
     """Load environment variables from .env files."""
     try:
         from dotenv import load_dotenv
@@ -54,7 +54,7 @@ load_env_files()
 from neo4j_agent_memory import MemoryClient, MemorySettings, Neo4jConfig
 
 
-async def main():
+async def main() -> None:
     # v0.3+: when you have a LangChain chat model already configured, use
     # llm_provider_from_langchain to feed it directly into MemorySettings.
     # This avoids declaring the same model twice (once for the agent,
@@ -62,7 +62,7 @@ async def main():
     # provider when LangChain is not installed.
     llm_provider = None
     try:
-        from langchain_openai import ChatOpenAI
+        from langchain_openai import ChatOpenAI  # type: ignore[import-not-found]  # optional example-only dependency, not a project dep
 
         from neo4j_agent_memory.integrations.langchain import (
             llm_provider_from_langchain,
@@ -127,8 +127,8 @@ async def main():
         memory = Neo4jAgentMemory(
             memory_client=client,
             session_id=session_id,
-            include_episodic=True,
-            include_semantic=True,
+            include_short_term=True,
+            include_long_term=True,
             include_reasoning=True,
         )
 
@@ -159,8 +159,8 @@ async def main():
 
         retriever = Neo4jMemoryRetriever(
             memory_client=client,
-            search_episodic=True,
-            search_semantic=True,
+            search_short_term=True,
+            search_long_term=True,
             k=5,
         )
 
