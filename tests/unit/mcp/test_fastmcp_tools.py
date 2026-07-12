@@ -389,6 +389,38 @@ class TestExtendedToolExecution:
             assert data["completed"] is True
 
     @pytest.mark.asyncio
+    async def test_memory_record_step_invalid_trace_id(self, server, mock_client):
+        # A non-UUID trace_id must be rejected before touching the reasoning
+        # layer (guards against the orphaned-step bug the UUID parsing fixed).
+        mock_client.reasoning.add_step = AsyncMock()
+
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "memory_record_step",
+                {"trace_id": "not-a-uuid", "thought": "I should search"},
+            )
+            data = json.loads(result.content[0].text)
+            assert "error" in data
+            assert "recorded" not in data
+            mock_client.reasoning.add_step.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_memory_complete_trace_invalid_trace_id(self, server, mock_client):
+        # A non-UUID trace_id must be rejected before touching the reasoning
+        # layer rather than silently completing nothing.
+        mock_client.reasoning.complete_trace = AsyncMock()
+
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "memory_complete_trace",
+                {"trace_id": "not-a-uuid", "outcome": "done", "success": True},
+            )
+            data = json.loads(result.content[0].text)
+            assert "error" in data
+            assert "completed" not in data
+            mock_client.reasoning.complete_trace.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_graph_query_read_only(self, server, mock_client):
         # v0.4: the graph_query MCP tool routes through client.query.cypher.
         mock_client.query.cypher = AsyncMock(return_value=[{"name": "test"}])

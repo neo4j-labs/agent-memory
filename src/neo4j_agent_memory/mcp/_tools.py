@@ -466,8 +466,10 @@ def _register_extended_tools(mcp: FastMCP) -> None:
 
         try:
             # The tool accepts list[str] from MCP callers; cast to the narrower
-            # Literal type expected by get_graph — values are validated by the
-            # underlying method at runtime.
+            # Literal type expected by get_graph. The cast is safe regardless of
+            # the actual string values because get_graph selects memory types by
+            # membership (e.g. ``"short_term" in memory_types``) and silently
+            # ignores any unrecognized value rather than dispatching on it.
             typed_memory_types = cast(
                 list[Literal["short_term", "long_term", "reasoning"]] | None,
                 memory_types,
@@ -717,8 +719,10 @@ def _register_extended_tools(mcp: FastMCP) -> None:
             session_id: Session ID to get observations for.
         """
         try:
-            # Try to get observer from lifespan context (request_context may be None
-            # outside an active MCP session — guard before accessing lifespan_context).
+            # get_observer returns None when no observer is configured, and
+            # raises RuntimeError when there is no active MCP request context
+            # (i.e. called outside a session). Either way the surrounding
+            # try/except below turns a missing context into an error response.
             from neo4j_agent_memory.mcp._common import get_observer
 
             observer = get_observer(ctx)
