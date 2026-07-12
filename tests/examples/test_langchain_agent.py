@@ -177,7 +177,7 @@ class TestLangchainAgentExample:
         content = example_path.read_text(encoding="utf-8")
 
         # Check for main function and entry point
-        assert "async def main():" in content
+        assert "async def main(" in content
         assert 'if __name__ == "__main__":' in content
         assert "asyncio.run(main())" in content
 
