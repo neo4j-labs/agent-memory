@@ -28,14 +28,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`long_term.expand_graph(node_id, loaded_ids=...)`** — 1-hop entity-neighborhood
   expansion (`POST /v1/graph/expand`) for graph visualization; mirrored in the
   TypeScript SDK as `longTerm.expandGraph(nodeId, loadedIds)`.
+- **`Neo4jClient.session()`** — public accessor returning a new driver session for
+  raw Cypher access (session-level control the `execute_read`/`execute_write`
+  helpers don't offer, e.g. streaming GDS algorithm results). Thin wrapper over the
+  existing private `_get_session()`.
 
 ### Changed
 
+- **Fixed: Microsoft Agent GDS integration never used the GDS library.**
+  `GDSIntegration` called `self._client._client.session()`, but `Neo4jClient` has no
+  `session()` method — so every algorithm query raised `AttributeError`, was swallowed
+  by the surrounding `try/except`, and silently fell back to basic Cypher even when
+  GDS was installed. The unit-test mock had drifted to expose a `.session` attribute
+  the real object lacked, masking the bug. Fixed by adding `Neo4jClient.session()` and
+  routing GDS through it.
+- **Fixed: `context_graph_tools()` (AWS Strands) raised `ValidationError` at runtime.**
+  It built `Neo4jConfig(user=..., password=<str>)`, but the field is `username` and
+  `password` is a `SecretStr`, with `extra="forbid"` — so every client cache-miss
+  raised. Now `username=...` + `password=SecretStr(...)`. Surfaced by `ty`.
+- **Fixed: `Neo4jCrewMemory` (CrewAI) never subclassed the real base class.** The
+  import `from crewai.memory import Memory` raised `ImportError` (the class lives at
+  `crewai.memory.memory.Memory`), so the class silently fell back to the
+  `except ImportError` stub even when CrewAI was installed. Fixed the import.
+- **`transport_mode` narrowed to `Literal["auto", "rest", "bridge"]`** on the Strands
+  `nams_context_graph_tools()` public function (was `str`), matching
+  `NamsConfig.transport_mode` and the documented values. **Public-API typing
+  change** — downstream callers passing an unconstrained `str` variable will see a
+  type-checker error; the runtime contract is unchanged.
+- **`GDSIntegration.find_shortest_path()` return type corrected** from
+  `list[dict[str, Any]] | None` to `dict[str, Any] | None` — the annotation was a lie
+  (the method has always returned a `{"nodes": ..., "relationships": ...}` dict).
+  **Public-API typing change.**
+- **Pydantic AI `record_agent_trace(result=...)` is now typed `AgentRunResult`**
+  (was `RunResult`, which moved to `pydantic_ai.agent`). Annotation-only; the runtime
+  object is unchanged.
+- **All 9 framework integrations are now `mypy --strict` and `ty` clean** (langchain,
+  crewai, agentcore, pydantic_ai, google_adk, openai_agents, strands, llamaindex,
+  microsoft_agent), plus `integrations/base.py` (`run_sync` is now `ParamSpec`-generic).
+  google.adk.* and nest_asyncio are suppressed per-module (`ignore_missing_imports`);
+  they ship no type information and are used at a typed boundary in only one/two files.
 - **Fixed: `neo4j-agent-memory schemas show` crashed with `AttributeError`.** The
   command called `EntitySchemaConfig.to_dict()`, which does not exist on the
   Pydantic v2 model — so every `schemas show` invocation raised before producing
-  JSON or YAML output. Now uses `model_dump()`. Surfaced by the Phase 2 typing
-  pass. (Type-safety effort, spec §6 Phase 2.)
+  JSON or YAML output. Now uses `model_dump()`. Surfaced by the type-safety pass.
 - **`ReasoningMemory.add_step()` / `complete_trace()` accept `trace_id: UUID | str`.**
   Both are `str(trace_id)`-normalized internally for the Cypher match, so the strict
   `UUID`-only parameter was widened to `UUID | str` for parity with the sibling id
@@ -43,36 +78,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `triggered_by_message_id`). This lets the MCP `memory_record_step` /
   `memory_complete_trace` tools forward the caller-supplied id directly instead of
   requiring UUID-formatted ids. Backward compatible (a `UUID` is still accepted).
-  (Type-safety effort, spec §6 Phase 2.)
 - **Fixed: `MemoryIntegration.add_fact()` parses `valid_from` / `valid_until`.**
   These public parameters accept ISO date strings but were forwarded as `str`
   straight into `LongTermMemory.add_fact`, which expects `datetime | None` — a
-  silent type mismatch surfaced by the Phase 2 typing pass. They are now parsed
+  silent type mismatch surfaced by the type-safety pass. They are now parsed
   with `datetime.fromisoformat()` (a malformed string now raises `ValueError` at
-  the call site instead of corrupting the stored value). (Type-safety effort, spec §6 Phase 2.)
+  the call site instead of corrupting the stored value).
 - **Fixed: `LongTermMemory.add()` now returns `Entity`** (per its `BaseMemory[Entity]`
   contract) instead of a `tuple[Entity, DeduplicationResult]`. The tuple return was a
-  latent contract violation surfaced by the Phase 1 typing pass; no in-tree caller
+  latent contract violation surfaced by the type-safety pass; no in-tree caller
   destructured it. Use `add_entity(...)` (unchanged) if you need the
-  `(Entity, DeduplicationResult)` pair. (Type-safety effort, spec §6 Phase 1.)
+  `(Entity, DeduplicationResult)` pair.
 - **Memory timestamps are now timezone-aware (UTC).** Default timestamps in the
   `memory/` layer (`Conversation.created_at`, `ConversationSummary.generated_at`,
   `ReasoningTrace.started_at`, and `_to_python_datetime` fallbacks) switched from
   naive `datetime.utcnow()` to `datetime.now(timezone.utc)`. Reads already produced
-  aware datetimes; this makes the write side consistent. (Type-safety effort, spec §6 Phase 1.)
+  aware datetimes; this makes the write side consistent.
 - **Fixed: GLiNER entity spans with `end_pos == 0`.** In `extraction/gliner_extractor.py`
   the span fallback changed from `entity.end_pos or len(name)` to an explicit
   `is not None` check, so a zero-width span at offset 0 is preserved instead of being
   replaced by the name length. Real extracted entities never have `end_pos == 0`, so
-  this has no observable effect in practice. (Type-safety effort, spec §6 Phase 1.)
+  this has no observable effect in practice.
 - **BREAKING: `InstructorProvider.__init__` no longer accepts `async_client`.**
-  The parameter (default `True`) was removed during the Phase 1 typing pass.
+  The parameter (default `True`) was removed during the type-safety pass.
   `async_client=False` produced a synchronous `instructor.Instructor`, which
   crashed at call time because the provider always `await`s `self._client.create(...)`
   — the sync path never worked. The provider is now unconditionally async. Callers
   that explicitly passed `async_client=True` (the working default) must drop the
-  argument; `async_client=False` was already non-functional. (Type-safety effort,
-  spec §6 Phase 1.)
+  argument; `async_client=False` was already non-functional.
 - **`long_term.wait_for_extraction(...)` now uses the authoritative extraction-status
   endpoint** when a `session_id` / `conversation_id` is supplied (polls until no
   message is pending), instead of only the workspace-scoped entity-search heuristic.

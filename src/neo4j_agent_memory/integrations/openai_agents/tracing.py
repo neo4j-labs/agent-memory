@@ -4,7 +4,9 @@ Records OpenAI agent executions as reasoning traces for
 learning from past interactions and improving future responses.
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from neo4j_agent_memory.memory.reasoning import ToolCallStatus
 
 if TYPE_CHECKING:
     from neo4j_agent_memory.memory.reasoning import ReasoningTrace
@@ -16,9 +18,9 @@ try:
 
     async def record_agent_trace(
         memory: "Neo4jOpenAIMemory",
-        messages: list[dict],
+        messages: list[dict[str, Any]],
         task: str,
-        tool_calls: list[dict] | None = None,
+        tool_calls: list[dict[str, Any]] | None = None,
         outcome: str | None = None,
         success: bool = True,
         generate_embedding: bool = True,
@@ -110,7 +112,7 @@ try:
                             step_id=current_step.id,
                             tool_name=tool_name,
                             arguments=arguments,
-                            status="success",  # Default to success
+                            status=ToolCallStatus.SUCCESS,  # Default to success
                         )
 
                 elif content:
@@ -165,8 +167,10 @@ try:
             success=success,
         )
 
-        # Return the completed trace
-        return await client.reasoning.get_trace(trace.id)
+        # Return the completed trace, falling back to the in-memory trace
+        # if the re-fetch returns nothing.
+        completed = await client.reasoning.get_trace(trace.id)
+        return completed if completed is not None else trace
 
     async def get_similar_traces(
         memory: "Neo4jOpenAIMemory",

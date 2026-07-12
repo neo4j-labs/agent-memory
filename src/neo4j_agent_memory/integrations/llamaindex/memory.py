@@ -3,10 +3,14 @@
 import asyncio
 import json
 import re
-from typing import TYPE_CHECKING, Any
+from collections.abc import Coroutine
+from typing import TYPE_CHECKING, Any, TypeVar
 
 if TYPE_CHECKING:
     from neo4j_agent_memory import MemoryClient
+    from neo4j_agent_memory.memory.short_term import Message
+
+_T = TypeVar("_T")
 
 try:
     from llama_index.core.base.llms.types import ChatMessage, MessageRole
@@ -49,6 +53,7 @@ try:
         ):
             self._client = memory_client
             self._session_id = session_id
+            self._loop: asyncio.AbstractEventLoop | None
             try:
                 self._loop = asyncio.get_running_loop()
             except RuntimeError:
@@ -58,7 +63,7 @@ try:
         # Internal helpers
         # ------------------------------------------------------------------
 
-        def _run_async(self, coro: Any) -> Any:
+        def _run_async(self, coro: Coroutine[Any, Any, _T]) -> _T:
             """Run an async coroutine from sync context."""
             if self._loop is None or self._loop.is_closed():
                 return asyncio.run(coro)
@@ -106,7 +111,7 @@ try:
             return str(obj)
 
         @staticmethod
-        def _get_metadata_dict(msg: Any) -> dict:
+        def _get_metadata_dict(msg: Any) -> dict[str, Any]:
             """Safely extract the metadata dict from a stored message.
 
             Handles both dict and JSON-string forms of the metadata field.
@@ -143,7 +148,8 @@ try:
                 inner = m.group(1)
                 try:
                     # Try JSON-decoding in case it was a JSON-escaped string
-                    return json.loads(f'"{inner}"')
+                    decoded = json.loads(f'"{inner}"')
+                    return decoded if isinstance(decoded, str) else inner
                 except (json.JSONDecodeError, ValueError):
                     return inner.replace("\\'", "'").replace("\\n", "\n")
             return content
@@ -198,7 +204,7 @@ try:
                 additional_kwargs=stored_kwargs,
             )
 
-        def _ensure_tool_call_integrity(self, messages: list) -> list:
+        def _ensure_tool_call_integrity(self, messages: list["Message"]) -> list["Message"]:
             """Filter out incomplete tool-call pairs to prevent API errors.
 
             OpenAI requires that every assistant message with tool_calls is
@@ -224,7 +230,7 @@ try:
             # responses exist; keep tool responses only if their calling
             # assistant msg exists.
             kept_assistant_call_ids: set[str] = set()
-            filtered: list = []
+            filtered: list[Message] = []
             for msg in messages:
                 if self._is_tool_call_msg(msg):
                     needed = self._get_tool_call_ids(msg)
@@ -239,7 +245,7 @@ try:
                     filtered.append(msg)
 
             # Second pass: drop tool responses whose assistant was dropped
-            final: list = []
+            final: list[Message] = []
             for msg in filtered:
                 if self._is_tool_response_msg(msg):
                     tcid = self._get_tool_call_id(msg)
@@ -278,7 +284,7 @@ try:
         # ------------------------------------------------------------------
 
         async def aget(self, input: str | None = None, **kwargs: Any) -> list[ChatMessage]:
-            raw_messages: list = []
+            raw_messages: list[Message] = []
             seen_ids: set[str] = set()
 
             # ---- Always load session conversation history first ----
@@ -343,7 +349,7 @@ try:
                 else None
             )
 
-            content = message.content
+            content = message.content or ""
             # Clean MCP result repr on write so data is stored cleanly
             if role_str == "tool" and content:
                 content = self._extract_mcp_text(content)
@@ -364,7 +370,7 @@ try:
             await self._client.short_term.clear_session(self._session_id)
 
         @classmethod
-        def from_defaults(
+        def from_defaults(  # type: ignore[override]  # base is a loose **kwargs factory; this backend needs a client + session
             cls,
             memory_client: "MemoryClient",
             session_id: str,

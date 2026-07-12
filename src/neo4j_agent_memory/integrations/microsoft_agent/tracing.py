@@ -9,6 +9,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from neo4j_agent_memory.memory.reasoning import ToolCallStatus
+
 if TYPE_CHECKING:
     from neo4j_agent_memory.memory.reasoning import ReasoningTrace
 
@@ -112,7 +114,7 @@ try:
                             step_id=current_step.id,
                             tool_name=tool_name,
                             arguments=arguments,
-                            status="success",
+                            status=ToolCallStatus.SUCCESS,
                         )
 
                 elif content:
@@ -169,8 +171,10 @@ try:
             success=success,
         )
 
-        # Return the completed trace
-        return await client.reasoning.get_trace(trace.id)
+        # Return the completed trace, falling back to the in-memory trace
+        # if the re-fetch returns nothing.
+        completed = await client.reasoning.get_trace(trace.id)
+        return completed if completed is not None else trace
 
     async def get_similar_traces(
         memory: Neo4jMicrosoftMemory,
@@ -253,35 +257,41 @@ try:
     def _get_content(msg: Any) -> str:
         """Extract content from a message."""
         if isinstance(msg, dict):
-            return msg.get("content", "")
+            content = msg.get("content", "")
+            return content if isinstance(content, str) else ""
         # Message.text returns concatenated text from all TextContent items
         if hasattr(msg, "text"):
-            return msg.text or ""
+            text = msg.text or ""
+            return text if isinstance(text, str) else ""
         return ""
 
     def _get_tool_calls(msg: Any) -> list[Any]:
         """Extract tool calls from a message."""
         if isinstance(msg, dict):
-            return msg.get("tool_calls", [])
+            tool_calls = msg.get("tool_calls", [])
+            return tool_calls if isinstance(tool_calls, list) else []
         if hasattr(msg, "tool_calls"):
-            return msg.tool_calls or []
+            tool_calls = msg.tool_calls or []
+            return tool_calls if isinstance(tool_calls, list) else []
         return []
 
     def _get_tool_name(tc: Any) -> str:
         """Extract tool name from a tool call."""
         if isinstance(tc, dict):
             func = tc.get("function", {})
-            if isinstance(func, dict):
-                return func.get("name", "unknown")
-            return tc.get("name", "unknown")
+            name = (
+                func.get("name", "unknown") if isinstance(func, dict) else tc.get("name", "unknown")
+            )
+            return name if isinstance(name, str) else "unknown"
         if hasattr(tc, "function"):
             func = tc.function
             if hasattr(func, "name"):
-                return func.name
+                return func.name if isinstance(func.name, str) else "unknown"
             if isinstance(func, dict):
-                return func.get("name", "unknown")
+                name = func.get("name", "unknown")
+                return name if isinstance(name, str) else "unknown"
         if hasattr(tc, "name"):
-            return tc.name
+            return tc.name if isinstance(tc.name, str) else "unknown"
         return "unknown"
 
     def _get_tool_arguments(tc: Any) -> dict[str, Any]:
@@ -310,7 +320,8 @@ try:
         # Parse if string
         if isinstance(args, str):
             try:
-                return json.loads(args)
+                parsed = json.loads(args)
+                return parsed if isinstance(parsed, dict) else {"raw": args}
             except (json.JSONDecodeError, TypeError):
                 return {"raw": args}
 

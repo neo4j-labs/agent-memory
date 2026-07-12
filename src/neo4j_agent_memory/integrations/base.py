@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from functools import wraps
-from typing import Any, TypeVar
+from typing import Any, ParamSpec, TypeVar
 
+P = ParamSpec("P")
 T = TypeVar("T")
 
 # Shared executor for all integrations to avoid per-call overhead
@@ -29,7 +30,7 @@ def _get_executor() -> concurrent.futures.ThreadPoolExecutor:
     return _executor
 
 
-def run_sync(func: Callable[..., T]) -> Callable[..., T]:
+def run_sync(func: Callable[P, Coroutine[Any, Any, T]]) -> Callable[P, T]:
     """
     Decorator to run an async function synchronously.
 
@@ -53,16 +54,17 @@ def run_sync(func: Callable[..., T]) -> Callable[..., T]:
     """
 
     @wraps(func)
-    def wrapper(*args: Any, **kwargs: Any) -> T:
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
         try:
-            loop = asyncio.get_running_loop()
+            loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
         except RuntimeError:
             loop = None
 
         if loop is not None:
             # Running in async context - use thread pool
             executor = _get_executor()
-            future = executor.submit(asyncio.run, func(*args, **kwargs))
+            coro = func(*args, **kwargs)
+            future = executor.submit(lambda: asyncio.run(coro))
             return future.result(timeout=_SYNC_TIMEOUT_SECONDS)
         else:
             # Not in async context - run directly

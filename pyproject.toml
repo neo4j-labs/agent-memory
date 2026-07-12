@@ -211,15 +211,26 @@ plugins = ["pydantic.mypy"]
 # ships py.typed and resolves cleanly, so the stale block was removed. yaml is
 # covered by typeshed's types-PyYAML, now a declared dev dependency so clean CI
 # resolves it (it was previously only ambiently present, which made the ratchet
-# count non-reproducible). Confirmed (Phase 1) that gliner 0.2.24 ships no
-# py.typed marker; it is suppressed via the override below. The remaining deps
-# that genuinely ship no type information are glirel, nest_asyncio, and
-# google.adk.*; their import diagnostics are intentionally left in the budget and
-# will be addressed in the relevant package phases (local stubs vs. per-module
+# count non-reproducible). Confirmed that gliner 0.2.24 ships no
+# py.typed marker; it is suppressed via the override below. google.adk.* also
+# ships no type information; since it is used at a typed boundary in only two
+# files (the ADK MemoryService), it is suppressed per-module here rather than
+# shipping local stubs. nest_asyncio (used only by the llamaindex integration)
+# is likewise suppressed per-module below. The remaining dep that genuinely
+# ships no type information is glirel; its import diagnostics are intentionally
+# left in the budget and will be addressed later (local stubs vs. per-module
 # ignore), not suppressed here.
 
 [[tool.mypy.overrides]]
 module = "gliner"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "google.adk.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "nest_asyncio"
 ignore_missing_imports = true
 
 [tool.ruff]

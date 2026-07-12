@@ -9,39 +9,52 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-try:
-    from google.adk.memory.base_memory_service import BaseMemoryService, SearchMemoryResponse
-except ImportError:
-    BaseMemoryService = object
+if TYPE_CHECKING:
+    # google.adk ships no py.typed marker, so its exports resolve to Any.
+    # Alias the ADK base to ``object`` for static analysis (strict mode
+    # forbids subclassing Any) and import the response type for annotations.
+    # The runtime import / fallback lives in the ``else`` branch, which the
+    # type checkers treat as unreachable — so neither sees a redefinition.
+    from google.adk.memory.base_memory_service import SearchMemoryResponse
 
-    class SearchMemoryResponse:
-        """Exact replica of ADK's response objects for CI environments."""
+    _ADKBase = object
+else:
+    try:
+        from google.adk.memory.base_memory_service import (
+            BaseMemoryService as _ADKBase,
+        )
+        from google.adk.memory.base_memory_service import SearchMemoryResponse
+    except ImportError:
+        _ADKBase = object
 
-        def __init__(self, memories=None, **kwargs):
-            self.memories = []
-            for m in memories or []:
-                if isinstance(m, dict):
+        class SearchMemoryResponse:
+            """Exact replica of ADK's response objects for CI environments."""
 
-                    class MockPart:
-                        def __init__(self, text):
-                            self.text = text
+            def __init__(self, memories: list[dict[str, Any]] | None = None, **kwargs: Any) -> None:
+                self.memories: list[Any] = []
+                for m in memories or []:
+                    if isinstance(m, dict):
 
-                    class MockContent:
-                        def __init__(self, role, parts):
-                            self.role = role
-                            self.parts = [MockPart(p.get("text", "")) for p in parts]
+                        class MockPart:
+                            def __init__(self, text: str) -> None:
+                                self.text = text
 
-                    class MockEntry:
-                        def __init__(self, data):
-                            self.id = data.get("id")
-                            c_data = data.get("content", {})
-                            self.content = MockContent(
-                                c_data.get("role", "user"), c_data.get("parts", [])
-                            )
+                        class MockContent:
+                            def __init__(self, role: str, parts: list[dict[str, Any]]) -> None:
+                                self.role = role
+                                self.parts = [MockPart(p.get("text", "")) for p in parts]
 
-                    self.memories.append(MockEntry(m))
-                else:
-                    self.memories.append(m)
+                        class MockEntry:
+                            def __init__(self, data: dict[str, Any]) -> None:
+                                self.id = data.get("id")
+                                c_data = data.get("content", {})
+                                self.content = MockContent(
+                                    c_data.get("role", "user"), c_data.get("parts", [])
+                                )
+
+                        self.memories.append(MockEntry(m))
+                    else:
+                        self.memories.append(m)
 
 
 from neo4j_agent_memory.integrations.google_adk.types import (
@@ -59,7 +72,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class Neo4jMemoryService(BaseMemoryService):
+class Neo4jMemoryService(_ADKBase):
     """Neo4j-backed memory service for Google ADK agents.
 
     Implements the ADK MemoryService interface to provide:

@@ -101,6 +101,16 @@ class Neo4jClient:
         driver = self._ensure_connected()
         return driver.session(database=self._config.database)
 
+    def session(self) -> AsyncSession:
+        """Return a new driver session for raw Cypher access.
+
+        Public accessor for callers that need session-level control the
+        ``execute_read``/``execute_write`` helpers don't offer (e.g. the
+        GDS integration streaming algorithm results). Prefer the execute_*
+        helpers for ordinary queries.
+        """
+        return self._get_session()
+
     async def execute_read(
         self,
         query: str,

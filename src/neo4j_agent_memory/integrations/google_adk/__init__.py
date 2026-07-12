@@ -41,7 +41,7 @@ def llm_provider_from_google_adk(model: Any) -> Any:
     return _passthrough(model)
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
     if name == "Neo4jMemoryService":
         from neo4j_agent_memory.integrations.google_adk.memory_service import (
             Neo4jMemoryService,

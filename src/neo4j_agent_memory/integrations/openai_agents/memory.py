@@ -113,7 +113,7 @@ try:
             self,
             role: str,
             content: str,
-            tool_calls: list[dict] | None = None,
+            tool_calls: list[dict[str, Any]] | None = None,
             tool_call_id: str | None = None,
             extract_entities: bool = True,
             generate_embedding: bool = True,
@@ -132,7 +132,7 @@ try:
             Returns:
                 The saved Message object
             """
-            metadata = {}
+            metadata: dict[str, Any] = {}
             if tool_calls:
                 metadata["tool_calls"] = tool_calls
             if tool_call_id:
@@ -151,7 +151,7 @@ try:
             self,
             limit: int = 50,
             include_system: bool = True,
-        ) -> list[dict]:
+        ) -> list[dict[str, Any]]:
             """
             Get conversation history in OpenAI message format.
 
@@ -197,7 +197,7 @@ try:
             include_messages: bool = True,
             include_entities: bool = True,
             include_preferences: bool = True,
-        ) -> list[dict]:
+        ) -> list[dict[str, Any]]:
             """
             Search across all memory types.
 
@@ -297,7 +297,7 @@ try:
             query: str,
             category: str | None = None,
             limit: int = 10,
-        ) -> list[dict]:
+        ) -> list[dict[str, Any]]:
             """
             Search user preferences.
 
@@ -327,7 +327,7 @@ try:
             """Clear all messages in the current session."""
             await self._client.short_term.clear_session(self._session_id)
 
-    def create_memory_tools(memory: Neo4jOpenAIMemory) -> list[dict]:
+    def create_memory_tools(memory: Neo4jOpenAIMemory) -> list[dict[str, Any]]:
         """
         Create OpenAI function tools for memory operations.
 
@@ -446,7 +446,7 @@ try:
     async def execute_memory_tool(
         memory: Neo4jOpenAIMemory,
         tool_name: str,
-        arguments: dict,
+        arguments: dict[str, Any],
     ) -> str:
         """
         Execute a memory tool and return the result.

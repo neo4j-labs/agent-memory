@@ -1,12 +1,15 @@
 """CrewAI memory integration."""
 
-from typing import TYPE_CHECKING, Any
+from collections.abc import Coroutine
+from typing import TYPE_CHECKING, Any, TypeVar
 
 if TYPE_CHECKING:
     from neo4j_agent_memory import MemoryClient
 
+_T = TypeVar("_T")
+
 try:
-    from crewai.memory import Memory
+    from crewai.memory.memory import Memory
 
     class Neo4jCrewMemory(Memory):
         """
@@ -44,7 +47,7 @@ try:
             self._client = memory_client
             self._crew_id = crew_id
 
-        def _run_async(self, coro: Any) -> Any:
+        def _run_async(self, coro: Coroutine[Any, Any, _T]) -> _T:
             """
             Run an async coroutine from sync context.
 
