@@ -120,7 +120,7 @@ class Neo4jClient:
 
             @unit_of_work(metadata={"app": f"neo4j-agent-memory_v{self._package_version}"})
             async def execute_read_tx(tx: AsyncManagedTransaction) -> list[dict[str, Any]]:
-                result = await tx.run(query, parameters or {})  # ty: ignore[invalid-argument-type]  # all queries are pre-built Cypher, never raw user input
+                result = await tx.run(query, parameters or {})  # ty: ignore[invalid-argument-type]  # neo4j stubs type the query as LiteralString; ours is a runtime str (pre-built Cypher, never raw user input)
                 data = await result.data()
                 return data
 
@@ -146,7 +146,7 @@ class Neo4jClient:
 
             @unit_of_work(metadata={"app": f"neo4j-agent-memory_v{self._package_version}"})
             async def execute_write_tx(tx: AsyncManagedTransaction) -> list[dict[str, Any]]:
-                result = await tx.run(query, parameters or {})  # ty: ignore[invalid-argument-type]  # all queries are pre-built Cypher, never raw user input
+                result = await tx.run(query, parameters or {})  # ty: ignore[invalid-argument-type]  # neo4j stubs type the query as LiteralString; ours is a runtime str (pre-built Cypher, never raw user input)
                 data = await result.data()
                 return data
 

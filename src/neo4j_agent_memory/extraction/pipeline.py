@@ -627,7 +627,13 @@ class ExtractionPipeline:
             # Process results
             for result in batch_results:
                 if isinstance(result, BaseException):
-                    # This shouldn't happen with return_exceptions=True, but handle it
+                    # gather(return_exceptions=True) aggregates failures here.
+                    # process_one already converts ordinary Exceptions into failed
+                    # BatchItemResults, so any BaseException reaching this point is a
+                    # control-flow signal (KeyboardInterrupt/SystemExit/CancelledError)
+                    # — re-raise it rather than silently swallowing it.
+                    if not isinstance(result, Exception):
+                        raise result
                     logger.error(f"Unexpected exception in batch: {result}")
                     continue
 

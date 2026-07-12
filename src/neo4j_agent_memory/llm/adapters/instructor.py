@@ -65,6 +65,17 @@ class InstructorProvider:
                 "Install with: pip install 'neo4j-agent-memory[instructor]'"
             ) from exc
         self.model = model
+        # ``async_client`` was removed as a public parameter (breaking change):
+        # the adapter is unconditionally async because ``complete_structured`` is
+        # a coroutine. Detect a stale caller explicitly rather than letting it hit
+        # the confusing "multiple values for keyword argument 'async_client'"
+        # TypeError from the ``from_provider`` call below.
+        if "async_client" in provider_kwargs:
+            raise TypeError(
+                "InstructorProvider no longer accepts an 'async_client' argument; "
+                "the adapter is always async (complete_structured is a coroutine). "
+                "Remove it. See CHANGELOG for this breaking change."
+            )
         # ``instructor.from_provider`` resolves provider strings of the same
         # ``"provider/model"`` shape we use, so the integration is seamless.
         # We always request the async client (Literal[True]) because
