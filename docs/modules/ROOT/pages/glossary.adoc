@@ -52,10 +52,11 @@ link:https://memory.neo4jlabs.com[memory.neo4jlabs.com]. A managed REST
 API; you bring an API key, not a database.
 
 | Workspace
-| The unit of hard isolation on NAMS — its own graph, bound to an API key
-(production) or selected per request via the `X-Workspace-Id` header.
-The `user_identifier=` axis sub-divides users within a workspace. See
-xref:explanation/backends.adoc#tenancy[Tenancy & scoping].
+| The unit of hard isolation on NAMS — its own graph. A *workspace key* is
+bound to one workspace; an *admin key* selects it per request via the
+`X-Workspace-Id` header. The `user_identifier=` axis sub-divides users
+within a workspace. See xref:explanation/backends.adoc#tenancy[Tenancy &
+scoping] and xref:reference/authentication.adoc[key categories].
 
 | Bridge protocol
 | The non-REST wire format (`POST /{snake_case_method}`) used by the
@@ -68,6 +69,26 @@ endpoints) or bridge; override with `NamsConfig(transport_mode=...)`.
 `"openai/text-embedding-3-small"` — resolved to a native adapter or
 LiteLLM. Used on the bolt backend; on NAMS, embedding runs server-side.
 See xref:how-to/bring-your-own-model.adoc[Bring Your Own Model].
+
+| Agent Skill _(Preview)_
+| A portable, self-contained procedure — an agentskills.io `SKILL.md`
+package — that NAMS distils from a workspace's accumulated memory so
+another agent can load and reuse it. See xref:explanation/skills.adoc[Agent Skills].
+
+| Skill distillation _(Preview)_
+| The server-side NAMS pipeline that turns a scoped slice of memory
+(messages, entities, reasoning traces) into an Agent Skill: scope →
+snapshot → grounded synthesis → quality gates → package. Reachable over
+REST + MCP only.
+
+| Provenance grounding
+| The rule that every claim and procedure step in a distilled skill is
+`GROUNDED_IN` specific source nodes — the graph is the authority and the
+LLM only writes from cited sources, so a skill is auditable, not invented.
+
+| Attestation
+| A detached JWS signature over a published skill's contents, verifiable
+offline against the public JWKS at `/.well-known/skill-attest-jwks.json`.
 |===
 
 == Industry-glossary alignment

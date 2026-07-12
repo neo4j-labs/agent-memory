@@ -64,7 +64,7 @@ settings = MemorySettings(
 )
 ----
 
-This is equivalent to `MemorySettings(llm="vertex_ai/gemini-2.5-flash")`. Both Vertex AI models route through LiteLLM in v0.3 (no native LLM adapter); Vertex AI embeddings have a native adapter. See xref:how-to/configure-embedding-provider.adoc[Configure Embedding Provider] for the Vertex AI specifics.
+This is equivalent to `MemorySettings(llm="vertex_ai/gemini-2.5-flash")`. Both Vertex AI models route through LiteLLM (no native LLM adapter); Vertex AI embeddings have a native adapter. See xref:how-to/configure-embedding-provider.adoc[Configure Embedding Provider] for the Vertex AI specifics.
 
 == Prerequisites
 

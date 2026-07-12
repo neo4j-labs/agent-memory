@@ -25,6 +25,14 @@ NAMS-backend only. All methods raise `NotSupportedError` on bolt.
 | Bind a version; subsequent entity writes validate against it.
 | `ontology.delete(id)` | `ontology.delete(id)`
 | Delete a workspace-owned ontology.
+| `ontology.import_(content=/url=, format=)` | `ontology.import({content?, url?, format?})`
+| Convert an external graph/ontology document into a *non-persisted* draft (`OntologyImportResult`). Nothing is saved until you `create()` / `update()` from the returned document. Note the trailing underscore on the Python name (`import` is a keyword).
+| `ontology.diff(id, from_revision, to_revision)` | `ontology.diff(id, fromRevision, toRevision)`
+| Structural diff between two revisions of an ontology (`OntologyDiff`).
+| `ontology.migrate(id, from_version_id=, to_version_id=, type_mappings=, dry_run=False)` | `ontology.migrate(id, {fromVersionId, toVersionId, typeMappings, dryRun?})`
+| Enqueue an *async* label-rename migration from one version to another; returns a `MigrationJob`. Pass `dry_run=True` to preview without writing.
+| `ontology.get_migration(job_id)` | `ontology.getMigration(jobId)`
+| Poll a migration job's status and progress (`MigrationJob`).
 |===
 
 == Return types
@@ -32,6 +40,31 @@ NAMS-backend only. All methods raise `NotSupportedError` on bolt.
 `list()` returns `OntologySummary[]`. `get()` returns `Ontology` (`{record,
 versions[]}`). `get_active()` returns `ActiveOntology`. `clone` / `create` /
 `update` / `activate` return an `OntologyVersion`.
+
+`import_()` returns an `OntologyImportResult` (`{document?, warnings[]
+(ImportWarning), detected_format?, suggested_name?}`). `diff()` returns an
+`OntologyDiff` (`{from_revision, to_revision, entity_types, relationships,
+mode_change?}`). `migrate()` and `get_migration()` return a `MigrationJob`
+(`{id, status (pending|running|completed|failed|paused), total, processed,
+errored, …}`).
+
+== Import formats
+
+`import_()` accepts these `format` ids (or `auto` / omit to detect from content):
+
+[cols="1,3",options="header"]
+|===
+| `format` | Source
+
+| `arrows` | link:https://arrows.app[Arrows.app] JSON
+| `data-importer` | Neo4j Data Importer model
+| `cypher` | Cypher DDL (`CREATE CONSTRAINT` / schema statements)
+| `graphql` | GraphQL SDL type definitions
+| `linkml` | LinkML schema
+| `rdf` | RDF / OWL (parsed server-side; the extraction service must be reachable)
+| `native` | The library's own ontology JSON/YAML (`yaml` / `yml` alias to `native`)
+| `auto` | Detect from content (the default when `format` is omitted)
+|===
 
 == Ontology document schema
 
@@ -52,8 +85,9 @@ The `OntologyVersion` carries `id`, `ontology_id`, `revision`,
 == REST endpoints
 
 The SDK targets these workspace-scoped endpoints (under the versioned base, e.g.
-`/v1`). They are *not* in the published OpenAPI spec; the shapes are verified
-against the staging deployment. Request bodies use snake_case.
+`/v1`). Request bodies use snake_case. See
+link:https://memory.neo4jlabs.com/openapi.json[the OpenAPI spec] for exact
+request/response shapes.
 
 [cols="1,3,2",options="header"]
 |===
@@ -67,16 +101,18 @@ against the staging deployment. Request bodies use snake_case.
 | PUT | `/ontologies/{id}` — body `{ontology, validation_mode?}` | `update()`
 | POST | `/ontologies/active` — body `{version_id}` | `activate()`
 | DELETE | `/ontologies/{id}` | `delete()`
-| POST | `/ontologies/import` | — (REST only, no SDK method)
-| GET | `/ontologies/{id}/diff` | — (REST only, no SDK method)
-| POST | `/ontologies/{id}/migrate` | — (REST only, no SDK method)
+| POST | `/ontologies/import` — body `{content?, url?, format?}` | `import_()` / `import()`
+| GET | `/ontologies/{id}/diff?from={n}&to={m}` | `diff()`
+| POST | `/ontologies/{id}/migrate` | `migrate()`
+| GET | `/ontologies/migrations/{job_id}` | `get_migration()`
 |===
 
 [NOTE]
 ====
-`import`, `diff`, and `migrate` exist on the service but are *not* exposed on the
-`client.ontology` accessor in any SDK yet — call them directly over REST. The
-preview/dry-run path of `import` is rate-limited (see
+`migrate` runs *asynchronously*: `POST /ontologies/{id}/migrate` returns a
+`MigrationJob` you poll with `get_migration()` (the service also exposes
+`/migrations/{job_id}/pause` and `/resume`). The preview/dry-run path of `import`
+is rate-limited to 30 requests/hour/workspace (see
 xref:reference/nams-limits.adoc[NAMS Limits & Behavior]).
 ====
 

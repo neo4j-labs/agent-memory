@@ -9,7 +9,7 @@
 How to port an existing direct-bolt project to the hosted **Neo4j Agent Memory Service (NAMS)** backend, including the full `NotSupportedError` reference table.
 
 [.lead]
-v0.4 introduces NAMS as an alternative backend behind the same `MemoryClient`. The migration is additive — your existing v0.3.x code keeps working unchanged on bolt; switching to NAMS usually means one config change.
+NAMS is a hosted backend behind the same `MemoryClient`. The migration is additive — your existing bolt code keeps working unchanged; switching to NAMS usually means one config change.
 
 == TL;DR
 
@@ -37,7 +37,7 @@ settings = MemorySettings(
 === 1. Install the `[nams]` extra
 
 ```bash
-uv pip install 'neo4j-agent-memory[nams]>=0.4.0'
+uv pip install 'neo4j-agent-memory[nams]>=0.5.0'
 ```
 
 === 2. Provision an API key
@@ -253,9 +253,12 @@ These methods exist on `NamsLongTermMemory` / `NamsShortTermMemory` but not on t
 
 == Deprecation timeline
 
-* **v0.4** (this release) — `client.graph.execute_read` emits one-time `DeprecationWarning` per process on bolt.
-* **v0.5** (planned) — More NAMS surface (additional tools, batched operations).
-* **v0.6** (planned) — Remove `client.graph` entirely. `client.query.cypher` becomes the only path for raw Cypher.
+`client.graph` is being retired in favour of `client.query.cypher`:
+
+* **Now** — `client.graph.execute_read` emits a one-time `DeprecationWarning` per process on bolt.
+* **Planned (targeted v0.6.0)** — `client.graph` is removed; `client.query.cypher` becomes the only path for raw Cypher.
+
+See the https://github.com/neo4j-labs/agent-memory/blob/main/CHANGELOG.md[CHANGELOG] for the authoritative schedule.
 
 == Need help?
 

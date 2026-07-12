@@ -9,7 +9,7 @@
 How to plug in any LLM or embedding provider — native adapters for OpenAI, Anthropic, Bedrock, Vertex AI, and sentence-transformers; LiteLLM universal fallback for everything else.
 
 [.lead]
-As of v0.3 `neo4j-agent-memory` is provider-pluggable. You pass either a provider-string shorthand (`"anthropic/claude-3-5-sonnet-latest"`), an explicit Provider instance, or hand off your already-configured framework model. The library picks the most reliable backend available.
+`neo4j-agent-memory` is provider-pluggable. You pass either a provider-string shorthand (`"anthropic/claude-3-5-sonnet-latest"`), an explicit Provider instance, or hand off your already-configured framework model. The library picks the most reliable backend available.
 
 == TL;DR — string shorthand
 

@@ -3,9 +3,9 @@
 :toclevels: 2
 
 How to scope conversations, traces, and preferences to a user identity
-in production. Pre-0.4 every consumer rolled their own `:User` node
-and per-user scoping logic; v0.4 makes user identity a first-class
-concept.
+in production. The SDK makes user identity a first-class concept — a
+`:User` node and per-user scoping logic you no longer have to roll
+yourself.
 
 [NOTE]
 ====
@@ -156,7 +156,7 @@ snapshot = await client.long_term.get_preferences_for(
 
 == Schema
 
-After v0.4 a multi-tenant graph contains:
+A multi-tenant graph contains:
 
 * `(:User {id, identifier, attributes_json, created_at})` — one per user, identifier-unique.
 * `(:User)-[:HAS_PREFERENCE]->(:Preference)` — written by `add_preference(user_identifier=...)`.
@@ -166,8 +166,9 @@ After v0.4 a multi-tenant graph contains:
 
 == Roadmap
 
-The v0.4 surface includes user-scoped conversations, traces, and
-preferences, including the multi-tenant guardrails described above.
+The SDK's multi-tenancy surface covers user-scoped conversations,
+traces, and preferences, including the multi-tenant guardrails
+described above.
 Any remaining roadmap work is additive and does not change the
 recommended scoping model documented on this page.
 

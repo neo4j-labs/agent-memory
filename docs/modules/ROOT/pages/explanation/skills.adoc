@@ -1,0 +1,110 @@
+= Agent Skills
+:page-product: agent-memory
+:page-pagination:
+:toclevels: 3
+:sectanchors:
+:icons: font
+
+[NOTE]
+====
+icon:flask[] *Preview.* Agent Skills is a NAMS-backend feature in preview. The
+backend contract (REST endpoints and MCP tools) is stable enough to build
+against, but the dashboard experience is still evolving and the surface is not
+yet exposed in the Python or TypeScript SDKs. There is no equivalent on the bolt
+backend.
+====
+
+[.lead]
+An *Agent Skill* turns accumulated agent memory into a small, trustworthy,
+reusable procedure another agent can load. Where the three memory layers capture
+_what happened_ in one workspace, a skill is the distilled _how-to_ — a portable
+package other agents (or the same agent in a fresh context) can pick up without
+starting cold.
+
+== The problem skills solve
+
+A NAMS workspace accumulates three kinds of memory: short-term messages,
+long-term POLE+O entities, and reasoning traces (steps and tool calls). That
+experience is valuable but *trapped* — it lives in one workspace's graph, in a
+form no other agent can consume directly. Skill distillation is the transform
+that lifts a scoped slice of that graph into a portable, spec-compliant Agent
+Skill (a `SKILL.md` package following the link:https://agentskills.io[agentskills.io]
+format) that any agent can load.
+
+== Create → review → use
+
+The feature is organised around three jobs:
+
+Create:: Distil a skill from a *scope* — the whole workspace, a single entity, or
+an ontology class. NAMS snapshots the relevant memory, synthesises a procedure
+grounded in it, runs quality gates, and packages the result.
+Review:: A human approves or rejects a distilled skill before it is published, so
+the published library stays healthy. Skills move through a lifecycle:
+`draft → in_review → published` (with `rejected` as a terminal state).
+Use:: Download the published `SKILL.md` package (a ZIP), or discover what exists
+over MCP, and load it into an agent.
+
+== Fidelity via provenance
+
+The defining property of a distilled skill is that *the graph is the authority
+and the LLM is only a writer working from cited sources*. Every claim and every
+procedure step is `GROUNDED_IN` specific source node ids — messages, entities, or
+reasoning steps in the workspace. That makes a skill **auditable, not invented**:
+you can trace any statement back to the memory it came from
+(`explain-provenance`), and a published package ships a `provenance.json`
+mapping. Distillation enforces quality gates on this grounding — a run whose
+grounding or coverage is too low is *withheld* (often with a suggestion to split
+it into smaller procedures) rather than published.
+
+== How a skill relates to memory
+
+Skills are a *derived projection* of the existing memory model, not a new memory
+layer:
+
+[cols="1,3",options="header"]
+|===
+| Concept | Relationship to skills
+
+| Short-term / long-term / reasoning memory
+| The raw material. A skill's claims and steps are grounded in `:Message`,
+`:Entity`, and reasoning (`:AgentStep` / `:ToolCall`) nodes.
+| Reasoning traces
+| The primary source for *procedure* steps — a recorded tool call becomes a
+typed script step; a reasoning step becomes a judgement step.
+| Ontology
+| Can be used as a distillation *scope* (`scope_type = ontology_class`), so you
+can distil "everything we know about this class of thing".
+| New graph objects
+| Distillation adds `:Skill` → `:SkillVersion` → `:SkillStep` / component nodes
+plus a `:DistillationRun`, co-located with the memory they cite.
+|===
+
+== What ships in a skill package
+
+A downloaded skill bundle contains a `SKILL.md` (YAML frontmatter carrying the
+grounding score and provenance id), a typed procedure (a step graph, or prose
+for simpler skills), `provenance.json`, and reference docs (domain model,
+exemplars, procedures). Published versions are **attested** — signed with a
+detached JWS you can verify offline against a public JWKS — so a consumer can
+confirm a package's integrity before loading it.
+
+== Maturity & limits
+
+* **Distillation** is on by default.
+* **Composition** (extracting a sub-procedure that other skills `CALLS`) is off by
+default.
+* **Execution** is *dry-run planning only* and gated off by default — NAMS will
+order and validate a skill's steps but does not invoke tools. Running the
+procedure is the loading agent's responsibility.
+* Whole-workspace distils tend to be *withheld* once a workspace holds more than
+one distinct procedure — prefer a narrower scope.
+
+See xref:reference/skills-api.adoc[Skills API] for the REST + MCP surface and the
+xref:tutorials/skills-quickstart.adoc[Skills Quickstart] for an end-to-end
+walkthrough.
+
+== See also
+
+* xref:explanation/memory-types.adoc[Memory Types] — the three layers a skill distils from.
+* xref:explanation/backends.adoc[Bolt vs NAMS] — skills are NAMS-only.
+* xref:reference/skills-api.adoc[Skills API] — endpoints, MCP tools, and lifecycle.

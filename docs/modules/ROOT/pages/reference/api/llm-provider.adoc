@@ -137,7 +137,7 @@ class ChatMessage(BaseModel):
     tool_call_id: str | None = None
 ----
 
-`content` is `str` only — multimodal is a v0.4+ concern.
+`content` is `str` only — multimodal is a future concern.
 
 === `Completion`
 

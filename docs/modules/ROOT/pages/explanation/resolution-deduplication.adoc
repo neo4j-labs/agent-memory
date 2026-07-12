@@ -8,7 +8,7 @@
 
 Understanding how agent memory systems handle duplicate and variant entity references to maintain data quality.
 
-NOTE: The resolution and deduplication strategies here are *client-side*, configurable on the *bolt* backend. On *NAMS*, resolution and dedup run server-side automatically; the manual review APIs (`find_potential_duplicates`, `merge_duplicate_entities`) are bolt-only. See xref:explanation/backends.adoc#capability-matrix[Bolt vs NAMS].
+NOTE: The resolution and deduplication strategies here are *client-side*, configurable on the *bolt* backend. On *NAMS*, resolution and dedup run server-side automatically: `add_entity` runs the full resolution cascade synchronously and reports a `resolution` outcome (`created` / `merged` / `review_pending`), with ambiguous matches landing in a `SAME_AS` review queue. The manual review APIs (`find_potential_duplicates`, `merge_duplicate_entities`) are bolt-only. See xref:explanation/backends.adoc#capability-matrix[Bolt vs NAMS].
 
 == The Entity Resolution Problem
 

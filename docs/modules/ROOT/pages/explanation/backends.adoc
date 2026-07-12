@@ -120,6 +120,8 @@ This is the canonical capability reference. Backend-sensitive how-to pages link 
 | Yes (deprecated, removal v0.6.0) | No (use `client.query.cypher`)
 | `client.schema.adopt_existing_graph`
 | Yes | No (server-managed schema)
+| Agent Skills — distil memory into portable Agent Skills (_Preview_)
+| No | REST + MCP only, no SDK method (see xref:reference/skills-api.adoc[Skills API])
 | MCP server
 | Yes (16 tools) | Yes (16 tools + 4 NAMS extras)
 | LangChain, LlamaIndex, CrewAI, OpenAI Agents, Microsoft Agent, Google ADK
@@ -145,7 +147,7 @@ This is the canonical capability reference. Backend-sensitive how-to pages link 
 
 | **Workspace** — separate whole projects / customers / environments, each with its own graph
 | Not a built-in concept — run separate databases or separate `MemoryClient` instances.
-| The unit of isolation. A workspace is bound to your API key (production), or selected per-request via `workspace_id` → the `X-Workspace-Id` header (header-scoped deployments). Different key/workspace = different graph.
+| The unit of isolation. A *workspace key* is permanently bound to one workspace; an *admin key* selects the workspace per-request via `workspace_id` → the `X-Workspace-Id` header. Different key/workspace = different graph. See xref:reference/authentication.adoc[key categories].
 |===
 
 In short: on **bolt** you scope by `user_identifier` (and operate separate databases for hard isolation); on **NAMS** the **workspace** (key- or header-bound) is the hard boundary and `user_identifier` sub-divides users within it. There is no `workspace_id` argument on memory calls — workspace is established at connect time, not per operation.

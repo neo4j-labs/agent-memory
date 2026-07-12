@@ -27,18 +27,18 @@ These are SDK-side defaults you can override; they are not server limits.
 
 == Rate limits
 
-NAMS applies per-workspace rate limiting. When you exceed a limit the service returns `429 Too Many Requests`; the SDK raises `RateLimitError` (carrying `retry_after`) after retries are exhausted, and honors any `Retry-After` header.
-
-Specific documented guards:
+A handful of endpoints enforce explicit rate limits. When you exceed one the service returns `429 Too Many Requests`; the SDK raises `RateLimitError` (carrying `retry_after`) after retries are exhausted, and honors any `Retry-After` header.
 
 [cols="2,2,2",options="header"]
 |===
 | Operation | Limit | On exceed
 
-| Ontology preview (`POST /v1/ontologies/import` dry-run / preview) | 30 requests / hour / workspace | `429` `{"error":"preview rate limit exceeded (30/hour)"}`
+| Ontology preview / extraction-backed import (`POST /v1/ontologies/preview`, RDF `/import`) | 30 requests / hour / workspace | `429` `{"error":"preview rate limit exceeded (30/hour)"}`
+| Feedback (`POST /v1/feedback`) | 10 / min and 100 / hour per user; 200 / hour per workspace | `429`
 | OAuth dynamic client registration (`/oauth/register`, MCP) | Per-source-IP sliding window | `429` with `Retry-After: 600`
-| All other endpoints | Per-workspace sliding window | `429`; retry after backoff
 |===
+
+Beyond these guards there is no blanket per-request rate limiter today — but write your client to tolerate `429` regardless; the SDK already retries with backoff.
 
 [TIP]
 ====
@@ -51,13 +51,19 @@ Treat `429` as normal backpressure: the SDK already retries with backoff. For bu
 |===
 | Quota | Behavior
 
-| Managed workspaces per user | Capped (operator-configured via `MAX_MANAGED_WORKSPACES_PER_USER`). Creating one past the cap returns a `workspace_limit_reached` error with the current `limit`. Workspaces backed by your own database (external / BYOD) are **not** counted against this cap.
+| Managed workspaces per user | Capped (default **10**, operator-configured via `MAX_MANAGED_WORKSPACES_PER_USER`). Creating one past the cap returns a `workspace_limit_reached` error with the current `limit`. Workspaces backed by your own database (external / BYOD) are **not** counted against this cap.
+| Skill package size | A distilled skill artifact is capped at **1 MiB** (`SKILL_MAX_ARTIFACT_BYTES`).
+| Feedback payload size | Feedback bodies over **16 KiB** are rejected.
 | Request payload size | Oversized requests return `413 Request Entity Too Large`. The exact byte ceiling is service-configured.
+| Idle managed databases | A managed (NAMS-provisioned) workspace database is reclaimed after **2 days** of inactivity (`MANAGED_DB_INACTIVITY_DAYS`). BYOD databases are never reaped.
 |===
 
 [NOTE]
 ====
-Whether additional usage quotas vary by workspace plan is **not currently documented** — confirm with the NAMS team before relying on plan-specific limits.
+NAMS has **no paid tiers or plan-based quotas** today: every capability in the
+xref:explanation/backends.adoc#capability-matrix[capability matrix] is available
+to any authenticated workspace, and the limits above apply uniformly. (A `plan`
+field appears on some workspace responses but is currently unused.)
 ====
 
 == Runtime behavior

@@ -1,0 +1,156 @@
+= Skills Quickstart (Preview)
+:page-product: agent-memory
+:page-pagination:
+:toclevels: 3
+:sectanchors:
+:icons: font
+:source-highlighter: highlight.js
+
+[NOTE]
+====
+icon:flask[] *Preview.* Agent Skills is a NAMS feature in preview, reachable over
+REST and MCP only (no SDK method yet). This walkthrough uses `curl`; the same
+steps are available as xref:reference/nams-mcp.adoc[MCP tools]
+(`skill_generate`, `skill_run_status`, …) for agent-driven use.
+====
+
+[.lead]
+Distil a workspace's accumulated memory into a portable, provenance-grounded
+Agent Skill, then review, publish, and download it — end to end against the
+hosted NAMS service.
+
+== What you'll need
+
+* A NAMS API key with the `skills:read` and `skills:write` scopes (a workspace
+key carries these). https://memory.neo4jlabs.com[Sign up here].
+* A workspace that already holds some memory — ideally a handful of reasoning
+traces for a *single, repeatable procedure* (see xref:explanation/skills.adoc[Agent Skills]
+on why narrow scopes distil best).
+* `curl` and a JSON tool like `jq`.
+
+Set your key and base URL once:
+
+[source,bash]
+----
+export NAMS_KEY="nams_xxxxxxxxxxxxxxxxxxxx"
+export NAMS="https://memory.neo4jlabs.com/v1"
+auth=(-H "Authorization: Bearer $NAMS_KEY" -H "Content-Type: application/json")
+----
+
+== 1. Start a distillation run
+
+Kick off a run over a scope. `scope.type` is required — start with `workspace`,
+or narrow to a single `entity` / `ontology_class` for a cleaner result.
+
+[source,bash]
+----
+curl -s "${auth[@]}" -X POST "$NAMS/skills/generate" \
+  -d '{"name": "refund-procedure", "scope": {"type": "workspace"}}'
+# => 202 {"runId": "run_123", "status": "queued"}
+----
+
+== 2. Poll the run
+
+Distillation is asynchronous (scope → snapshot → grounded synthesis → quality
+gates → package). Poll until it settles:
+
+[source,bash]
+----
+curl -s "${auth[@]}" "$NAMS/skills/runs/run_123" | jq '{status, outcome, skillId}'
+----
+
+A run resolves to one of three outcomes:
+
+* `Created` — a skill draft passed the grounding and coverage gates.
+* `Withheld` — the scope held more than one procedure (or grounding was too low);
+the response suggests splitting it. This is normal for a broad `workspace` scope.
+* `Failed` — the run errored.
+
+If you get `Withheld`, re-run with a narrower scope.
+
+== 3. Inspect provenance
+
+Every claim and step is grounded in specific source nodes. Confirm the skill is
+_auditable, not invented_:
+
+[source,bash]
+----
+curl -s "${auth[@]}" "$NAMS/skills/{skillId}/explain-provenance" | jq
+----
+
+== 4. Review, then publish
+
+A skill must be approved before it can be published:
+
+[source,bash]
+----
+curl -s "${auth[@]}" -X POST "$NAMS/skills/{skillId}/review"  -d '{"decision": "approve"}'
+curl -s "${auth[@]}" -X POST "$NAMS/skills/{skillId}/publish"
+----
+
+Publishing signs a detached-JWS attestation. Verify it (or let any consumer
+verify offline against `/.well-known/skill-attest-jwks.json`):
+
+[source,bash]
+----
+curl -s "${auth[@]}" "$NAMS/skills/{skillId}/verify" | jq
+----
+
+== 5. Download and load the skill
+
+Download the `SKILL.md` package (a ZIP with `SKILL.md`, `provenance.json`, and
+`references/`) and hand it to an agent like any other
+link:https://agentskills.io[agentskills.io] skill:
+
+[source,bash]
+----
+curl -s "${auth[@]}" "$NAMS/skills/{skillId}/download" -o refund-procedure.zip
+----
+
+[IMPORTANT]
+====
+NAMS distils, reviews, and publishes skills; it does **not** run them. Skill
+_execution_ is dry-run planning only and gated off by default — the loading
+agent is responsible for actually performing the procedure.
+====
+
+== Prefer to script it?
+
+There is no `client.skill` SDK method yet, but the REST API is easy to drive from
+code. The same generate-then-poll loop in Python with `httpx`:
+
+[source,python]
+----
+import asyncio
+import httpx
+
+NAMS = "https://memory.neo4jlabs.com/v1"
+HEADERS = {"Authorization": "Bearer nams_xxxxxxxxxxxxxxxxxxxx"}
+
+
+async def distil_skill() -> str:
+    async with httpx.AsyncClient(base_url=NAMS, headers=HEADERS) as http:
+        started = await http.post(
+            "/skills/generate",
+            json={"name": "refund-procedure", "scope": {"type": "workspace"}},
+        )
+        run_id = started.json()["runId"]
+
+        while True:
+            run = (await http.get(f"/skills/runs/{run_id}")).json()
+            if run["status"] != "running":
+                return run.get("skillId", "")
+            await asyncio.sleep(2.0)
+
+
+skill_id = asyncio.run(distil_skill())
+----
+
+For agent-driven use, the xref:reference/nams-mcp.adoc[hosted MCP tools]
+(`skill_generate`, `skill_run_status`, …) expose the same flow.
+
+== Next steps
+
+* xref:explanation/skills.adoc[Agent Skills] — the provenance model and lifecycle.
+* xref:reference/skills-api.adoc[Skills API] — the full REST + MCP surface.
+* xref:reference/nams-mcp.adoc[Hosted NAMS MCP Server] — drive these steps from an agent.

@@ -72,7 +72,7 @@ All five ship as subpath exports.
 
 * Package: link:https://www.npmjs.com/package/@neo4j-labs/agent-memory[`@neo4j-labs/agent-memory` on npm]
 * Source: link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript[`typescript/` in the agent-memory repo]
-* Release tags: `typescript-v*` (e.g. `typescript-v0.3.0`)
+* Release tags: `typescript-v*` (e.g. `typescript-v0.4.0`)
 * Changelog: link:https://github.com/neo4j-labs/agent-memory/blob/main/typescript/CHANGELOG.md[typescript/CHANGELOG.md]
 
 == Looking for the Python SDK?

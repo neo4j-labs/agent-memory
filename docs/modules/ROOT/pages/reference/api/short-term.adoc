@@ -173,6 +173,29 @@ results = await short_term.search_messages(
 
 List of `(Message, score)` tuples, sorted by relevance.
 
+== Extraction Status (NAMS)
+
+On the NAMS backend, entity extraction runs asynchronously — writes are accepted
+immediately and extracted entities appear a moment later. These methods let you
+wait for the pipeline to settle before asserting on results.
+
+=== get_extraction_status
+
+[source,python]
+----
+status = await client.short_term.get_extraction_status(session_id)
+# or: get_extraction_status(conversation_id=...)
+status.is_complete    # bool  — no messages still pending
+status.pending_count  # int   — messages not yet extracted
+----
+
+Returns an `ExtractionStatus`. Backed by `GET /v1/conversations/{id}/extraction-status`.
+On bolt, extraction is synchronous, so this rollup is trivially complete.
+
+TIP: `client.long_term.wait_for_extraction(session_id=...)` polls this endpoint
+for you, then (optionally) confirms via entity search — see
+xref:reference/nams-limits.adoc[NAMS Limits & Behavior].
+
 == Session Operations
 
 === list_sessions

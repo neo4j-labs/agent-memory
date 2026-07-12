@@ -61,6 +61,16 @@ NAMS runs embedding, extraction, resolution, and enrichment server-side, so the 
 
 Both share the same memory model and the same NAMS backend, so pick by stack. The **Python SDK** supports *both* backends (bolt and NAMS) and the full extraction/enrichment pipeline. The **TypeScript SDK** is **NAMS-only** (a `fetch`-based HTTP client) and ideal for Node, Bun, Deno, Cloudflare Workers, and Vercel Edge. Mixed Python + TypeScript agents can read and write the same memory on a shared workspace. See xref:sdks/python.adoc[Python SDK] and xref:sdks/typescript.adoc[TypeScript SDK].
 
+[[what-are-skills]]
+=== What are NAMS Agent Skills? _(Preview)_
+
+Skills are a NAMS feature that *distils* a scoped slice of a workspace's accumulated memory — messages, entities, and reasoning traces — into a portable, provenance-grounded **Agent Skill** (an agentskills.io `SKILL.md` package) that another agent can load and reuse. Every claim and step is grounded in specific source nodes, so a skill is auditable rather than invented. Skills are exposed over REST and MCP only (there is no SDK method yet), and the feature is in **Preview**. See xref:explanation/skills.adoc[Agent Skills] and xref:reference/skills-api.adoc[Skills API].
+
+[[run-a-skill]]
+=== Can I run a distilled skill? _(Preview)_
+
+Not automatically — skill *execution* is **dry-run planning only** and gated off by default (`SKILL_EXECUTION_ENABLED=false`). The intended path is to **download** a published skill's `SKILL.md` package and load it into your agent like any other Agent Skill. NAMS handles distillation, review, and publishing; running the procedure is the agent's job. See xref:reference/skills-api.adoc[Skills API].
+
 [[neo4j-versions]]
 === Which Neo4j versions are supported?
 
