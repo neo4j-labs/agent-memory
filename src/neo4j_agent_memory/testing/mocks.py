@@ -470,7 +470,7 @@ class MockReasoningMemory:
 
     async def add_step(
         self,
-        trace_id: UUID,
+        trace_id: UUID | str,
         *,
         thought: str | None = None,
         action: str | None = None,
@@ -555,7 +555,7 @@ class MockReasoningMemory:
 
     async def complete_trace(
         self,
-        trace_id: UUID,
+        trace_id: UUID | str,
         *,
         outcome: str | None = None,
         success: bool | None = None,
@@ -564,7 +564,7 @@ class MockReasoningMemory:
         """Complete a reasoning trace."""
         trace = self._traces.get(str(trace_id))
         if trace is None:
-            raise ValueError(f"Trace {trace_id} not found")
+            raise ValueError(f"Trace not found: {trace_id}")
 
         trace.outcome = outcome
         trace.success = success
@@ -572,7 +572,7 @@ class MockReasoningMemory:
 
         return trace
 
-    async def get_trace(self, trace_id: UUID) -> ReasoningTrace | None:
+    async def get_trace(self, trace_id: UUID | str) -> ReasoningTrace | None:
         """Get a trace by ID."""
         return self._traces.get(str(trace_id))
 
