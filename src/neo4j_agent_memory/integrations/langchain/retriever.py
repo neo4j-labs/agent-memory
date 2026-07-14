@@ -57,7 +57,8 @@ try:
                 import concurrent.futures
 
                 with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(asyncio.run, self._get_relevant_documents_async(query))
+                    coro = self._get_relevant_documents_async(query)
+                    future = executor.submit(lambda: asyncio.run(coro))
                     return future.result()
             else:
                 return asyncio.run(self._get_relevant_documents_async(query))

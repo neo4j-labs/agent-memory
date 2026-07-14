@@ -62,7 +62,7 @@ class TestGoogleADKDemoStructure:
         """Verify demo.py has async main function."""
         demo = demo_dir / "demo.py"
         content = demo.read_text(encoding="utf-8")
-        assert "async def main():" in content, "demo.py should have 'async def main()'"
+        assert "async def main(" in content, "demo.py should have 'async def main()'"
         assert 'if __name__ == "__main__":' in content, "demo.py should have main entry point"
 
     def test_demo_valid_python(self, demo_dir):

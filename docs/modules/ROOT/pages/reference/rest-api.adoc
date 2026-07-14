@@ -42,12 +42,14 @@ over hand-built URLs.
 Every request carries `Authorization: Bearer <token>`, where the token is either
 your API key (`nams_...`) used directly, or a short-lived JWT obtained from the
 Auth0 exchange endpoints (`POST /v1/auth/exchange`, `POST /v1/auth/refresh`).
-Deployments that scope
-by header (e.g. the development/staging service) additionally require
-`X-Workspace-Id: <workspace_id>`; the SDK sends it automatically when
-`workspace_id` / `workspaceId` (or `MEMORY_WORKSPACE_ID`) is configured. On
-production the workspace is encoded in the API key and the header is optional.
-See xref:how-to/use-nams.adoc[Use NAMS].
+
+The target workspace depends on the key's category (see
+xref:reference/authentication.adoc[Authentication & API Keys]): a **workspace
+key** is already bound to one workspace, so `X-Workspace-Id` is optional (and a
+_different_ value is rejected with `403`); an **admin key** names the workspace
+per request with `X-Workspace-Id: <workspace_id>`. The SDK sends the header
+automatically when `workspace_id` / `workspaceId` (or `MEMORY_WORKSPACE_ID`) is
+configured. See xref:how-to/use-nams.adoc[Use NAMS].
 
 == Conversations
 
@@ -66,7 +68,12 @@ See xref:how-to/use-nams.adoc[Use NAMS].
 | `GET` | `/conversations/{id}/context` | `get_context` | `getContext` | `GetContext` | `get_context` | `GetContextAsync`
 | `GET` | `/conversations/{id}/observations` | `get_observations` | `getObservations` | `GetObservations` | `get_observations` | `GetObservationsAsync`
 | `GET` | `/conversations/{id}/reflections` | `get_reflections` | `getReflections` | `GetReflections` | `get_reflections` | `GetReflectionsAsync`
+| `GET` | `/conversations/{id}/extraction-status` | `get_extraction_status` | `getExtractionStatus` | `GetExtractionStatus` | `get_extraction_status` | `GetExtractionStatusAsync`
 |===
+
+Because extraction runs asynchronously on NAMS, `get_extraction_status` (short-term
+memory) is the authoritative "has the pipeline finished?" signal for a
+conversation — `long_term.wait_for_extraction(session_id=...)` polls it for you.
 
 == Entities
 
@@ -84,7 +91,13 @@ See xref:how-to/use-nams.adoc[Use NAMS].
 | `POST` | `/entities/{id}/merge` | `merge_entities` | `mergeEntities` | `MergeEntities` | `merge_entities` | `MergeEntitiesAsync`
 | `GET` | `/entities/graph` | `get_entity_graph` | `getEntityGraph` | `GetEntityGraph` | `get_entity_graph` | `GetEntityGraphAsync`
 | `POST` | `/entities/search` | `search_entities` | `searchEntities` | `SearchEntities` | `search_entities` | `SearchEntitiesAsync`
+| `POST` | `/graph/expand` | `expand_graph` | `expandGraph` | `ExpandGraph` | `expand_graph` | `ExpandGraphAsync`
 |===
+
+`POST /graph/expand` returns the 1-hop neighbourhood of a node (`{nodes, edges}`),
+excluding any `loaded_ids` you already have — it backs incremental
+graph-visualization ("expand this node"). Exposed as `long_term.expand_graph` /
+`longTerm.expandGraph`.
 
 == Reasoning
 
@@ -111,15 +124,18 @@ See xref:how-to/use-nams.adoc[Use NAMS].
 | `POST` | `/auth/api-keys` | `create_api_key` | `auth.createApiKey` | `Auth.CreateAPIKey` | `auth.create_api_key` | `Auth.CreateApiKeyAsync`
 | `DELETE` | `/auth/api-keys/{id}` | `revoke_api_key` | `auth.revokeApiKey` | `Auth.RevokeAPIKey` | `auth.revoke_api_key` | `Auth.RevokeApiKeyAsync`
 | `GET` | `/auth/api-keys/{id}/reveal` | `reveal_api_key` | `auth.revealApiKey` | `Auth.RevealAPIKey` | `auth.reveal_api_key` | `Auth.RevealApiKeyAsync`
+| `POST` | `/auth/api-keys/{id}/rotate` | `rotate_api_key` | `auth.rotateApiKey` | `Auth.RotateAPIKey` | `auth.rotate_api_key` | `Auth.RotateApiKeyAsync`
 | `POST` | `/auth/refresh` | `refresh_access_token` | `auth.refreshAccessToken` | `Auth.RefreshAccessToken` | `auth.refresh_access_token` | `Auth.RefreshAccessTokenAsync`
 |===
 
 [NOTE]
 ====
 The per-language method names above follow the bridge-protocol/conformance
-naming. *The Python SDK does not currently expose API-key-management methods* —
-it consumes a key you provide and manages nothing. Create / reveal / rotate /
-revoke keys from the dashboard or by calling these REST endpoints directly. See
+naming. Both SDKs expose these on a `client.auth` accessor (Python `NamsAuth`,
+TypeScript `AuthClient`): `list_api_keys` / `create_api_key` / `reveal_api_key` /
+`rotate_api_key` / `revoke_api_key` / `refresh_access_token`. On the bolt backend
+`client.auth` is a `NotSupportedError` sentinel (bolt uses `NEO4J_PASSWORD`, not
+a NAMS key). You can also manage keys from the dashboard. See
 xref:reference/authentication.adoc[Authentication & API Keys].
 ====
 
@@ -141,18 +157,21 @@ document schema and validation modes.
 | `PUT` | `/ontologies/{id}` | `ontology.update` | `ontology.update`
 | `POST` | `/ontologies/active` | `ontology.activate` | `ontology.activate`
 | `DELETE` | `/ontologies/{id}` | `ontology.delete` | `ontology.delete`
-| `POST` | `/ontologies/import` | — (REST only) | — (REST only)
-| `GET` | `/ontologies/{id}/diff` | — (REST only) | — (REST only)
-| `POST` | `/ontologies/{id}/migrate` | — (REST only) | — (REST only)
+| `POST` | `/ontologies/import` | `ontology.import_` | `ontology.import`
+| `GET` | `/ontologies/{id}/diff` | `ontology.diff` | `ontology.diff`
+| `POST` | `/ontologies/{id}/migrate` | `ontology.migrate` | `ontology.migrate`
+| `GET` | `/ontologies/migrations/{job_id}` | `ontology.get_migration` | `ontology.getMigration`
 |===
 
 [NOTE]
 ====
-`import`, `diff`, and `migrate` are available over REST but are *not yet exposed*
-on the `client.ontology` SDK accessor in any language. Call them directly (e.g.
-with `httpx` / `fetch`) using a `Bearer` token and `X-Workspace-Id` until SDK
-methods land. The preview/dry-run path of `import` is rate-limited (see
-xref:reference/nams-limits.adoc[NAMS Limits & Behavior]).
+`import`, `diff`, and `migrate` are exposed on the `client.ontology` accessor in
+both SDKs (Python `import_` — trailing underscore, since `import` is a keyword).
+`migrate` is asynchronous: it returns a `MigrationJob` you poll with
+`get_migration()`. The preview/dry-run path of `import` is rate-limited to 30
+requests/hour/workspace (see xref:reference/nams-limits.adoc[NAMS Limits &
+Behavior]). See xref:reference/ontology-api.adoc[Ontology API] for method
+signatures and the accepted import formats.
 ====
 
 [#errors]

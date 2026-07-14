@@ -19,6 +19,8 @@ Example usage:
     result = await geocoder.geocode("Central Park, NYC")
 """
 
+from __future__ import annotations
+
 import asyncio
 import logging
 import time
@@ -38,7 +40,7 @@ class GeocodingResult:
     place_type: str | None = None
     confidence: float = 1.0
 
-    def as_neo4j_point(self) -> dict:
+    def as_neo4j_point(self) -> dict[str, float]:
         """Return coordinates as Neo4j Point parameters.
 
         Use with Cypher: point({latitude: $latitude, longitude: $longitude})

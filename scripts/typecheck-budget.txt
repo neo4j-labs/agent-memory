@@ -1,0 +1,11 @@
+# Type-check error budget (monotonic ratchet).
+#
+# The counts below may only ever decrease. CI runs scripts/typecheck_ratchet.py
+# and fails any PR that raises a count (regression) or lowers one without
+# recording it here. See the type-safety tracking issue #144.
+#
+# Measured with integration extras installed: `uv sync --all-extras --group dev`.
+# Refresh after improving a count: `make typecheck-ratchet-update`.
+
+mypy=0
+ty=3

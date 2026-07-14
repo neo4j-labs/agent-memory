@@ -43,6 +43,7 @@ from neo4j_agent_memory.integrations.agentcore.types import (
 
 if TYPE_CHECKING:
     from neo4j_agent_memory import MemoryClient
+    from neo4j_agent_memory.graph.client import Neo4jClient
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +111,13 @@ class Neo4jMemoryProvider:
         self._extraction_model = extraction_model
         self._generate_embeddings = generate_embeddings
         self._sessions: dict[str, SessionContext] = {}
+
+    def _neo4j(self) -> Neo4jClient:
+        """Return the underlying connected Neo4jClient, narrowing the None state."""
+        neo4j_client = self._client._client
+        if neo4j_client is None:
+            raise RuntimeError("MemoryClient is not connected; call connect() first.")
+        return neo4j_client
 
     @property
     def namespace(self) -> str:
@@ -386,7 +394,7 @@ class Neo4jMemoryProvider:
             DETACH DELETE m
             RETURN count(m) AS deleted
             """
-            result = await self._client._client.execute_write(
+            result = await self._neo4j().execute_write(
                 query,
                 {"memory_id": memory_id},
             )
@@ -403,7 +411,7 @@ class Neo4jMemoryProvider:
                 DETACH DELETE e
                 RETURN count(e) AS deleted
                 """
-                result = await self._client._client.execute_write(
+                result = await self._neo4j().execute_write(
                     query,
                     {"memory_id": memory_id},
                 )
@@ -420,7 +428,7 @@ class Neo4jMemoryProvider:
                 DETACH DELETE p
                 RETURN count(p) AS deleted
                 """
-                result = await self._client._client.execute_write(
+                result = await self._neo4j().execute_write(
                     query,
                     {"memory_id": memory_id},
                 )
@@ -451,7 +459,7 @@ class Neo4jMemoryProvider:
             DETACH DELETE m
             RETURN count(m) AS deleted
             """
-            result = await self._client._client.execute_write(
+            result = await self._neo4j().execute_write(
                 query,
                 {"session_id": session_id},
             )

@@ -37,8 +37,10 @@ Example usage:
         context = await client.get_context("restaurant recommendation")
 """
 
+from __future__ import annotations
+
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from pydantic import BaseModel, Field
 
@@ -49,11 +51,17 @@ if TYPE_CHECKING:
         ReasoningProtocol,
         ShortTermProtocol,
     )
-    from neo4j_agent_memory.memory.buffered import BufferedWriter
+    from neo4j_agent_memory.embeddings.base import Embedder
+    from neo4j_agent_memory.enrichment.background import BackgroundEnrichmentService
+    from neo4j_agent_memory.enrichment.base import EnrichmentProvider as _EnrichmentProviderProtocol
+    from neo4j_agent_memory.extraction.base import EntityExtractor
+    from neo4j_agent_memory.memory.buffered import BufferedWriteError, BufferedWriter
     from neo4j_agent_memory.memory.consolidation import ConsolidationMemory
     from neo4j_agent_memory.memory.eval import EvalMemory
     from neo4j_agent_memory.memory.users import UserMemory
     from neo4j_agent_memory.nams.client import NamsBackend
+    from neo4j_agent_memory.resolution.base import EntityResolver
+    from neo4j_agent_memory.services.geocoder import Geocoder
 
 from neo4j_agent_memory.config.settings import (
     EmbeddingConfig,
@@ -143,7 +151,7 @@ except ImportError:
     class VertexAIEmbedder:  # type: ignore[no-redef]
         """Stub for VertexAIEmbedder when google-cloud-aiplatform is not installed."""
 
-        def __init__(self, *args, **kwargs):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
             raise ImportError(
                 "VertexAIEmbedder requires google-cloud-aiplatform. "
                 "Install with: pip install neo4j-agent-memory[vertex-ai]"
@@ -157,7 +165,7 @@ except ImportError:
     class Neo4jMemoryService:  # type: ignore[no-redef]
         """Stub for Neo4jMemoryService when google-adk is not installed."""
 
-        def __init__(self, *args, **kwargs):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
             raise ImportError(
                 "Neo4jMemoryService requires google-adk. "
                 "Install with: pip install neo4j-agent-memory[google-adk]"
@@ -171,7 +179,7 @@ except ImportError:
     class Neo4jMemoryMCPServer:  # type: ignore[no-redef]
         """Stub for Neo4jMemoryMCPServer when mcp is not installed."""
 
-        def __init__(self, *args, **kwargs):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
             raise ImportError(
                 "Neo4jMemoryMCPServer requires the mcp package. "
                 "Install with: pip install neo4j-agent-memory[mcp]"
@@ -309,7 +317,7 @@ class _DeprecatedGraphProxy:
 
     _execute_read_warned: bool = False
 
-    def __init__(self, client: "Neo4jClient") -> None:
+    def __init__(self, client: Neo4jClient) -> None:
         # Use object.__setattr__ to avoid triggering __getattr__ on init.
         object.__setattr__(self, "_client", client)
 
@@ -358,12 +366,12 @@ class MemoryClient:
         self,
         settings: MemorySettings | None = None,
         *,
-        embedder=None,
-        extractor=None,
-        resolver=None,
-        geocoder=None,
-        enrichment_provider=None,
-    ):
+        embedder: Embedder | None = None,
+        extractor: EntityExtractor | None = None,
+        resolver: EntityResolver | None = None,
+        geocoder: Geocoder | None = None,
+        enrichment_provider: _EnrichmentProviderProtocol | None = None,
+    ) -> None:
         """
         Initialize the memory client.
 
@@ -380,17 +388,17 @@ class MemoryClient:
         # when ``settings.backend == "nams"``.
         self._client: Neo4jClient | None = None
         self._schema_manager: SchemaManager | None = None
-        self._embedder_override = embedder
-        self._extractor_override = extractor
-        self._resolver_override = resolver
-        self._geocoder_override = geocoder
-        self._enrichment_provider_override = enrichment_provider
-        self._embedder = None
-        self._extractor = None
-        self._resolver = None
-        self._geocoder = None
-        self._enrichment_provider = None
-        self._enrichment_service = None
+        self._embedder_override: Embedder | None = embedder
+        self._extractor_override: EntityExtractor | None = extractor
+        self._resolver_override: EntityResolver | None = resolver
+        self._geocoder_override: Geocoder | None = geocoder
+        self._enrichment_provider_override: _EnrichmentProviderProtocol | None = enrichment_provider
+        self._embedder: Embedder | None = None
+        self._extractor: EntityExtractor | None = None
+        self._resolver: EntityResolver | None = None
+        self._geocoder: Geocoder | None = None
+        self._enrichment_provider: _EnrichmentProviderProtocol | None = None
+        self._enrichment_service: BackgroundEnrichmentService | None = None
 
         # NAMS-only state. ``_nams_backend`` stays None on bolt.
         self._nams_backend: NamsBackend | None = None
@@ -420,12 +428,12 @@ class MemoryClient:
         self._consolidation: ConsolidationMemory | Any = None
         self._eval: EvalMemory | None = None
 
-    async def __aenter__(self) -> "MemoryClient":
+    async def __aenter__(self) -> MemoryClient:
         """Async context manager entry."""
         await self.connect()
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+    async def __aexit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
         """Async context manager exit."""
         await self.close()
 
@@ -462,7 +470,10 @@ class MemoryClient:
             # so downstream memory layers keep working unchanged.
             from neo4j_agent_memory.embeddings.base import adapt_to_legacy_embedder
 
-            self._embedder = adapt_to_legacy_embedder(self._embedder_override)
+            # adapt_to_legacy_embedder returns `object` because its input is
+            # typed as `object`; it always produces a value satisfying `Embedder`
+            # (either the original Embedder or a _ProviderToEmbedderAdapter).
+            self._embedder = cast("Embedder", adapt_to_legacy_embedder(self._embedder_override))
         else:
             self._embedder = self._create_embedder()
 
@@ -722,7 +733,7 @@ class MemoryClient:
         await self.flush()
 
     @property
-    def write_errors(self) -> list:
+    def write_errors(self) -> list[BufferedWriteError]:
         """Background buffered-write errors recorded since startup.
 
         Always empty on the NAMS backend — NAMS commits writes
@@ -803,7 +814,7 @@ class MemoryClient:
         return self._reasoning  # type: ignore[return-value]
 
     @property
-    def eval(self) -> "EvalMemory":
+    def eval(self) -> EvalMemory:
         """
         Access the evaluation harness — recall@k for retrieval, audit
         completeness, and preference fidelity.
@@ -815,7 +826,7 @@ class MemoryClient:
         return self._eval
 
     @property
-    def consolidation(self) -> "ConsolidationMemory":
+    def consolidation(self) -> ConsolidationMemory:
         """
         Access consolidation primitives — dry-runnable hygiene jobs:
 
@@ -831,7 +842,7 @@ class MemoryClient:
         return self._consolidation
 
     @property
-    def buffered(self) -> "BufferedWriter":
+    def buffered(self) -> BufferedWriter:
         """
         Access the buffered (fire-and-forget) writer.
 
@@ -846,7 +857,7 @@ class MemoryClient:
         return self._buffered
 
     @property
-    def users(self) -> "UserMemory":
+    def users(self) -> UserMemory:
         """
         Access user memory for first-class :User identity in multi-tenant
         deployments.
@@ -886,7 +897,7 @@ class MemoryClient:
         return self._schema_manager
 
     @property
-    def query(self) -> "CypherQueryProtocol":
+    def query(self) -> CypherQueryProtocol:
         """
         Read-only Cypher accessor — works on both backends.
 
@@ -958,7 +969,7 @@ class MemoryClient:
         return self._auth
 
     @property
-    def graph(self) -> "Neo4jClient":
+    def graph(self) -> Neo4jClient:
         """
         Access the underlying Neo4j graph client for custom Cypher queries.
 
@@ -1057,7 +1068,7 @@ class MemoryClient:
 
         return "\n\n".join(parts)
 
-    async def get_stats(self) -> dict:
+    async def get_stats(self) -> dict[str, Any]:
         """
         Get memory statistics.
 
@@ -1141,7 +1152,10 @@ class MemoryClient:
             raise NotConnectedError("Client not connected.")
 
         if memory_types is None:
-            memory_types = ["short_term", "long_term", "reasoning"]
+            memory_types = cast(
+                "list[Literal['short_term', 'long_term', 'reasoning']]",
+                ["short_term", "long_term", "reasoning"],
+            )
 
         all_nodes: list[GraphNode] = []
         all_relationships: list[GraphRelationship] = []
@@ -1373,7 +1387,7 @@ class MemoryClient:
         session_id: str | None = None,
         has_coordinates: bool = True,
         limit: int = 500,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """
         Get location entities, optionally filtered by conversation session.
 
@@ -1486,7 +1500,7 @@ class MemoryClient:
         except Exception:
             return []
 
-    def _create_embedder(self):
+    def _create_embedder(self) -> Embedder | None:
         """Create embedder from ``self._settings.embedding``.
 
         Handles the union type introduced in v0.3.0:
@@ -1510,7 +1524,9 @@ class MemoryClient:
         if not isinstance(config, EmbeddingConfig):
             from neo4j_agent_memory.embeddings.base import adapt_to_legacy_embedder
 
-            return adapt_to_legacy_embedder(config)
+            # adapt_to_legacy_embedder returns `object` (accepts both Embedder
+            # and EmbeddingProvider); the result always satisfies Embedder.
+            return cast("Embedder", adapt_to_legacy_embedder(config))
 
         # Legacy EmbeddingConfig: translate to a concrete embedder.
         if config.provider == EmbeddingProvider.OPENAI:
@@ -1534,7 +1550,7 @@ class MemoryClient:
         else:
             return None
 
-    def _create_extractor(self):
+    def _create_extractor(self) -> EntityExtractor | None:
         """Create extractor based on settings.
 
         Uses the extraction factory to create the appropriate extractor
@@ -1585,7 +1601,7 @@ class MemoryClient:
             return cfg.dimensions
         return 1536
 
-    def _create_resolver(self):
+    def _create_resolver(self) -> EntityResolver | None:
         """Create resolver based on settings."""
         config = self._settings.resolution
 
@@ -1624,7 +1640,7 @@ class MemoryClient:
 
         return None
 
-    def _create_geocoder(self):
+    def _create_geocoder(self) -> Geocoder | None:
         """Create geocoder based on settings.
 
         Returns a configured geocoder for Location entities, or None if
@@ -1646,7 +1662,7 @@ class MemoryClient:
             user_agent=config.user_agent,
         )
 
-    def _create_enrichment_provider(self):
+    def _create_enrichment_provider(self) -> _EnrichmentProviderProtocol | None:
         """Create enrichment provider based on settings.
 
         Returns a configured enrichment provider, or None if enrichment
@@ -1656,7 +1672,7 @@ class MemoryClient:
 
         return create_enrichment_service(self._settings.enrichment)
 
-    async def _create_enrichment_service(self):
+    async def _create_enrichment_service(self) -> BackgroundEnrichmentService | None:
         """Create and start the background enrichment service.
 
         Returns a BackgroundEnrichmentService if enrichment is enabled and

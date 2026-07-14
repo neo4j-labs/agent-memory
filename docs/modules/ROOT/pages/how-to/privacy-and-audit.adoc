@@ -8,7 +8,7 @@ How to record audit trails for sensitive memory reads, archive expired
 conversations, and plug in at-rest encryption for `Message.content`.
 
 [.lead]
-Privacy in v0.5 is opt-in: the library ships the integration points but
+Privacy is opt-in: the library ships the integration points but
 keeps every transparent middleware off by default, since "audit every
 read" doubles traffic and "encrypt every message" pulls in
 provider-specific dependencies.

@@ -12,7 +12,12 @@ The shape of `@neo4j-labs/agent-memory`'s public surface, with deep links into t
 ====
 **NAMS-only, and at parity with Python.** The TypeScript SDK targets the hosted xref:reference/rest-api.adoc[NAMS] service exclusively — there is no bolt backend. It implements the *same memory model* as the xref:sdks/python.adoc[Python SDK]; cross-language behavioral parity is enforced by the link:https://github.com/neo4j-labs/agent-memory-tck[agent-memory-tck] conformance suite, which is the source of truth for parity claims.
 
-Known surface differences (not behavioral): the TypeScript SDK exposes `client.auth` for API-key + OAuth management, whereas the Python SDK manages keys via the dashboard/REST (see xref:reference/authentication.adoc[Authentication]). Both SDKs share the same `shortTerm` / `longTerm` / `reasoning` / `query` / `ontology` surface; ontology `import` / `diff` / `migrate` are REST-only in both.
+Both SDKs share the same `shortTerm` / `longTerm` / `reasoning` / `query` /
+`ontology` / `auth` surface, including ontology `import` / `diff` / `migrate` and
+API-key management. The only structural difference is that the TypeScript SDK is
+NAMS-only (no bolt backend), so these accessors are always live; in the Python
+SDK the NAMS-only ones raise `NotSupportedError` on bolt (see
+xref:reference/authentication.adoc[Authentication]).
 ====
 
 [NOTE]
@@ -317,6 +322,9 @@ TypeDoc: link:https://neo4j-labs.github.io/agent-memory/typescript/classes/Query
 |`revealApiKey(keyId, workspaceId)`
 |Re-reveal a stored key (one-time, if your account has the scope).
 
+|`rotateApiKey(keyId)`
+|Mint a replacement key and revoke the old one.
+
 |`refreshAccessToken(refreshToken)`
 |Exchange a refresh token for a fresh access token pair.
 |===
@@ -356,6 +364,18 @@ xref:how-to/use-ontologies.adoc[Use Ontologies].
 
 |`delete(id)`
 |Delete a workspace-owned ontology.
+
+|`import({ content?, url?, format? })`
+|Convert an external graph/ontology document into a non-persisted draft (`OntologyImportResult`).
+
+|`diff(id, fromRevision, toRevision)`
+|Structural diff between two revisions (`OntologyDiff`).
+
+|`migrate(id, { fromVersionId, toVersionId, typeMappings, dryRun? })`
+|Enqueue an async label-rename migration; returns a `MigrationJob`.
+
+|`getMigration(jobId)`
+|Poll a migration job's status/progress.
 |===
 
 == Errors

@@ -11,6 +11,16 @@ The complete reference for wiring an embedding provider into `MemorySettings.emb
 [.lead]
 For the big-picture choice between providers see xref:how-to/bring-your-own-model.adoc[Bring Your Own Model]. Embedding adapters share the `EmbeddingProvider` Protocol; the same wiring patterns apply across cloud APIs and local models.
 
+[NOTE]
+====
+This page configures *client-side* embedding on the **bolt** backend. On
+**NAMS**, embedding runs server-side — the workspace's embedding model and
+vector dimension are fixed when the database is provisioned (currently Amazon
+Titan Text v2 at 1024 dimensions by default, or OpenAI `text-embedding-3-small`
+at 1536 where configured). `MemorySettings.embedding` is therefore ignored on
+NAMS. See xref:explanation/backends.adoc[Bolt vs NAMS].
+====
+
 == Set via a provider string
 
 [source,python]

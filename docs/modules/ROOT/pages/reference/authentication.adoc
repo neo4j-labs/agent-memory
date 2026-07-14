@@ -25,20 +25,33 @@ NAMS accepts three kinds of credential:
 
 == Key format & the wire
 
-API keys are prefixed `nams_`. Send the key as a Bearer token on every request:
+API keys are prefixed `nams_` (legacy `gylrd_` keys are still accepted). Send the key as a Bearer token on every request:
 
 [source,http]
 ----
 Authorization: Bearer nams_xxxxxxxxxxxxxxxxxxxx
-X-Workspace-Id: ws_xxxxxxxx          # required by header-scoped deployments
+X-Workspace-Id: ws_xxxxxxxx          # see "Key categories" below
 ----
 
-API keys are **user-owned, not workspace-bound**. The target workspace is resolved per request:
+Static API keys expire roughly 90 days after creation — rotate before expiry.
 
-* **Production** — the workspace is encoded in the key; the `X-Workspace-Id` header is optional.
-* **Header-scoped deployments** (e.g. development / staging) — you must send `X-Workspace-Id`. The SDK sends it automatically when `workspace_id` / `workspaceId` (or `MEMORY_WORKSPACE_ID`) is configured.
+== Key categories
 
-The service checks that the key's owner is a member of the resolved workspace; non-members get `403`. See xref:explanation/backends.adoc#tenancy[Tenancy & scoping].
+Every key is created in one of two categories, which fix its scopes and how the target workspace is resolved:
+
+[cols="1,3",options="header"]
+|===
+| Category | Behaviour
+
+| **Workspace key** +
+(`category: "workspace"`, `workspaceId` required at creation)
+| Data-plane scopes only (`memory` / `entities` / `reasoning` / `ontology` / `skills`), permanently **bound to one workspace**. `X-Workspace-Id` is optional; sending a _different_ workspace id is rejected with `403` — a bound key is never silently retargeted. Cannot mint or manage keys. **This is the key you put in application code.**
+| **Admin key** +
+(`category: "admin"`, the default when `category` is omitted)
+| Account-wide, all scopes including `workspace:admin`. Not bound to a workspace — name the target per request with `X-Workspace-Id`. Use for administrative automation, never in a shipped app.
+|===
+
+The service also checks that the key's owner is a member of the resolved workspace; non-members get `403`. See xref:explanation/backends.adoc#tenancy[Tenancy & scoping].
 
 == Configuring the SDK
 
@@ -65,16 +78,44 @@ Keys are created and managed from the dashboard at link:https://memory.neo4jlabs
 |===
 | Operation | REST
 
-| Create | `POST /v1/auth/api-keys` — returns the raw key once; also stored encrypted-at-rest so it can be revealed later.
+| Create | `POST /v1/auth/api-keys` — body `{label, category, workspaceId?}`. Returns the raw key once; also stored encrypted-at-rest so it can be revealed later.
 | List | `GET /v1/auth/api-keys`
 | Reveal | `GET /v1/auth/api-keys/{id}/reveal` — owner-only (non-owners get `404`; revoked or pre-encryption keys get `410`).
 | Rotate | `POST /v1/auth/api-keys/{id}/rotate` — mints a new key and revokes the old one.
 | Revoke | `DELETE /v1/auth/api-keys/{id}` — added to a blocklist for 30 days; effective on the next request.
 |===
 
-[IMPORTANT]
+Key management requires a **user token or an admin key**, so a leaked workspace
+data key cannot mint or manage keys. Keys are **owner-private**: only the user
+who created a key can list, reveal, rotate, or revoke it — they are invisible
+even to a workspace owner.
+
+== Managing keys from the SDK
+
+Both SDKs expose the lifecycle on a `client.auth` accessor (Python `NamsAuth`,
+TypeScript `AuthClient`). On the bolt backend `client.auth` is a
+`NotSupportedError` sentinel — bolt uses `NEO4J_PASSWORD`, not a NAMS key.
+
+[source,python]
+----
+# All async; NAMS only. `.key` (plaintext) is populated only on create/reveal.
+keys     = await client.auth.list_api_keys(workspace_id="ws_123")   # metadata only
+revealed = await client.auth.reveal_api_key(key_id, workspace_id="ws_123")
+rotated  = await client.auth.rotate_api_key(key_id)   # mints a replacement, revokes the old
+await client.auth.revoke_api_key(key_id)              # effective on the next request
+print(rotated.key)                                    # shown once
+----
+
+TypeScript mirrors these as `client.auth.listApiKeys` / `revealApiKey` /
+`rotateApiKey` / `revokeApiKey`, plus `refreshAccessToken` for the JWT flow.
+
+[NOTE]
 ====
-**Key management is dashboard/REST-only.** The Python SDK attaches a key you provide (via `MEMORY_API_KEY` / `NamsConfig(api_key=...)`) but does **not** expose `create` / `reveal` / `rotate` / `revoke` methods on `client`. Manage keys from the dashboard or by calling the REST endpoints above directly.
+`create_api_key(label, *, scopes=..., workspace_id=...)` exists on the SDK, but it
+does **not** send a `category`, and the service defaults an un-categorised create
+to an *admin* key (which rejects a `workspaceId`). To create a **workspace** key —
+the usual case for application code — use the dashboard, or `POST /v1/auth/api-keys`
+with `category: "workspace"` directly. See xref:reference/rest-api.adoc[REST API].
 ====
 
 == Handling keys safely

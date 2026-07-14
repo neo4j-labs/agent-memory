@@ -1,6 +1,8 @@
 """OpenAI embedding provider."""
 
-from typing import TYPE_CHECKING
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
 
 from neo4j_agent_memory.core.exceptions import EmbeddingError
 from neo4j_agent_memory.embeddings.base import BaseEmbedder
@@ -49,7 +51,7 @@ class OpenAIEmbedder(BaseEmbedder):
         else:
             self._dimensions = MODEL_DIMENSIONS.get(model, 1536)
 
-    def _ensure_client(self) -> "AsyncOpenAI":
+    def _ensure_client(self) -> AsyncOpenAI:
         """Ensure the OpenAI client is initialized."""
         if self._client is None:
             try:
@@ -71,7 +73,7 @@ class OpenAIEmbedder(BaseEmbedder):
         client = self._ensure_client()
 
         try:
-            kwargs: dict = {"input": text, "model": self._model}
+            kwargs: dict[str, Any] = {"input": text, "model": self._model}
             if self._requested_dimensions is not None:
                 kwargs["dimensions"] = self._requested_dimensions
 
@@ -92,7 +94,7 @@ class OpenAIEmbedder(BaseEmbedder):
             # Process in batches
             for i in range(0, len(texts), self._batch_size):
                 batch = texts[i : i + self._batch_size]
-                kwargs: dict = {"input": batch, "model": self._model}
+                kwargs: dict[str, Any] = {"input": batch, "model": self._model}
                 if self._requested_dimensions is not None:
                     kwargs["dimensions"] = self._requested_dimensions
 

@@ -1,0 +1,116 @@
+= Skills API (Preview)
+:page-product: agent-memory
+:toclevels: 2
+:icons: font
+
+[NOTE]
+====
+icon:flask[] *Preview.* The Skills surface is exposed over the NAMS **REST API**
+and **MCP** only — there is no `client.skill` accessor in the Python or
+TypeScript SDK yet, and nothing on the bolt backend. Paths below are under the
+versioned base (e.g. `https://memory.neo4jlabs.com/v1`); all are workspace-scoped
+and gated by the `skills:read` / `skills:write` scopes. For the concept, see
+xref:explanation/skills.adoc[Agent Skills].
+====
+
+== REST endpoints
+
+[cols="1,3,1,3",options="header"]
+|===
+| Method | Path | Scope | Purpose
+
+| `GET` | `/v1/skills` | `skills:read` | List skills in the workspace.
+| `GET` | `/v1/skills/{id}` | `skills:read` | One skill with its version history.
+| `GET` | `/v1/skills/published` | `skills:read` | Discovery manifest of published, usable skills.
+| `GET` | `/v1/skills/governance` | `skills:read` | Reuse candidates vs. duplicate/overlapping skills.
+| `GET` | `/v1/skills/capabilities` | `skills:read` | Gate state: `{distillation, composition, attestationConfigured}`.
+| `POST` | `/v1/skills/generate` | `skills:write` | Start a distillation run (`scope.type` required). Returns `202 {runId, status:"queued"}`.
+| `POST` | `/v1/skills/scan` | `skills:write` | Scan a workspace for candidate skill scopes (auto-suggest).
+| `GET` | `/v1/skills/runs` | `skills:read` | Recent distillation runs (activity list).
+| `GET` | `/v1/skills/runs/{id}` | `skills:read` | Poll one distillation run.
+| `POST` | `/v1/skills/{id}/review` | `skills:write` | Approve or reject a skill.
+| `POST` | `/v1/skills/review/bulk` | `skills:write` | Approve/reject in bulk.
+| `POST` | `/v1/skills/{id}/publish` | `skills:write` | Publish an approved skill (signs an attestation).
+| `GET` | `/v1/skills/{id}/download` | `skills:read` | Download the `SKILL.md` package (ZIP).
+| `GET` | `/v1/skills/{id}/explain-provenance` | `skills:read` | Trace claims/steps back to source node ids.
+| `GET` | `/v1/skills/{id}/verify` | `skills:read` | Verify a published skill's attestation.
+| `GET` | `/v1/skills/{id}/drift` | `skills:read` | Whether the underlying memory has drifted from the published skill.
+| `POST` | `/v1/skills/{id}/edit` | `skills:write` | Validity-gated preview of an edit.
+| `POST` | `/v1/skills/{id}/edit/commit` | `skills:write` | Commit a previewed edit.
+| `POST` | `/v1/skills/{id}/extract-subprocedure` | `skills:write` | Extract a reusable sub-procedure (composition).
+| `POST` | `/v1/skills/{id}/steps/{stepId}/repair` | `skills:write` | Repair a single procedure step.
+| `GET` | `/.well-known/skill-attest-jwks.json` | _(public)_ | Public JWKS for offline attestation verification.
+|===
+
+== MCP tools
+
+The hosted NAMS MCP server (see xref:reference/nams-mcp.adoc[Hosted NAMS MCP
+Server]) exposes the same surface as 13 tools. They appear in `tools/list` only
+for a principal whose scopes permit them.
+
+[cols="1,3",options="header"]
+|===
+| Tool | Purpose
+
+| `skill_generate` | Start a distillation run.
+| `skill_run_status` | Poll a run.
+| `skill_list` | List skills.
+| `skill_get` | Fetch a skill + version history.
+| `skill_list_published` | Discover published, usable skills.
+| `skill_governance` | Reuse vs. duplicate analysis.
+| `skill_explain_provenance` | Trace grounding to source nodes.
+| `skill_review` | Approve / reject.
+| `skill_publish` | Publish (attest).
+| `skill_drift` | Drift status of a published skill.
+| `skill_edit` | Preview / apply an edit.
+| `skill_extract_subprocedure` | Composition (off by default).
+| `skill_execute` | *Dry-run planning only* — orders and validates steps, invokes nothing. Gated off by default.
+|===
+
+== Lifecycle & run outcomes
+
+A skill moves `draft → in_review → published` (or `rejected`). A *distillation
+run* (`POST /v1/skills/generate`) resolves to one of:
+
+[cols="1,3",options="header"]
+|===
+| Outcome | Meaning
+
+| `Created` | A skill draft was produced and passed the quality gates.
+| `Withheld` | The scope held more than one distinct procedure, or grounding /
+coverage was too low — the run returns a *split suggestion* rather than a skill.
+This is expected for broad scopes, not an error.
+| `Failed` | The run errored.
+|===
+
+== Attestation
+
+Publishing signs the package digest with a detached JWS (RS256). Consumers verify
+either via `GET /v1/skills/{id}/verify` or offline against the public JWKS at
+`/.well-known/skill-attest-jwks.json`. If no attestation key is configured, a
+skill can still be published but is flagged **unsigned**.
+
+== Gates & limits
+
+[cols="2,1,3",options="header"]
+|===
+| Setting | Default | Effect
+
+| `SKILL_DISTILLATION_ENABLED` | `true` | Master switch for distillation.
+| `SKILL_COMPOSITION_ENABLED` | `false` | Enables `extract-subprocedure` / `CALLS` composition.
+| `SKILL_EXECUTION_ENABLED` | `false` | Even when `true`, `skill_execute` only produces a dry-run plan.
+| `SKILL_GROUNDING_THRESHOLD` | `0.9` | Minimum share of grounded claims to pass the gate.
+| `SKILL_COVERAGE_THRESHOLD` | `0.6` | Minimum coverage of the scope to pass the gate.
+| `SKILL_MIN_STEPS` | `3` | Below this, a procedure degrades to prose.
+| `SKILL_MAX_ARTIFACT_BYTES` | `1048576` | 1 MiB cap on a packaged skill artifact.
+|===
+
+These are server-side operator settings, shown so you can interpret run outcomes
+(e.g. a `Withheld` run whose grounding fell below `0.9`). For request-level rate
+limits see xref:reference/nams-limits.adoc[NAMS Limits & Behavior].
+
+== See also
+
+* xref:explanation/skills.adoc[Agent Skills] — the concept and provenance model.
+* xref:tutorials/skills-quickstart.adoc[Skills Quickstart] — end-to-end over REST/MCP.
+* xref:reference/nams-mcp.adoc[Hosted NAMS MCP Server] — how the MCP tools are served.

@@ -9,7 +9,7 @@ referenced — a 1-hop traversal instead of the default 3-hop path.
 By default, the library writes
 `(ReasoningTrace)-[:INITIATED_BY]->(Message)-[:MENTIONS]->(Entity)` and
 `(ToolCall)-[:TRIGGERED_BY]->(Message)`, so reaching an entity from a
-step is three hops. v0.3 introduces a direct
+step is three hops. The library also provides a direct
 `(:ReasoningStep)-[:TOUCHED]->(:Entity)` edge that you can write either
 explicitly or via an observer hook. This page shows both.
 

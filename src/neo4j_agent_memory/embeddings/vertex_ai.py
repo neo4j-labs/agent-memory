@@ -6,6 +6,8 @@ Supports Google Cloud's Vertex AI text embedding models including:
 - textembedding-gecko-multilingual@001 (768 dimensions)
 """
 
+from __future__ import annotations
+
 import asyncio
 from typing import TYPE_CHECKING, Any
 
@@ -99,7 +101,7 @@ class VertexAIEmbedder(BaseEmbedder):
         # Determine dimensions from model name
         self._dimensions = VERTEX_MODEL_DIMENSIONS.get(model, 768)
 
-    def _ensure_initialized(self) -> "TextEmbeddingModel":
+    def _ensure_initialized(self) -> TextEmbeddingModel:
         """Ensure Vertex AI is initialized and return the embedding model.
 
         Note: For thread-safe async initialization, use _ensure_initialized_async instead.
@@ -132,7 +134,7 @@ class VertexAIEmbedder(BaseEmbedder):
         except Exception as e:
             raise EmbeddingError(f"Failed to initialize Vertex AI: {e}") from e
 
-    async def _ensure_initialized_async(self) -> "TextEmbeddingModel":
+    async def _ensure_initialized_async(self) -> TextEmbeddingModel:
         """Thread-safe async initialization."""
         if self._embedding_model is not None:
             return self._embedding_model
@@ -175,7 +177,9 @@ class VertexAIEmbedder(BaseEmbedder):
             from vertexai.language_models import TextEmbeddingInput
 
             input_obj = TextEmbeddingInput(text, task_type=self._task_type)
-            embeddings = await asyncio.to_thread(model.get_embeddings, [input_obj])
+            # Use the wider element type to satisfy to_thread's invariant Callable parameter.
+            inputs_single: list[str | TextEmbeddingInput] = [input_obj]
+            embeddings = await asyncio.to_thread(model.get_embeddings, inputs_single)
             return embeddings[0].values
 
         except EmbeddingError:
@@ -207,7 +211,11 @@ class VertexAIEmbedder(BaseEmbedder):
             # Process in batches (Vertex AI limit is 250 per request)
             for i in range(0, len(texts), self._batch_size):
                 batch = texts[i : i + self._batch_size]
-                inputs = [TextEmbeddingInput(t, task_type=self._task_type) for t in batch]
+                # Annotate as the wider type that get_embeddings accepts (str | TextEmbeddingInput)
+                # to satisfy to_thread's invariant Callable parameter type.
+                inputs: list[str | TextEmbeddingInput] = [
+                    TextEmbeddingInput(t, task_type=self._task_type) for t in batch
+                ]
                 embeddings = await asyncio.to_thread(model.get_embeddings, inputs)
                 all_embeddings.extend([e.values for e in embeddings])
 

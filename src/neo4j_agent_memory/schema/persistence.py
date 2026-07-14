@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
 from neo4j_agent_memory.graph import queries
@@ -36,7 +36,7 @@ class StoredSchema:
     created_by: str | None
 
     @classmethod
-    def from_node(cls, node: dict) -> StoredSchema:
+    def from_node(cls, node: dict[str, Any]) -> StoredSchema:
         """Create a StoredSchema from a Neo4j node."""
         config_data = json.loads(node["config"])
         return cls(
@@ -339,7 +339,7 @@ class SchemaManager:
         )
 
         if results and results[0] is not None:
-            return results[0].get("deleted", False)
+            return bool(results[0].get("deleted", False))
         return False
 
     async def delete_all_versions(self, name: str) -> int:

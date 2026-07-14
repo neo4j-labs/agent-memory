@@ -253,7 +253,12 @@ class LLMEntityExtractor(EntityExtractor):
         include_preferences: bool,
     ) -> ExtractionResult:
         """Run extraction via :meth:`StructuredExtractor.complete_structured`."""
+        from neo4j_agent_memory.llm.protocol import StructuredExtractor
         from neo4j_agent_memory.llm.types import ChatMessage
+
+        # Called only after isinstance(self._provider, StructuredExtractor) in extract()
+        assert isinstance(self._provider, StructuredExtractor)
+        provider = self._provider
 
         prompt = self._build_prompt(text, types_to_use)
         messages = [
@@ -263,7 +268,7 @@ class LLMEntityExtractor(EntityExtractor):
         # The structured-extraction path validates against ExtractionPayload.
         # ``complete_structured`` raises StructuredExtractionError on failure
         # which we let propagate so the pipeline can decide how to handle it.
-        payload: ExtractionPayload = await self._provider.complete_structured(  # type: ignore[attr-defined]
+        payload: ExtractionPayload = await provider.complete_structured(
             messages,
             ExtractionPayload,
             temperature=self._temperature,

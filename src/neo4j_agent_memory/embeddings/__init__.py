@@ -10,6 +10,8 @@
     :func:`neo4j_agent_memory.llm.from_provider`.
 """
 
+from __future__ import annotations
+
 from neo4j_agent_memory.embeddings.base import (
     BaseEmbedder,
     Embedder,
@@ -36,7 +38,7 @@ __all__ = [
 
 
 # Lazy imports for optional providers
-def __getattr__(name: str):
+def __getattr__(name: str) -> type:
     if name == "VertexAIEmbedder":
         from neo4j_agent_memory.embeddings.vertex_ai import VertexAIEmbedder
 

@@ -83,7 +83,19 @@ MemoryClient(
 
 | `graph`
 | `Neo4jClient`
-| Access the underlying Neo4j graph client for custom Cypher queries
+| Access the underlying Neo4j graph client for custom Cypher queries (bolt; being retired in favour of `query.cypher` — see xref:how-to/migrate-to-nams.adoc[Migrate to NAMS])
+
+| `query`
+| `QueryConsole`
+| Read-only Cypher against the active workspace graph: `await client.query.cypher(...)`
+
+| `ontology`
+| `NamsOntology`
+| Typed, versioned domain ontologies. NAMS only — raises `NotSupportedError` on bolt. See xref:reference/ontology-api.adoc[Ontology API]
+
+| `auth`
+| `NamsAuth`
+| API-key management (list / create / reveal / rotate / revoke / refresh). NAMS only — raises `NotSupportedError` on bolt. See xref:reference/authentication.adoc[Authentication]
 |===
 
 == Methods

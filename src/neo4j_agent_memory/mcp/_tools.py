@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from fastmcp import Context
 
@@ -464,8 +464,17 @@ def _register_extended_tools(mcp: FastMCP) -> None:
         client = get_client(ctx)
 
         try:
+            # The tool accepts list[str] from MCP callers; cast to the narrower
+            # Literal type expected by get_graph. The cast is safe regardless of
+            # the actual string values because get_graph selects memory types by
+            # membership (e.g. ``"short_term" in memory_types``) and silently
+            # ignores any unrecognized value rather than dispatching on it.
+            typed_memory_types = cast(
+                list[Literal["short_term", "long_term", "reasoning"]] | None,
+                memory_types,
+            )
             graph = await client.get_graph(
-                memory_types=memory_types,
+                memory_types=typed_memory_types,
                 session_id=session_id,
                 limit=limit,
                 include_embeddings=False,
@@ -709,8 +718,13 @@ def _register_extended_tools(mcp: FastMCP) -> None:
             session_id: Session ID to get observations for.
         """
         try:
-            # Try to get observer from lifespan context
-            observer = ctx.request_context.lifespan_context.get("observer")
+            # get_observer returns None when no observer is configured, and
+            # raises RuntimeError when there is no active MCP request context
+            # (i.e. called outside a session). Either way the surrounding
+            # try/except below turns a missing context into an error response.
+            from neo4j_agent_memory.mcp._common import get_observer
+
+            observer = get_observer(ctx)
             if observer is not None:
                 result = await observer.get_observations(session_id)
                 return json.dumps(result, default=str)

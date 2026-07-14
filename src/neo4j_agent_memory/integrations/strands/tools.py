@@ -79,7 +79,7 @@ def _run_async(coro: Coroutine[Any, Any, _T]) -> _T:
         return asyncio.run(coro)
 
 
-def _get_nams_cache_bucket(endpoint: str, transport_mode: str) -> tuple[str, str]:
+def _get_nams_cache_bucket(endpoint: str, transport_mode: TransportMode) -> tuple[str, str]:
     """Return the process-local cache bucket key for NAMS clients."""
     return (endpoint, transport_mode)
 

@@ -1,7 +1,9 @@
 """Sentence Transformers embedding provider for local embeddings."""
 
+from __future__ import annotations
+
 import asyncio
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from neo4j_agent_memory.core.exceptions import EmbeddingError
 from neo4j_agent_memory.embeddings.base import BaseEmbedder
@@ -42,7 +44,7 @@ class SentenceTransformerEmbedder(BaseEmbedder):
         self._model: SentenceTransformer | None = None
         self._dimensions: int | None = None
 
-    def _ensure_model(self) -> "SentenceTransformer":
+    def _ensure_model(self) -> SentenceTransformer:
         """Lazy load the model."""
         if self._model is None:
             try:
@@ -75,7 +77,7 @@ class SentenceTransformerEmbedder(BaseEmbedder):
             embedding = await loop.run_in_executor(
                 None, lambda: model.encode(text, convert_to_numpy=True)
             )
-            return embedding.tolist()
+            return cast(list[float], embedding.tolist())  # numpy tolist() is Any in stubs
         except Exception as e:
             raise EmbeddingError(f"Failed to generate embedding: {e}") from e
 

@@ -44,8 +44,8 @@ class TestLangchainAgentExample:
             memory = Neo4jAgentMemory(
                 memory_client=memory_client,
                 session_id=session_id,
-                include_episodic=True,
-                include_semantic=True,
+                include_short_term=True,
+                include_long_term=True,
                 include_reasoning=True,
             )
 
@@ -120,8 +120,8 @@ class TestLangchainAgentExample:
 
             retriever = Neo4jMemoryRetriever(
                 memory_client=memory_client,
-                search_episodic=True,
-                search_semantic=True,
+                search_short_term=True,
+                search_long_term=True,
                 k=5,
             )
 
@@ -145,8 +145,8 @@ class TestLangchainAgentExample:
 
             retriever = Neo4jMemoryRetriever(
                 memory_client=memory_client,
-                search_episodic=True,
-                search_semantic=True,
+                search_short_term=True,
+                search_long_term=True,
                 k=5,
             )
 
@@ -177,7 +177,7 @@ class TestLangchainAgentExample:
         content = example_path.read_text(encoding="utf-8")
 
         # Check for main function and entry point
-        assert "async def main():" in content
+        assert "async def main(" in content
         assert 'if __name__ == "__main__":' in content
         assert "asyncio.run(main())" in content
 

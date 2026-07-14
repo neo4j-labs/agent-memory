@@ -1,5 +1,7 @@
 """Semantic match entity resolution using embeddings."""
 
+from __future__ import annotations
+
 from typing import TYPE_CHECKING
 
 from neo4j_agent_memory.resolution.base import (
@@ -21,7 +23,7 @@ class SemanticMatchResolver(BaseResolver):
 
     def __init__(
         self,
-        embedder: "Embedder",
+        embedder: Embedder,
         *,
         threshold: float = 0.8,
     ):
@@ -46,13 +48,13 @@ class SemanticMatchResolver(BaseResolver):
 
     def _cosine_similarity(self, a: list[float], b: list[float]) -> float:
         """Compute cosine similarity between two vectors."""
-        dot_product = sum(x * y for x, y in zip(a, b))
-        norm_a = sum(x * x for x in a) ** 0.5
-        norm_b = sum(x * x for x in b) ** 0.5
+        dot_product: float = sum(x * y for x, y in zip(a, b))
+        norm_a: float = sum(x * x for x in a) ** 0.5
+        norm_b: float = sum(x * x for x in b) ** 0.5
         if norm_a == 0 or norm_b == 0:
             return 0.0
         # Clamp to [0.0, 1.0] to handle floating point precision issues
-        return min(1.0, max(0.0, dot_product / (norm_a * norm_b)))
+        return float(min(1.0, max(0.0, dot_product / (norm_a * norm_b))))
 
     async def resolve(
         self,

@@ -1,6 +1,6 @@
 """Test fixtures and data factories for neo4j-agent-memory."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -91,7 +91,7 @@ class MemoryFixtures:
             role=role,
             content=content,
             conversation_id=conversation_id or uuid4(),
-            created_at=created_at or datetime.utcnow(),
+            created_at=created_at or datetime.now(timezone.utc),
             metadata=metadata or {},
             embedding=embedding,
         )
@@ -125,7 +125,7 @@ class MemoryFixtures:
             Conversation instance with messages
         """
         conv_id = id or uuid4()
-        base_time = created_at or datetime.utcnow()
+        base_time = created_at or datetime.now(timezone.utc)
 
         if messages is None and message_count > 0:
             messages = []
@@ -169,7 +169,7 @@ class MemoryFixtures:
         return SessionInfo(
             session_id=session_id or f"test-session-{uuid4().hex[:8]}",
             title=title,
-            created_at=created_at or datetime.utcnow(),
+            created_at=created_at or datetime.now(timezone.utc),
             updated_at=updated_at,
             message_count=message_count,
             first_message_preview=first_message_preview or "First test message...",
@@ -226,7 +226,7 @@ class MemoryFixtures:
             description=description,
             canonical_name=canonical_name or name,
             confidence=confidence,
-            created_at=created_at or datetime.utcnow(),
+            created_at=created_at or datetime.now(timezone.utc),
             embedding=embedding,
         )
 
@@ -249,7 +249,7 @@ class MemoryFixtures:
             preference=preference or f"Test preference for {category}",
             context=context,
             confidence=confidence,
-            created_at=created_at or datetime.utcnow(),
+            created_at=created_at or datetime.now(timezone.utc),
             embedding=embedding,
         )
 
@@ -272,7 +272,7 @@ class MemoryFixtures:
             predicate=predicate,
             object=object_,
             confidence=confidence,
-            created_at=created_at or datetime.utcnow(),
+            created_at=created_at or datetime.now(timezone.utc),
             embedding=embedding,
         )
 
@@ -307,7 +307,7 @@ class MemoryFixtures:
             ReasoningTrace with optional steps
         """
         trace_id = id or uuid4()
-        base_time = started_at or datetime.utcnow()
+        base_time = started_at or datetime.now(timezone.utc)
 
         steps = []
         for i in range(step_count):
@@ -364,7 +364,7 @@ class MemoryFixtures:
             action=action or f"Taking action {step_number}",
             observation=observation or f"Observed result {step_number}",
             tool_calls=tool_calls,
-            created_at=created_at or datetime.utcnow(),
+            created_at=created_at or datetime.now(timezone.utc),
             embedding=embedding,
         )
 

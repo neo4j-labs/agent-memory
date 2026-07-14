@@ -1,10 +1,15 @@
 """Entity extraction using spaCy NER."""
 
+from __future__ import annotations
+
 import asyncio
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    from spacy.language import Language
 
 from neo4j_agent_memory.extraction.base import (
     ExtractedEntity,
@@ -109,7 +114,7 @@ class SpacyEntityExtractor:
             context_window: Number of characters of context to include around entities
         """
         self._model_name = model
-        self._nlp = None  # Lazy load
+        self._nlp: Language | None = None  # Lazy load
         self.type_mapping = type_mapping or self.DEFAULT_TYPE_MAPPING.copy()
         self.subtype_mapping = subtype_mapping or self.DEFAULT_SUBTYPE_MAPPING.copy()
         self.default_confidence = default_confidence
@@ -219,7 +224,7 @@ class SpacyEntityExtractor:
         )
 
     @classmethod
-    def from_config(cls, config: SpacyConfig) -> "SpacyEntityExtractor":
+    def from_config(cls, config: SpacyConfig) -> SpacyEntityExtractor:
         """Create extractor from configuration."""
         return cls(
             model=config.model,

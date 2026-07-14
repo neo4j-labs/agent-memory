@@ -1,11 +1,15 @@
 """LangChain memory integration."""
 
-from typing import TYPE_CHECKING, Any
+from collections.abc import Coroutine
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from pydantic import BaseModel, ConfigDict
 
 if TYPE_CHECKING:
-    pass
+    from neo4j_agent_memory.memory.reasoning import ReasoningTrace
+    from neo4j_agent_memory.memory.short_term import Message
+
+_T = TypeVar("_T")
 
 
 class Neo4jAgentMemory(BaseModel):
@@ -40,7 +44,7 @@ class Neo4jAgentMemory(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    def _run_async(self, coro: Any) -> Any:
+    def _run_async(self, coro: Coroutine[Any, Any, _T]) -> _T:
         """
         Run an async coroutine from sync context.
 
@@ -139,14 +143,14 @@ class Neo4jAgentMemory(BaseModel):
         """Clear conversation history for this session."""
         self._run_async(self.memory_client.short_term.clear_session(self.session_id))
 
-    def _format_messages(self, messages: list) -> str:
+    def _format_messages(self, messages: list["Message"]) -> str:
         """Format messages for context."""
         lines = []
         for msg in messages:
             lines.append(f"{msg.role.value}: {msg.content}")
         return "\n".join(lines)
 
-    def _format_traces(self, traces: list) -> str:
+    def _format_traces(self, traces: list["ReasoningTrace"]) -> str:
         """Format reasoning traces for context."""
         lines = []
         for trace in traces:

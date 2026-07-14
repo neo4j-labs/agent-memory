@@ -365,6 +365,23 @@ stats = await long_term.geocode_locations(skip_existing: bool = True)
 # Returns: {"processed": 100, "geocoded": 85, "skipped": 10, "failed": 5}
 ----
 
+== Graph Operations (NAMS)
+
+=== expand_graph
+
+Fetch the 1-hop neighbourhood of an entity node for incremental graph
+visualization ("expand this node"), excluding nodes you already have.
+
+[source,python]
+----
+result = await client.long_term.expand_graph(node_id, loaded_ids=["id1", "id2"])
+result["nodes"]  # neighbouring nodes not already in loaded_ids
+result["edges"]  # connecting relationships
+----
+
+NAMS only (backed by `POST /v1/graph/expand`); mirrored in the TypeScript SDK as
+`longTerm.expandGraph(nodeId, loadedIds)`.
+
 == Entity Model
 
 [source,python]

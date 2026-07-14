@@ -1,7 +1,9 @@
 """Factory for creating extraction pipelines and extractors."""
 
+from __future__ import annotations
+
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from neo4j_agent_memory.config.settings import (
     ExtractionConfig,
@@ -21,6 +23,7 @@ from neo4j_agent_memory.extraction.pipeline import (
 )
 
 if TYPE_CHECKING:
+    from neo4j_agent_memory.llm.protocol import LLMProvider
     from neo4j_agent_memory.schema.models import EntitySchemaConfig
 
 logger = logging.getLogger(__name__)
@@ -68,7 +71,7 @@ def _convert_merge_strategy(config_strategy: ConfigMergeStrategy) -> MergeStrate
 def create_spacy_extractor(
     extraction_config: ExtractionConfig,
     schema_config: SchemaConfig | None = None,
-) -> "EntityExtractor":
+) -> EntityExtractor:
     """Create a spaCy entity extractor.
 
     Args:
@@ -97,7 +100,7 @@ def create_spacy_extractor(
 def create_gliner_extractor(
     extraction_config: ExtractionConfig,
     schema_config: SchemaConfig | None = None,
-) -> "EntityExtractor":
+) -> EntityExtractor:
     """Create a GLiNER entity extractor.
 
     GLiNER2 supports domain schemas with entity type descriptions for
@@ -148,7 +151,7 @@ def create_llm_extractor(
     extraction_config: ExtractionConfig,
     schema_config: SchemaConfig | None = None,
     llm_config: Any = None,
-) -> "EntityExtractor":
+) -> EntityExtractor:
     """Create an LLM entity extractor.
 
     Args:
@@ -203,8 +206,10 @@ def create_llm_extractor(
         kwargs: dict[str, Any] = {}
         if llm_config.api_key is not None:
             kwargs["api_key"] = llm_config.api_key.get_secret_value()
-        provider = from_provider(model_id, kind="llm", **kwargs)
-        return LLMEntityExtractor(provider=provider, **common_kwargs)
+        llm_provider = cast(
+            "LLMProvider", from_provider(model_id, kind="llm", **kwargs)
+        )  # kind="llm" guarantees LLMProvider
+        return LLMEntityExtractor(provider=llm_provider, **common_kwargs)
 
     # No llm_config: let LLMEntityExtractor build its own default provider
     # from extraction_config.llm_model.
@@ -364,7 +369,7 @@ class ExtractorBuilder:
         ```
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize builder with default settings."""
         self._enable_spacy = False
         self._enable_gliner = False
@@ -388,7 +393,7 @@ class ExtractorBuilder:
         self._extract_preferences = True
         self._confidence_threshold: float | None = None
 
-    def with_spacy(self, model: str = "en_core_web_sm") -> "ExtractorBuilder":
+    def with_spacy(self, model: str = "en_core_web_sm") -> ExtractorBuilder:
         """Add spaCy extractor to pipeline."""
         self._enable_spacy = True
         self._spacy_model = model
@@ -401,7 +406,7 @@ class ExtractorBuilder:
         device: str = "cpu",
         *,
         model_name: str | None = None,
-    ) -> "ExtractorBuilder":
+    ) -> ExtractorBuilder:
         """Add GLiNER2 extractor to pipeline with simple labels.
 
         Args:
@@ -424,7 +429,7 @@ class ExtractorBuilder:
         model: str = "gliner-community/gliner_medium-v2.5",
         threshold: float = 0.5,
         device: str = "cpu",
-    ) -> "ExtractorBuilder":
+    ) -> ExtractorBuilder:
         """Add GLiNER2 extractor with a domain schema for better accuracy.
 
         Using domain schemas with entity type descriptions significantly
@@ -444,17 +449,17 @@ class ExtractorBuilder:
         self._gliner_schema = schema_name
         return self
 
-    def with_llm_fallback(self, model: str = "gpt-4o-mini") -> "ExtractorBuilder":
+    def with_llm_fallback(self, model: str = "gpt-4o-mini") -> ExtractorBuilder:
         """Add LLM extractor as fallback."""
         self._enable_llm = True
         self._llm_model = model
         return self
 
-    def with_llm(self, model: str = "gpt-4o-mini") -> "ExtractorBuilder":
+    def with_llm(self, model: str = "gpt-4o-mini") -> ExtractorBuilder:
         """Add an LLM extractor (alias of :meth:`with_llm_fallback`)."""
         return self.with_llm_fallback(model)
 
-    def with_entity_types(self, types: list[str]) -> "ExtractorBuilder":
+    def with_entity_types(self, types: list[str]) -> ExtractorBuilder:
         """Set entity types to extract."""
         self._entity_types = types
         # GLiNER labels mirror the configured entity types when no domain
@@ -462,7 +467,7 @@ class ExtractorBuilder:
         self._gliner_entity_labels = [t.lower() for t in types]
         return self
 
-    def with_confidence_threshold(self, threshold: float) -> "ExtractorBuilder":
+    def with_confidence_threshold(self, threshold: float) -> ExtractorBuilder:
         """Set the confidence threshold for entity extraction.
 
         Applies to GLiNER (the threshold passed to the model) and is recorded
@@ -474,7 +479,7 @@ class ExtractorBuilder:
         self._gliner_threshold = threshold
         return self
 
-    def with_schema(self, schema_config: "EntitySchemaConfig") -> "ExtractorBuilder":
+    def with_schema(self, schema_config: EntitySchemaConfig) -> ExtractorBuilder:
         """Configure entity types from an :class:`EntitySchemaConfig`.
 
         Derives ``entity_types`` from the schema's
@@ -493,32 +498,32 @@ class ExtractorBuilder:
             self._gliner_entity_labels = [t.lower() for t in type_names]
         return self
 
-    def merge_by_union(self) -> "ExtractorBuilder":
+    def merge_by_union(self) -> ExtractorBuilder:
         """Use union strategy for merging."""
         self._merge_strategy = MergeStrategy.UNION
         return self
 
-    def merge_by_intersection(self) -> "ExtractorBuilder":
+    def merge_by_intersection(self) -> ExtractorBuilder:
         """Use intersection strategy for merging."""
         self._merge_strategy = MergeStrategy.INTERSECTION
         return self
 
-    def merge_by_confidence(self) -> "ExtractorBuilder":
+    def merge_by_confidence(self) -> ExtractorBuilder:
         """Use confidence strategy for merging."""
         self._merge_strategy = MergeStrategy.CONFIDENCE
         return self
 
-    def merge_by_cascade(self) -> "ExtractorBuilder":
+    def merge_by_cascade(self) -> ExtractorBuilder:
         """Use cascade strategy for merging."""
         self._merge_strategy = MergeStrategy.CASCADE
         return self
 
-    def extract_relations(self, enabled: bool = True) -> "ExtractorBuilder":
+    def extract_relations(self, enabled: bool = True) -> ExtractorBuilder:
         """Enable/disable relation extraction."""
         self._extract_relations = enabled
         return self
 
-    def extract_preferences(self, enabled: bool = True) -> "ExtractorBuilder":
+    def extract_preferences(self, enabled: bool = True) -> ExtractorBuilder:
         """Enable/disable preference extraction."""
         self._extract_preferences = enabled
         return self

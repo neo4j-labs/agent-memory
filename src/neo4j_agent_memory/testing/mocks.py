@@ -1,9 +1,14 @@
 """Mock implementations of memory classes for testing."""
 
-from collections.abc import Callable
-from datetime import datetime
-from typing import Any, Literal
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID, uuid4
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from types import TracebackType
 
 from neo4j_agent_memory.memory.long_term import (
     Entity,
@@ -30,7 +35,7 @@ from neo4j_agent_memory.memory.short_term import (
 class MockShortTermMemory:
     """In-memory mock of ShortTermMemory for unit testing."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._conversations: dict[str, Conversation] = {}
         self._messages: dict[str, Message] = {}
 
@@ -55,7 +60,7 @@ class MockShortTermMemory:
                 id=uuid4(),
                 session_id=session_id,
                 messages=[],
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(timezone.utc),
             )
 
         conv = self._conversations[session_id]
@@ -65,12 +70,12 @@ class MockShortTermMemory:
             role=role,
             content=content,
             conversation_id=conv.id,
-            created_at=timestamp or datetime.utcnow(),
+            created_at=timestamp or datetime.now(timezone.utc),
             metadata=metadata or {},
         )
 
         conv.messages.append(message)
-        conv.updated_at = datetime.utcnow()
+        conv.updated_at = datetime.now(timezone.utc)
         self._messages[str(message.id)] = message
 
         return message
@@ -125,7 +130,7 @@ class MockShortTermMemory:
                 id=uuid4(),
                 session_id=session_id,
                 messages=[],
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(timezone.utc),
             )
 
         conv = self._conversations[session_id]
@@ -287,7 +292,7 @@ class MockShortTermMemory:
 class MockLongTermMemory:
     """In-memory mock of LongTermMemory for unit testing."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._entities: dict[str, Entity] = {}
         self._preferences: dict[str, Preference] = {}
         self._facts: dict[str, Fact] = {}
@@ -310,7 +315,7 @@ class MockLongTermMemory:
             type=entity_type,
             description=description,
             canonical_name=name,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
         )
 
         self._entities[str(entity.id)] = entity
@@ -332,7 +337,7 @@ class MockLongTermMemory:
             preference=preference,
             context=context,
             confidence=confidence,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
         )
 
         self._preferences[str(pref.id)] = pref
@@ -354,7 +359,7 @@ class MockLongTermMemory:
             predicate=predicate,
             object=object_,
             confidence=confidence,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
         )
 
         self._facts[str(fact.id)] = fact
@@ -425,7 +430,7 @@ class MockLongTermMemory:
         if entities:
             parts.append("### Entities")
             for e in entities:
-                parts.append(f"- {e.name} ({e.type.value})")
+                parts.append(f"- {e.name} ({e.type})")
 
         if prefs:
             parts.append("### Preferences")
@@ -438,7 +443,7 @@ class MockLongTermMemory:
 class MockReasoningMemory:
     """In-memory mock of ReasoningMemory for unit testing."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._traces: dict[str, ReasoningTrace] = {}
         self._steps: dict[str, ReasoningStep] = {}
         self._tool_calls: dict[str, ToolCall] = {}
@@ -456,7 +461,7 @@ class MockReasoningMemory:
             id=uuid4(),
             session_id=session_id,
             task=task,
-            started_at=datetime.utcnow(),
+            started_at=datetime.now(timezone.utc),
             metadata=metadata or {},
         )
 
@@ -465,7 +470,7 @@ class MockReasoningMemory:
 
     async def add_step(
         self,
-        trace_id: UUID,
+        trace_id: UUID | str,
         *,
         thought: str | None = None,
         action: str | None = None,
@@ -484,7 +489,7 @@ class MockReasoningMemory:
             thought=thought,
             action=action,
             observation=observation,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
             metadata=metadata or {},
         )
 
@@ -550,7 +555,7 @@ class MockReasoningMemory:
 
     async def complete_trace(
         self,
-        trace_id: UUID,
+        trace_id: UUID | str,
         *,
         outcome: str | None = None,
         success: bool | None = None,
@@ -558,14 +563,16 @@ class MockReasoningMemory:
     ) -> ReasoningTrace:
         """Complete a reasoning trace."""
         trace = self._traces.get(str(trace_id))
-        if trace:
-            trace.outcome = outcome
-            trace.success = success
-            trace.completed_at = datetime.utcnow()
+        if trace is None:
+            raise ValueError(f"Trace not found: {trace_id}")
+
+        trace.outcome = outcome
+        trace.success = success
+        trace.completed_at = datetime.now(timezone.utc)
 
         return trace
 
-    async def get_trace(self, trace_id: UUID) -> ReasoningTrace | None:
+    async def get_trace(self, trace_id: UUID | str) -> ReasoningTrace | None:
         """Get a trace by ID."""
         return self._traces.get(str(trace_id))
 
@@ -667,16 +674,21 @@ class MockMemoryClient:
             assert len(conv.messages) == 1
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.short_term = MockShortTermMemory()
         self.long_term = MockLongTermMemory()
         self.reasoning = MockReasoningMemory()
 
-    async def __aenter__(self) -> "MockMemoryClient":
+    async def __aenter__(self) -> MockMemoryClient:
         """Async context manager entry."""
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         """Async context manager exit."""
         pass
 

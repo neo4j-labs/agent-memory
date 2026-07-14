@@ -27,6 +27,7 @@ from uuid import uuid4
 if TYPE_CHECKING:
     from neo4j_agent_memory import MemoryClient
     from neo4j_agent_memory.mcp._observer import MemoryObserver
+    from neo4j_agent_memory.mcp._preference_detector import PreferenceDetector
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +99,7 @@ class MemoryIntegration:
         self._conversation_session_id: str | None = None
 
         # Preference detector (lazy-initialized)
-        self._preference_detector = None
+        self._preference_detector: PreferenceDetector | None = None
 
         # Observer (set externally by the MCP server lifespan)
         self._observer: MemoryObserver | None = None
@@ -148,7 +149,12 @@ class MemoryIntegration:
         await self.connect()
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: object,
+    ) -> None:
         await self.close()
 
     def resolve_session_id(self, hint: str | None = None) -> str:
@@ -185,7 +191,7 @@ class MemoryIntegration:
     def observer(self, value: MemoryObserver | None) -> None:
         self._observer = value
 
-    def _get_preference_detector(self):
+    def _get_preference_detector(self) -> PreferenceDetector:
         """Lazy-initialize the preference detector."""
         if self._preference_detector is None:
             from neo4j_agent_memory.mcp._preference_detector import PreferenceDetector
@@ -536,13 +542,23 @@ class MemoryIntegration:
             Dict with stored fact info.
         """
         try:
+            # valid_from / valid_until are ISO strings from callers; add_fact
+            # expects datetime | None, so parse them here.  This is the correct
+            # fix for a genuine type mismatch — the public signature accepts str
+            # for ergonomics while the storage layer requires datetime.
+            vf: datetime | None = (
+                datetime.fromisoformat(valid_from) if valid_from is not None else None
+            )
+            vu: datetime | None = (
+                datetime.fromisoformat(valid_until) if valid_until is not None else None
+            )
             fact = await self.client.long_term.add_fact(
                 subject=subject,
                 predicate=predicate,
                 obj=object_value,
                 confidence=confidence,
-                valid_from=valid_from,
-                valid_until=valid_until,
+                valid_from=vf,
+                valid_until=vu,
                 generate_embedding=True,
                 metadata=metadata,
             )

@@ -22,7 +22,7 @@ from neo4j_agent_memory.resolution import (
 )
 
 
-async def main():
+async def main() -> None:
     print("=" * 60)
     print("Neo4j Agent Memory - Entity Resolution Demo")
     print("=" * 60)

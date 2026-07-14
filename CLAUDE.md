@@ -346,27 +346,43 @@ Key fixtures in `tests/conftest.py`:
 
 ## Documentation
 
-### Structure (Diataxis Framework)
+### Structure (Antora + Diataxis)
 
-The documentation follows the [Diataxis framework](https://diataxis.fr/) with four content types:
+The documentation is an **Antora** component (`docs/antora.yml`,
+`docs/antora-playbook.yml`). All content lives under a single `ROOT` module and
+is organised by the [Diataxis framework](https://diataxis.fr/) content types:
 
 ```
 docs/
-├── tutorials/           # Learning-oriented: guided walkthroughs
-├── how-to/              # Task-oriented: solving specific problems
-├── reference/           # Information-oriented: API descriptions
-├── explanation/         # Understanding-oriented: conceptual discussions
-└── build.js             # Node.js build script (Asciidoctor)
+├── antora.yml               # Antora component descriptor (name: agent-memory)
+├── antora-playbook.yml      # Site playbook (start page, UI bundle)
+├── package.json             # scripts: build (antora), serve
+└── modules/
+    └── ROOT/
+        ├── nav.adoc         # Left-hand navigation (single source)
+        ├── pages/
+        │   ├── index.adoc, getting-started.adoc, configuration.adoc,
+        │   │   glossary.adoc, faq.adoc
+        │   ├── tutorials/   # Learning-oriented: guided walkthroughs
+        │   ├── how-to/      # Task-oriented: solving specific problems
+        │   ├── reference/   # Information-oriented: API descriptions
+        │   ├── explanation/ # Understanding-oriented: conceptual discussions
+        │   └── sdks/        # Python & TypeScript SDK landing pages
+        ├── partials/        # Reusable AsciiDoc includes (e.g. backend-*.adoc)
+        └── images/          # Diagrams and screenshots (Antora image path)
 ```
+
+The old `docs/build.js` Asciidoctor script and the flat top-level
+`tutorials/how-to/reference/explanation` directories are gone — everything is
+under `modules/ROOT/`.
 
 ### Building Documentation
 
 ```bash
 cd docs
 npm install
-npm run build           # Build to _site/
-npm run serve           # Local preview server
-npm run lint            # Validate links
+npm run build           # Antora build → docs/build/site/
+npm run serve           # Build then serve build/site locally
 ```
 
 ### Documentation Testing
@@ -2331,30 +2347,25 @@ See `examples/financial-services-advisor/google-cloud-financial-advisor/README.m
 
 ## Documentation
 
-The documentation is located in `docs/` and follows the [Diataxis framework](https://diataxis.fr/) for organizing technical documentation into four distinct types.
+The documentation is an [Antora](https://antora.org/) component located in
+`docs/`, organised by the [Diataxis framework](https://diataxis.fr/) into four
+content types. All pages live under `docs/modules/ROOT/pages/`.
 
 ### Documentation Structure
 
 ```
-docs/
-├── index.adoc                    # Landing page
-├── tutorials/                    # Learning-oriented guides
-│   ├── first-agent-memory.adoc   # Build your first memory-enabled agent
-│   ├── conversation-memory.adoc  # Add memory to a chatbot
-│   └── knowledge-graph.adoc      # Build a knowledge graph from documents
-├── how-to/                       # Task-oriented guides
-│   ├── messages.adoc             # Store and search messages
-│   ├── entities.adoc             # Work with entities
-│   ├── entity-extraction.adoc    # Configure extraction pipeline
-│   └── integrations/             # Framework-specific guides
-├── reference/                    # Information-oriented content
-│   ├── configuration.adoc        # All configuration options
-│   ├── cli.adoc                  # CLI command reference
-│   └── api/                      # API documentation
-└── explanation/                  # Understanding-oriented content
-    ├── memory-types.adoc         # The three memory types explained
-    ├── poleo-model.adoc          # POLE+O data model concepts
-    └── extraction-pipeline.adoc  # How entity extraction works
+docs/modules/ROOT/
+├── nav.adoc                          # Left-hand navigation (single source)
+├── pages/
+│   ├── index.adoc                    # Landing page
+│   ├── getting-started.adoc          # Hosted (NAMS) vs self-hosted (bolt) fork
+│   ├── tutorials/                    # Learning-oriented guides
+│   ├── how-to/                       # Task-oriented guides (+ integrations/, typescript/)
+│   ├── reference/                    # Information-oriented content (+ api/)
+│   ├── explanation/                  # Understanding-oriented content
+│   └── sdks/                         # Python & TypeScript SDK landing pages
+├── partials/                         # Reusable includes (e.g. backend-*.adoc)
+└── images/                           # Diagrams and screenshots
 ```
 
 ### Diataxis Quadrants
@@ -2372,14 +2383,11 @@ docs/
 # Install dependencies
 cd docs && npm install
 
-# Build documentation
+# Build documentation (Antora → docs/build/site/)
 npm run build
 
-# Serve with live reload
+# Build then serve locally
 npm run serve
-
-# Validate links
-npm run lint
 ```
 
 ### Writing Documentation
@@ -2408,8 +2416,8 @@ When adding or modifying documentation:
 
 ### Documentation Build System
 
-- **Format**: AsciiDoc (`.adoc` files)
-- **Builder**: Custom Node.js script using `@asciidoctor/core`
-- **Features**: Auto-navigation generation, search (Pagefind), dark/light theme
-- **Output**: Static HTML in `docs/_site/`
-- **Deployment**: Vercel (auto-deploys on push to main)
+- **Format**: AsciiDoc (`.adoc` files) in an Antora component
+- **Builder**: Antora (`antora antora-playbook.yml`) with the Neo4j Labs UI bundle
+- **Navigation**: `docs/modules/ROOT/nav.adoc` (single source, hand-maintained)
+- **Output**: Static HTML in `docs/build/site/`
+- **Deployment**: Vercel (`docs/vercel.json`, `outputDirectory: build/site`; auto-deploys on push to main)

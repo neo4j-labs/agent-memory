@@ -62,7 +62,7 @@ class TestDomainSchemasStructure:
         if not script_path.exists():
             pytest.skip(f"Script not found: {script}")
         content = script_path.read_text(encoding="utf-8")
-        assert "async def main():" in content, f"{script} should have 'async def main()'"
+        assert "async def main(" in content, f"{script} should have 'async def main()'"
         assert '__name__ == "__main__"' in content, f"{script} should have main entry point"
 
     @pytest.mark.parametrize("script", ALL_SCHEMA_SCRIPTS)

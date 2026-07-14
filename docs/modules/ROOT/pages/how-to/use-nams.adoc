@@ -19,7 +19,7 @@ NAMS is a managed REST service backed by Neo4j. You don't run the database; you 
 == Install
 
 ```bash
-uv pip install 'neo4j-agent-memory[nams]>=0.4.0'
+uv pip install 'neo4j-agent-memory[nams]>=0.5.0'
 ```
 
 The `[nams]` extra pulls in `httpx`. If you already have `httpx` (or any framework integration that depends on it), you don't strictly need the extra — the import is lazy.
@@ -205,6 +205,20 @@ await client.short_term.add_message(
     user_identifier="alice-user-id",
 )
 ----
+
+== Bring your own database (BYOD)
+
+By default a NAMS workspace is backed by a managed Neo4j database that NAMS
+provisions and operates for you. You can instead point a workspace at **your own
+Neo4j** (`dbMode: external`): NAMS stores the memory graph in your database while
+still serving the same REST/MCP surface, and external workspaces don't count
+against the managed-workspace cap.
+
+Workspace database management — provisioning, switching managed↔external, and
+`.cypher` export/import (`/v1/workspace/database/*`) — is an administrative
+operation (admin-scoped REST or the dashboard), not part of the memory client.
+See the link:https://memory.neo4jlabs.com/openapi.json[OpenAPI spec] for the
+exact endpoints.
 
 == What's *not* available on NAMS
 

@@ -1,0 +1,96 @@
+= Hosted NAMS MCP Server
+:page-product: agent-memory
+:toclevels: 2
+:icons: font
+
+The hosted NAMS backend ships its own Model Context Protocol (MCP) server, so an
+MCP-capable agent (Claude Desktop, Claude Code, Cursor, …) can use a NAMS
+workspace's memory — and its ontology and Skills surface — directly, without the
+SDK.
+
+[NOTE]
+====
+This is **not** the same as the self-hosted Python MCP server
+(`neo4j-agent-memory mcp serve`) documented in xref:reference/mcp-tools.adoc[MCP
+Tools]. That one you run yourself against a bolt or NAMS backend and it exposes
+6/16 memory tools. The server described here is *operated by NAMS*, authenticated
+with OAuth, and exposes the full hosted surface (47 tools).
+====
+
+== Two hosts
+
+NAMS is reached through two public hostnames:
+
+[cols="1,3",options="header"]
+|===
+| Host | Serves
+
+| **Apex API host** (e.g. `memory.neo4jlabs.com`)
+| Every REST endpoint (`/v1/*`), `/.well-known/jwks.json`, and the dashboard.
+| **MCP host** (`mcp.<domain>`)
+| The MCP server and its OAuth ceremony. Kept deliberately separate because MCP
+is a non-REST protocol with its own auth flow and stored client registrations
+whose `resource` indicator embeds the hostname.
+|===
+
+The apex forwards `/mcp*` and `/.well-known/oauth-*` to the MCP server as a
+convenience, but the MCP host is canonical for MCP clients.
+
+== Authentication
+
+You can authenticate the MCP connection two ways:
+
+* **API key** — send your `nams_…` key as a Bearer token. Simplest for headless
+/ programmatic clients.
+* **OAuth 2.0** — for interactive clients. The MCP server is a full OAuth 2.0
+Authorization Server (RFC 8414) and Protected Resource (RFC 9728) with **Dynamic
+Client Registration** (RFC 7591) and the Authorization-Code + **PKCE** flow,
+including a workspace-selector step so the user picks which workspace the session
+is scoped to.
+
+Discovery and flow endpoints (served under the `/mcp` prefix on the MCP host):
+
+[cols="2,3",options="header"]
+|===
+| Endpoint | Purpose
+
+| `/.well-known/oauth-protected-resource` | Protected-resource metadata.
+| `/.well-known/oauth-authorization-server` | Authorization-server metadata.
+| `/mcp/oauth/register` | Dynamic client registration.
+| `/mcp/authorize` | Authorization endpoint (Auth Code + PKCE).
+| `/mcp/oauth/callback` | Redirect callback (+ `/select-workspace`).
+| `/mcp/oauth/token` | Token + refresh-token endpoint.
+|===
+
+See xref:reference/authentication.adoc[Authentication & API Keys] for the key and
+token model, and xref:how-to/typescript/mcp.adoc[MCP Tools (TypeScript)] for
+wiring a client.
+
+== Tool surface & scope-filtered visibility
+
+The server registers **47 tools** spanning memory, entity resolution/review,
+ontology, workspace management, and xref:reference/skills-api.adoc[Skills]
+(13 skill tools).
+
+The surface a caller sees is **scope-dependent**. `tools/list` returns only the
+tools the principal's scopes permit it to invoke — so a data-plane *workspace
+key* does **not** see the control-plane `workspace_*` administration tools (they
+require `workspace:admin`, carried only by an *admin* key). Invoking a tool
+outside your scope fails closed. This means the tool list is not fixed: it
+reflects your key category (see xref:reference/authentication.adoc[key categories]).
+
+[cols="1,3",options="header"]
+|===
+| Group | Examples
+
+| Memory | `memory_add_message`, `memory_search`, `memory_get_context`, `memory_add_entity`, `memory_resolve_entity`, `memory_extraction_status`
+| Ontology | `ontology_list`, `ontology_activate`, `ontology_preview`, ontology write + pending-type tools
+| Workspace _(admin scope)_ | `workspace_create`, `workspace_get`, `workspace_reprovision`, `workspace_set_external_db`, `workspace_list_backups`, `workspace_update`, `workspace_delete`, `workspace_get_database` (plus the ungated `workspace_list`)
+| Skills _(Preview)_ | the 13 `skill_*` tools — see xref:reference/skills-api.adoc[Skills API]
+|===
+
+== See also
+
+* xref:reference/mcp-tools.adoc[MCP Tools] — the self-hosted Python MCP server.
+* xref:reference/rest-api.adoc[NAMS REST API] — the HTTP surface the tools back onto.
+* xref:reference/skills-api.adoc[Skills API] — the Skills tools in detail.

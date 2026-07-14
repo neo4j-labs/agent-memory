@@ -1,6 +1,8 @@
 """Fuzzy match entity resolution using RapidFuzz."""
 
-from typing import TYPE_CHECKING
+from __future__ import annotations
+
+from collections.abc import Callable
 
 from neo4j_agent_memory.core.exceptions import ResolutionError
 from neo4j_agent_memory.resolution.base import (
@@ -8,9 +10,6 @@ from neo4j_agent_memory.resolution.base import (
     ResolutionMatch,
     ResolvedEntity,
 )
-
-if TYPE_CHECKING:
-    pass
 
 
 def is_rapidfuzz_available() -> bool:
@@ -29,6 +28,8 @@ class FuzzyMatchResolver(BaseResolver):
 
     Uses token-based fuzzy matching to find similar entity names.
     """
+
+    _scorer: Callable[..., float] | None
 
     def __init__(
         self,
@@ -53,10 +54,10 @@ class FuzzyMatchResolver(BaseResolver):
         """Check if this resolver is available (has required dependencies)."""
         return self._available
 
-    def _ensure_scorer(self):
-        """Ensure the RapidFuzz scorer is loaded."""
+    def _ensure_scorer(self) -> Callable[..., float]:
+        """Ensure the RapidFuzz scorer is loaded and return it."""
         if self._scorer is not None:
-            return
+            return self._scorer
 
         try:
             from rapidfuzz import fuzz
@@ -65,7 +66,7 @@ class FuzzyMatchResolver(BaseResolver):
                 "RapidFuzz package not installed. Install with: pip install neo4j-agent-memory[fuzzy]"
             )
 
-        scorers = {
+        scorers: dict[str, Callable[..., float]] = {
             "ratio": fuzz.ratio,
             "partial_ratio": fuzz.partial_ratio,
             "token_sort_ratio": fuzz.token_sort_ratio,
@@ -75,6 +76,7 @@ class FuzzyMatchResolver(BaseResolver):
         }
 
         self._scorer = scorers.get(self._scorer_name, fuzz.token_sort_ratio)
+        return self._scorer
 
     async def resolve(
         self,
@@ -93,7 +95,7 @@ class FuzzyMatchResolver(BaseResolver):
                 match_type="fuzzy",
             )
 
-        self._ensure_scorer()
+        scorer = self._ensure_scorer()
         normalized = self._normalize(entity_name)
 
         best_match = None
@@ -101,7 +103,7 @@ class FuzzyMatchResolver(BaseResolver):
 
         for existing in existing_entities:
             existing_normalized = self._normalize(existing)
-            score = self._scorer(normalized, existing_normalized) / 100.0  # Normalize to 0-1
+            score = float(scorer(normalized, existing_normalized)) / 100.0  # Normalize to 0-1
 
             if score >= self._threshold and score > best_score:
                 best_match = existing
@@ -133,13 +135,13 @@ class FuzzyMatchResolver(BaseResolver):
         candidates: list[str],
     ) -> list[ResolutionMatch]:
         """Find fuzzy matches from candidates."""
-        self._ensure_scorer()
+        scorer = self._ensure_scorer()
         matches = []
         normalized = self._normalize(entity_name)
 
         for candidate in candidates:
             candidate_normalized = self._normalize(candidate)
-            score = self._scorer(normalized, candidate_normalized) / 100.0
+            score = float(scorer(normalized, candidate_normalized)) / 100.0
 
             if score >= self._threshold:
                 matches.append(

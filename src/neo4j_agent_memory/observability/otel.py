@@ -106,8 +106,8 @@ class OpenTelemetryTracer(Tracer):
                     OTLPSpanExporter,
                 )
 
-                exporter = OTLPSpanExporter(endpoint=endpoint, headers=headers)
-                provider.add_span_processor(BatchSpanProcessor(exporter))
+                grpc_exporter = OTLPSpanExporter(endpoint=endpoint, headers=headers)
+                provider.add_span_processor(BatchSpanProcessor(grpc_exporter))
             except ImportError:
                 # Try HTTP exporter
                 try:
@@ -115,8 +115,8 @@ class OpenTelemetryTracer(Tracer):
                         OTLPSpanExporter as HTTPSpanExporter,
                     )
 
-                    exporter = HTTPSpanExporter(endpoint=endpoint, headers=headers)
-                    provider.add_span_processor(BatchSpanProcessor(exporter))
+                    http_exporter = HTTPSpanExporter(endpoint=endpoint, headers=headers)
+                    provider.add_span_processor(BatchSpanProcessor(http_exporter))
                 except ImportError:
                     pass  # No exporter available, traces will be collected but not exported
 

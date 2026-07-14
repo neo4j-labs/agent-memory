@@ -9,7 +9,7 @@
 A step-by-step tutorial: build a memory-enabled agent using Anthropic Claude for entity extraction and local sentence-transformers for embeddings. Zero OpenAI dependency.
 
 [.lead]
-By the end you'll have a working memory system where the LLM is Anthropic and embeddings are computed locally on your machine — no embedding API calls leave your network. This is the headline configuration for v0.3.
+By the end you'll have a working memory system where the LLM is Anthropic and embeddings are computed locally on your machine — no embedding API calls leave your network.
 
 == What you'll learn
 

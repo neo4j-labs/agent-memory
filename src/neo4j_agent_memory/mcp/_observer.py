@@ -209,7 +209,13 @@ class MemoryObserver:
         transcript_parts: list[str] = []
         for msg in older_messages[-60:]:  # cap transcript size
             role = getattr(msg, "role", None)
-            role_name = role.value if hasattr(role, "value") else (role or "user")
+            if role is None:
+                role_name: str = "user"
+            elif hasattr(role, "value"):
+                role_name = str(role.value)
+            else:
+                # Match the original `role or "user"`: a falsy role (e.g. "") -> "user".
+                role_name = str(role) if role else "user"
             transcript_parts.append(f"{role_name}: {msg.content}")
         transcript = "\n".join(transcript_parts)
 

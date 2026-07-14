@@ -53,7 +53,7 @@ For the hosted service, swap the `neo4j={...}` config for
 
 * Package: link:https://pypi.org/project/neo4j-agent-memory/[neo4j-agent-memory on PyPI]
 * Source: link:https://github.com/neo4j-labs/agent-memory[github.com/neo4j-labs/agent-memory]
-* Release tags: `python-v*` (e.g. `python-v0.4.1`)
+* Release tags: `python-v*` (e.g. `python-v0.5.0`)
 * Changelog: link:https://github.com/neo4j-labs/agent-memory/blob/main/CHANGELOG.md[CHANGELOG.md]
 
 == Looking for the TypeScript SDK?

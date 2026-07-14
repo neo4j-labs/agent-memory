@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from neo4j_agent_memory.core.exceptions import EmbeddingError
 from neo4j_agent_memory.embeddings.base import BaseEmbedder
@@ -158,17 +158,19 @@ class BedrockEmbedder(BaseEmbedder):
         Returns:
             JSON string for the request body.
         """
+        # body values vary by model: str, bool, list[str] — use Any
+        body: dict[str, Any]
         if self._model.startswith("amazon.titan"):
             # Titan embedding models
             body = {
                 "inputText": text,
             }
             if self._normalize:
-                body["normalize"] = True
+                body["normalize"] = True  # Titan API accepts bool for normalize
         elif self._model.startswith("cohere"):
             # Cohere embedding models
             body = {
-                "texts": [text],
+                "texts": [text],  # Cohere API expects a list of strings
                 "input_type": "search_document",
             }
         else:
@@ -186,16 +188,17 @@ class BedrockEmbedder(BaseEmbedder):
         Returns:
             Embedding vector as list of floats.
         """
+        # response_body is dict[str, Any]; cast at this external API boundary
         if self._model.startswith("amazon.titan"):
-            return response_body["embedding"]
+            return cast(list[float], response_body["embedding"])
         elif self._model.startswith("cohere"):
-            return response_body["embeddings"][0]
+            return cast(list[float], response_body["embeddings"][0])
         else:
             # Try common keys
             if "embedding" in response_body:
-                return response_body["embedding"]
+                return cast(list[float], response_body["embedding"])
             elif "embeddings" in response_body:
-                return response_body["embeddings"][0]
+                return cast(list[float], response_body["embeddings"][0])
             else:
                 raise EmbeddingError(f"Unknown response format: {response_body.keys()}")
 

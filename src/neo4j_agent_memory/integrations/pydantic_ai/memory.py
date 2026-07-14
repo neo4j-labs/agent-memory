@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar
 
 if TYPE_CHECKING:
-    from pydantic_ai.result import RunResult
+    from pydantic_ai.agent import AgentRunResult
 
     from neo4j_agent_memory import MemoryClient
     from neo4j_agent_memory.memory.reasoning import ReasoningMemory, ReasoningTrace
@@ -128,7 +128,7 @@ class MemoryDependency:
         ]
 
 
-def create_memory_tools(memory: "MemoryClient") -> list[Callable]:
+def create_memory_tools(memory: "MemoryClient") -> list[Callable[..., Any]]:
     """
     Create Pydantic AI tools for memory operations.
 
@@ -230,7 +230,7 @@ def create_memory_tools(memory: "MemoryClient") -> list[Callable]:
 async def record_agent_trace(
     reasoning_memory: "ReasoningMemory",
     session_id: str,
-    result: "RunResult[T]",
+    result: "AgentRunResult[T]",
     *,
     task: str | None = None,
     include_tool_calls: bool = True,
@@ -287,16 +287,13 @@ async def record_agent_trace(
 
     # Extract task from first user message if not provided
     if task is None:
+        task = "PydanticAI agent run"
         for msg in result.all_messages():
             if isinstance(msg, ModelRequest):
-                for part in msg.parts:
-                    if isinstance(part, UserPromptPart):
-                        task = str(part.content)[:500]  # Truncate long tasks
-                        break
-            if task:
-                break
-        if task is None:
-            task = "PydanticAI agent run"
+                user_part = next((p for p in msg.parts if isinstance(p, UserPromptPart)), None)
+                if user_part is not None:
+                    task = str(user_part.content)[:500]  # Truncate long tasks
+                    break
 
     # Start the trace
     trace = await reasoning_memory.start_trace(
@@ -319,14 +316,8 @@ async def record_agent_trace(
                 for part in msg.parts:
                     if isinstance(part, ToolCallPart):
                         tool_call_id = part.tool_call_id or f"call_{len(tool_calls)}"
-                        # Extract args safely
-                        args = {}
-                        if hasattr(part.args, "args_dict"):
-                            args = part.args.args_dict
-                        elif hasattr(part.args, "model_dump"):
-                            args = part.args.model_dump()
-                        elif isinstance(part.args, dict):
-                            args = part.args
+                        # args_as_dict() normalizes str/dict args to a dict.
+                        args: dict[str, Any] = part.args_as_dict() if part.args is not None else {}
 
                         tool_calls[tool_call_id] = {
                             "name": part.tool_name,
@@ -334,10 +325,10 @@ async def record_agent_trace(
                         }
 
             elif isinstance(msg, ModelRequest):
-                for part in msg.parts:
-                    if isinstance(part, ToolReturnPart):
-                        tool_call_id = part.tool_call_id or ""
-                        tool_results[tool_call_id] = part.content
+                for req_part in msg.parts:
+                    if isinstance(req_part, ToolReturnPart):
+                        tool_call_id = req_part.tool_call_id or ""
+                        tool_results[tool_call_id] = req_part.content
 
         # Create steps for each tool call
         step_number = 0
@@ -415,7 +406,7 @@ def _is_error_result(result: Any) -> bool:
     return False
 
 
-def nams_memory_tools(memory: "MemoryClient") -> list[Callable]:
+def nams_memory_tools(memory: "MemoryClient") -> list[Callable[..., Any]]:
     """Pydantic AI tools exposing NAMS Platinum operations.
 
     Returns the standard :func:`create_memory_tools` set plus four

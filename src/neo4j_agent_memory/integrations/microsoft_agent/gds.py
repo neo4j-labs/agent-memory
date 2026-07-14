@@ -12,6 +12,8 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from neo4j import AsyncSession
+
     from neo4j_agent_memory import MemoryClient
 
 logger = logging.getLogger(__name__)
@@ -115,6 +117,13 @@ class GDSIntegration:
         self._gds_available: bool | None = None
         self._fallback_warned: bool = False
 
+    def _session(self) -> AsyncSession:
+        """Return a raw Neo4j session, narrowing the client's connected state."""
+        neo4j_client = self._client._client
+        if neo4j_client is None:
+            raise RuntimeError("MemoryClient is not connected; call connect() first.")
+        return neo4j_client.session()
+
     @property
     def config(self) -> GDSConfig:
         """Get the GDS configuration."""
@@ -132,7 +141,7 @@ class GDSIntegration:
 
         try:
             # Try to call gds.version()
-            async with self._client._client.session() as session:
+            async with self._session() as session:
                 result = await session.run("RETURN gds.version() AS version")
                 record = await result.single()
                 if record:
@@ -204,7 +213,7 @@ class GDSIntegration:
         ORDER BY score DESC
         """
         try:
-            async with self._client._client.session() as session:
+            async with self._session() as session:
                 result = await session.run(
                     query,
                     entity_ids=entity_ids,
@@ -243,7 +252,7 @@ class GDSIntegration:
         ORDER BY score DESC
         """
         try:
-            async with self._client._client.session() as session:
+            async with self._session() as session:
                 result = await session.run(simple_query, entity_ids=entity_ids)
                 records = await result.data()
                 return [(r["entity_id"], r["score"]) for r in records]
@@ -291,7 +300,7 @@ class GDSIntegration:
         RETURN e.id AS entity_id, communityId AS community_id
         """
         try:
-            async with self._client._client.session() as session:
+            async with self._session() as session:
                 result = await session.run(query, entity_ids=entity_ids)
                 records = await result.data()
                 return {r["entity_id"]: r["community_id"] for r in records}
@@ -319,7 +328,7 @@ class GDSIntegration:
         RETURN entity_id, group_id
         """
         try:
-            async with self._client._client.session() as session:
+            async with self._session() as session:
                 result = await session.run(query, entity_ids=entity_ids)
                 records = await result.data()
 
@@ -345,7 +354,7 @@ class GDSIntegration:
         source_entity: str,
         target_entity: str,
         max_hops: int = 5,
-    ) -> list[dict[str, Any]] | None:
+    ) -> dict[str, Any] | None:
         """
         Find shortest path between two entities.
 
@@ -355,15 +364,20 @@ class GDSIntegration:
             max_hops: Maximum path length to search.
 
         Returns:
-            List of nodes in the path, or None if no path exists.
+            A dict with ``"nodes"`` (the entities along the path) and
+            ``"relationships"`` (their connecting relationship types), or
+            ``None`` if no path exists.
         """
-        # This doesn't require GDS - use built-in shortestPath
+        # This doesn't require GDS - use built-in shortestPath.
+        # Cypher can't parameterize a variable-length path bound, so max_hops
+        # is interpolated; coerce it to int to keep the query injection-safe.
+        safe_hops = int(max_hops)
         query = f"""
         MATCH (source:Entity)
         WHERE source.name = $source OR source.id = $source
         MATCH (target:Entity)
         WHERE target.name = $target OR target.id = $target
-        MATCH path = shortestPath((source)-[*..{max_hops}]-(target))
+        MATCH path = shortestPath((source)-[*..{safe_hops}]-(target))
         RETURN [n IN nodes(path) | {{
             id: n.id,
             name: n.name,
@@ -372,9 +386,9 @@ class GDSIntegration:
         [r IN relationships(path) | {{type: type(r)}}] AS relationships
         """
         try:
-            async with self._client._client.session() as session:
+            async with self._session() as session:
                 result = await session.run(
-                    query,
+                    query,  # ty: ignore[invalid-argument-type]  # neo4j stubs type the query as LiteralString; ours is a runtime str built from a fixed template + an int bound (safe_hops)
                     source=source_entity,
                     target=target_entity,
                 )
@@ -447,7 +461,7 @@ class GDSIntegration:
         LIMIT $limit
         """
         try:
-            async with self._client._client.session() as session:
+            async with self._session() as session:
                 result = await session.run(query, entity_id=entity_id, limit=limit)
                 records = await result.data()
                 return [dict(r) for r in records]
@@ -478,7 +492,7 @@ class GDSIntegration:
             else:
                 # Get all entities
                 query = "MATCH (e:Entity) RETURN e.id AS id LIMIT 1000"
-                async with self._client._client.session() as session:
+                async with self._session() as session:
                     result = await session.run(query)
                     records = await result.data()
                     all_ids = [r["id"] for r in records]
@@ -493,7 +507,7 @@ class GDSIntegration:
             WHERE e.id IN $ids
             RETURN e.id AS id, e.name AS name, e.type AS type, e.description AS description
             """
-            async with self._client._client.session() as session:
+            async with self._session() as session:
                 result = await session.run(query, ids=top_ids)
                 records = await result.data()
                 return [{**dict(r), "score": score_map.get(r["id"], 0)} for r in records]

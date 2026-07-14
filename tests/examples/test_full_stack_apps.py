@@ -335,7 +335,9 @@ class TestExampleConsistency:
         for example in simple_examples:
             if example.exists():
                 content = example.read_text(encoding="utf-8")
-                assert "async def main():" in content, (
+                # Match the definition regardless of any return-type annotation
+                # (e.g. `async def main() -> None:`).
+                assert "async def main(" in content, (
                     f"{example.name} should have 'async def main()'"
                 )
                 assert 'if __name__ == "__main__":' in content, (

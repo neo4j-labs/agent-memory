@@ -7,7 +7,17 @@ Complete reference for the neo4j-agent-memory MCP server tools, resources, and p
 
 == Overview
 
-The MCP server exposes memory capabilities via the Model Context Protocol for Claude Desktop, Claude Code, Cursor, and other MCP-compatible hosts.
+This page documents the **self-hosted Python MCP server** you run yourself with
+`neo4j-agent-memory mcp serve` (against a bolt or NAMS backend). It exposes
+memory capabilities via the Model Context Protocol for Claude Desktop, Claude
+Code, Cursor, and other MCP-compatible hosts.
+
+[NOTE]
+====
+The hosted NAMS backend also operates its **own** MCP server (OAuth-authenticated,
+47 tools including ontology and Skills) — see xref:reference/nams-mcp.adoc[Hosted
+NAMS MCP Server]. That one you connect to; this one you run.
+====
 
 image::diagrams/mcp-server-architecture.png[MCP server architecture: MCP client connects via protocol to server profiles, MemoryClient, and Neo4j,width=540,align=left]
 

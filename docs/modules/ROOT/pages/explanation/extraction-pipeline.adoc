@@ -94,7 +94,7 @@ LLM extractors use large language models (GPT-4o, Claude, Llama, Gemini, …) wi
 
 [NOTE]
 ====
-As of v0.3, `LLMEntityExtractor` is provider-pluggable: pass any `LLMProvider` instance (Anthropic, Bedrock, Vertex AI, local Ollama, …) or rely on `MemorySettings.llm` to wire one for you. When the configured provider implements the Silver tier (`StructuredExtractor`), the extractor calls `complete_structured` with a Pydantic schema — OpenAI strict mode, Anthropic forced tool use, or schema-aligned retry, depending on the provider. See xref:explanation/structured-extraction.adoc[Structured Extraction] for the dispatch rules and xref:how-to/bring-your-own-model.adoc[Bring Your Own Model] for the wiring.
+`LLMEntityExtractor` is provider-pluggable: pass any `LLMProvider` instance (Anthropic, Bedrock, Vertex AI, local Ollama, …) or rely on `MemorySettings.llm` to wire one for you. When the configured provider implements the Silver tier (`StructuredExtractor`), the extractor calls `complete_structured` with a Pydantic schema — OpenAI strict mode, Anthropic forced tool use, or schema-aligned retry, depending on the provider. See xref:explanation/structured-extraction.adoc[Structured Extraction] for the dispatch rules and xref:how-to/bring-your-own-model.adoc[Bring Your Own Model] for the wiring.
 ====
 
 == Multi-Stage Pipelines

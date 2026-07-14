@@ -20,7 +20,7 @@ scaffold, not a benchmark.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
 
@@ -81,7 +81,7 @@ class DimensionReport(BaseModel):
         ge=0.0,
         le=1.0,
     )
-    details: list[dict] = Field(
+    details: list[dict[str, Any]] = Field(
         default_factory=list,
         description="Per-case breakdown",
     )
@@ -144,7 +144,7 @@ class EvalMemory:
 
         Recall = |retrieved ∩ expected| / |expected|.
         """
-        details: list[dict] = []
+        details: list[dict[str, Any]] = []
         scores: list[float] = []
         for case in cases:
             results = await self._client.long_term.search_entities(case.query, limit=case.k)
@@ -174,7 +174,7 @@ class EvalMemory:
 
     async def _eval_audit(self, cases: list[AuditCase]) -> DimensionReport:
         """Verify each entity has the expected ``:TOUCHED``-bearing steps."""
-        details: list[dict] = []
+        details: list[dict[str, Any]] = []
         scores: list[float] = []
         for case in cases:
             # v0.4: use the portable client.query.cypher accessor — runs on
@@ -209,7 +209,7 @@ class EvalMemory:
 
     async def _eval_preference(self, cases: list[PreferenceCase]) -> DimensionReport:
         """Check ``get_preferences_for(active_only=True)`` exact match."""
-        details: list[dict] = []
+        details: list[dict[str, Any]] = []
         scores: list[float] = []
         for case in cases:
             prefs = await self._client.long_term.get_preferences_for(

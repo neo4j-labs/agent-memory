@@ -1,5 +1,7 @@
 """Async Neo4j client wrapper."""
 
+from __future__ import annotations
+
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
@@ -74,7 +76,7 @@ class Neo4jClient:
             await self._driver.close()
             self._driver = None
 
-    async def __aenter__(self) -> "Neo4jClient":
+    async def __aenter__(self) -> Neo4jClient:
         """Async context manager entry."""
         await self.connect()
         return self
@@ -99,6 +101,16 @@ class Neo4jClient:
         driver = self._ensure_connected()
         return driver.session(database=self._config.database)
 
+    def session(self) -> AsyncSession:
+        """Return a new driver session for raw Cypher access.
+
+        Public accessor for callers that need session-level control the
+        ``execute_read``/``execute_write`` helpers don't offer (e.g. the
+        GDS integration streaming algorithm results). Prefer the execute_*
+        helpers for ordinary queries.
+        """
+        return self._get_session()
+
     async def execute_read(
         self,
         query: str,
@@ -118,7 +130,7 @@ class Neo4jClient:
 
             @unit_of_work(metadata={"app": f"neo4j-agent-memory_v{self._package_version}"})
             async def execute_read_tx(tx: AsyncManagedTransaction) -> list[dict[str, Any]]:
-                result = await tx.run(query, parameters or {})
+                result = await tx.run(query, parameters or {})  # ty: ignore[invalid-argument-type]  # neo4j stubs type the query as LiteralString; ours is a runtime str (pre-built Cypher, never raw user input)
                 data = await result.data()
                 return data
 
@@ -144,7 +156,7 @@ class Neo4jClient:
 
             @unit_of_work(metadata={"app": f"neo4j-agent-memory_v{self._package_version}"})
             async def execute_write_tx(tx: AsyncManagedTransaction) -> list[dict[str, Any]]:
-                result = await tx.run(query, parameters or {})
+                result = await tx.run(query, parameters or {})  # ty: ignore[invalid-argument-type]  # neo4j stubs type the query as LiteralString; ours is a runtime str (pre-built Cypher, never raw user input)
                 data = await result.data()
                 return data
 

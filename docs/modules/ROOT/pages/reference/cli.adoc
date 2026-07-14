@@ -352,7 +352,7 @@ export NEO4J_PASSWORD=password
 # OpenAI (for LLM extractor or OpenAI provider strings)
 export OPENAI_API_KEY=sk-...
 
-# v0.3+ provider configuration
+# provider configuration
 export NAM_LLM=anthropic/claude-3-5-sonnet-latest
 export NAM_LLM_API_KEY=$ANTHROPIC_API_KEY
 export NAM_EMBEDDING=BAAI/bge-small-en-v1.5

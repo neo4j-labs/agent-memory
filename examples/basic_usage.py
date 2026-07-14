@@ -23,7 +23,7 @@ from pathlib import Path
 from pydantic import SecretStr
 
 
-def load_env_files():
+def load_env_files() -> None:
     """Load environment variables from .env files."""
     # Try to load from dotenv if available
     try:
@@ -72,7 +72,7 @@ from neo4j_agent_memory import (
 )
 
 
-async def main():
+async def main() -> None:
     # v0.3+: pick an embedding model as a provider-string. The factory
     # resolves to the best available adapter — OpenAI native if [openai]
     # is installed, sentence-transformers local if the openai key is
@@ -420,7 +420,7 @@ async def main():
             await recorder.record_tool_call(
                 "analyze_text",
                 {"text": "Customer asking about returns"},
-                {"intent": "return_policy", "confidence": 0.95},
+                result={"intent": "return_policy", "confidence": 0.95},
             )
             await recorder.add_observation("Customer wants to know about return policy")
 

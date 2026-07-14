@@ -1,8 +1,10 @@
 """Neo4j schema management for indexes and constraints."""
 
+from __future__ import annotations
+
 import logging
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 from neo4j_agent_memory.core.exceptions import SchemaError
 from neo4j_agent_memory.graph import queries
@@ -39,10 +41,13 @@ def _extract_vector_dimensions(options: object) -> int | None:
     """
     if not isinstance(options, dict):
         return None
-    config = options.get("indexConfig")
+    # cast: Neo4j driver returns untyped dicts; isinstance confirmed it is a dict.
+    options_d = cast("dict[str, Any]", options)
+    config = options_d.get("indexConfig")
     if not isinstance(config, dict):
         return None
-    dims = config.get("vector.dimensions")
+    config_d = cast("dict[str, Any]", config)
+    dims = config_d.get("vector.dimensions")
     if isinstance(dims, int) and dims > 0:
         return dims
     return None
@@ -57,7 +62,7 @@ class SchemaManager:
 
     def __init__(
         self,
-        client: "Neo4jClient",
+        client: Neo4jClient,
         *,
         vector_dimensions: int = DEFAULT_VECTOR_DIMENSIONS,
     ):
@@ -438,7 +443,7 @@ class SchemaManager:
 
         return AdoptionReport(by_label=per_label, dry_run=dry_run)
 
-    async def get_schema_info(self) -> dict:
+    async def get_schema_info(self) -> dict[str, Any]:
         """Get information about the current schema."""
         constraints = await self._client.execute_read(queries.SHOW_CONSTRAINTS_DETAIL)
         indexes = await self._client.execute_read(queries.SHOW_INDEXES_DETAIL)

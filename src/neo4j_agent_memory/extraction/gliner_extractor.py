@@ -7,12 +7,17 @@ schemas for different use cases.
 Reference: https://github.com/urchade/GLiNER
 """
 
+from __future__ import annotations
+
 import asyncio
 import logging
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    from spacy.language import Language
 
 from neo4j_agent_memory.extraction.base import (
     ExtractedEntity,
@@ -46,7 +51,7 @@ def is_glirel_available() -> bool:
         True if GLiREL can be imported, False otherwise.
     """
     try:
-        import glirel  # noqa: F401
+        import glirel  # type: ignore[import-not-found]  # glirel ships no types  # noqa: F401
 
         return True
     except ImportError:
@@ -383,9 +388,10 @@ class GLiNEREntityExtractor:
             schema: Pre-defined DomainSchema to use (overrides entity_labels)
         """
         self._model_name = model
-        self._model = None  # Lazy load
+        self._model: Any | None = None  # Lazy load
 
         # Use schema if provided, otherwise use entity_labels
+        self.entity_labels: list[str] | dict[str, str]
         if schema is not None:
             # Schema provides labels with descriptions
             self.entity_labels = schema.entity_types
@@ -454,7 +460,7 @@ class GLiNEREntityExtractor:
         descriptions to better understand what entities to extract.
         """
         # Determine which labels to use
-        if self._use_descriptions:
+        if isinstance(self.entity_labels, dict):
             # entity_labels is dict[str, str] - keys are labels, values are descriptions
             all_labels = list(self.entity_labels.keys())
         else:
@@ -478,13 +484,13 @@ class GLiNEREntityExtractor:
 
         # GLiNER2 can accept labels with descriptions for improved accuracy
         # Format: {"label_name": "description of what this entity type is"}
-        if self._use_descriptions:
+        if isinstance(self.entity_labels, dict):
             # Create labels dict with only the labels we're using
             labels_with_descriptions = {
                 label: self.entity_labels[label] for label in labels if label in self.entity_labels
             }
             # GLiNER2 predict_entities accepts dict for labels with descriptions
-            predict_labels = labels_with_descriptions
+            predict_labels: list[str] | dict[str, str] = labels_with_descriptions
         else:
             predict_labels = labels
 
@@ -574,7 +580,7 @@ class GLiNEREntityExtractor:
         as it processes multiple texts in a single forward pass.
         """
         # Determine which labels to use
-        if self._use_descriptions:
+        if isinstance(self.entity_labels, dict):
             all_labels = list(self.entity_labels.keys())
         else:
             all_labels = list(self.entity_labels)
@@ -595,8 +601,8 @@ class GLiNEREntityExtractor:
             labels = all_labels
 
         # Prepare labels for GLiNER
-        if self._use_descriptions:
-            predict_labels = {
+        if isinstance(self.entity_labels, dict):
+            predict_labels: list[str] | dict[str, str] = {
                 label: self.entity_labels[label] for label in labels if label in self.entity_labels
             }
         else:
@@ -650,7 +656,7 @@ class GLiNEREntityExtractor:
         *,
         entity_types: list[str] | None = None,
         batch_size: int = 32,
-        on_progress: "Callable[[int, int], None] | None" = None,
+        on_progress: Callable[[int, int], None] | None = None,
     ) -> list[ExtractionResult]:
         """
         Extract entities from multiple texts using GLiNER batch inference.
@@ -728,7 +734,7 @@ class GLiNEREntityExtractor:
         self.label_mapping[label.lower()] = (entity_type.upper(), subtype)
 
     @classmethod
-    def from_config(cls, config: GLiNERConfig) -> "GLiNEREntityExtractor":
+    def from_config(cls, config: GLiNERConfig) -> GLiNEREntityExtractor:
         """Create extractor from configuration.
 
         If schema_name is provided in config, it will override entity_labels.
@@ -755,7 +761,7 @@ class GLiNEREntityExtractor:
         model: str = DEFAULT_GLINER2_MODEL,
         threshold: float = 0.5,
         device: str = "cpu",
-    ) -> "GLiNEREntityExtractor":
+    ) -> GLiNEREntityExtractor:
         """Create extractor using a pre-defined domain schema.
 
         Using domain schemas with entity descriptions significantly improves
@@ -787,7 +793,7 @@ class GLiNEREntityExtractor:
         threshold: float = 0.5,
         device: str = "cpu",
         use_descriptions: bool = True,
-    ) -> "GLiNEREntityExtractor":
+    ) -> GLiNEREntityExtractor:
         """Create extractor optimized for POLE+O entity extraction.
 
         Args:
@@ -911,8 +917,8 @@ class GLiRELExtractor:
             device: Device to run on (cpu, cuda, mps)
         """
         self._model_name = model
-        self._model = None  # Lazy load
-        self._nlp = None  # spaCy model for tokenization
+        self._model: Any | None = None  # Lazy load
+        self._nlp: Language | None = None  # spaCy model for tokenization
 
         if relation_types is None:
             self.relation_types = DEFAULT_RELATION_TYPES.copy()
@@ -929,7 +935,7 @@ class GLiRELExtractor:
         """Lazy load GLiREL model."""
         if self._model is None:
             try:
-                from glirel import GLiREL
+                from glirel import GLiREL  # ty: ignore[unresolved-import]  # glirel ships no types
 
                 logger.info(f"Loading GLiREL model: {self._model_name}")
                 self._model = GLiREL.from_pretrained(self._model_name)
@@ -979,18 +985,13 @@ class GLiRELExtractor:
         GLiREL expects entities as: [[start_token, end_token, type, text], ...]
         But it also accepts character positions when using predict_relations with text.
         """
-        glirel_entities = []
+        glirel_entities: list[list[int | str]] = []
         for entity in entities:
             # GLiREL format: [start, end, type, text]
             # Using character positions
-            glirel_entities.append(
-                [
-                    entity.start_pos or 0,
-                    entity.end_pos or len(entity.name),
-                    entity.type,
-                    entity.name,
-                ]
-            )
+            start: int = entity.start_pos if entity.start_pos is not None else 0
+            end: int = entity.end_pos if entity.end_pos is not None else len(entity.name)
+            glirel_entities.append([start, end, entity.type, entity.name])
         return glirel_entities
 
     def _extract_relations_sync(
@@ -1080,7 +1081,7 @@ class GLiRELExtractor:
         return relations
 
     @classmethod
-    def from_config(cls, config: GLiRELConfig) -> "GLiRELExtractor":
+    def from_config(cls, config: GLiRELConfig) -> GLiRELExtractor:
         """Create extractor from configuration."""
         return cls(
             model=config.model,
@@ -1095,7 +1096,7 @@ class GLiRELExtractor:
         model: str = DEFAULT_GLIREL_MODEL,
         threshold: float = 0.5,
         device: str = "cpu",
-    ) -> "GLiRELExtractor":
+    ) -> GLiRELExtractor:
         """Create extractor with default POLE+O relation types."""
         return cls(
             model=model,
@@ -1192,7 +1193,7 @@ class GLiNERWithRelationsExtractor:
         relation_threshold: float = 0.5,
         device: str = "cpu",
         relation_types: dict[str, str] | None = None,
-    ) -> "GLiNERWithRelationsExtractor":
+    ) -> GLiNERWithRelationsExtractor:
         """Create combined extractor for a domain schema.
 
         Args:
@@ -1232,7 +1233,7 @@ class GLiNERWithRelationsExtractor:
         entity_threshold: float = 0.5,
         relation_threshold: float = 0.5,
         device: str = "cpu",
-    ) -> "GLiNERWithRelationsExtractor":
+    ) -> GLiNERWithRelationsExtractor:
         """Create combined extractor optimized for POLE+O extraction.
 
         Args:

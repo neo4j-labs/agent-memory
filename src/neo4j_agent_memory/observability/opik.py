@@ -252,11 +252,16 @@ class OpikTracer(Tracer):
             reason: Optional explanation for the score
         """
         try:
-            self._client.log_feedback(
-                trace_id=trace_id,
-                name=name,
-                value=value,
-                reason=reason,
-            )
+            # log_feedback is present in some Opik releases but absent from the
+            # published stubs.  Use getattr so both mypy and ty see a safe dynamic
+            # dispatch rather than a missing-attribute error.
+            log_fb = getattr(self._client, "log_feedback", None)
+            if callable(log_fb):
+                log_fb(
+                    trace_id=trace_id,
+                    name=name,
+                    value=value,
+                    reason=reason,
+                )
         except Exception:
             pass  # Don't fail if feedback logging fails
