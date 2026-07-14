@@ -62,11 +62,10 @@ async def test_search_entities_finds_recent_writes(
 async def test_get_entity_by_name_found(nams_client: MemoryClient, unique_name: Any) -> None:
     """``get_entity_by_name`` returns the exact entity for a known name.
 
-    Implementation note: NAMS has no ``GET /entities?name=`` filter, so our
-    impl calls ``POST /entities/search`` and filters for exact match. That
-    search is vector-backed and indexed asynchronously — a freshly-written
-    entity may not be returned by search for a brief window. We poll a
-    handful of times before giving up to absorb that lag.
+    Implementation note: this hits ``GET /v1/entities/by-name`` —
+    resolver-normalized exact/alias matching, ordered best-match-first.
+    Explicit ``add_entity`` writes are synchronous, but we still poll a
+    handful of times to absorb any deployment-side indexing lag.
     """
     import asyncio
 

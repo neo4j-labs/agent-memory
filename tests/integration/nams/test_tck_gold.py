@@ -22,31 +22,48 @@ pytestmark = pytest.mark.integration
 
 
 # =============================================================================
-# Relationships — writes are bolt-only; reads come inline on GET /entities/{id}
+# Relationships — POST /v1/relationships (ADR-0016); reads come inline on
+# GET /entities/{id}
 # =============================================================================
 
 
 @pytest.mark.asyncio
-async def test_add_relationship_not_supported_on_nams(
+async def test_add_relationship_writes_typed_edge(
     nams_client: MemoryClient, unique_name: Any
 ) -> None:
-    """NAMS has no write endpoint for entity relationships. Relationships
-    must be added via the bolt backend. Existing relationships ARE
-    readable on NAMS via the inline ``relationships`` field on
-    ``GET /v1/entities/{id}`` — see ``test_get_entity_relationships_*``.
+    """``add_relationship`` writes via ``POST /v1/relationships``. The type
+    is validated against the workspace's allowed-relations vocabulary —
+    an allowlisted type like WORKS_AT round-trips; an unknown type would
+    collapse to RELATED_TO (with the original name kept as ``predicate``).
     """
     e1 = await nams_client.long_term.add_entity(unique_name("person"), "PERSON")
     e2 = await nams_client.long_term.add_entity(unique_name("org"), "ORGANIZATION")
     e1 = e1[0] if isinstance(e1, tuple) else e1
     e2 = e2[0] if isinstance(e2, tuple) else e2
 
+    rel = await nams_client.long_term.add_relationship(
+        source_id=e1.id,
+        relationship_type="WORKS_AT",
+        target_id=e2.id,
+        properties={"since": "2023"},
+    )
+    assert isinstance(rel, Relationship)
+    assert str(rel.source_id) == str(e1.id)
+    assert str(rel.target_id) == str(e2.id)
+    # WORKS_AT is in the default allowlist, so it must not collapse.
+    assert rel.type == "WORKS_AT"
+
+
+@pytest.mark.asyncio
+async def test_get_related_entities_depth_gt_one_raises(
+    nams_client: MemoryClient, unique_name: Any
+) -> None:
+    """``get_related_entities`` is 1-hop on REST; depth > 1 raises."""
+    e = await nams_client.long_term.add_entity(unique_name("p"), "PERSON")
+    e = e[0] if isinstance(e, tuple) else e
+
     with pytest.raises(NotSupportedError):
-        await nams_client.long_term.add_relationship(
-            source_id=e1.id,
-            relationship_type="WORKS_AT",
-            target_id=e2.id,
-            properties={"since": "2023"},
-        )
+        await nams_client.long_term.get_related_entities(e.id, depth=2)
 
 
 @pytest.mark.asyncio
@@ -72,8 +89,8 @@ async def test_get_related_entities_returns_list(
     nams_client: MemoryClient, unique_name: Any
 ) -> None:
     """``get_related_entities`` reads from the same inline source. With no
-    relationships in place (since ``add_relationship`` is bolt-only), the
-    result is an empty list — but the endpoint is exercised and parses.
+    relationships in place, the result is an empty list — but the endpoint
+    is exercised and parses.
     """
     a = await nams_client.long_term.add_entity(unique_name("a"), "PERSON")
     a = a[0] if isinstance(a, tuple) else a

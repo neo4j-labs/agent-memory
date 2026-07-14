@@ -230,7 +230,7 @@ These accessors / methods raise `NotSupportedError` because NAMS handles them se
 * `client.consolidation` (dedupe / archival).
 * `client.schema.adopt_existing_graph()`.
 * `client.long_term.geocode_locations()`, `search_locations_near()`, `search_locations_in_bounding_box()`.
-* `client.long_term.find_potential_duplicates()`, `merge_duplicate_entities()`, `review_duplicate()`.
+* `client.long_term.find_potential_duplicates()`, `review_duplicate()`. (`merge_duplicate_entities()` IS supported — it composes `POST /v1/entities/{id}/merge` + an optional canonical-name rename.)
 * `client.get_stats()`, `client.get_graph()`, `client.get_locations()`.
 
 If you configure client-side `embedding`, `extraction`, `resolution`, `geocoding`, or `enrichment` alongside `backend="nams"`, you'll see a single `UserWarning` at `connect()` time naming the inactive layers — the configs are otherwise ignored (NAMS manages these server-side).

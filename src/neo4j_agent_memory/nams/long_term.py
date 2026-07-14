@@ -2,9 +2,9 @@
 
 Endpoint mappings verified against the live NAMS OpenAPI spec.
 
-NAMS provides first-class **Entity** endpoints only. Preferences,
-facts, and entity relationships are NOT exposed as dedicated REST
-endpoints — those features must go through the Cypher console
+NAMS provides first-class **Entity** and **relationship** endpoints.
+Preferences and facts are NOT exposed as dedicated REST endpoints —
+those features must go through the Cypher console
 (``client.query.cypher``) or are out of scope on NAMS entirely.
 
 Methods that raise :class:`NotSupportedError`:
@@ -12,8 +12,7 @@ Methods that raise :class:`NotSupportedError`:
 * ``add_preference``, ``search_preferences``, ``get_preferences_for``,
   ``supersede_preference``
 * ``add_fact``, ``search_facts``, ``get_facts_about``
-* ``add_relationship``, ``get_entity_relationships``,
-  ``get_related_entities``
+* ``get_related_entities`` with ``depth > 1`` (the REST API is 1-hop)
 
 NAMS-specific endpoint shapes vs. our Protocol:
 
@@ -21,6 +20,14 @@ NAMS-specific endpoint shapes vs. our Protocol:
   aliases, attributes, confidence (those are bolt-only).
 * Entity search returns ``{"entities": [...], "searchType": ...}``
   envelope.
+* ``POST /v1/relationships`` validates the relationship type against the
+  workspace's allowed-relations vocabulary — unknown types collapse to
+  ``RELATED_TO`` with the caller's name preserved as ``predicate``
+  (ADR-0016; mirrors the MCP ``memory_create_relation`` tool).
+* ``GET /v1/entities/by-name`` is resolver-normalized (case/punctuation/
+  corporate-suffix-insensitive + aliases) and returns an ordered
+  ``{"entities": [...]}`` list, best match first — 200 with an empty
+  list when nothing matches, never 404.
 * Entity feedback is **PUT** not POST, body
   ``{userScore?, confirmed?}`` (no free-form ``feedback`` string).
 * Entity provenance lives under ``/v1/reasoning/provenance/{entityId}``
@@ -95,6 +102,12 @@ _SPEC_EXPAND_GRAPH = EndpointSpec(
 )
 _SPEC_SEARCH_ENTITIES = EndpointSpec(
     rest_method="POST", rest_path="/entities/search", bridge_method="search_entities"
+)
+_SPEC_GET_ENTITY_BY_NAME = EndpointSpec(
+    rest_method="GET", rest_path="/entities/by-name", bridge_method="get_entity_by_name"
+)
+_SPEC_ADD_RELATIONSHIP = EndpointSpec(
+    rest_method="POST", rest_path="/relationships", bridge_method="add_relationship"
 )
 
 # Entity provenance is under the reasoning namespace per verified spec.
@@ -192,9 +205,9 @@ def _normalize_entity(payload: dict[str, Any] | None) -> dict[str, Any]:
 class NamsLongTermMemory:
     """Long-term memory backed by the NAMS HTTP service.
 
-    Provides entity operations only (NAMS exposes no first-class
-    preference / fact / relationship endpoints). Other Protocol methods
-    raise :class:`NotSupportedError`.
+    Provides entity and relationship operations (NAMS exposes no
+    first-class preference / fact endpoints). Preference / fact Protocol
+    methods raise :class:`NotSupportedError`.
     """
 
     def __init__(self, transport: HttpTransport) -> None:
@@ -255,17 +268,50 @@ class NamsLongTermMemory:
         relationship_type: str,
         target_id: UUID | str,
         **kwargs: Any,
-    ) -> None:
-        raise NotSupportedError(
-            backend="nams",
-            method="LongTermMemory.add_relationship",
-            message=(
-                "NAMS does not expose a relationships endpoint. Relationships "
-                "are accessible read-only via get_entity(id) which inlines "
-                "them in the response."
-            ),
-            workaround="For write-side relationship support, use the bolt backend.",
+    ) -> Relationship:
+        """Create a typed relationship between two entities.
+
+        ``POST /v1/relationships``. The type is validated against the
+        workspace's allowed-relations vocabulary server-side: an unknown
+        type **collapses** to ``RELATED_TO`` (the caller's original name is
+        preserved on the edge as ``predicate``), so the returned
+        :class:`Relationship` carries the type that was actually written.
+        Re-asserting an existing ``(source, type, target)`` edge is
+        idempotent (confidence is averaged server-side).
+
+        Supported kwargs: ``confidence`` (0..1] and ``properties`` (alias
+        ``attributes``) — extra edge properties with scalar or scalar-list
+        values; the keys ``id``/``confidence``/``method``/``predicate``/
+        ``firstSeenAt``/``lastSeenAt`` are reserved and rejected with
+        :class:`ValidationError`. Bolt-only kwargs (``description``,
+        ``valid_from``, ``valid_until``) are silently dropped.
+        """
+        properties = kwargs.get("properties")
+        if properties is None:
+            properties = kwargs.get("attributes")
+        body = _drop_none(
+            {
+                "sourceId": _to_str(source_id),
+                "targetId": _to_str(target_id),
+                "relationshipType": relationship_type,
+                "confidence": kwargs.get("confidence"),
+                "properties": properties,
+            }
         )
+        payload = await self._transport.request(_SPEC_ADD_RELATIONSHIP, json=body)
+        data = snakeize_keys(payload) if isinstance(payload, dict) else {}
+        normalized = _drop_none(
+            {
+                "id": data.get("id"),
+                "source_id": data.get("source_id") or _to_str(source_id),
+                "target_id": data.get("target_id") or _to_str(target_id),
+                # The WRITTEN type — RELATED_TO when the server collapsed it.
+                "type": data.get("relationship_type") or relationship_type,
+                "confidence": data.get("confidence"),
+                "attributes": dict(properties or {}),
+            }
+        )
+        return payload_to_model(normalized, Relationship)
 
     async def search_entities(self, query: str, **kwargs: Any) -> list[Entity]:
         """Vector/keyword search across entities.
@@ -417,38 +463,133 @@ class NamsLongTermMemory:
         )
 
     async def get_entity_by_name(self, name: str) -> Entity | None:
-        """Look up an entity by name.
+        """Look up an entity by name via ``GET /v1/entities/by-name``.
 
-        NAMS doesn't expose a ``GET /entities?name=`` filter — we use
-        ``POST /entities/search`` with the name as the query and return
-        the first hit whose name matches exactly. Returns ``None`` if
-        no match is found.
+        Matching is resolver-normalized — case/punctuation/corporate-suffix
+        insensitive, and aliases count — so this answers "would a create
+        dedupe onto something?" the same way the write path would. The
+        response is a deterministically ordered ``{"entities": [...]}``
+        list with the best match first; returns that first match, or
+        ``None`` when the list is empty (the endpoint returns 200 with an
+        empty list, never 404).
         """
-        results = await self.search_entities(name, limit=20)
-        for e in results:
-            if e.name == name:
-                return e
-        return None
+        payload = await self._transport.request(_SPEC_GET_ENTITY_BY_NAME, params={"name": name})
+        first: Any = None
+        if isinstance(payload, dict) and "entities" in payload:
+            items = payload.get("entities") or []
+            first = items[0] if items else None
+        elif isinstance(payload, list):
+            first = payload[0] if payload else None
+        elif payload:
+            # Bridge servers may return the entity object directly.
+            first = payload
+        if not isinstance(first, dict):
+            return None
+        return payload_to_model(_normalize_entity(first), Entity)
 
     # ------------------------------------------------------------------ Silver
 
-    async def get_related_entities(self, entity_id: UUID | str, **kwargs: Any) -> Any:
-        """Return entities related to ``entity_id``.
+    async def get_related_entities(self, entity_id: UUID | str, **kwargs: Any) -> list[Entity]:
+        """Return entities related to ``entity_id`` (1 hop, both directions).
 
-        NAMS exposes inline relationships on ``GET /entities/{id}`` —
-        we fetch the entity and return the ``relationships`` array.
-        Each relationship has ``{relType, targetId, targetName, targetType}``.
+        NAMS exposes inline relationships on ``GET /entities/{id}`` — we
+        fetch the entity and map each relationship's target
+        (``{relType, targetId, targetName, targetType}``) to an
+        :class:`Entity`. Optionally filter with ``relationship_type=``
+        (single type) or ``relationship_types=`` (list, bolt-style alias).
+
+        ``depth`` beyond 1 is not representable on the NAMS REST API and
+        raises :class:`NotSupportedError`.
         """
+        depth = kwargs.get("depth")
+        if depth is not None:
+            try:
+                depth_int = int(depth)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"depth must be an integer, got {depth!r}"
+                ) from exc
+            if depth_int > 1:
+                raise NotSupportedError(
+                    backend="nams",
+                    method="LongTermMemory.get_related_entities",
+                    message=(
+                        "depth > 1 is not supported on the NAMS REST API — "
+                        "GET /v1/entities/{id} inlines 1-hop relationships only."
+                    ),
+                    workaround="Use the bolt backend for multi-hop traversal, or chain 1-hop calls.",
+                )
+        rel_types = kwargs.get("relationship_types")
+        single = kwargs.get("relationship_type")
+        if single is not None:
+            rel_types = [single]
         payload = await self._transport.request(
             _SPEC_GET_ENTITY,
             path_params={"entity_id": _to_str(entity_id)},
         )
         if not isinstance(payload, dict):
             return []
-        # camelCase → snake_case for the wrapper, but keep relationships verbatim
-        # for the caller — they're identifying refs, not full Entity objects.
-        rels = payload.get("relationships") or []
-        return list(rels)
+        related: list[Entity] = []
+        for r in payload.get("relationships") or []:
+            if not isinstance(r, dict):
+                continue
+            rel_type = r.get("relType") or r.get("rel_type") or r.get("type")
+            if rel_types and rel_type not in rel_types:
+                continue
+            target_id = r.get("targetId") or r.get("target_id")
+            if not target_id:
+                continue
+            target = {
+                "id": target_id,
+                "name": r.get("targetName") or r.get("target_name") or "",
+                "type": r.get("targetType") or r.get("target_type") or "custom",
+            }
+            related.append(payload_to_model(_normalize_entity(target), Entity))
+        return related
+
+    async def merge_duplicate_entities(
+        self,
+        source_id: UUID | str,
+        target_id: UUID | str,
+        *,
+        canonical_name: str | None = None,
+        **kwargs: Any,
+    ) -> Entity:
+        """Merge ``source_id`` into ``target_id`` and return the merged entity.
+
+        A two/three-call composition over the REST API:
+
+        1. ``POST /v1/entities/{source_id}/merge`` — the response's
+           ``targetId`` is the *canonical-resolved* merge target (the
+           requested target may itself have been merged already); that id
+           is used for the follow-up calls.
+        2. ``PUT /v1/entities/{canonical_id}`` with ``{name}`` — only when
+           ``canonical_name`` is given.
+        3. ``GET /v1/entities/{canonical_id}`` — returned as the merged
+           :class:`Entity`.
+
+        Note: unlike bolt's ``merge_duplicate_entities`` (which returns a
+        ``(source, target)`` tuple), this returns the surviving target
+        entity only — the source no longer exists after the merge.
+        """
+        merge_payload = await self._transport.request(
+            _SPEC_MERGE_ENTITIES,
+            path_params={"entity_id": _to_str(source_id)},
+            json={"targetId": _to_str(target_id)},
+        )
+        merged = snakeize_keys(merge_payload) if isinstance(merge_payload, dict) else {}
+        canonical_id = str(merged.get("target_id") or _to_str(target_id))
+        if canonical_name is not None:
+            await self._transport.request(
+                _SPEC_UPDATE_ENTITY,
+                path_params={"entity_id": canonical_id},
+                json={"name": canonical_name},
+            )
+        payload = await self._transport.request(
+            _SPEC_GET_ENTITY,
+            path_params={"entity_id": canonical_id},
+        )
+        return payload_to_model(_normalize_entity(payload), Entity)
 
     async def get_preferences_for(self, **kwargs: Any) -> list[Preference]:
         raise NotSupportedError(

@@ -2,8 +2,9 @@
 
 Endpoint shapes verified against the live NAMS OpenAPI spec.
 
-NAMS provides entity endpoints only. Preferences, facts, and
-relationship writes raise :class:`NotSupportedError`.
+NAMS provides entity and relationship endpoints (``POST
+/v1/relationships`` and ``GET /v1/entities/by-name`` per ADR-0016).
+Preferences and facts raise :class:`NotSupportedError`.
 """
 
 from __future__ import annotations
@@ -188,34 +189,37 @@ class TestSearchEntities:
 
 
 class TestGetEntityByName:
+    """``GET /v1/entities/by-name`` — resolver-normalized lookup, ordered
+    list with the best match first; the SDK returns first-or-None."""
+
     @respx.mock
-    async def test_uses_search_internally(self, long_term):
-        respx.post("https://memory.test/v1/entities/search").respond(
-            200, json={"entities": [SAMPLE_ENTITY], "searchType": "vector"}
+    async def test_returns_first_match(self, long_term):
+        route = respx.get("https://memory.test/v1/entities/by-name").respond(
+            200,
+            json={
+                "entities": [
+                    {**SAMPLE_ENTITY, "matchKind": "name"},
+                    {
+                        **SAMPLE_ENTITY,
+                        "id": "00000000-0000-0000-0000-000000000002",
+                        "matchKind": "alias",
+                        "resolvedFrom": "Ali",
+                    },
+                ]
+            },
         )
-        result = await long_term.get_entity_by_name("Alice")
+        result = await long_term.get_entity_by_name("alice")
         assert result is not None
         assert result.name == "Alice"
+        assert str(result.id) == "00000000-0000-0000-0000-000000000001"
+        assert result.type == "PERSON"  # uppercased for package consumers
+        assert route.calls[0].request.url.params["name"] == "alice"
 
     @respx.mock
     async def test_returns_none_when_no_match(self, long_term):
-        respx.post("https://memory.test/v1/entities/search").respond(
-            200, json={"entities": [], "searchType": "vector"}
-        )
+        # 200 with an empty list — the endpoint never 404s on no-match.
+        respx.get("https://memory.test/v1/entities/by-name").respond(200, json={"entities": []})
         result = await long_term.get_entity_by_name("Missing")
-        assert result is None
-
-    @respx.mock
-    async def test_returns_none_when_only_inexact_matches(self, long_term):
-        """Search returns hits but none with exact name match."""
-        respx.post("https://memory.test/v1/entities/search").respond(
-            200,
-            json={
-                "entities": [{**SAMPLE_ENTITY, "name": "Alice Different"}],
-                "searchType": "vector",
-            },
-        )
-        result = await long_term.get_entity_by_name("Alice")
         assert result is None
 
 
@@ -277,8 +281,8 @@ class TestGetEntityProvenance:
 
 
 class TestNotSupportedMethods:
-    """Preferences, facts, relationships, related-entities, get_facts_about
-    have no NAMS endpoints — all raise NotSupportedError."""
+    """Preferences, facts, and get_facts_about have no NAMS endpoints —
+    all raise NotSupportedError."""
 
     async def test_add_preference(self, long_term):
         with pytest.raises(NotSupportedError):
@@ -308,13 +312,69 @@ class TestNotSupportedMethods:
         with pytest.raises(NotSupportedError):
             await long_term.get_facts_about("Alice")
 
-    async def test_add_relationship(self, long_term):
-        with pytest.raises(NotSupportedError):
-            await long_term.add_relationship(
-                "00000000-0000-0000-0000-0000000000e1",
-                "WORKS_AT",
-                "00000000-0000-0000-0000-0000000000e2",
-            )
+
+class TestAddRelationship:
+    """``POST /v1/relationships`` — ADR-0016 pipeline-mirroring semantics."""
+
+    @respx.mock
+    async def test_happy_path_sends_camel_body_and_returns_relationship(self, long_term):
+        route = respx.post("https://memory.test/v1/relationships").respond(
+            201,
+            json={
+                "id": "00000000-0000-0000-0000-00000000ab01",
+                "sourceId": "00000000-0000-0000-0000-0000000000e1",
+                "targetId": "00000000-0000-0000-0000-0000000000e2",
+                "relationshipType": "WORKS_AT",
+                "confidence": 0.9,
+                "created": True,
+            },
+        )
+        rel = await long_term.add_relationship(
+            "00000000-0000-0000-0000-0000000000e1",
+            "WORKS_AT",
+            "00000000-0000-0000-0000-0000000000e2",
+            confidence=0.9,
+            properties={"since": "2023"},
+        )
+        body = json.loads(route.calls[0].request.content)
+        assert body == {
+            "sourceId": "00000000-0000-0000-0000-0000000000e1",
+            "targetId": "00000000-0000-0000-0000-0000000000e2",
+            "relationshipType": "WORKS_AT",
+            "confidence": 0.9,
+            "properties": {"since": "2023"},
+        }
+        assert isinstance(rel, Relationship)
+        assert str(rel.id) == "00000000-0000-0000-0000-00000000ab01"
+        assert str(rel.source_id) == "00000000-0000-0000-0000-0000000000e1"
+        assert str(rel.target_id) == "00000000-0000-0000-0000-0000000000e2"
+        assert rel.type == "WORKS_AT"
+        assert rel.confidence == 0.9
+        assert rel.attributes == {"since": "2023"}
+
+    @respx.mock
+    async def test_collapsed_type_passes_through(self, long_term):
+        """An unknown type collapses to RELATED_TO server-side; the SDK
+        reports the WRITTEN type, not the requested one."""
+        respx.post("https://memory.test/v1/relationships").respond(
+            200,
+            json={
+                "id": "00000000-0000-0000-0000-00000000ab02",
+                "sourceId": "00000000-0000-0000-0000-0000000000e1",
+                "targetId": "00000000-0000-0000-0000-0000000000e2",
+                "relationshipType": "RELATED_TO",
+                "predicate": "COLLABORATES_WITH",
+                "confidence": 1.0,
+                "created": False,
+            },
+        )
+        rel = await long_term.add_relationship(
+            "00000000-0000-0000-0000-0000000000e1",
+            "COLLABORATES_WITH",
+            "00000000-0000-0000-0000-0000000000e2",
+        )
+        assert rel.type == "RELATED_TO"
+        assert rel.attributes == {}
 
 
 class TestGetEntityRelationships:
@@ -352,7 +412,7 @@ class TestGetEntityRelationships:
 
 class TestGetRelatedEntities:
     @respx.mock
-    async def test_returns_relationships_as_dicts(self, long_term):
+    async def test_maps_inline_relationships_to_entities(self, long_term):
         respx.get("https://memory.test/v1/entities/00000000-0000-0000-0000-0000000000e1").respond(
             200,
             json={
@@ -362,14 +422,123 @@ class TestGetRelatedEntities:
                         "relType": "KNOWS",
                         "targetId": "00000000-0000-0000-0000-0000000000e2",
                         "targetName": "Bob",
-                        "targetType": "PERSON",
+                        "targetType": "person",
+                    },
+                    {
+                        "relType": "WORKS_AT",
+                        "targetId": "00000000-0000-0000-0000-0000000000e3",
+                        "targetName": "Acme",
+                        "targetType": "organization",
                     },
                 ],
             },
         )
         related = await long_term.get_related_entities("00000000-0000-0000-0000-0000000000e1")
         assert isinstance(related, list)
+        assert len(related) == 2
+        assert all(isinstance(e, Entity) for e in related)
+        assert related[0].name == "Bob"
+        assert related[0].type == "PERSON"
+        assert str(related[0].id) == "00000000-0000-0000-0000-0000000000e2"
+        assert related[1].name == "Acme"
+
+    @respx.mock
+    async def test_filters_by_relationship_type(self, long_term):
+        respx.get("https://memory.test/v1/entities/00000000-0000-0000-0000-0000000000e1").respond(
+            200,
+            json={
+                **SAMPLE_ENTITY,
+                "relationships": [
+                    {
+                        "relType": "KNOWS",
+                        "targetId": "00000000-0000-0000-0000-0000000000e2",
+                        "targetName": "Bob",
+                        "targetType": "person",
+                    },
+                    {
+                        "relType": "WORKS_AT",
+                        "targetId": "00000000-0000-0000-0000-0000000000e3",
+                        "targetName": "Acme",
+                        "targetType": "organization",
+                    },
+                ],
+            },
+        )
+        related = await long_term.get_related_entities(
+            "00000000-0000-0000-0000-0000000000e1", relationship_type="WORKS_AT"
+        )
         assert len(related) == 1
+        assert related[0].name == "Acme"
+
+    async def test_depth_beyond_one_raises(self, long_term):
+        # No respx mock — the guard must trip before any HTTP call.
+        with pytest.raises(NotSupportedError):
+            await long_term.get_related_entities("00000000-0000-0000-0000-0000000000e1", depth=2)
+
+    @respx.mock
+    async def test_depth_one_is_fine(self, long_term):
+        respx.get("https://memory.test/v1/entities/00000000-0000-0000-0000-0000000000e1").respond(
+            200, json=SAMPLE_ENTITY
+        )
+        related = await long_term.get_related_entities(
+            "00000000-0000-0000-0000-0000000000e1", depth=1
+        )
+        assert related == []
+
+
+class TestMergeDuplicateEntities:
+    """Two/three-call composition: merge → optional rename → fetch."""
+
+    SRC = "00000000-0000-0000-0000-0000000000a1"
+    TGT = "00000000-0000-0000-0000-0000000000a2"
+    CANON = "00000000-0000-0000-0000-0000000000c1"
+
+    @respx.mock
+    async def test_merge_then_fetch_uses_canonical_target(self, long_term):
+        merge = respx.post(f"https://memory.test/v1/entities/{self.SRC}/merge").respond(
+            200, json={"status": "merged", "sourceId": self.SRC, "targetId": self.CANON}
+        )
+        # The follow-up GET must hit the canonical-resolved target from the
+        # merge response, NOT the requested target id.
+        get = respx.get(f"https://memory.test/v1/entities/{self.CANON}").respond(
+            200, json={**SAMPLE_ENTITY, "id": self.CANON}
+        )
+        entity = await long_term.merge_duplicate_entities(self.SRC, self.TGT)
+        body = json.loads(merge.calls[0].request.content)
+        assert body == {"targetId": self.TGT}
+        assert get.called
+        assert isinstance(entity, Entity)
+        assert str(entity.id) == self.CANON
+
+    @respx.mock
+    async def test_canonical_name_triggers_rename(self, long_term):
+        respx.post(f"https://memory.test/v1/entities/{self.SRC}/merge").respond(
+            200, json={"status": "merged", "sourceId": self.SRC, "targetId": self.CANON}
+        )
+        put = respx.put(f"https://memory.test/v1/entities/{self.CANON}").respond(
+            200, json={"status": "updated"}
+        )
+        respx.get(f"https://memory.test/v1/entities/{self.CANON}").respond(
+            200, json={**SAMPLE_ENTITY, "id": self.CANON, "name": "Alice Smith"}
+        )
+        entity = await long_term.merge_duplicate_entities(
+            self.SRC, self.TGT, canonical_name="Alice Smith"
+        )
+        assert put.called
+        assert json.loads(put.calls[0].request.content) == {"name": "Alice Smith"}
+        assert entity.name == "Alice Smith"
+
+    @respx.mock
+    async def test_no_rename_without_canonical_name(self, long_term):
+        respx.post(f"https://memory.test/v1/entities/{self.SRC}/merge").respond(
+            200, json={"status": "merged", "sourceId": self.SRC, "targetId": self.CANON}
+        )
+        put = respx.put(f"https://memory.test/v1/entities/{self.CANON}")
+        respx.get(f"https://memory.test/v1/entities/{self.CANON}").respond(
+            200, json={**SAMPLE_ENTITY, "id": self.CANON}
+        )
+        await long_term.merge_duplicate_entities(self.SRC, self.TGT)
+        assert not put.called
 
 
 class TestGetContext:

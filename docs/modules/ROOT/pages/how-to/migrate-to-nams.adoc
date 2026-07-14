@@ -83,8 +83,8 @@ Search your codebase for any of these patterns — they need replacement or guar
 | Cannot port; consider keeping that pipeline on bolt.
 | `client.long_term.geocode_locations()`, `search_locations_near()`, etc.
 | Not available on NAMS; keep on bolt or pre-geocode at ingest.
-| `client.long_term.find_potential_duplicates()`, `merge_duplicate_entities()`, `review_duplicate()`
-| Removed by NAMS (server handles dedup automatically).
+| `client.long_term.find_potential_duplicates()`, `review_duplicate()`
+| Removed by NAMS (server handles dedup automatically). `merge_duplicate_entities()` still works — on NAMS it composes the hosted merge endpoint and returns the surviving `Entity` (not a `(source, target)` tuple).
 | `await client.get_stats()` / `get_graph()` / `get_locations()`
 | Use `client.query.cypher` with a counting / traversal query, or skip.
 |===
@@ -157,9 +157,12 @@ What raises on each backend, with workarounds:
 | `client.long_term.search_locations_near()`, `search_locations_in_bounding_box()`, `get_location_coordinates()`
 | Method call raises
 | Same — no NAMS analog.
-| `client.long_term.find_potential_duplicates()`, `merge_duplicate_entities()`, `review_duplicate()`, `get_same_as_cluster()`, `get_deduplication_stats()`
+| `client.long_term.find_potential_duplicates()`, `review_duplicate()`, `get_same_as_cluster()`, `get_deduplication_stats()`
 | Method call raises
-| NAMS handles dedup server-side; the surface isn't exposed.
+| NAMS handles dedup server-side; the review surface isn't exposed. `merge_duplicate_entities(source_id, target_id, canonical_name=...)` IS supported — it merges via `POST /v1/entities/{id}/merge` and returns the surviving `Entity`.
+| `client.long_term.get_related_entities(..., depth=2)`
+| Raises for `depth > 1` only
+| The NAMS REST API inlines 1-hop relationships on `GET /v1/entities/{id}`. Chain 1-hop calls or use bolt for deeper traversal.
 | `client.long_term.register_extractor()`, `link_entity_to_message()`, `link_entity_to_extractor()`, `list_extractors()`
 | Method call raises
 | Provenance is server-managed; query via `get_entity_provenance(entity_id)`.
