@@ -230,10 +230,11 @@ class Neo4jSessionManager(SessionManager):
         registration order, so persistence (base ``MessageAddedEvent`` ->
         append_message) always runs before context injection.
         AfterInvocationEvent dispatches in reverse registration order, so our
-        flush runs before the base no-op sync_agent — and also before any user
-        hooks registered after this manager. External AfterInvocationEvent
-        hooks therefore observe the final turn BEFORE it is persisted; hooks
-        that need the persisted message should read it on the next turn instead.
+        flush runs before the base no-op sync_agent. That same reverse ordering
+        means any user hooks registered after this manager run BEFORE our flush,
+        so external AfterInvocationEvent hooks observe the final turn while it is
+        still un-persisted; hooks that need the persisted message should read it
+        on the next turn instead.
         """
         super().register_hooks(registry, **kwargs)
         registry.add_callback(AfterInvocationEvent, self._on_after_invocation)

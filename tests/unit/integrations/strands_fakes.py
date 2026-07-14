@@ -59,9 +59,13 @@ class FakeShortTerm:
         if self.fail_next_add:
             self.fail_next_add = False
             raise RuntimeError("backend down")
-        self.add_message_calls.append(
-            {"session_id": session_id, "role": role, "content": content, **kwargs}
-        )
+        # Real NAMS accepts only {content, role} on add_message and silently
+        # drops everything else (metadata, user_identifier, bolt-only knobs).
+        # Mirror that here so NAMS-mode tests can't lean on dropped kwargs.
+        recorded = {"session_id": session_id, "role": role, "content": content}
+        if not self._nams_mode:
+            recorded.update(kwargs)
+        self.add_message_calls.append(recorded)
         if session_id not in self.conversations:
             if self._nams_mode:
                 raise NamMemoryError(f"NAMS: unknown conversation {session_id}")

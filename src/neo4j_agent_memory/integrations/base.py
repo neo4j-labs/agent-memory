@@ -71,14 +71,24 @@ class AsyncBridge:
         Callers with a ``run()`` in flight will block until their own
         timeout fires. Drain in-flight work before closing (the session
         manager flushes its buffer first, which guarantees this).
+
+        If the loop thread does not stop within the join timeout we do NOT
+        call ``loop.close()`` — closing a still-running loop raises
+        ``RuntimeError``. The thread is a daemon, so we drop our references
+        and let it unwind on its own rather than leave the bridge in a
+        half-closed state. References are always reset, so the bridge stays
+        reusable (``_ensure_loop`` rebuilds the loop on next use).
         """
         with self._lock:
-            if self._loop is None:
+            loop = self._loop
+            thread = self._thread
+            if loop is None:
                 return
-            self._loop.call_soon_threadsafe(self._loop.stop)
-            if self._thread is not None:
-                self._thread.join(timeout=5)
-            self._loop.close()
+            loop.call_soon_threadsafe(loop.stop)
+            if thread is not None:
+                thread.join(timeout=5)
+            if thread is None or not thread.is_alive():
+                loop.close()
             self._loop = None
             self._thread = None
 
