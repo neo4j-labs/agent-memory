@@ -502,16 +502,23 @@ class NamsLongTermMemory:
         raises :class:`NotSupportedError`.
         """
         depth = kwargs.get("depth")
-        if depth is not None and int(depth) > 1:
-            raise NotSupportedError(
-                backend="nams",
-                method="LongTermMemory.get_related_entities",
-                message=(
-                    "depth > 1 is not supported on the NAMS REST API — "
-                    "GET /v1/entities/{id} inlines 1-hop relationships only."
-                ),
-                workaround="Use the bolt backend for multi-hop traversal, or chain 1-hop calls.",
-            )
+        if depth is not None:
+            try:
+                depth_int = int(depth)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"depth must be an integer, got {depth!r}"
+                ) from exc
+            if depth_int > 1:
+                raise NotSupportedError(
+                    backend="nams",
+                    method="LongTermMemory.get_related_entities",
+                    message=(
+                        "depth > 1 is not supported on the NAMS REST API — "
+                        "GET /v1/entities/{id} inlines 1-hop relationships only."
+                    ),
+                    workaround="Use the bolt backend for multi-hop traversal, or chain 1-hop calls.",
+                )
         rel_types = kwargs.get("relationship_types")
         single = kwargs.get("relationship_type")
         if single is not None:

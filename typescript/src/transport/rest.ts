@@ -192,17 +192,7 @@ const ROUTES: Record<string, RestCall | "noop" | "unsupported"> = {
       >[];
       const first = entities[0];
       if (!first) return null;
-      return {
-        id: first["id"],
-        name: first["name"],
-        type: first["type"],
-        description: first["description"],
-        confidence: first["confidence"],
-        source_stage: first["sourceStage"],
-        created_at: first["createdAt"],
-        updated_at: first["updatedAt"],
-        canonical_name: undefined,
-      };
+      return first;
     },
   },
   get_related_entities: {
