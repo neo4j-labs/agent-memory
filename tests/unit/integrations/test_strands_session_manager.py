@@ -860,9 +860,7 @@ class TestFormattersExtended:
         # formatter falls back to .type if full_type is ever falsy.
         from neo4j_agent_memory.integrations.strands._retrieval import _format_entity
 
-        entity = SimpleNamespace(
-            display_name="X", type="PERSON", full_type=None, description=None
-        )
+        entity = SimpleNamespace(display_name="X", type="PERSON", full_type=None, description=None)
         assert _format_entity(entity) == "[entity] X (PERSON)"
 
 
