@@ -2,17 +2,44 @@
 
 from __future__ import annotations
 
+import re
 import warnings
 from enum import Enum
 from typing import Any, Literal
+from urllib.parse import urlsplit, urlunsplit
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 from pydantic_settings.sources import DotEnvSettingsSource
 
 # Strict config shared by every child config model. Misspelled fields raise
 # at construction time instead of being silently dropped.
 _STRICT_CONFIG = ConfigDict(extra="forbid")
+
+# Host of the managed, REST-only NAMS service. Endpoints pointed here must
+# carry a ``/v<N>`` segment (see ``nams.endpoints.detect_protocol``); a bare
+# host would otherwise fall back to the TCK bridge protocol and silently fail.
+_HOSTED_NAMS_HOST = "memory.neo4jlabs.com"
+# Matches a ``/v<digits>`` path segment — mirrors ``nams.endpoints._REST_RE``.
+_VERSION_SEGMENT_RE = re.compile(r"/v\d+(/|$)")
+
+
+def _normalize_nams_endpoint(endpoint: str) -> str:
+    """Append ``/v1`` to a bare hosted-service URL.
+
+    The managed service at ``memory.neo4jlabs.com`` is REST-only and served
+    under ``/v1``. A user who copies the base URL from the docs (without the
+    suffix) would otherwise be auto-routed to the TCK bridge protocol and fail
+    silently. Normalize only for the hosted host so version-less on-prem /
+    localhost endpoints keep their bridge behavior. See issue #129.
+    """
+    parts = urlsplit(endpoint)
+    if parts.hostname != _HOSTED_NAMS_HOST:
+        return endpoint
+    if _VERSION_SEGMENT_RE.search(parts.path):
+        return endpoint
+    new_path = parts.path.rstrip("/") + "/v1"
+    return urlunsplit(parts._replace(path=new_path))
 
 
 class EmbeddingProvider(str, Enum):
@@ -500,8 +527,17 @@ class NamsConfig(BaseModel):
     endpoint: str = Field(
         default="https://memory.neo4jlabs.com/v1",
         description="NAMS endpoint base URL. REST shape ends in /v<N> (e.g. /v1); "
-        "anything else is treated as TCK bridge unless overridden by transport_mode.",
+        "anything else is treated as TCK bridge unless overridden by transport_mode. "
+        f"A bare hosted URL (https://{_HOSTED_NAMS_HOST}) is normalized to /v1, "
+        "since the hosted service is REST-only.",
     )
+
+    @field_validator("endpoint")
+    @classmethod
+    def _ensure_hosted_endpoint_is_versioned(cls, endpoint: str) -> str:
+        """Normalize a bare hosted-service URL to include ``/v1`` (issue #129)."""
+        return _normalize_nams_endpoint(endpoint)
+
     api_key: SecretStr | None = Field(
         default=None,
         description="NAMS API key (format 'nams_...'). When constructed via "
@@ -767,7 +803,8 @@ class MemorySettings(BaseSettings):
 
         env_endpoint = os.environ.get("MEMORY_ENDPOINT")
         if env_endpoint and "endpoint" not in self.nams.model_fields_set:
-            self.nams.endpoint = env_endpoint
+            # Assignment bypasses the field validator, so normalize here too.
+            self.nams.endpoint = _normalize_nams_endpoint(env_endpoint)
 
         env_workspace = os.environ.get("MEMORY_WORKSPACE_ID")
         if env_workspace and self.nams.workspace_id is None:
