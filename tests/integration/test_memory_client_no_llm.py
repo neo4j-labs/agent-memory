@@ -162,10 +162,7 @@ class TestMemoryClientNoLLM:
             [sys.executable, "-c", script],
             capture_output=True,
             text=True,
-            # Generous cap: the subprocess may cold-download the
-            # sentence-transformers model on a CI cache miss. CI caches
-            # ~/.cache/huggingface (see ci-python.yml) so warm runs are fast.
-            timeout=300,
+            timeout=120,
         )
         if result.returncode != 0:
             pytest.fail(

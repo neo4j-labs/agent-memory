@@ -176,9 +176,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface
-          # Rotating key + restore-keys: restore the newest prior cache, then
-          # re-save with whatever models this run pulled. Model-agnostic — no
-          # per-model key to maintain.
+          # Rotating key: restore-keys restores the newest prior cache (so nothing
+          # re-downloads on a normal run), then the run re-saves under a fresh
+          # per-commit key so any newly-used model is folded in automatically —
+          # no manual version bump for contributors to remember.
           key: hf-cache-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
             hf-cache-${{ runner.os }}-
@@ -266,9 +267,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface
-          # Rotating key + restore-keys: restore the newest prior cache, then
-          # re-save with whatever models this run pulled. Model-agnostic — no
-          # per-model key to maintain.
+          # Rotating key: restore-keys restores the newest prior cache (so nothing
+          # re-downloads on a normal run), then the run re-saves under a fresh
+          # per-commit key so any newly-used model is folded in automatically —
+          # no manual version bump for contributors to remember.
           key: hf-cache-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
             hf-cache-${{ runner.os }}-
@@ -308,9 +310,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface
-          # Rotating key + restore-keys: restore the newest prior cache, then
-          # re-save with whatever models this run pulled. Model-agnostic — no
-          # per-model key to maintain.
+          # Rotating key: restore-keys restores the newest prior cache (so nothing
+          # re-downloads on a normal run), then the run re-saves under a fresh
+          # per-commit key so any newly-used model is folded in automatically —
+          # no manual version bump for contributors to remember.
           key: hf-cache-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
             hf-cache-${{ runner.os }}-
@@ -375,9 +378,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface
-          # Rotating key + restore-keys: restore the newest prior cache, then
-          # re-save with whatever models this run pulled. Model-agnostic — no
-          # per-model key to maintain.
+          # Rotating key: restore-keys restores the newest prior cache (so nothing
+          # re-downloads on a normal run), then the run re-saves under a fresh
+          # per-commit key so any newly-used model is folded in automatically —
+          # no manual version bump for contributors to remember.
           key: hf-cache-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
             hf-cache-${{ runner.os }}-
@@ -412,9 +416,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface
-          # Rotating key + restore-keys: restore the newest prior cache, then
-          # re-save with whatever models this run pulled. Model-agnostic — no
-          # per-model key to maintain.
+          # Rotating key: restore-keys restores the newest prior cache (so nothing
+          # re-downloads on a normal run), then the run re-saves under a fresh
+          # per-commit key so any newly-used model is folded in automatically —
+          # no manual version bump for contributors to remember.
           key: hf-cache-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
             hf-cache-${{ runner.os }}-
