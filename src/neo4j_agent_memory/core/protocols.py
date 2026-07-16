@@ -17,7 +17,6 @@ Platinum). Portable code should rely only on the methods declared here.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 from uuid import UUID
 
@@ -27,7 +26,6 @@ if TYPE_CHECKING:
     from datetime import datetime
 
     from neo4j_agent_memory.memory.long_term import (
-        DeduplicationStats,
         Entity,
         Fact,
         Preference,
@@ -36,9 +34,7 @@ if TYPE_CHECKING:
     from neo4j_agent_memory.memory.reasoning import (
         ReasoningStep,
         ReasoningTrace,
-        Tool,
         ToolCall,
-        ToolStats,
     )
     from neo4j_agent_memory.memory.short_term import (
         Conversation,
@@ -149,56 +145,6 @@ class ShortTermProtocol(Protocol):
         session_id: str,
     ) -> list[dict[str, Any]]:
         """Return generated reflections for the session."""
-        ...
-
-
-@runtime_checkable
-class BoltShortTermProtocol(ShortTermProtocol, Protocol):
-    """Self-hosted (bolt) short-term surface: base contract plus bolt-only methods."""
-
-    async def search(self, query: str, **kwargs: Any) -> list[Message]:
-        """Search for messages (delegates to search_messages)."""
-        ...
-
-    async def add_messages_batch(
-        self,
-        session_id: str,
-        messages: list[dict[str, Any]],
-        *,
-        batch_size: int = 100,
-        generate_embeddings: bool = True,
-        extract_entities: bool = False,
-        extract_relations: bool = True,
-        on_progress: Callable[[int, int], None] | None = None,
-        on_batch_complete: Callable[[int, list[Message]], None] | None = None,
-    ) -> list[Message]:
-        """Bulk-load messages with transaction batching, returning the stored messages."""
-        ...
-
-    async def extract_entities_from_session(
-        self,
-        session_id: str,
-        *,
-        batch_size: int = 50,
-        skip_existing: bool = True,
-        extract_relations: bool = True,
-        on_progress: Callable[[int, int], None] | None = None,
-    ) -> dict[str, int]:
-        """Extract entities and relations from all messages in a session."""
-        ...
-
-    async def generate_embeddings_batch(
-        self,
-        session_id: str,
-        *,
-        batch_size: int = 100,
-        on_progress: Callable[[int, int], None] | None = None,
-    ) -> int:
-        """Generate embeddings for session messages that don't have them yet."""
-        ...
-
-    async def migrate_message_links(self) -> dict[str, int]:
-        """Backfill FIRST_MESSAGE/NEXT_MESSAGE links for pre-existing messages."""
         ...
 
 
@@ -387,195 +333,6 @@ class LongTermProtocol(Protocol):
 
 
 @runtime_checkable
-class BoltLongTermProtocol(LongTermProtocol, Protocol):
-    """Self-hosted (bolt) long-term surface: base contract plus bolt-only methods."""
-
-    async def search(self, query: str, **kwargs: Any) -> list[Entity]:
-        """Search for entities (delegates to search_entities)."""
-        ...
-
-    # Deduplication ------------------------------------------------------
-
-    async def find_potential_duplicates(
-        self,
-        *,
-        limit: int = 100,
-    ) -> list[tuple[Entity, Entity, float]]:
-        """Return (entity1, entity2, confidence) triples pending duplicate review."""
-        ...
-
-    async def merge_duplicate_entities(
-        self,
-        source_id: UUID,
-        target_id: UUID,
-    ) -> tuple[Entity, Entity] | None:
-        """Merge source into target, transferring relationships; None if not found."""
-        ...
-
-    async def review_duplicate(
-        self,
-        source_id: UUID,
-        target_id: UUID,
-        *,
-        confirm: bool,
-    ) -> bool:
-        """Confirm (merge) or reject a flagged duplicate pair."""
-        ...
-
-    async def get_same_as_cluster(
-        self,
-        entity_id: UUID,
-    ) -> list[Entity]:
-        """Return every entity in the given entity's SAME_AS cluster, including itself."""
-        ...
-
-    async def get_deduplication_stats(self) -> DeduplicationStats:
-        """Return aggregate counts describing entity deduplication state."""
-        ...
-
-    # Provenance ----------------------------------------------------------
-
-    async def register_extractor(
-        self,
-        name: str,
-        *,
-        version: str | None = None,
-        config: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Create or update the Extractor node identified by ``name``."""
-        ...
-
-    async def link_entity_to_message(
-        self,
-        entity: Entity | UUID,
-        message_id: UUID | str,
-        *,
-        confidence: float = 1.0,
-        start_pos: int | None = None,
-        end_pos: int | None = None,
-        context: str | None = None,
-    ) -> bool:
-        """Record an EXTRACTED_FROM provenance link from entity to source message."""
-        ...
-
-    async def link_entity_to_extractor(
-        self,
-        entity: Entity | UUID,
-        extractor_name: str,
-        *,
-        confidence: float = 1.0,
-        extraction_time_ms: float | None = None,
-    ) -> bool:
-        """Record an EXTRACTED_BY provenance link from entity to extractor."""
-        ...
-
-    async def get_entities_from_message(
-        self,
-        message_id: UUID | str,
-    ) -> list[tuple[Entity, dict[str, Any]]]:
-        """Return (entity, extraction_info) pairs extracted from a message, by position."""
-        ...
-
-    async def get_entities_by_extractor(
-        self,
-        extractor_name: str,
-        *,
-        limit: int = 100,
-    ) -> list[tuple[Entity, dict[str, Any]]]:
-        """Return (entity, extraction_info) pairs produced by the named extractor."""
-        ...
-
-    async def list_extractors(self) -> list[dict[str, Any]]:
-        """List every registered extractor with its entity count."""
-        ...
-
-    async def get_extraction_stats(self) -> dict[str, Any]:
-        """Return overall extraction stats: total entities, source messages, extractors."""
-        ...
-
-    async def get_extractor_stats(self) -> list[dict[str, Any]]:
-        """Return per-extractor stats: entity count and average confidence."""
-        ...
-
-    async def delete_entity_provenance(
-        self,
-        entity: Entity | UUID,
-    ) -> int:
-        """Delete all provenance links for an entity; returns the number removed."""
-        ...
-
-    # Preferences / relationships ------------------------------------------
-
-    async def get_preferences_by_category(
-        self,
-        category: str,
-        *,
-        limit: int = 100,
-    ) -> list[Preference]:
-        """Return every preference recorded under ``category``."""
-        ...
-
-    async def supersede_preference(
-        self,
-        old_preference_id: UUID | str,
-        new_preference_id: UUID | str,
-    ) -> None:
-        """Mark ``old`` as superseded by ``new`` for time-travel queries. Idempotent."""
-        ...
-
-    async def get_entity_relationships(
-        self,
-        entity_name: str,
-    ) -> list[tuple[Entity, Relationship]]:
-        """Return (related_entity, relationship) pairs for the named entity."""
-        ...
-
-    # Geospatial ------------------------------------------------------------
-
-    async def geocode_locations(
-        self,
-        *,
-        batch_size: int = 50,
-        skip_existing: bool = True,
-        on_progress: Callable[[int, int], None] | None = None,
-    ) -> dict[str, int]:
-        """Geocode Location entities lacking coordinates; returns processed/geocoded counts."""
-        ...
-
-    async def search_locations_near(
-        self,
-        latitude: float,
-        longitude: float,
-        *,
-        radius_km: float = 10.0,
-        session_id: str | None = None,
-        limit: int = 10,
-    ) -> list[Entity]:
-        """Return Location entities within ``radius_km`` of a point, nearest first."""
-        ...
-
-    async def search_locations_in_bounding_box(
-        self,
-        min_lat: float,
-        min_lon: float,
-        max_lat: float,
-        max_lon: float,
-        *,
-        session_id: str | None = None,
-        limit: int = 100,
-    ) -> list[Entity]:
-        """Return Location entities within the given latitude/longitude bounding box."""
-        ...
-
-    async def get_location_coordinates(
-        self,
-        entity_id: UUID | str,
-    ) -> tuple[float, float] | None:
-        """Return (latitude, longitude) for a Location entity, or None if not geocoded."""
-        ...
-
-
-@runtime_checkable
 class ReasoningProtocol(Protocol):
     """Contract for reasoning memory (traces, steps, tool calls).
 
@@ -716,37 +473,6 @@ class ReasoningProtocol(Protocol):
 
 
 @runtime_checkable
-class BoltReasoningProtocol(ReasoningProtocol, Protocol):
-    """Self-hosted (bolt) reasoning surface: base contract plus bolt-only methods."""
-
-    async def search(self, query: str, **kwargs: Any) -> list[ReasoningStep]:
-        """Search reasoning steps (not supported on this backend; returns empty)."""
-        ...
-
-    async def get_tool_usage_stats(
-        self,
-        tool_name: str | None = None,
-    ) -> dict[str, Tool]:
-        """Return tool name to :class:`Tool` mapping, computed from ToolCall nodes.
-
-        Deprecated in favor of :meth:`get_tool_stats`, which reads
-        pre-aggregated statistics.
-        """
-        ...
-
-    async def get_tool_stats(
-        self,
-        tool_name: str | None = None,
-    ) -> list[ToolStats]:
-        """Return pre-aggregated per-tool statistics, ordered by total calls descending."""
-        ...
-
-    async def migrate_tool_stats(self) -> dict[str, int]:
-        """Backfill pre-aggregated Tool stats from existing ToolCall nodes."""
-        ...
-
-
-@runtime_checkable
 class CypherQueryProtocol(Protocol):
     """Unified read-only Cypher accessor (``client.query``).
 
@@ -767,8 +493,5 @@ __all__ = [
     "ShortTermProtocol",
     "LongTermProtocol",
     "ReasoningProtocol",
-    "BoltShortTermProtocol",
-    "BoltLongTermProtocol",
-    "BoltReasoningProtocol",
     "CypherQueryProtocol",
 ]

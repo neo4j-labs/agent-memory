@@ -26,8 +26,9 @@ class ToolCallStatus(str, Enum):
     ``core.protocols`` — which needs it as a default value in
     ``ReasoningProtocol.record_tool_call`` — has no runtime dependency
     on ``memory.reasoning``. That one-way dependency is what lets
-    ``memory.reasoning`` import Bolt sub-Protocols from
-    ``core.protocols`` at class-definition time without a cycle.
+    ``memory.reasoning`` import ``ReasoningProtocol`` from
+    ``core.protocols`` at class-definition time (for nominal
+    inheritance) without a cycle.
     """
 
     PENDING = "pending"

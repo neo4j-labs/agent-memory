@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from neo4j_agent_memory.core.exceptions import NotSupportedError
 from neo4j_agent_memory.core.memory import BaseMemory, MemoryEntry
-from neo4j_agent_memory.core.protocols import BoltShortTermProtocol
+from neo4j_agent_memory.core.protocols import ShortTermProtocol
 from neo4j_agent_memory.graph import queries
 from neo4j_agent_memory.graph.query_builder import build_create_entity_query
 
@@ -310,7 +310,7 @@ class ConversationSummary(BaseModel):
     )
 
 
-class ShortTermMemory(BaseMemory[Message], BoltShortTermProtocol):
+class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
     """
     Short-term memory stores conversation history and experiences.
 

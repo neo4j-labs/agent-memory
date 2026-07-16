@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from neo4j_agent_memory.core.memory import BaseMemory, MemoryEntry
 from neo4j_agent_memory.core.memory import ToolCallStatus as ToolCallStatus  # re-export
-from neo4j_agent_memory.core.protocols import BoltReasoningProtocol
+from neo4j_agent_memory.core.protocols import ReasoningProtocol
 from neo4j_agent_memory.graph import queries
 from neo4j_agent_memory.schema.models import EntityRef, TraceOutcome
 
@@ -381,7 +381,7 @@ class HookContext:
         await self.memory._record_touched_edge(self.step_id, ref)
 
 
-class ReasoningMemory(BaseMemory[ReasoningStep], BoltReasoningProtocol):
+class ReasoningMemory(BaseMemory[ReasoningStep], ReasoningProtocol):
     """
     Reasoning memory stores reasoning traces and tool usage patterns.
 
