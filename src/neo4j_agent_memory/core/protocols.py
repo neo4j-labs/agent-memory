@@ -118,10 +118,14 @@ class ShortTermProtocol(Protocol):
     async def create_conversation(
         self,
         session_id: str,
-        *,
-        conversation_id: str | None = None,
     ) -> Conversation:
-        """Explicitly create a conversation node (without adding messages)."""
+        """Explicitly create a conversation node (without adding messages).
+
+        ``conversation_id`` is deliberately not part of this signature:
+        bolt's ``create_conversation`` takes bare ``**kwargs`` and does not
+        name it, so a Protocol caller passing it would be silently dropped
+        on bolt. Pass ``session_id`` only for portable code.
+        """
         ...
 
     async def list_conversations(
@@ -139,10 +143,15 @@ class ShortTermProtocol(Protocol):
         self,
         session_id: str,
         messages: list[dict[str, Any]],
-        *,
-        conversation_id: str | None = None,
     ) -> list[Message]:
-        """Bulk-insert messages in one round-trip. Server-side on NAMS."""
+        """Bulk-insert messages in one round-trip. Server-side on NAMS.
+
+        ``conversation_id`` is deliberately not part of this signature:
+        bolt's ``bulk_add_messages`` forwards ``**kwargs`` to
+        ``add_messages_batch``, which does not accept ``conversation_id``
+        and raises ``TypeError`` if given it. Pass ``session_id`` only for
+        portable code.
+        """
         ...
 
     async def get_observations(

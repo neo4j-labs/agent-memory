@@ -519,20 +519,14 @@ class MemoryClient:
         default_llm_provider = (
             self._settings.llm if isinstance(self._settings.llm, _LLMProvider) else None
         )
-        # The bolt impls implement every Protocol *method* (short-term
-        # conformance is asserted in tests/unit/nams/test_protocols.py;
-        # Platinum-only methods raise NotSupportedError). ``ShortTermMemory``
-        # is now a structural subtype of ``ShortTermProtocol`` (its
-        # signatures were tightened to match), so no ignore is needed below.
-        # ``LongTermMemory`` and ``ReasoningMemory`` still have concrete
-        # signatures narrower than their intentionally-permissive ``**kwargs``
-        # Protocol signatures (e.g. bolt ``list_sessions(*, prefix, limit,
-        # …)`` vs a permissive ``**kwargs`` Protocol method elsewhere), so
-        # mypy does not treat them as structural subtypes there yet. They
-        # still hold the full behavior; the property getters re-narrow to
-        # the concrete bolt type. The NAMS path (below) fills the same
-        # fields with the hosted impls, which is why the field type is the
-        # Protocol.
+        # The field holds the bolt or NAMS impl (both satisfy the Protocol).
+        # ShortTermMemory structurally satisfies ShortTermProtocol, so no ignore is
+        # needed. LongTermMemory / ReasoningMemory have narrower concrete signatures
+        # than their permissive ``**kwargs`` Protocol methods and still require the
+        # ignore below (short-term conformance is asserted in
+        # tests/unit/nams/test_protocols.py; Platinum-only methods raise
+        # NotSupportedError). The property getters re-narrow to the concrete bolt
+        # type.
         self._short_term = ShortTermMemory(
             self._client,
             self._embedder,
