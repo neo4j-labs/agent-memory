@@ -40,7 +40,7 @@ Example usage:
 from __future__ import annotations
 
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Generic, Literal, cast
+from typing import TYPE_CHECKING, Any, Generic, Literal, cast, overload
 
 from pydantic import BaseModel, Field
 from typing_extensions import Self, TypeVar
@@ -72,6 +72,7 @@ if TYPE_CHECKING:
     from neo4j_agent_memory.services.geocoder import Geocoder
 
 from neo4j_agent_memory.config.settings import (
+    BoltSettings,
     EmbeddingConfig,
     EmbeddingProvider,
     EnrichmentConfig,
@@ -85,6 +86,7 @@ from neo4j_agent_memory.config.settings import (
     MemoryConfig,
     MemorySettings,
     NamsConfig,
+    NamsSettings,
     Neo4jConfig,
     ResolutionConfig,
     ResolverStrategy,
@@ -240,6 +242,9 @@ __all__ = [
     "SessionStrategy",
     # Settings
     "MemorySettings",
+    "BoltSettings",
+    "NamsSettings",
+    "connect",
     "Neo4jConfig",
     "NamsConfig",
     "EmbeddingConfig",
@@ -1741,3 +1746,82 @@ if TYPE_CHECKING:
     NamsMemoryClient = MemoryClient[NamsShortTermMemory, NamsLongTermMemory, NamsReasoningMemory]
 else:
     NamsMemoryClient = MemoryClient
+
+
+# Backend-typed construction. An overloaded `MemoryClient.__new__` returning
+# `BoltMemoryClient` / `NamsMemoryClient` was tried first (it would have kept
+# the `async with MemoryClient(settings) as client:` idiom); both mypy
+# --strict and ty reject specializing a generic's return type through an
+# overloaded `__new__` — the caller-visible type is always the widened
+# `MemoryClient[Any, Any, Any]`, regardless of which `__new__` overload
+# matched. A module-level overloaded factory does not have this limitation,
+# since ordinary function overload resolution (not `__new__` return-type
+# specialization) picks the branch. This is the shipped mechanism.
+@overload
+async def connect(
+    settings: BoltSettings,
+    *,
+    embedder: Embedder | None = None,
+    extractor: EntityExtractor | None = None,
+    resolver: EntityResolver | None = None,
+    geocoder: Geocoder | None = None,
+    enrichment_provider: _EnrichmentProviderProtocol | None = None,
+) -> BoltMemoryClient: ...
+@overload
+async def connect(
+    settings: NamsSettings,
+    *,
+    embedder: Embedder | None = None,
+    extractor: EntityExtractor | None = None,
+    resolver: EntityResolver | None = None,
+    geocoder: Geocoder | None = None,
+    enrichment_provider: _EnrichmentProviderProtocol | None = None,
+) -> NamsMemoryClient: ...
+@overload
+async def connect(
+    settings: MemorySettings,
+    *,
+    embedder: Embedder | None = None,
+    extractor: EntityExtractor | None = None,
+    resolver: EntityResolver | None = None,
+    geocoder: Geocoder | None = None,
+    enrichment_provider: _EnrichmentProviderProtocol | None = None,
+) -> MemoryClient[Any, Any, Any]: ...
+async def connect(
+    settings: MemorySettings,
+    *,
+    embedder: Embedder | None = None,
+    extractor: EntityExtractor | None = None,
+    resolver: EntityResolver | None = None,
+    geocoder: Geocoder | None = None,
+    enrichment_provider: _EnrichmentProviderProtocol | None = None,
+) -> MemoryClient[Any, Any, Any]:
+    """Construct, connect, and return a backend-typed ``MemoryClient``.
+
+    ``await connect(BoltSettings(...))`` statically returns
+    ``BoltMemoryClient``; ``await connect(NamsSettings(...))`` returns
+    ``NamsMemoryClient``; a plain ``MemorySettings`` returns the
+    base-Protocol-typed ``MemoryClient``.
+
+    Equivalent to::
+
+        client = MemoryClient(settings, ...)
+        await client.connect()
+
+    minus the free static narrowing a bare constructor call can't provide
+    (see the module comment above). Callers own the connection lifecycle —
+    call ``await client.close()`` when done — since this returns an
+    already-connected instance rather than a context manager. Use
+    ``async with MemoryClient(settings) as client:`` instead when you don't
+    need the backend-typed return value.
+    """
+    client: MemoryClient[Any, Any, Any] = MemoryClient(
+        settings,
+        embedder=embedder,
+        extractor=extractor,
+        resolver=resolver,
+        geocoder=geocoder,
+        enrichment_provider=enrichment_provider,
+    )
+    await client.connect()
+    return client

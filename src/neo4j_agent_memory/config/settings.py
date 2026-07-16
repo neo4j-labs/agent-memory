@@ -799,3 +799,25 @@ class MemorySettings(BaseSettings):
     def from_dict(cls, config: dict[str, Any]) -> MemorySettings:
         """Create settings from a dictionary."""
         return cls(**config)
+
+
+class BoltSettings(MemorySettings):
+    """``MemorySettings`` pinned to the self-hosted (bolt) backend.
+
+    Narrows ``backend`` to the ``"bolt"`` literal so backend-typed
+    construction helpers (e.g. ``neo4j_agent_memory.connect()``) can return
+    a precisely backend-typed ``MemoryClient`` from the argument's static
+    type alone, with no runtime ``isinstance`` check.
+    """
+
+    backend: Literal["bolt"] = "bolt"
+
+
+class NamsSettings(MemorySettings):
+    """``MemorySettings`` pinned to the hosted NAMS backend.
+
+    Narrows ``backend`` to the ``"nams"`` literal — see
+    :class:`BoltSettings` for why this exists.
+    """
+
+    backend: Literal["nams"] = "nams"
