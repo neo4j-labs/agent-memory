@@ -416,9 +416,8 @@ class LongTermProtocol(Protocol):
 class ReasoningProtocol(Protocol):
     """Contract for reasoning memory (traces, steps, tool calls).
 
-    Tool-call and trace-completion helpers, tool-usage statistics, and
-    audit-edge writes are backend-capability extensions, not part of
-    this base contract.
+    Tool-usage statistics and audit-edge writes are backend-capability
+    extensions, not part of this base contract.
     """
 
     # Bronze tier ------------------------------------------------------------
