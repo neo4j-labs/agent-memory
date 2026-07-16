@@ -250,7 +250,7 @@ class NamsReasoningMemory:
             workaround="Use client.query.cypher(...) over (:ReasoningStep) nodes.",
         )
 
-    async def get_similar_traces(self, query: str, **kwargs: Any) -> list[ReasoningTrace]:
+    async def get_similar_traces(self, task: str, **kwargs: Any) -> list[ReasoningTrace]:
         raise NotSupportedError(
             backend="nams",
             method="ReasoningMemory.get_similar_traces",

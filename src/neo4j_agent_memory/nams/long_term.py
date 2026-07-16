@@ -241,7 +241,7 @@ class NamsLongTermMemory:
             ),
         )
 
-    async def add_fact(self, subject: str, predicate: str, object: str, **kwargs: Any) -> Fact:  # noqa: A002
+    async def add_fact(self, subject: str, predicate: str, obj: str, **kwargs: Any) -> Fact:
         raise NotSupportedError(
             backend="nams",
             method="LongTermMemory.add_fact",

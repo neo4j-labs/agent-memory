@@ -588,13 +588,10 @@ class MemoryClient(Generic[_ST, _LT, _RT]):
 
         self._consolidation = ConsolidationMemory(self._client)
 
-        # Evaluation harness. EvalMemory takes the base-Protocol-typed
-        # client; MemoryClient is invariant in its type parameters, so the
-        # cast asserts what tests/typing/ verifies: self's actual _ST/_LT/_RT
-        # always conform to the base Protocols.
+        # Evaluation harness.
         from neo4j_agent_memory.memory.eval import EvalMemory
 
-        self._eval = EvalMemory(cast(MemoryClient, self))
+        self._eval = EvalMemory(self)
 
         # Wire the unified Cypher accessor — bolt impl forwards to
         # ``Neo4jClient.execute_read`` after read-only validation.
@@ -676,10 +673,10 @@ class MemoryClient(Generic[_ST, _LT, _RT]):
         )
 
         # Evaluation harness works on both backends — it uses the public
-        # protocol surface only. Cast rationale: see _connect_bolt above.
+        # protocol surface only.
         from neo4j_agent_memory.memory.eval import EvalMemory
 
-        self._eval = EvalMemory(cast(MemoryClient, self))
+        self._eval = EvalMemory(self)
 
     def _warn_inactive_layers_on_nams(self) -> None:
         """Emit a single warning listing client-side layers ignored by NAMS.

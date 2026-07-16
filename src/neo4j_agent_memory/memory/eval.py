@@ -109,7 +109,7 @@ class EvalReport(BaseModel):
 class EvalMemory:
     """``client.eval`` — runs a labeled :class:`EvalSuite`."""
 
-    def __init__(self, client: MemoryClient):
+    def __init__(self, client: MemoryClient[Any, Any, Any]):
         self._client = client
 
     async def run(

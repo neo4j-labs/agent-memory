@@ -130,7 +130,7 @@ async def test_facts_not_supported_on_nams(nams_client: MemoryClient, unique_nam
     """NAMS does not expose a facts endpoint — both writes and searches raise."""
     subj = unique_name("subj")
     with pytest.raises(NotSupportedError):
-        await nams_client.long_term.add_fact(subject=subj, predicate="works_at", object="Acme")
+        await nams_client.long_term.add_fact(subject=subj, predicate="works_at", obj="Acme")
     with pytest.raises(NotSupportedError):
         await nams_client.long_term.search_facts(subj, limit=5)
     with pytest.raises(NotSupportedError):

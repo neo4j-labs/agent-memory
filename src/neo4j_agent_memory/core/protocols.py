@@ -66,8 +66,12 @@ class ShortTermProtocol(Protocol):
         session_id: str,
         *,
         conversation_id: str | None = None,
+        limit: int | None = None,
     ) -> Conversation:
-        """Return the conversation (header + messages) for a session."""
+        """Return the conversation (header + messages) for a session.
+
+        ``limit`` bounds the number of messages returned.
+        """
         ...
 
     async def search_messages(
@@ -110,8 +114,14 @@ class ShortTermProtocol(Protocol):
     async def create_conversation(
         self,
         session_id: str,
+        *,
+        user_identifier: str | None = None,
     ) -> Conversation:
-        """Explicitly create a conversation node for a session, without adding messages."""
+        """Explicitly create a conversation node for a session, without adding messages.
+
+        ``user_identifier``, when provided, scopes the conversation to a
+        user identity (multi-tenant).
+        """
         ...
 
     async def list_conversations(
@@ -189,7 +199,6 @@ class LongTermProtocol(Protocol):
         subject: str,
         predicate: str,
         obj: str,
-        /,
         *,
         confidence: float = 1.0,
         valid_from: datetime | None = None,
@@ -197,10 +206,7 @@ class LongTermProtocol(Protocol):
         generate_embedding: bool = True,
         metadata: dict[str, Any] | None = None,
     ) -> Fact:
-        """Record a subject-predicate-object fact.
-
-        The third argument (the object of the fact) is positional-only.
-        """
+        """Record a subject-predicate-object fact."""
         ...
 
     async def add_relationship(
@@ -411,17 +417,13 @@ class ReasoningProtocol(Protocol):
 
     async def get_similar_traces(
         self,
-        query: str,
-        /,
+        task: str,
         *,
         limit: int = 5,
         success_only: bool = True,
         threshold: float = 0.7,
     ) -> list[ReasoningTrace]:
-        """Find traces with similar task descriptions.
-
-        The query is identified positional-only.
-        """
+        """Find traces with similar task descriptions."""
         ...
 
     async def get_trace(self, trace_id: UUID | str) -> ReasoningTrace | None:
