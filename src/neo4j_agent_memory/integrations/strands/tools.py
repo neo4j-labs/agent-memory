@@ -25,19 +25,19 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, TypeVar
-
-_T = TypeVar("_T")
-
-# Transport modes accepted by the NAMS backend (mirrors NamsConfig.transport_mode).
-TransportMode = Literal["auto", "rest", "bridge"]
+from typing import TYPE_CHECKING, Any, TypeVar
 
 if TYPE_CHECKING:
+    from strands.types.tools import AgentTool
+
     from neo4j_agent_memory import MemoryClient
+    from neo4j_agent_memory.nams.endpoints import TransportMode
 
 logger = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
 
 # Module-level client cache for tool reuse
 _client_cache: dict[str, MemoryClient] = {}
@@ -56,7 +56,7 @@ def _is_valid_hf_model_id(model_id: str) -> bool:
 
 
 def _run_async(coro: Coroutine[Any, Any, _T]) -> _T:
-    """Run an async coroutine synchronously.
+    """Run an async coroutine synchronously, returning its real result type.
 
     Strands tools are synchronous, but MemoryClient is async.
     This helper runs async code in the appropriate event loop.
@@ -71,6 +71,7 @@ def _run_async(coro: Coroutine[Any, Any, _T]) -> _T:
         import concurrent.futures
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
+            # Wrap in a zero-arg callable so the result type flows through submit().
             future = executor.submit(lambda: asyncio.run(coro))
             return future.result()
     else:
@@ -171,7 +172,7 @@ def _create_search_context_tool(
     embedding_provider: str,
     embedding_model: str | None,
     **kwargs: Any,
-) -> Any:
+) -> AgentTool:
     """Create the search_context tool with bound configuration."""
     try:
         from strands import tool
@@ -328,7 +329,7 @@ def _create_get_entity_graph_tool(
     embedding_provider: str,
     embedding_model: str | None,
     **kwargs: Any,
-) -> Any:
+) -> AgentTool:
     """Create the get_entity_graph tool with bound configuration."""
     try:
         from strands import tool
@@ -515,7 +516,7 @@ def _create_add_memory_tool(
     embedding_provider: str,
     embedding_model: str | None,
     **kwargs: Any,
-) -> Any:
+) -> AgentTool:
     """Create the add_memory tool with bound configuration."""
     try:
         from strands import tool
@@ -599,7 +600,7 @@ def _create_get_user_preferences_tool(
     embedding_provider: str,
     embedding_model: str | None,
     **kwargs: Any,
-) -> Any:
+) -> AgentTool:
     """Create the get_user_preferences tool with bound configuration."""
     try:
         from strands import tool
@@ -682,7 +683,7 @@ def context_graph_tools(
     embedding_provider: str = "bedrock",
     embedding_model: str | None = None,
     **kwargs: Any,
-) -> list[Any]:
+) -> list[AgentTool]:
     """Create all Context Graph tools configured for use with Strands agents.
 
     This factory function creates a list of @tool decorated functions that can
@@ -734,22 +735,24 @@ def context_graph_tools(
             "neo4j_password is required. Provide it directly or set NEO4J_PASSWORD environment variable."
         )
 
-    # Common config for all tools
-    config: dict[str, Any] = {
-        "neo4j_uri": uri,
-        "neo4j_user": neo4j_user,
-        "neo4j_password": password,
-        "neo4j_database": neo4j_database,
-        "embedding_provider": embedding_provider,
-        "embedding_model": embedding_model,
-        **kwargs,
-    }
+    # Pass args explicitly (not via a **dict) so each factory receives the
+    # narrowed per-argument types — uri/password are str here, not str | None.
+    def _build(factory: Callable[..., AgentTool]) -> AgentTool:
+        return factory(
+            neo4j_uri=uri,
+            neo4j_user=neo4j_user,
+            neo4j_password=password,
+            neo4j_database=neo4j_database,
+            embedding_provider=embedding_provider,
+            embedding_model=embedding_model,
+            **kwargs,
+        )
 
     return [
-        _create_search_context_tool(**config),
-        _create_get_entity_graph_tool(**config),
-        _create_add_memory_tool(**config),
-        _create_get_user_preferences_tool(**config),
+        _build(_create_search_context_tool),
+        _build(_create_get_entity_graph_tool),
+        _build(_create_add_memory_tool),
+        _build(_create_get_user_preferences_tool),
     ]
 
 
@@ -788,27 +791,20 @@ def _get_or_create_nams_client(
         if cached.api_key == api_key:
             return cached.client
 
-    from pydantic import SecretStr
+    from neo4j_agent_memory import MemoryClient
+    from neo4j_agent_memory.integrations.strands.config import build_nams_settings
 
-    from neo4j_agent_memory import MemoryClient, MemorySettings, NamsConfig
-
-    settings = MemorySettings(
-        backend="nams",
-        nams=NamsConfig(
-            endpoint=endpoint,
-            api_key=SecretStr(api_key),
-            # Strands runs tools in short bursts via sync wrappers —
-            # skipping probe avoids a round-trip on every call.
-            validate_on_connect=False,
-            transport_mode=transport_mode,
-        ),
-    )
+    # Strands runs tools in short bursts via sync wrappers —
+    # skipping probe avoids a round-trip on every call.
+    settings = build_nams_settings(endpoint, api_key, transport_mode)
     client = MemoryClient(settings)
     cached_clients.append(_CachedNamsClient(api_key=api_key, client=client))
     return client
 
 
-def _nams_search_context_tool(endpoint: str, api_key: str, transport_mode: TransportMode) -> Any:
+def _nams_search_context_tool(
+    endpoint: str, api_key: str, transport_mode: TransportMode
+) -> AgentTool:
     """NAMS-backed search_context tool (Strands @tool)."""
     try:
         from strands import tool
@@ -872,7 +868,7 @@ def _nams_search_context_tool(endpoint: str, api_key: str, transport_mode: Trans
 
 def _nams_set_entity_feedback_tool(
     endpoint: str, api_key: str, transport_mode: TransportMode
-) -> Any:
+) -> AgentTool:
     """NAMS-only @tool — record positive/negative feedback on an entity."""
     try:
         from strands import tool
@@ -909,7 +905,7 @@ def _nams_set_entity_feedback_tool(
 
 def _nams_get_entity_provenance_tool(
     endpoint: str, api_key: str, transport_mode: TransportMode
-) -> Any:
+) -> AgentTool:
     """NAMS-only @tool — fetch sources + extractors for an entity."""
     try:
         from strands import tool
@@ -938,7 +934,7 @@ def _nams_get_entity_provenance_tool(
     return get_entity_provenance
 
 
-def _nams_cypher_tool(endpoint: str, api_key: str, transport_mode: TransportMode) -> Any:
+def _nams_cypher_tool(endpoint: str, api_key: str, transport_mode: TransportMode) -> AgentTool:
     """NAMS-only @tool — read-only Cypher escape hatch (POST /v1/query)."""
     try:
         from strands import tool
@@ -973,7 +969,7 @@ def nams_context_graph_tools(
     endpoint: str | None = None,
     api_key: str | None = None,
     transport_mode: TransportMode = "auto",
-) -> list[Any]:
+) -> list[AgentTool]:
     """Create Strands @tool functions backed by NAMS rather than direct Neo4j.
 
     Returns a focused tool set sized for NAMS Platinum semantics:
@@ -1008,12 +1004,9 @@ def nams_context_graph_tools(
         tools = nams_context_graph_tools()  # picks up MEMORY_API_KEY from env
         agent = Agent(model="anthropic.claude-sonnet-4-20250514-v1:0", tools=tools)
     """
-    import os
+    from neo4j_agent_memory.integrations.strands.config import resolve_nams_connection
 
-    endpoint = endpoint or os.environ.get("MEMORY_ENDPOINT") or "https://memory.neo4jlabs.com/v1"
-    api_key = api_key or os.environ.get("MEMORY_API_KEY")
-    if not api_key:
-        raise ValueError("api_key is required. Pass api_key= or set MEMORY_API_KEY env var.")
+    endpoint, api_key = resolve_nams_connection(endpoint, api_key)
 
     return [
         _nams_search_context_tool(endpoint, api_key, transport_mode),

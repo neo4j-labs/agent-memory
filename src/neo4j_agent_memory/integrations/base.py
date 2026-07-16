@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import threading
 from collections.abc import Callable, Coroutine
 from functools import wraps
 from typing import Any, ParamSpec, TypeVar
@@ -20,6 +21,76 @@ T = TypeVar("T")
 _executor: concurrent.futures.ThreadPoolExecutor | None = None
 _EXECUTOR_MAX_WORKERS = 4
 _SYNC_TIMEOUT_SECONDS = 30
+
+
+class AsyncBridge:
+    """Persistent background-event-loop bridge for sync code driving async clients.
+
+    Unlike :func:`run_sync` (one-shot ``asyncio.run`` per call), AsyncBridge keeps
+    ONE loop alive across calls — required when the async client holds loop-bound
+    state (httpx/bolt transports), e.g. a long-lived integration object making
+    many sequential calls. Use run_sync for stateless one-shot calls; use
+    AsyncBridge when the same client instance must serve multiple calls.
+
+    The loop thread starts lazily on first use and is restarted if used
+    again after ``close()`` (cheap, and keeps the API forgiving).
+    """
+
+    def __init__(self, timeout: float = 30.0) -> None:
+        self._timeout = timeout
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
+        self._lock = threading.Lock()
+
+    def _ensure_loop(self) -> asyncio.AbstractEventLoop:
+        with self._lock:
+            if self._loop is None or self._thread is None or not self._thread.is_alive():
+                self._loop = asyncio.new_event_loop()
+                self._thread = threading.Thread(
+                    target=self._loop.run_forever,
+                    name="neo4j-strands-session-manager",
+                    daemon=True,
+                )
+                self._thread.start()
+            return self._loop
+
+    def run(self, coro: Coroutine[Any, Any, T], timeout: float | None = None) -> T:
+        """Submit ``coro`` to the background loop and block for its result.
+
+        Generic over the coroutine's result type, so callers get the
+        awaited value's real type back (e.g. ``run(client.add_message(...))``
+        returns ``Message``, not ``Any``).
+        """
+        loop = self._ensure_loop()
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+        return future.result(timeout=timeout if timeout is not None else self._timeout)
+
+    def close(self) -> None:
+        """Stop and discard the loop thread. Safe to call repeatedly.
+
+        Callers with a ``run()`` in flight will block until their own
+        timeout fires. Drain in-flight work before closing (the session
+        manager flushes its buffer first, which guarantees this).
+
+        If the loop thread does not stop within the join timeout we do NOT
+        call ``loop.close()`` — closing a still-running loop raises
+        ``RuntimeError``. The thread is a daemon, so we drop our references
+        and let it unwind on its own rather than leave the bridge in a
+        half-closed state. References are always reset, so the bridge stays
+        reusable (``_ensure_loop`` rebuilds the loop on next use).
+        """
+        with self._lock:
+            loop = self._loop
+            thread = self._thread
+            if loop is None:
+                return
+            loop.call_soon_threadsafe(loop.stop)
+            if thread is not None:
+                thread.join(timeout=5)
+            if thread is None or not thread.is_alive():
+                loop.close()
+            self._loop = None
+            self._thread = None
 
 
 def _get_executor() -> concurrent.futures.ThreadPoolExecutor:

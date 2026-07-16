@@ -8,7 +8,11 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from neo4j_agent_memory import MemorySettings
+    from neo4j_agent_memory.nams.endpoints import TransportMode
 
 
 @dataclass
@@ -147,6 +151,58 @@ class StrandsConfig:
         result.update(self.extra_config)
         return result
 
+
+# ---------------------------------------------------------------------------
+# NAMS connection helpers (shared by session_manager and tools)
+# ---------------------------------------------------------------------------
+
+#: Default hosted NAMS endpoint, shared by tools and the session manager.
+DEFAULT_NAMS_ENDPOINT = "https://memory.neo4jlabs.com/v1"
+
+
+def resolve_nams_connection(
+    endpoint: str | None = None,
+    api_key: str | None = None,
+) -> tuple[str, str]:
+    """Resolve NAMS endpoint + api key from args or env (MEMORY_ENDPOINT / MEMORY_API_KEY).
+
+    Raises:
+        ValueError: If no API key is provided or found in the environment.
+    """
+    endpoint = endpoint or os.environ.get("MEMORY_ENDPOINT") or DEFAULT_NAMS_ENDPOINT
+    api_key = api_key or os.environ.get("MEMORY_API_KEY")
+    if not api_key:
+        raise ValueError("api_key is required. Pass api_key= or set MEMORY_API_KEY env var.")
+    return endpoint, api_key
+
+
+def build_nams_settings(
+    endpoint: str,
+    api_key: str,
+    transport_mode: TransportMode = "auto",
+    *,
+    validate_on_connect: bool = False,
+) -> MemorySettings:
+    """Build NAMS-backed MemorySettings (validate_on_connect off by default —
+    Strands drives short synchronous bursts; skipping the probe saves a round-trip)."""
+    from pydantic import SecretStr
+
+    from neo4j_agent_memory import MemorySettings, NamsConfig
+
+    return MemorySettings(
+        backend="nams",
+        nams=NamsConfig(
+            endpoint=endpoint,
+            api_key=SecretStr(api_key),
+            validate_on_connect=validate_on_connect,
+            transport_mode=transport_mode,
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Default Bedrock models for different use cases
+# ---------------------------------------------------------------------------
 
 # Default Bedrock models for different use cases
 BEDROCK_EMBEDDING_MODELS = {

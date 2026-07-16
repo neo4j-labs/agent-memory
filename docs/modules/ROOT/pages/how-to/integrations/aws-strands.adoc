@@ -1,16 +1,126 @@
 = AWS Strands Agents Integration
 :description: Integrate Neo4j Agent Memory with AWS Strands Agents SDK
-:keywords: strands, aws, bedrock, neo4j, agent, tools
+:keywords: strands, aws, bedrock, neo4j, agent, tools, session manager
 
-This guide shows how to add Neo4j Context Graph memory to AWS Strands agents using the `@tool` decorated functions.
+This guide shows how to add Neo4j Context Graph memory to AWS Strands agents.
+The integration offers two complementary modes, usable independently or
+together on the same agent:
 
+[cols="1,2,2"]
+|===
+| Mode | What it does | Reach for it when
+
+| *Memory tools* (pull-based)
+| `@tool` functions the agent calls on its own judgment: search memories,
+  explore the entity graph, store facts, read preferences.
+| You want the agent in explicit control — deep queries, on-demand recall,
+  storing extra-conversational facts.
+
+| *Session manager* (push-based)
+| `Neo4jSessionManager` on `Agent(session_manager=...)`: every turn is
+  persisted automatically, history is restored on restart, and (opt-in)
+  relevant long-term memories are injected into each user message.
+| You want zero-effort conversation capture and continuity — nothing depends
+  on the model remembering to call a tool.
+|===
+
+[[_overview]]
 == Overview
 
 image::diagrams/multi-agent-architecture-aws-neo4j.png[Multi-agent architecture with shared Neo4j memory: Strands agents communicate through a shared knowledge graph,width=600,align=left]
 
 image::diagrams/shared-memory-data-flow-kyc-graph-credit.png[Shared memory data flow: KYC agent writes entities to Neo4j, Credit agent reads them — findings are immediately available across agents,width=540,align=left]
 
-The Strands integration provides four memory tools that agents can use:
+Both modes write into the same knowledge graph, which is what enables the
+multi-agent "shared brain" shown above: what one agent learns, every other
+agent can retrieve (see <<_the_shared_brain_pattern>>).
+
+== Installation
+
+[source,bash]
+----
+pip install neo4j-agent-memory[aws,strands]
+----
+
+== Quick Start
+
+This example combines both modes: the session manager captures and restores
+the conversation transparently, while the tools give the agent explicit
+memory operations.
+
+[source,python]
+----
+from strands import Agent
+from neo4j_agent_memory import MemorySettings
+from neo4j_agent_memory.integrations.strands import (
+    Neo4jRetrievalConfig,
+    Neo4jSessionManager,
+    context_graph_tools,
+)
+
+# Pull-based tools — the agent decides when to search or store.
+tools = context_graph_tools(
+    neo4j_uri="neo4j+s://xxx.databases.neo4j.io",
+    neo4j_password="your-password",
+    embedding_provider="bedrock",
+)
+
+# Push-based session manager — every turn persisted, history restored,
+# relevant memories injected into each user message (opt-in).
+manager = Neo4jSessionManager(
+    "support-42",
+    settings=MemorySettings(
+        neo4j={
+            "uri": "neo4j+s://xxx.databases.neo4j.io",
+            "password": "your-password",
+        },
+    ),
+    retrieval_config=Neo4jRetrievalConfig(),
+)
+
+agent = Agent(
+    model="anthropic.claude-sonnet-4-20250514-v1:0",
+    tools=tools,
+    session_manager=manager,
+)
+
+agent("Remember that I prefer Python over JavaScript")
+----
+
+Using the hosted NAMS service instead of self-hosted Neo4j? Swap in the
+NAMS variants — both read `MEMORY_API_KEY` (and optionally
+`MEMORY_ENDPOINT`) from the environment:
+
+[source,python]
+----
+from neo4j_agent_memory.integrations.strands import (
+    Neo4jRetrievalConfig,
+    Neo4jSessionManager,
+    nams_context_graph_tools,
+)
+
+manager = Neo4jSessionManager.for_nams(
+    "support-42",
+    retrieval_config=Neo4jRetrievalConfig(),
+)
+tools = nams_context_graph_tools()
+----
+
+[IMPORTANT]
+====
+Do *not* share a `MemoryClient` between the tools and the session manager.
+The tools use their own cached clients with per-call open/close semantics;
+the session manager holds a persistent client on its own event-loop thread.
+Sharing one client would let a tool's teardown close the manager's transport
+mid-session. Two transports per process is correct and cheap.
+====
+
+Each mode also works on its own — the next two sections cover them
+independently.
+
+== Memory Tools (Pull-Based)
+
+The integration provides four memory tools that agents can use:
 
 [cols="1,2"]
 |===
@@ -29,14 +139,76 @@ The Strands integration provides four memory tools that agents can use:
 | Retrieve user preferences by category
 |===
 
-== Installation
+[TIP]
+====
+When a session manager is attached (see <<_session_manager_push_based>>),
+conversation capture is automatic — `add_memory` is then only needed for
+*extra-conversational* facts, and `search_context` becomes the explicit
+deep-query escape hatch alongside automatic context injection.
+====
+
+=== Configuration
+
+==== Basic Configuration
+
+[source,python]
+----
+from neo4j_agent_memory.integrations.strands import context_graph_tools
+
+tools = context_graph_tools(
+    # Neo4j connection
+    neo4j_uri="neo4j+s://xxx.databases.neo4j.io",
+    neo4j_user="neo4j",
+    neo4j_password="your-password",
+    neo4j_database="neo4j",
+
+    # Embedding configuration
+    embedding_provider="bedrock",  # or "openai", "vertex_ai"
+    embedding_model="amazon.titan-embed-text-v2:0",
+
+    # AWS configuration (for Bedrock)
+    aws_region="us-east-1",
+)
+----
+
+==== Using StrandsConfig
+
+[source,python]
+----
+from neo4j_agent_memory.integrations.strands import StrandsConfig, context_graph_tools
+
+config = StrandsConfig(
+    neo4j_uri="neo4j+s://xxx.databases.neo4j.io",
+    neo4j_password="your-password",
+    embedding_provider="bedrock",
+    embedding_model="amazon.titan-embed-text-v2:0",
+    aws_region="us-east-1",
+)
+
+tools = context_graph_tools(**config.to_dict())
+----
+
+==== From Environment Variables
+
+[source,python]
+----
+from neo4j_agent_memory.integrations.strands import StrandsConfig, context_graph_tools
+
+# Reads from environment variables
+config = StrandsConfig.from_env()
+tools = context_graph_tools(**config.to_dict())
+----
+
+Required environment variables:
 
 [source,bash]
 ----
-pip install neo4j-agent-memory[aws,strands]
+export NEO4J_URI=neo4j+s://xxx.databases.neo4j.io
+export NEO4J_PASSWORD=your-password
+export AWS_REGION=us-east-1
 ----
 
-== Pass-through your Strands model
+=== Pass-Through Your Strands Model
 
 Strands agents typically use Bedrock model strings (e.g. `"anthropic.claude-sonnet-4-20250514-v1:0"`). `llm_provider_from_strands` accepts either a bare string or a model object and prepends `bedrock/` when no provider prefix is present:
 
@@ -60,94 +232,9 @@ settings = MemorySettings(
 
 The `context_graph_tools(...)` helper already resolves the embedder via `from_provider` internally — the pass-through is only needed when you want the same model used by both the agent and memory extraction.
 
-== Quick Start
+=== Tool Details
 
-[source,python]
-----
-from strands import Agent
-from neo4j_agent_memory.integrations.strands import context_graph_tools
-
-# Get all Context Graph tools
-tools = context_graph_tools(
-    neo4j_uri="neo4j+s://xxx.databases.neo4j.io",
-    neo4j_password="your-password",
-    embedding_provider="bedrock",
-)
-
-# Create agent with memory tools
-agent = Agent(
-    model="anthropic.claude-sonnet-4-20250514-v1:0",
-    tools=tools,
-)
-
-# Agent can now use memory
-response = agent("Remember that I prefer Python over JavaScript")
-----
-
-== Configuration
-
-=== Basic Configuration
-
-[source,python]
-----
-from neo4j_agent_memory.integrations.strands import context_graph_tools
-
-tools = context_graph_tools(
-    # Neo4j connection
-    neo4j_uri="neo4j+s://xxx.databases.neo4j.io",
-    neo4j_user="neo4j",
-    neo4j_password="your-password",
-    neo4j_database="neo4j",
-
-    # Embedding configuration
-    embedding_provider="bedrock",  # or "openai", "vertex_ai"
-    embedding_model="amazon.titan-embed-text-v2:0",
-
-    # AWS configuration (for Bedrock)
-    aws_region="us-east-1",
-)
-----
-
-=== Using StrandsConfig
-
-[source,python]
-----
-from neo4j_agent_memory.integrations.strands import StrandsConfig, context_graph_tools
-
-config = StrandsConfig(
-    neo4j_uri="neo4j+s://xxx.databases.neo4j.io",
-    neo4j_password="your-password",
-    embedding_provider="bedrock",
-    embedding_model="amazon.titan-embed-text-v2:0",
-    aws_region="us-east-1",
-)
-
-tools = context_graph_tools(**config.to_dict())
-----
-
-=== From Environment Variables
-
-[source,python]
-----
-from neo4j_agent_memory.integrations.strands import StrandsConfig, context_graph_tools
-
-# Reads from environment variables
-config = StrandsConfig.from_env()
-tools = context_graph_tools(**config.to_dict())
-----
-
-Required environment variables:
-
-[source,bash]
-----
-export NEO4J_URI=neo4j+s://xxx.databases.neo4j.io
-export NEO4J_PASSWORD=your-password
-export AWS_REGION=us-east-1
-----
-
-== Tool Details
-
-=== search_context
+==== search_context
 
 Search for relevant memories and entities:
 
@@ -169,7 +256,7 @@ Returns:
 * Related entities
 * Entity relationships (if enabled)
 
-=== get_entity_graph
+==== get_entity_graph
 
 Explore relationships around an entity:
 
@@ -189,7 +276,7 @@ Returns:
 * Connected entities
 * Relationship types and properties
 
-=== add_memory
+==== add_memory
 
 Store information with automatic entity extraction:
 
@@ -209,7 +296,7 @@ Returns:
 * Extracted entities (if enabled)
 * Entity relationships created
 
-=== get_user_preferences
+==== get_user_preferences
 
 Retrieve user preferences:
 
@@ -227,7 +314,7 @@ Returns:
 * Categories and values
 * Confidence scores
 
-== Agent System Prompts
+=== Agent System Prompts
 
 Guide your agent to use memory effectively:
 
@@ -248,29 +335,7 @@ Always reference your memory when it's relevant to the conversation.""",
 )
 ----
 
-== Multi-User Support
-
-Handle multiple users in the same application:
-
-[source,python]
-----
-# Tools are configured per-invocation
-# The agent passes user_id with each tool call
-
-agent = Agent(
-    model="anthropic.claude-sonnet-4-20250514-v1:0",
-    tools=tools,
-    system_prompt="""The current user is {user_id}.
-Always include user_id="{user_id}" in your memory tool calls.""",
-)
-
-# Inject user context
-response = agent(
-    f"[User: user-123] What do you remember about me?",
-)
-----
-
-== Error Handling
+=== Error Handling
 
 Tools return error information in results:
 
@@ -298,19 +363,253 @@ without that context. Don't expose internal errors to users.""",
 )
 ----
 
-== Performance Tips
+=== Performance Tips
 
-=== Reduce Latency
+==== Reduce Latency
 
 1. **Use Bedrock in the same region** as your application
 2. **Limit `top_k`** to reduce result processing
 3. **Set `include_relationships=False`** when you don't need graph traversal
 
-=== Reduce Costs
+==== Reduce Costs
 
 1. **Use Claude Haiku** for entity extraction (cheaper than Sonnet)
 2. **Batch memory additions** rather than storing every message
 3. **Filter by category** in `get_user_preferences`
+
+[[_session_manager_push_based]]
+== Session Manager (Push-Based)
+
+`Neo4jSessionManager` plugs into the Strands session lifecycle: pass it to
+`Agent(session_manager=...)` and every turn is persisted automatically,
+conversation history is restored on agent restart, and (opt-in) relevant
+long-term memories are injected into each user message before the model sees
+it. Nothing depends on the model deciding to call a tool.
+
+=== Construction
+
+For self-hosted Neo4j, pass `settings=` and the manager owns the client
+lifecycle:
+
+[source,python]
+----
+from neo4j_agent_memory import MemorySettings
+from neo4j_agent_memory.integrations.strands import Neo4jSessionManager
+
+settings = MemorySettings(
+    neo4j={"uri": "bolt://localhost:7687", "password": "password"},
+)
+manager = Neo4jSessionManager("support-42", settings=settings)
+----
+
+For the hosted NAMS service, `for_nams` reads `MEMORY_API_KEY` (and
+optionally `MEMORY_ENDPOINT`) from the environment — the same conventions as
+`nams_context_graph_tools()`:
+
+[source,python]
+----
+from neo4j_agent_memory.integrations.strands import Neo4jSessionManager
+
+manager = Neo4jSessionManager.for_nams("support-42")
+----
+
+Alternatively, pass an already-constructed (but not yet connected)
+`MemoryClient` via `memory_client=`; see the loop-binding note under
+<<_limitations>>.
+
+=== Retrieval Injection
+
+When a `Neo4jRetrievalConfig` is supplied, each user message triggers
+concurrent long-term searches (entities, preferences, and optionally facts).
+Matching results are prepended inside a `<user_context>` block:
+
+----
+<user_context>
+Relevant memory:
+- [entity] Acme Corp (ORGANIZATION) — customer since 2024, owner: Jane Doe
+- [preference] communication: prefers concise answers
+</user_context>
+{original user text}
+----
+
+The *stored* message is always the user's original — injection is in-memory
+only and idempotent per message. If nothing clears the `min_score` floor,
+nothing is injected (no empty tags). The cost is 1–3 backend round-trips per
+user turn (why it is opt-in).
+
+[NOTE]
+====
+On NAMS, only entity search is available — NAMS does not yet expose
+preference or fact search endpoints, so `include_preferences` /
+`include_facts` are skipped automatically on that backend.
+`min_score` is not enforced on NAMS — the hosted search API has no threshold parameter.
+====
+
+[source,python]
+----
+from neo4j_agent_memory.integrations.strands import Neo4jRetrievalConfig
+
+retrieval_config = Neo4jRetrievalConfig(
+    top_k=10,                   # max results per memory kind
+    min_score=0.2,              # similarity floor
+    include_entities=True,
+    include_preferences=True,
+    include_facts=False,        # set True to also search stored facts
+    context_tag="user_context", # XML wrapper tag (AgentCore-compatible default)
+)
+----
+
+=== Constructor Reference
+
+[cols="1,1,3"]
+|===
+| Parameter | Default | Description
+
+| `session_id`
+| _(required)_
+| Strands session identifier (maps to one `Conversation` in the graph).
+
+| `memory_client`
+| `None`
+| Pre-constructed `MemoryClient`. Exactly one of `memory_client` / `settings` must be provided.
+
+| `settings`
+| `None`
+| `MemorySettings` from which a client is constructed and owned by the manager.
+
+| `user_id`
+| `None`
+| Scopes writes to a specific user/tenant (multi-tenant deployments).
+
+| `retrieval_config`
+| `None`
+| Enable long-term memory injection. `None` disables it (persistence-only mode).
+
+| `extract_entities`
+| `True`
+| Run entity extraction on stored messages (bolt only; NAMS extracts server-side regardless).
+
+| `record_tool_calls`
+| `False`
+| Mirror tool-use and tool-result blocks into reasoning memory for audit.
+
+| `request_timeout`
+| `30.0`
+| Seconds to wait for each sync→async backend call before raising.
+
+| `restore_limit`
+| `None`
+| Max messages loaded into the agent on restore; `None` loads the backend default (bolt caps at 1000).
+|===
+
+[[_limitations]]
+=== Limitations
+
+* **Memory-grade persistence.** Text turns are stored and restored; tool-use
+  blocks are not replayed on restart (set `record_tool_calls=True` to mirror
+  them into reasoning memory for audit instead).
+
+* **`agent.state` and conversation-manager window state do not survive
+  restarts.** No Strands-specific node types are written to the graph;
+  `sync_agent` is a no-op — the message buffer is flushed by the `AfterInvocationEvent` hook.
+
+* **Redaction.** Fully supported *within* an invocation — the write-behind
+  buffer lets guardrails rewrite the latest message before it ever reaches
+  the backend. After the buffer has been flushed, falls back to
+  delete-and-re-add on bolt (the redacted message moves to the end of
+  restored history) and logs a warning on NAMS (no message-update endpoint
+  on NAMS, so server-side redaction is not possible).
+
+* **External `AfterInvocationEvent` hooks registered after the session
+  manager run before the final turn is flushed** (Strands dispatches that
+  event in reverse registration order) — read persisted state on the next
+  turn instead.
+
+* **Search scope.** Long-term searches are workspace/database-scoped.
+  `user_id` scopes *writes* (multi-tenant), not searches — the search APIs
+  take no user filter.
+
+* **One agent per session manager instance.** Pass multiple agents their
+  own managers (the shared-brain pattern). Strands Graph/Swarm
+  orchestration persistence is not supported in v1.
+
+* **Loop-bound transports.** Pass `settings=` (or an *unconnected*
+  `memory_client=`). A client already connected on another event loop
+  cannot be driven from the manager's background loop — the transport is
+  bound to the loop that performed the first `connect()`.
+
+* **Multiple conversations with the same session ID (NAMS).** If external
+  writers create more than one NAMS conversation with the same
+  `strands_session_id` metadata, the manager resolves to the first one
+  listed. Avoid duplicate session IDs in shared workspaces; resolution
+  passes `user_id` and an explicit page limit to narrow the scan.
+
+== Multi-User Support
+
+Handle multiple users in the same application. The tools take a `user_id`
+argument on each call; the session manager takes `user_id` at construction
+(one manager per user session):
+
+[source,python]
+----
+# Tools are configured per-invocation
+# The agent passes user_id with each tool call
+
+agent = Agent(
+    model="anthropic.claude-sonnet-4-20250514-v1:0",
+    tools=tools,
+    session_manager=Neo4jSessionManager(
+        f"support-{user_id}",
+        settings=settings,
+        user_id=user_id,  # scopes writes in multi-tenant deployments
+    ),
+    system_prompt="""The current user is {user_id}.
+Always include user_id="{user_id}" in your memory tool calls.""",
+)
+
+# Inject user context
+response = agent(
+    f"[User: user-123] What do you remember about me?",
+)
+----
+
+[[_the_shared_brain_pattern]]
+== The Shared-Brain Pattern
+
+Each agent gets its own `Neo4jSessionManager` (its own `session_id`), all
+pointing at the same graph. Conversations flow into one knowledge graph;
+entities extracted from one session are searchable by all others — this is
+the multi-agent architecture from the <<_overview,Overview>> diagrams.
+
+[source,python]
+----
+from neo4j_agent_memory import MemorySettings
+from neo4j_agent_memory.integrations.strands import (
+    Neo4jRetrievalConfig,
+    Neo4jSessionManager,
+)
+
+settings = MemorySettings(
+    neo4j={"uri": "bolt://localhost:7687", "password": "password"},
+)
+
+# Agent A — ingests from KYC conversations
+manager_a = Neo4jSessionManager(
+    "kyc-session",
+    settings=settings,
+    extract_entities=True,
+)
+
+# Agent B — queries the shared graph with context injection
+manager_b = Neo4jSessionManager(
+    "credit-session",
+    settings=settings,
+    retrieval_config=Neo4jRetrievalConfig(),
+)
+----
+
+See `examples/strands-session-manager/` for a runnable three-phase demo that
+requires no LLM or API key.
 
 == See Also
 

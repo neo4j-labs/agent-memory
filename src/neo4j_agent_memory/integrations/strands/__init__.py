@@ -22,14 +22,19 @@ Example:
     response = agent("What do you know about our project?")
 """
 
-from typing import Any
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any, cast
 
 from neo4j_agent_memory.integrations._passthrough import (
     llm_provider_from_framework_model as _passthrough,
 )
 
+if TYPE_CHECKING:
+    from neo4j_agent_memory.llm import LLMProvider
 
-def llm_provider_from_strands(model: Any) -> Any:
+
+def llm_provider_from_strands(model: Any) -> LLMProvider:
     """Translate a Strands Agents model into an :class:`LLMProvider`.
 
     Strands typically uses Bedrock model identifier strings (e.g.
@@ -41,8 +46,11 @@ def llm_provider_from_strands(model: Any) -> Any:
         from neo4j_agent_memory.llm import from_provider
 
         model_id = model if "/" in model else f"bedrock/{model}"
-        return from_provider(model_id)
-    return _passthrough(model)
+        # from_provider returns LLMProvider | EmbeddingProvider (not overloaded);
+        # kind defaults to "llm", so the result is an LLMProvider here.
+        return cast("LLMProvider", from_provider(model_id))
+    # _passthrough introspects an arbitrary framework model object (returns Any).
+    return cast("LLMProvider", _passthrough(model))
 
 
 try:
@@ -50,6 +58,10 @@ try:
         BEDROCK_EMBEDDING_MODELS,
         BEDROCK_LLM_MODELS,
         StrandsConfig,
+    )
+    from neo4j_agent_memory.integrations.strands.session_manager import (
+        Neo4jRetrievalConfig,
+        Neo4jSessionManager,
     )
     from neo4j_agent_memory.integrations.strands.tools import (
         clear_client_cache,
@@ -65,6 +77,8 @@ try:
         "BEDROCK_EMBEDDING_MODELS",
         "BEDROCK_LLM_MODELS",
         "llm_provider_from_strands",
+        "Neo4jSessionManager",
+        "Neo4jRetrievalConfig",
     ]
 except ImportError:
     # strands-agents not installed

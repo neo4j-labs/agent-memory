@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Strands SessionManager** (`Neo4jSessionManager`) — automatic conversation
+  persistence/restore for AWS Strands agents via `Agent(session_manager=...)`,
+  backed by any `MemoryClient` (bolt or NAMS). Includes opt-in long-term
+  memory injection (`Neo4jRetrievalConfig`), a write-behind buffer for
+  guardrail redaction, optional tool-call mirroring into reasoning memory
+  (`record_tool_calls=True`), and `Neo4jSessionManager.for_nams()` for the
+  hosted service.
 - **Ontology `import` / `diff` / `migrate` on `client.ontology`.** Closes the gap
   where these shipped server-side + REST but weren't reachable from the SDK.
   `import_(content=/url=, format=)` converts an external graph/ontology document
