@@ -46,9 +46,9 @@ def llm_provider_from_strands(model: Any) -> LLMProvider:
         from neo4j_agent_memory.llm import from_provider
 
         model_id = model if "/" in model else f"bedrock/{model}"
-        # from_provider returns LLMProvider | EmbeddingProvider (not overloaded);
-        # kind defaults to "llm", so the result is an LLMProvider here.
-        return cast("LLMProvider", from_provider(model_id))
+        # from_provider is @overloaded on kind; kind defaults to "llm", so
+        # this returns an LLMProvider (no cast needed).
+        return from_provider(model_id)
     # _passthrough introspects an arbitrary framework model object (returns Any).
     return cast("LLMProvider", _passthrough(model))
 
