@@ -330,8 +330,13 @@ def create_extractor(
     elif extraction_config.extractor_type == ExtractorType.LLM:
         return create_llm_extractor(extraction_config, schema_config, llm_config)
 
-    else:  # ExtractorType.PIPELINE (the remaining enum value)
+    elif extraction_config.extractor_type == ExtractorType.PIPELINE:
         return create_extraction_pipeline(extraction_config, schema_config, llm_config)
+
+    # ExtractorType is exhausted above. This fail-fast guard means a future enum
+    # value added without a branch here raises loudly instead of being silently
+    # routed to one of the existing extractors.
+    raise ValueError(f"Unhandled extractor type: {extraction_config.extractor_type}")
 
 
 class ExtractorBuilder:
