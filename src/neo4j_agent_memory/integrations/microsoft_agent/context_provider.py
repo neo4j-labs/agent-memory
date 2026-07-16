@@ -11,6 +11,8 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any
 
+from neo4j_agent_memory.memory.short_term import ShortTermMemory
+
 from ..base import (
     format_context_section,
     truncate_text,
@@ -489,11 +491,14 @@ Use this information to provide personalized, contextually relevant responses.""
 
             async def extract_batch() -> None:
                 try:
-                    # Use session-level extraction
-                    await self._client.short_term.extract_entities_from_session(
-                        session_id=self._session_id,
-                        batch_size=10,
-                    )
+                    # Session-level extraction is bolt-only; NAMS extracts
+                    # entities server-side, so there's nothing to trigger here.
+                    short_term = self._client.short_term
+                    if isinstance(short_term, ShortTermMemory):
+                        await short_term.extract_entities_from_session(
+                            session_id=self._session_id,
+                            batch_size=10,
+                        )
                 except Exception as e:
                     logger.debug(f"Background extraction error: {e}")
 

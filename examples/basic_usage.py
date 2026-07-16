@@ -64,12 +64,12 @@ from neo4j_agent_memory import (
     ExtractorType,
     GeocodingConfig,
     GeocodingProvider,
-    MemoryClient,
-    MemorySettings,
     MessageRole,
     Neo4jConfig,
     ToolCallStatus,
+    connect,
 )
+from neo4j_agent_memory.config.settings import BoltSettings
 
 
 async def main() -> None:
@@ -113,8 +113,11 @@ async def main() -> None:
         cache_results=True,  # Cache results to avoid repeated API calls
     )
 
-    # Configure the memory client
-    settings = MemorySettings(
+    # Configure the memory client. This example exercises bolt-only
+    # features (geospatial search, batch loading, tool stats), so it
+    # connects via the typed factory to get a concrete `BoltMemoryClient`
+    # rather than the base-Protocol-typed `MemoryClient`.
+    settings = BoltSettings(
         neo4j=Neo4jConfig(
             uri=os.getenv("NEO4J_URI", "bolt://localhost:7687"),
             username=os.getenv("NEO4J_USERNAME", "neo4j"),
@@ -125,7 +128,8 @@ async def main() -> None:
         geocoding=geocoding_config,
     )
 
-    async with MemoryClient(settings) as memory:
+    memory = await connect(settings)
+    try:
         session_id = "demo-session"
 
         print("=" * 60)
@@ -503,6 +507,8 @@ async def main() -> None:
         print(f"   Reasoning Traces: {stats.get('traces', 0)}")
 
         print("\n✅ Demo complete!")
+    finally:
+        await memory.close()
 
 
 if __name__ == "__main__":

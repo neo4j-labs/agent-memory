@@ -14,10 +14,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from neo4j_agent_memory.core.protocols import LongTermProtocol
     from neo4j_agent_memory.memory.long_term import (
         Entity,
         Fact,
-        LongTermMemory,
         Preference,
     )
 
@@ -58,7 +58,7 @@ def _format_fact(fact: Fact) -> str:
 
 
 async def _retrieve_context(
-    long_term: LongTermMemory, query: str, cfg: Neo4jRetrievalConfig, *, nams: bool
+    long_term: LongTermProtocol, query: str, cfg: Neo4jRetrievalConfig, *, nams: bool
 ) -> str:
     """Run the configured long-term searches concurrently and format the block.
 
