@@ -318,9 +318,14 @@ class TestExampleConsistency:
         for example in simple_examples:
             if example.exists():
                 content = example.read_text(encoding="utf-8")
-                # Should use async with for proper resource management
-                assert "async with MemoryClient" in content, (
-                    f"{example.name} should use 'async with MemoryClient'"
+                # Proper resource management via either the `async with
+                # MemoryClient` context-manager idiom, or the backend-typed
+                # `connect()` factory paired with an explicit `client.close()`.
+                uses_context_manager = "async with MemoryClient" in content
+                uses_connect = "connect(" in content and ".close()" in content
+                assert uses_context_manager or uses_connect, (
+                    f"{example.name} should manage the client via "
+                    f"'async with MemoryClient' or 'connect(...)' + 'await client.close()'"
                 )
 
     def test_all_examples_have_main_function(self):

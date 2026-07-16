@@ -1,4 +1,5 @@
 """Type-level test: both backend short-term impls satisfy ShortTermProtocol."""
+
 from __future__ import annotations
 
 from neo4j_agent_memory.core.protocols import ShortTermProtocol
