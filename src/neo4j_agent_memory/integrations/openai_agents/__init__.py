@@ -28,14 +28,19 @@ Example:
         await record_agent_trace(memory, messages, task="Help user")
 """
 
-from typing import Any
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
 
 from neo4j_agent_memory.integrations._passthrough import (
     llm_provider_from_framework_model as _passthrough,
 )
 
+if TYPE_CHECKING:
+    from neo4j_agent_memory.llm import LLMProvider
 
-def llm_provider_from_openai_agents(model: Any) -> Any:
+
+def llm_provider_from_openai_agents(model: Any) -> LLMProvider:
     """Translate an OpenAI Agents SDK model into an :class:`LLMProvider`.
 
     The Agents SDK uses OpenAI ``AsyncOpenAI`` clients and bare model

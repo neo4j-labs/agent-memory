@@ -12,11 +12,17 @@ Example:
         # Use with Google ADK agent
 """
 
-from typing import Any
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
 
 from neo4j_agent_memory.integrations._passthrough import (
     llm_provider_from_framework_model as _passthrough,
 )
+
+if TYPE_CHECKING:
+    from neo4j_agent_memory.integrations.google_adk.memory_service import Neo4jMemoryService
+    from neo4j_agent_memory.llm import LLMProvider
 
 __all__ = [
     "Neo4jMemoryService",
@@ -24,7 +30,7 @@ __all__ = [
 ]
 
 
-def llm_provider_from_google_adk(model: Any) -> Any:
+def llm_provider_from_google_adk(model: Any) -> LLMProvider:
     """Translate a Google ADK / Gemini model into an :class:`LLMProvider`.
 
     ADK agents typically use ``gemini-2.5-flash`` / ``gemini-2.5-pro``

@@ -1,14 +1,19 @@
 """LangChain integration for neo4j-agent-memory."""
 
-from typing import Any
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
 
 from neo4j_agent_memory.integrations._passthrough import (
     llm_provider_from_framework_model as _passthrough,
 )
 from neo4j_agent_memory.integrations.langchain.memory import Neo4jAgentMemory
 
+if TYPE_CHECKING:
+    from neo4j_agent_memory.llm import LLMProvider
 
-def llm_provider_from_langchain(model: Any) -> Any:
+
+def llm_provider_from_langchain(model: Any) -> LLMProvider:
     """Translate a LangChain ``BaseChatModel`` into an :class:`LLMProvider`.
 
     Lets users pass through their already-configured LangChain model::

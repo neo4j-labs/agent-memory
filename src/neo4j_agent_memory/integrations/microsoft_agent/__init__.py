@@ -41,18 +41,23 @@ Example:
         )
 """
 
-from typing import Any
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
 
 from neo4j_agent_memory.integrations._passthrough import (
     llm_provider_from_framework_model as _passthrough,
 )
+
+if TYPE_CHECKING:
+    from neo4j_agent_memory.llm import LLMProvider
 
 # Target API version - document for compatibility tracking
 MICROSOFT_AGENT_FRAMEWORK_VERSION = "1.0.0b260212"
 MICROSOFT_AGENT_FRAMEWORK_MIN_VERSION = "1.0.0b260212"
 
 
-def llm_provider_from_microsoft_agent(model: Any) -> Any:
+def llm_provider_from_microsoft_agent(model: Any) -> LLMProvider:
     """Translate a Microsoft Agent Framework chat client into an :class:`LLMProvider`.
 
     The Agent Framework wraps Azure OpenAI and OpenAI clients. The

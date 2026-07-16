@@ -1,13 +1,18 @@
 """LlamaIndex integration for neo4j-agent-memory."""
 
-from typing import Any
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
 
 from neo4j_agent_memory.integrations._passthrough import (
     llm_provider_from_framework_model as _passthrough,
 )
 
+if TYPE_CHECKING:
+    from neo4j_agent_memory.llm import LLMProvider
 
-def llm_provider_from_llamaindex(model: Any) -> Any:
+
+def llm_provider_from_llamaindex(model: Any) -> LLMProvider:
     """Translate a LlamaIndex ``LLM`` into an :class:`LLMProvider`.
 
     LlamaIndex LLM classes expose ``model``; class names like
