@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import copy
 import logging
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from neo4j_agent_memory.integrations.base import AsyncBridge as _AsyncBridge
@@ -49,7 +49,6 @@ if TYPE_CHECKING:
     from strands.types.tools import ToolUse
 
     from neo4j_agent_memory import MemoryClient, MemorySettings
-    from neo4j_agent_memory.core.protocols import ShortTermProtocol
     from neo4j_agent_memory.memory.short_term import Message as StoredMessage
     from neo4j_agent_memory.nams.endpoints import TransportMode
 
@@ -161,25 +160,17 @@ class Neo4jSessionManager(SessionManager):
         """
         if not self._is_nams:
             return self.session_id
-        # Deferred core fix (tracked as a follow-up): ``MemoryClient.short_term``
-        # is statically the concrete bolt ``ShortTermMemory``, but
-        # ``list_conversations`` / ``create_conversation`` live on
-        # ``ShortTermProtocol`` (implemented by the NAMS backend; bolt omits them).
-        # Until the property return type is widened to ``ShortTermProtocol``, this
-        # cast is required on the NAMS path. Bolt and the protocol are not in one
-        # inheritance hierarchy, so reinterpret via ``object`` — the
-        # checker-sanctioned form for a deliberate cross-type cast.
-        nams_short_term = cast("ShortTermProtocol", cast(object, self._client.short_term))
+        short_term = self._client.short_term
         # Narrow server-side where possible; explicit limit extends coverage
         # beyond the server's default page (full pagination isn't exposed by
         # the API).
-        conversations = await nams_short_term.list_conversations(
+        conversations = await short_term.list_conversations(
             user_identifier=self._user_id, limit=1000
         )
         for conversation in conversations:
             if (conversation.metadata or {}).get(_SESSION_KEY) == self.session_id:
                 return str(conversation.id)
-        created = await nams_short_term.create_conversation(
+        created = await short_term.create_conversation(
             session_id=self.session_id,
             metadata={_SESSION_KEY: self.session_id, "session_type": "AGENT"},
             user_identifier=self._user_id,
