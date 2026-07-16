@@ -91,11 +91,11 @@ This is the canonical capability reference. Backend-sensitive how-to pages link 
 | `client.short_term.create_conversation` / `bulk_add_messages`
 | (synthesized) | Yes
 | `client.short_term.get_observations` / `get_reflections`
-| No | Yes
+| `NotSupportedError` | Yes
 | `client.long_term.add_entity` / `search_entities`
 | Yes (with dedup) | Yes (server-side dedup)
 | `client.long_term.set_entity_feedback` / `get_entity_history`
-| No | Yes
+| `NotSupportedError` | Yes
 | `client.long_term.get_entity_provenance`
 | Yes | Yes
 | `client.long_term.geocode_locations` / `search_locations_near`
