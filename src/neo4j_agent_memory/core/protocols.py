@@ -1,26 +1,18 @@
-"""Backend-agnostic Protocols implemented by bolt and NAMS impls.
+"""Backend-agnostic memory contracts.
 
-These are the shared contracts that both the direct-Neo4j (bolt) backend
-and the hosted NAMS HTTP backend honor. The :class:`MemoryClient` exposes
-each accessor (``client.short_term``, ``client.long_term``,
-``client.reasoning``, ``client.query``) typed by the Protocol; the
-concrete implementation is selected at ``connect()`` time based on
-``MemorySettings.backend``.
+These Protocols define the shared, implementation-independent contracts
+for short-term, long-term, and reasoning memory access, plus a unified
+read-only Cypher accessor. The :class:`MemoryClient` exposes each
+accessor (``client.short_term``, ``client.long_term``,
+``client.reasoning``, ``client.query``) typed by the Protocol.
 
 Protocols are :func:`@runtime_checkable <typing.runtime_checkable>` so
 that user code and tests can use ``isinstance(...)`` for ducktyping —
 this matches the v0.3 pattern for :class:`LLMProvider` and
 :class:`EmbeddingProvider`.
 
-Method signatures use ``**kwargs`` where bolt impls accept extra,
-backend-specific keyword arguments (e.g. ``extract_entities=True``,
-``geocode=True``). NAMS impls silently ignore unknown kwargs; bolt
-impls honor them.
-
 The Protocol surface covers the SPEC tiers (Bronze, Silver, Gold,
-Platinum). Bolt-only methods (e.g. ``add_messages_batch``,
-``geocode_locations``) live on the concrete bolt classes but are NOT
-declared on the Protocol — portable code uses Protocol methods only.
+Platinum). Portable code should rely only on the methods declared here.
 """
 
 from __future__ import annotations
@@ -52,11 +44,7 @@ if TYPE_CHECKING:
 
 @runtime_checkable
 class ShortTermProtocol(Protocol):
-    """Contract for short-term memory (conversations, messages, context).
-
-    Implementations: :class:`ShortTermMemory` (bolt),
-    :class:`NamsShortTermMemory` (NAMS).
-    """
+    """Contract for short-term memory (conversations, messages, context)."""
 
     # Bronze tier ------------------------------------------------------------
 
@@ -121,13 +109,7 @@ class ShortTermProtocol(Protocol):
         self,
         session_id: str,
     ) -> Conversation:
-        """Explicitly create a conversation node (without adding messages).
-
-        ``conversation_id`` is deliberately not part of this signature:
-        bolt's ``create_conversation`` takes bare ``**kwargs`` and does not
-        name it, so a Protocol caller passing it would be silently dropped
-        on bolt. Pass ``session_id`` only for portable code.
-        """
+        """Explicitly create a conversation node for a session, without adding messages."""
         ...
 
     async def list_conversations(
@@ -136,7 +118,7 @@ class ShortTermProtocol(Protocol):
         user_identifier: str | None = None,
         limit: int = 100,
     ) -> list[Conversation]:
-        """List conversations; bolt may filter by user_identifier, NAMS by user_id."""
+        """List conversations, optionally scoped to a user identifier."""
         ...
 
     # Platinum tier ----------------------------------------------------------
@@ -146,43 +128,27 @@ class ShortTermProtocol(Protocol):
         session_id: str,
         messages: list[dict[str, Any]],
     ) -> list[Message]:
-        """Bulk-insert messages in one round-trip. Server-side on NAMS.
-
-        ``conversation_id`` is deliberately not part of this signature:
-        bolt's ``bulk_add_messages`` forwards ``**kwargs`` to
-        ``add_messages_batch``, which does not accept ``conversation_id``
-        and raises ``TypeError`` if given it. Pass ``session_id`` only for
-        portable code.
-        """
+        """Bulk-insert messages for a session in one round-trip, preserving order."""
         ...
 
     async def get_observations(
         self,
         session_id: str,
     ) -> list[dict[str, Any]]:
-        """Return inline observations extracted from the session (NAMS Platinum).
-
-        Concrete return type may be a Pydantic ``Observation`` model in a
-        future minor release; for v0.4 the protocol returns
-        ``list[dict[str, Any]]`` to avoid prematurely locking the shape.
-        """
+        """Return inline observations extracted from the session."""
         ...
 
     async def get_reflections(
         self,
         session_id: str,
     ) -> list[dict[str, Any]]:
-        """Return LLM-generated reflections for the session (NAMS Platinum)."""
+        """Return generated reflections for the session."""
         ...
 
 
 @runtime_checkable
 class LongTermProtocol(Protocol):
-    """Contract for long-term memory (entities, preferences, facts).
-
-    Implementations: :class:`LongTermMemory` (bolt),
-    :class:`NamsLongTermMemory` (NAMS).
-    """
+    """Contract for long-term memory (entities, preferences, facts)."""
 
     # Bronze tier ------------------------------------------------------------
 
@@ -193,18 +159,11 @@ class LongTermProtocol(Protocol):
         *,
         description: str | None = None,
     ) -> Any:
-        """Create or upsert an entity.
+        """Create or upsert an entity by name and type.
 
-        Returns either an ``Entity`` (NAMS) or a ``(Entity, DeduplicationResult)``
-        tuple (bolt). Portable code that needs a single entity should
-        access ``result[0]`` after a type check; convenience helpers may
-        normalize this in v0.5+.
-
-        Bolt-only extras (``subtype``, ``aliases``, ``attributes``,
-        ``resolve``, ``deduplicate``, ``geocode``, ``enrich``, ``coordinates``,
-        ``metadata``, …) are NAMS-silently-dropped, so they stay off this
-        Protocol; ``description`` is the one optional field both backends
-        genuinely store.
+        Returns the created or updated entity, either alone or paired
+        with a deduplication result. Portable code that needs a single
+        entity should narrow the return value's type before use.
         """
         ...
 
@@ -220,12 +179,7 @@ class LongTermProtocol(Protocol):
         user_identifier: str | None = None,
         applies_to: list[Any] | None = None,
     ) -> Preference:
-        """Record a user preference.
-
-        NAMS has no preferences endpoint and always raises
-        :class:`NotSupportedError`; its ``**kwargs`` catch-all absorbs this
-        full parameter set structurally, matching bolt's real signature.
-        """
+        """Record a user preference under a category, with optional context, confidence, and metadata."""
         ...
 
     async def add_fact(
@@ -243,10 +197,7 @@ class LongTermProtocol(Protocol):
     ) -> Fact:
         """Record a subject-predicate-object fact.
 
-        The third positional param is positional-only: bolt names it
-        ``obj``, NAMS names it ``object`` — neither name is part of the
-        portable contract, only its position. NAMS has no facts endpoint
-        and always raises :class:`NotSupportedError`.
+        The third argument (the object of the fact) is positional-only.
         """
         ...
 
@@ -255,12 +206,14 @@ class LongTermProtocol(Protocol):
         source: Entity | UUID,
         target: Entity | UUID,
         relationship_type: str,
+        *,
+        description: str | None = None,
+        confidence: float = 1.0,
+        valid_from: datetime | None = None,
+        valid_until: datetime | None = None,
+        attributes: dict[str, Any] | None = None,
     ) -> Relationship:
-        """Create a typed relationship between two entities.
-
-        NAMS has no relationships write endpoint and always raises
-        :class:`NotSupportedError`.
-        """
+        """Create a typed relationship between two entities."""
         ...
 
     async def search_entities(
@@ -269,24 +222,14 @@ class LongTermProtocol(Protocol):
         *,
         limit: int = 10,
     ) -> list[Entity]:
-        """Vector/keyword search across entities.
-
-        Bolt's ``entity_types``/``threshold`` and NAMS's ``entity_type``
-        stay off this Protocol — NAMS reads a different key
-        (``entity_type``, singular) than bolt names (``entity_types``,
-        plural), so passing the plural form through the Protocol would be
-        silently dropped on NAMS. ``limit`` is the one filter both honor.
-        """
+        """Vector/keyword search across entities, limited to at most `limit` results."""
         ...
 
     async def wait_for_extraction(self) -> bool:
-        """Await async entity extraction (NAMS) or no-op (bolt).
+        """Wait for any pending asynchronous entity extraction to complete.
 
-        Bolt always returns ``True`` immediately, ignoring any input, so
-        none of NAMS's rich keyword surface (``query``, ``expected_names``,
-        ``min_results``, ``predicate``, ``timeout``, ``interval``,
-        ``session_id``) belongs on this Protocol — bolt would silently
-        ignore all of it.
+        Returns True once extraction has settled (or immediately if there
+        is nothing to await).
         """
         ...
 
@@ -298,12 +241,7 @@ class LongTermProtocol(Protocol):
         limit: int = 10,
         threshold: float = 0.7,
     ) -> list[Preference]:
-        """Vector/keyword search across preferences.
-
-        NAMS has no preferences endpoint and always raises
-        :class:`NotSupportedError`; its ``**kwargs`` catch-all absorbs this
-        full parameter set structurally, matching bolt's real signature.
-        """
+        """Vector/keyword search across preferences, optionally filtered by category."""
         ...
 
     async def search_facts(
@@ -313,12 +251,7 @@ class LongTermProtocol(Protocol):
         limit: int = 10,
         threshold: float = 0.7,
     ) -> list[Fact]:
-        """Vector/keyword search across facts.
-
-        NAMS has no facts endpoint and always raises
-        :class:`NotSupportedError`; its ``**kwargs`` catch-all absorbs this
-        full parameter set structurally, matching bolt's real signature.
-        """
+        """Vector/keyword search across facts."""
         ...
 
     async def get_entity_by_name(self, name: str) -> Entity | None:
@@ -332,13 +265,9 @@ class LongTermProtocol(Protocol):
         entity_id: UUID,
         /,
     ) -> Any:
-        """Return entities related to the given entity (graph traversal).
+        """Return entities related to the given entity via graph traversal.
 
-        Positional-only: bolt's param is ``entity`` (``Entity | UUID``),
-        NAMS's is ``entity_id`` (``UUID | str``) — ``UUID`` is the type both
-        accept. Bolt's ``relationship_types``/``depth`` stay off this
-        Protocol: NAMS's ``**kwargs`` never reads them, so it always
-        returns the full unfiltered relationship set regardless.
+        The entity is identified positional-only, by its UUID.
         """
         ...
 
@@ -350,13 +279,7 @@ class LongTermProtocol(Protocol):
         active_only: bool = True,
         as_of: datetime | None = None,
     ) -> list[Preference]:
-        """Return preferences scoped to a user.
-
-        ``user_identifier`` is keyword-only: NAMS's real signature is bare
-        ``**kwargs`` with no positional parameter at all, so it can only
-        ever receive this by keyword. NAMS has no preferences endpoint and
-        always raises :class:`NotSupportedError`.
-        """
+        """Return preferences scoped to a user, optionally filtered further."""
         ...
 
     async def get_facts_about(
@@ -364,30 +287,21 @@ class LongTermProtocol(Protocol):
         subject: str,
         /,
     ) -> list[Fact]:
-        """Return facts where the entity is the subject.
+        """Return facts where the given entity is the subject.
 
-        Positional-only: bolt names this param ``subject``, NAMS names it
-        ``entity_name``, and NAMS has no ``**kwargs`` catch-all — only the
-        shared position, not either name, is part of the contract. Bolt's
-        ``limit`` stays off this Protocol: NAMS's signature has no slot to
-        receive it at all.
+        The subject is identified positional-only.
         """
         ...
 
     async def get_context(self, query: str) -> str:
-        """Return assembled context text from long-term memory.
-
-        Bolt's ``include_entities``/``include_preferences``/``max_items``
-        stay off this Protocol: NAMS always returns ``""`` regardless of
-        what's passed, so none of them are honored on that side.
-        """
+        """Return assembled context text from long-term memory for a query."""
         ...
 
     # ``supersede_preference`` and ``get_entity_relationships`` are
     # deliberately absent: both have a real, differently-shaped signature on
-    # each backend (arity or return-type divergence, not just an optional
-    # extra), so no single Protocol signature is honest for both without an
-    # implementation change. See task-3-report.md.
+    # each implementation (arity or return-type divergence, not just an
+    # optional extra), so no single Protocol signature is honest for both
+    # without an implementation change.
 
     # Gold tier --------------------------------------------------------------
 
@@ -405,19 +319,14 @@ class LongTermProtocol(Protocol):
         entity_id: UUID | str,
         feedback: str,
     ) -> None:
-        """Record user feedback (positive/negative) on an entity (NAMS only).
-
-        Bolt always raises :class:`NotSupportedError` regardless of input,
-        so NAMS's ``user_score``/``confirmed`` overrides stay off this
-        Protocol.
-        """
+        """Record user feedback (positive/negative) on an entity."""
         ...
 
     async def get_entity_history(
         self,
         entity_id: UUID | str,
     ) -> list[dict[str, Any]]:
-        """Return the edit/mention history for an entity (NAMS only)."""
+        """Return the edit/mention history for an entity."""
         ...
 
 
