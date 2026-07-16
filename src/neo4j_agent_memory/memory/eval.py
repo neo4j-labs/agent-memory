@@ -212,7 +212,7 @@ class EvalMemory:
         scores: list[float] = []
         for case in cases:
             prefs = await self._client.long_term.get_preferences_for(
-                case.user_identifier, active_only=True
+                user_identifier=case.user_identifier, active_only=True
             )
             actual_ids = {str(p.id) for p in prefs}
             # Use F1 — either over- or under-returning hurts.

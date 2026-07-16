@@ -94,7 +94,7 @@ class ShortTermProtocol(Protocol):
         """Delete every message in a session."""
         ...
 
-    async def get_context(self, query: str) -> str:
+    async def get_context(self, query: str, **kwargs: Any) -> str:
         """Return assembled context text for a query."""
         ...
 
@@ -295,7 +295,7 @@ class LongTermProtocol(Protocol):
         """
         ...
 
-    async def get_context(self, query: str) -> str:
+    async def get_context(self, query: str, **kwargs: Any) -> str:
         """Return assembled context text from long-term memory for a query."""
         ...
 
