@@ -101,6 +101,35 @@ Follow these conventions when adding or changing code:
    Neo4j record dicts, and heterogeneous dispatch tables. Anything else is a
    defect — replacing `Any` with a suppression is a regression, not a fix.
 
+### Backend-typed clients
+
+`ShortTermProtocol` / `LongTermProtocol` / `ReasoningProtocol`
+(`core/protocols.py`) are the rich, backend-agnostic contract: every method on
+them is genuinely honored by **both** the self-hosted (bolt) and hosted
+(NAMS) backends. `MemoryClient` is generic over these three Protocols
+(`MemoryClient[ST, LT, RT]`, with PEP 696 defaults), so a plain
+`MemoryClient(settings)` — including the `async with MemoryClient(settings) as
+client:` idiom — types `client.short_term` / `.long_term` / `.reasoning` as
+the base Protocols. This is deliberate: it stops call sites from silently
+depending on bolt-only behavior when the same code should run against NAMS
+too. Framework integrations (langchain, pydantic_ai, google_adk,
+openai_agents, microsoft_agent, llamaindex, crewai, agentcore, strands) are
+written against this base `MemoryClient` and must stay agnostic — do not add
+a call in `integrations/` that only one backend supports.
+
+When a call site genuinely needs bolt-only functionality (geospatial search,
+geocoding, dedup, provenance, tool-usage stats, `bulk`/`add_messages_batch`,
+`extract_entities_from_session`), obtain a backend-typed client instead of
+casting: `await connect(BoltSettings(...))` returns `BoltMemoryClient`, whose
+`.short_term`/`.long_term`/`.reasoning` are the concrete bolt classes.
+`await connect(NamsSettings(...))` returns `NamsMemoryClient` for the
+symmetric hosted case. `BoltSettings`/`NamsSettings` (in
+`config/settings.py`) are `MemorySettings` narrowed to a `Literal["bolt"]` /
+`Literal["nams"]` `backend`, which is what lets `connect()` pick the right
+overload statically, with no runtime `isinstance` check. `connect()` returns
+an already-connected client — it is not an async context manager, so call
+`await client.close()` when done.
+
 ## Running Examples
 
 Examples are located in `examples/` and demonstrate various features:
