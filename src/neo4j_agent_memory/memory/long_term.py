@@ -14,6 +14,7 @@ from pydantic import Field
 
 from neo4j_agent_memory.core.exceptions import NotSupportedError
 from neo4j_agent_memory.core.memory import BaseMemory, MemoryEntry
+from neo4j_agent_memory.core.protocols import BoltLongTermProtocol
 from neo4j_agent_memory.graph import queries
 from neo4j_agent_memory.graph.query_builder import build_create_entity_query
 
@@ -312,7 +313,7 @@ class Fact(MemoryEntry):
         return (self.subject, self.predicate, self.object)
 
 
-class LongTermMemory(BaseMemory[Entity]):
+class LongTermMemory(BaseMemory[Entity], BoltLongTermProtocol):
     """
     Long-term/Declarative memory stores facts, preferences, and entities.
 

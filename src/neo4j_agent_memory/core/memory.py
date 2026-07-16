@@ -3,6 +3,7 @@
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
+from enum import Enum
 from typing import TYPE_CHECKING, Any, Generic, Protocol, TypeVar
 from uuid import UUID, uuid4
 
@@ -15,6 +16,26 @@ if TYPE_CHECKING:
 
 
 T = TypeVar("T", bound="MemoryEntry")
+
+
+class ToolCallStatus(str, Enum):
+    """Status of a tool call.
+
+    Lives in ``core.memory`` (not ``memory.reasoning``, where it is
+    re-exported for backward compatibility) so that
+    ``core.protocols`` — which needs it as a default value in
+    ``ReasoningProtocol.record_tool_call`` — has no runtime dependency
+    on ``memory.reasoning``. That one-way dependency is what lets
+    ``memory.reasoning`` import Bolt sub-Protocols from
+    ``core.protocols`` at class-definition time without a cycle.
+    """
+
+    PENDING = "pending"
+    SUCCESS = "success"
+    FAILURE = "failure"
+    ERROR = "error"
+    TIMEOUT = "timeout"
+    CANCELLED = "cancelled"
 
 
 class MemoryEntry(BaseModel):

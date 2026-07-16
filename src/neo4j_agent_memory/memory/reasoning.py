@@ -6,13 +6,14 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
-from enum import Enum
 from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 
 from neo4j_agent_memory.core.memory import BaseMemory, MemoryEntry
+from neo4j_agent_memory.core.memory import ToolCallStatus as ToolCallStatus  # re-export
+from neo4j_agent_memory.core.protocols import BoltReasoningProtocol
 from neo4j_agent_memory.graph import queries
 from neo4j_agent_memory.schema.models import EntityRef, TraceOutcome
 
@@ -60,17 +61,6 @@ def _to_python_datetime(neo4j_datetime: Any) -> datetime:
 if TYPE_CHECKING:
     from neo4j_agent_memory.embeddings.base import Embedder
     from neo4j_agent_memory.graph.client import Neo4jClient
-
-
-class ToolCallStatus(str, Enum):
-    """Status of a tool call."""
-
-    PENDING = "pending"
-    SUCCESS = "success"
-    FAILURE = "failure"
-    ERROR = "error"
-    TIMEOUT = "timeout"
-    CANCELLED = "cancelled"
 
 
 class ToolCall(MemoryEntry):
@@ -391,7 +381,7 @@ class HookContext:
         await self.memory._record_touched_edge(self.step_id, ref)
 
 
-class ReasoningMemory(BaseMemory[ReasoningStep]):
+class ReasoningMemory(BaseMemory[ReasoningStep], BoltReasoningProtocol):
     """
     Reasoning memory stores reasoning traces and tool usage patterns.
 
