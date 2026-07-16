@@ -112,17 +112,18 @@ make neo4j-start
 make neo4j-stop
 make neo4j-wait    # Wait for Neo4j to be ready
 
-# Type checking
-make typecheck
+# Type checking (both blocking in CI)
+make typecheck   # mypy --strict
+make ty          # ty (second checker)
 
 # Linting and formatting
 make lint
 make format
 
-# Run all checks (lint, format, typecheck)
+# Run all checks (lint, format, mypy, ty)
 make check
 
-# Pre-commit checks (format, lint, typecheck, unit tests)
+# Pre-commit checks (format, lint, mypy, ty, unit tests)
 make pre-commit
 ```
 
@@ -1928,7 +1929,7 @@ make neo4j-start       # Start Neo4j Docker container
 make neo4j-stop        # Stop Neo4j Docker container
 make neo4j-wait        # Wait for Neo4j to be ready
 make neo4j-shell       # Open cypher-shell to Neo4j
-make check             # Run lint, format check, typecheck
+make check             # Run lint, format check, mypy, ty
 make pre-commit        # Run all checks + unit tests
 make ci                # Full CI simulation
 

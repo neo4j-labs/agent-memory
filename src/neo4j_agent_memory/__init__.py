@@ -1644,6 +1644,8 @@ class MemoryClient:
                 threshold=config.semantic_threshold,
             )
 
+        # ResolverStrategy is exhausted above; COMPOSITE is the last possible
+        # value, so no trailing fallback return is reachable.
         if config.strategy == ResolverStrategy.COMPOSITE:
             from neo4j_agent_memory.resolution.composite import CompositeResolver
 
@@ -1653,8 +1655,6 @@ class MemoryClient:
                 fuzzy_threshold=config.fuzzy_threshold,
                 semantic_threshold=config.semantic_threshold,
             )
-
-        return None
 
     def _create_geocoder(self) -> Geocoder | None:
         """Create geocoder based on settings.

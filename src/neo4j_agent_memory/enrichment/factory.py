@@ -361,9 +361,9 @@ def create_enrichment_service(
                     api_key=config.diffbot_api_key.get_secret_value(),
                     rate_limit=config.diffbot_rate_limit,
                 )
-            else:
-                logger.warning(f"Unknown enrichment provider type: {provider_type}")
-                continue
+            # provider_type is narrowed to WIKIMEDIA | DIFFBOT above (NONE is
+            # skipped), so the branches are exhaustive; a newly-added provider
+            # will surface as a possibly-unbound `provider` error here.
 
             # Wrap with caching if enabled
             if config.cache_results:

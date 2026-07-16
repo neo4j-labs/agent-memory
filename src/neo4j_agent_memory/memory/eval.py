@@ -149,9 +149,8 @@ class EvalMemory:
         for case in cases:
             results = await self._client.long_term.search_entities(case.query, limit=case.k)
             retrieved_ids: set[str] = set()
-            for r in results:
-                # search_entities returns (Entity, score) tuples.
-                entity = r[0] if isinstance(r, tuple) else r
+            for entity in results:
+                # search_entities returns a list of Entity.
                 retrieved_ids.add(str(getattr(entity, "id", "")))
 
             hits = retrieved_ids & case.expected_entity_ids

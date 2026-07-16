@@ -1,4 +1,4 @@
-.PHONY: help install install-all install-dev lint format typecheck ty typecheck-ratchet typecheck-ratchet-update test test-unit test-integration test-integration-mcp test-e2e test-all test-docker test-ci test-no-docker test-quick test-file test-match test-aws test-nams-unit test-nams-integration test-nams-staging test-nams-sandbox test-nams-local test-nams coverage coverage-all coverage-ci coverage-mcp test-examples test-examples-quick test-examples-no-neo4j test-docs test-docs-syntax test-docs-build test-docs-links neo4j-start neo4j-stop neo4j-logs clean build publish docs docs-diagrams-list docs-diagrams-status docs-diagrams-missing docs-diagrams-manifest docs-diagrams-add-refs docs-diagrams-generate example-basic example-resolution example-langchain example-pydantic examples chat-agent-install chat-agent-backend chat-agent-frontend chat-agent ts-install ts-build ts-test ts-test-unit ts-test-integration ts-lint ts-docs ts-conformance ts-pack ts-clean ts-test-examples
+.PHONY: help install install-all install-dev lint format typecheck ty test test-unit test-integration test-integration-mcp test-e2e test-all test-docker test-ci test-no-docker test-quick test-file test-match test-aws test-nams-unit test-nams-integration test-nams-staging test-nams-sandbox test-nams-local test-nams coverage coverage-all coverage-ci coverage-mcp test-examples test-examples-quick test-examples-no-neo4j test-docs test-docs-syntax test-docs-build test-docs-links neo4j-start neo4j-stop neo4j-logs clean build publish docs docs-diagrams-list docs-diagrams-status docs-diagrams-missing docs-diagrams-manifest docs-diagrams-add-refs docs-diagrams-generate example-basic example-resolution example-langchain example-pydantic examples chat-agent-install chat-agent-backend chat-agent-frontend chat-agent ts-install ts-build ts-test ts-test-unit ts-test-integration ts-lint ts-docs ts-conformance ts-pack ts-clean ts-test-examples
 
 # Default target
 help:
@@ -12,10 +12,8 @@ help:
 	@echo "Code Quality:"
 	@echo "  make lint             Run linter (ruff check)"
 	@echo "  make format           Format code (ruff format)"
-	@echo "  make typecheck        Run type checker (mypy)"
+	@echo "  make typecheck        Run type checker (mypy, strict)"
 	@echo "  make ty               Run the ty type checker (second checker)"
-	@echo "  make typecheck-ratchet        Fail if mypy/ty counts exceed the budget"
-	@echo "  make typecheck-ratchet-update Refresh the type-check budget after improving"
 	@echo "  make check            Run all code quality checks"
 	@echo ""
 	@echo "Testing:"
@@ -114,22 +112,12 @@ format-check:
 typecheck:
 	uv run mypy src benchmarks examples/*.py
 
-# Second, independent type checker (Astral's ty). Non-blocking by itself today;
-# the typecheck-ratchet target is what gates regressions in CI.
+# Second, independent type checker (Astral's ty). Blocking in CI alongside
+# mypy. Run with the integration extras: `uv sync --all-extras --group dev`.
 ty:
 	uv run ty check src benchmarks examples/*.py
 
-# Monotonic error ratchet: fails if mypy/ty counts rise above the committed
-# budget (scripts/typecheck-budget.txt), or improve without recording it.
-# Requires the integration extras: `uv sync --all-extras --group dev`.
-typecheck-ratchet:
-	uv run python scripts/typecheck_ratchet.py
-
-# Refresh the budget after lowering an error count, then commit the change.
-typecheck-ratchet-update:
-	uv run python scripts/typecheck_ratchet.py --update
-
-check: lint format-check typecheck
+check: lint format-check typecheck ty
 	@echo "All code quality checks passed!"
 
 # =============================================================================
@@ -469,7 +457,7 @@ docs-diagrams-generate:
 # =============================================================================
 
 # Run a quick check before committing
-pre-commit: format lint typecheck test-unit
+pre-commit: format lint typecheck ty test-unit
 	@echo "Pre-commit checks passed!"
 
 # Full CI simulation (with Neo4j)

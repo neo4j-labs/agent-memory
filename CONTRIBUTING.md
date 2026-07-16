@@ -33,8 +33,9 @@ make test-integration
 # Code quality
 make lint         # Run ruff linter
 make format       # Format code with ruff
-make typecheck    # Run mypy type checking
-make check        # Run all checks (lint + typecheck + test)
+make typecheck    # Run mypy (strict) type checking
+make ty           # Run ty (second, independent type checker)
+make check        # Run all checks (lint + format + mypy + ty)
 
 # Docker management for Neo4j
 make neo4j-start  # Start Neo4j container
@@ -55,6 +56,50 @@ make chat-agent-backend  # Run FastAPI backend (port 8000)
 make chat-agent-frontend # Run Next.js frontend (port 3000)
 make chat-agent          # Show setup instructions
 ```
+
+## Type Safety (Python SDK)
+
+This section covers the **Python SDK** (repo root: `src/`, `benchmarks/`,
+`examples/`). The TypeScript SDK under `typescript/` is type-checked separately
+by `tsc` via `make ts-lint` (see the TypeScript CI workflow); the `make`
+targets and conventions below apply only to the Python code.
+
+The Python SDK is checked by **two** type checkers, both blocking in CI and both
+run by `make check`:
+
+- **mypy** in `--strict` mode is the source of truth (`make typecheck`).
+- **ty** (Astral's checker) is the second, independent checker whose
+  complementary rules must also pass (`make ty`).
+
+The checked surface is `src`, `benchmarks`, and the top-level `examples/*.py`
+demos, and it is kept at **zero** errors/diagnostics — CI fails on any new
+error. Run the checkers with the integration extras installed
+(`uv sync --all-extras --group dev`) so `integrations/` is analyzed against real
+framework types.
+
+Follow these conventions when adding or changing code:
+
+1. **`from __future__ import annotations`** at the top of every module, so
+   annotations are lazy strings and heavy/optional types can be imported under
+   `TYPE_CHECKING`.
+2. **`TYPE_CHECKING` imports** for annotation-only types (framework types, heavy
+   modules, cross-layer models).
+3. **Match overridden signatures to the base class** — frameworks supply real
+   types; use them rather than `Any`.
+4. **`Protocol` over `Any`** for structural/duck-typed boundaries;
+   **generics (`TypeVar`/`ParamSpec`)** over `Any` for pass-through helpers.
+5. **Narrow `X | None` through a local** before use — instance attributes do not
+   narrow across `await`/calls.
+6. **Prefer fixing the type over casting.** A `cast` is a last resort at a
+   genuine external boundary, with an inline comment stating why. Never launder
+   a value through `object` (`cast(T, cast(object, x))`) to silence a
+   cross-hierarchy mismatch — fix the underlying types instead.
+7. **Every `# type: ignore` is coded and justified** — `# type: ignore[code]  # why`.
+   Bare ignores are forbidden; `warn_unused_ignores` removes stale ones.
+8. **Legitimate `Any` (keep, document):** `**kwargs: Any` forwarding,
+   arbitrary-JSON tool inputs/results, framework model objects at the boundary,
+   Neo4j record dicts, and heterogeneous dispatch tables. Anything else is a
+   defect — replacing `Any` with a suppression is a regression, not a fix.
 
 ## Running Examples
 

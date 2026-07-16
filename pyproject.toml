@@ -140,8 +140,8 @@ dev = [
     # for reproducible CI. Bump deliberately. See the type-safety tracking issue #144.
     "ty==0.0.13",
     # yaml ships no inline types; the mypy override block assumes these stubs are
-    # present. Pinned so the ratchet count is reproducible in clean CI (an ambient
-    # install here silently shifted the mypy budget). See #144.
+    # present. Pinned so the mypy error count is reproducible in clean CI (an
+    # ambient install here silently shifted it). See #144.
     "types-PyYAML==6.0.12.20260518",
     "ruff>=0.3.0",
     "pre-commit>=3.6.0",
@@ -202,6 +202,15 @@ python_version = "3.10"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
+# Additional strictness: applied globally now that the whole checked surface
+# (src, benchmarks, examples/*.py) is strict-clean.
+# `disallow_any_explicit` is intentionally NOT enabled: every package carries
+# legitimate `dict[str, Any]` Neo4j-record / JSON-boundary usage, so the flag
+# would only force suppressions rather than surface real defects.
+warn_unreachable = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+extra_checks = true
 plugins = ["pydantic.mypy"]
 
 # ignore_missing_imports override list — audited 2026-06-19 with the integration
@@ -210,8 +219,8 @@ plugins = ["pydantic.mypy"]
 # rapidfuzz, langchain_core, llama_index, crewai, agent_framework) now
 # ships py.typed and resolves cleanly, so the stale block was removed. yaml is
 # covered by typeshed's types-PyYAML, now a declared dev dependency so clean CI
-# resolves it (it was previously only ambiently present, which made the ratchet
-# count non-reproducible). Confirmed that gliner 0.2.24 ships no
+# resolves it (it was previously only ambiently present, which made the mypy
+# error count non-reproducible). Confirmed that gliner 0.2.24 ships no
 # py.typed marker; it is suppressed via the override below. google.adk.* also
 # ships no type information; since it is used at a typed boundary in only two
 # files (the ADK MemoryService), it is suppressed per-module here rather than

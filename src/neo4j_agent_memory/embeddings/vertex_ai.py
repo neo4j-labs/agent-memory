@@ -140,9 +140,11 @@ class VertexAIEmbedder(BaseEmbedder):
             return self._embedding_model
 
         async with self._init_lock:
-            if self._embedding_model is not None:
-                return self._embedding_model
-            return await asyncio.to_thread(self._ensure_initialized)
+            # Re-check under the lock: another coroutine may have initialized
+            # the model while we awaited lock acquisition.
+            if self._embedding_model is None:
+                self._embedding_model = await asyncio.to_thread(self._ensure_initialized)
+            return self._embedding_model
 
     @property
     def model(self) -> str:

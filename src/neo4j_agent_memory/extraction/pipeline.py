@@ -309,14 +309,12 @@ def merge_extraction_results(
         merged_entities = _merge_entities_union(all_entities)
     elif strategy == MergeStrategy.INTERSECTION:
         merged_entities = _merge_entities_intersection(all_entities)
-    elif strategy == MergeStrategy.CONFIDENCE:
-        merged_entities = _merge_entities_confidence(all_entities)
     elif strategy == MergeStrategy.CASCADE:
         merged_entities = _merge_entities_cascade(all_entities)
     elif strategy == MergeStrategy.FIRST_SUCCESS:
         # Should not reach here in normal pipeline flow
         merged_entities = all_entities[0] if all_entities else []
-    else:
+    else:  # MergeStrategy.CONFIDENCE (default)
         merged_entities = _merge_entities_confidence(all_entities)
 
     # Merge relations (deduplicate by triple)

@@ -330,12 +330,8 @@ def create_extractor(
     elif extraction_config.extractor_type == ExtractorType.LLM:
         return create_llm_extractor(extraction_config, schema_config, llm_config)
 
-    elif extraction_config.extractor_type == ExtractorType.PIPELINE:
+    else:  # ExtractorType.PIPELINE (the remaining enum value)
         return create_extraction_pipeline(extraction_config, schema_config, llm_config)
-
-    else:
-        logger.warning(f"Unknown extractor type: {extraction_config.extractor_type}, using NoOp")
-        return NoOpExtractor()
 
 
 class ExtractorBuilder:

@@ -52,6 +52,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Type safety: the Python SDK is now `mypy --strict` + `ty` clean and enforced in
+  CI.** Both checkers run as blocking CI steps (and via `make check` / `make
+  pre-commit`) over `src/`, `benchmarks/`, and the `examples/*.py` demos, kept at zero
+  errors/diagnostics. Adds the strictness flags `warn_unreachable`,
+  `warn_redundant_casts`, `warn_unused_ignores`, and `extra_checks`; makes all nine
+  framework integrations checker-clean (`integrations/base.run_sync` is now
+  `ParamSpec`-generic); reduces `# type: ignore` to a fully coded-and-justified
+  minimum; and removes statically-unreachable dead branches (no runtime effect).
+  Contributor typing conventions are documented in `CONTRIBUTING.md`. Runtime bug
+  fixes and public-API typing changes surfaced by this work are listed individually
+  below.
 - **Fixed: Microsoft Agent GDS integration never used the GDS library.**
   `GDSIntegration` called `self._client._client.session()`, but `Neo4jClient` has no
   `session()` method — so every algorithm query raised `AttributeError`, was swallowed
@@ -62,7 +73,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Fixed: `context_graph_tools()` (AWS Strands) raised `ValidationError` at runtime.**
   It built `Neo4jConfig(user=..., password=<str>)`, but the field is `username` and
   `password` is a `SecretStr`, with `extra="forbid"` — so every client cache-miss
-  raised. Now `username=...` + `password=SecretStr(...)`. Surfaced by `ty`.
+  raised. Now `username=...` + `password=SecretStr(...)`.
 - **Fixed: `Neo4jCrewMemory` (CrewAI) never subclassed the real base class.** The
   import `from crewai.memory import Memory` raised `ImportError` (the class lives at
   `crewai.memory.memory.Memory`), so the class silently fell back to the
@@ -76,18 +87,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `list[dict[str, Any]] | None` to `dict[str, Any] | None` — the annotation was a lie
   (the method has always returned a `{"nodes": ..., "relationships": ...}` dict).
   **Public-API typing change.**
-- **Pydantic AI `record_agent_trace(result=...)` is now typed `AgentRunResult`**
-  (was `RunResult`, which moved to `pydantic_ai.agent`). Annotation-only; the runtime
-  object is unchanged.
-- **All 9 framework integrations are now `mypy --strict` and `ty` clean** (langchain,
-  crewai, agentcore, pydantic_ai, google_adk, openai_agents, strands, llamaindex,
-  microsoft_agent), plus `integrations/base.py` (`run_sync` is now `ParamSpec`-generic).
-  google.adk.* and nest_asyncio are suppressed per-module (`ignore_missing_imports`);
-  they ship no type information and are used at a typed boundary in only one/two files.
 - **Fixed: `neo4j-agent-memory schemas show` crashed with `AttributeError`.** The
   command called `EntitySchemaConfig.to_dict()`, which does not exist on the
   Pydantic v2 model — so every `schemas show` invocation raised before producing
-  JSON or YAML output. Now uses `model_dump()`. Surfaced by the type-safety pass.
+  JSON or YAML output. Now uses `model_dump()`.
 - **`ReasoningMemory.add_step()` / `complete_trace()` accept `trace_id: UUID | str`.**
   Both are `str(trace_id)`-normalized internally for the Cypher match, so the strict
   `UUID`-only parameter was widened to `UUID | str` for parity with the sibling id
@@ -98,44 +101,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Fixed: `MemoryIntegration.add_fact()` parses `valid_from` / `valid_until`.**
   These public parameters accept ISO date strings but were forwarded as `str`
   straight into `LongTermMemory.add_fact`, which expects `datetime | None` — a
-  silent type mismatch surfaced by the type-safety pass. They are now parsed
+  silent type mismatch. They are now parsed
   with `datetime.fromisoformat()` (a malformed string now raises `ValueError` at
   the call site instead of corrupting the stored value).
 - **Fixed: `LongTermMemory.add()` now returns `Entity`** (per its `BaseMemory[Entity]`
   contract) instead of a `tuple[Entity, DeduplicationResult]`. The tuple return was a
-  latent contract violation surfaced by the type-safety pass; no in-tree caller
+  latent contract violation; no in-tree caller
   destructured it. Use `add_entity(...)` (unchanged) if you need the
   `(Entity, DeduplicationResult)` pair.
-- **Memory timestamps are now timezone-aware (UTC).** Default timestamps in the
-  `memory/` layer (`Conversation.created_at`, `ConversationSummary.generated_at`,
-  `ReasoningTrace.started_at`, and `_to_python_datetime` fallbacks) switched from
+- **Memory timestamps are now timezone-aware (UTC).** All default timestamps in the
+  library — the `memory/` layer (`Conversation.created_at`,
+  `ConversationSummary.generated_at`, `ReasoningTrace.started_at`), the base
+  `core.MemoryEntry.created_at` (inherited by `Entity`, `Preference`, `Fact`, and
+  every other memory model), `EnrichmentResult.retrieved_at` /
+  `EnrichmentTask.created_at`, and the `_to_python_datetime` fallbacks — switched from
   naive `datetime.utcnow()` to `datetime.now(timezone.utc)`. Reads already produced
-  aware datetimes; this makes the write side consistent.
-- **The remaining default timestamps are now timezone-aware (UTC).** Extends the
-  change above to the base `core.MemoryEntry.created_at` (inherited by `Entity`,
-  `Preference`, `Fact`, and every other memory model) and to
-  `EnrichmentResult.retrieved_at` / `EnrichmentTask.created_at` — the last
-  `datetime.utcnow()` call sites in the library. The whole library now writes
-  aware UTC timestamps.
-- **The type-check ratchet now covers `benchmarks/` and the top-level
-  `examples/*.py` demos in addition to `src/`, and all of `src/` is
-  `mypy --strict`-clean (0 errors).** `testing/mocks.py` was the last holdout:
-  `MockReasoningMemory.complete_trace()` now raises on an unknown trace id (matching
-  the real `ReasoningMemory`) instead of returning `None`, and
-  `MockMemoryClient.__aexit__` is fully typed. Three latent bugs in the example
-  scripts were fixed in the process: `basic_usage.py` passed a tool result
-  positionally to the keyword-only `StreamingTraceRecorder.record_tool_call(result=…)`;
-  `langchain_agent.py` used the pre-rename `include_/search_episodic|semantic`
-  keyword arguments (now `*_short_term` / `*_long_term`), which pydantic silently
-  dropped; and `enrichment_example.py` passed a non-existent `confidence=` argument
-  to `add_entity`.
-- **Fixed: GLiNER entity spans with `end_pos == 0`.** In `extraction/gliner_extractor.py`
-  the span fallback changed from `entity.end_pos or len(name)` to an explicit
-  `is not None` check, so a zero-width span at offset 0 is preserved instead of being
-  replaced by the name length. Real extracted entities never have `end_pos == 0`, so
-  this has no observable effect in practice.
+  aware datetimes; the write side is now consistent.
 - **BREAKING: `InstructorProvider.__init__` no longer accepts `async_client`.**
-  The parameter (default `True`) was removed during the type-safety pass.
+  The parameter (default `True`) was removed.
   `async_client=False` produced a synchronous `instructor.Instructor`, which
   crashed at call time because the provider always `await`s `self._client.create(...)`
   — the sync path never worked. The provider is now unconditionally async. Callers
@@ -151,23 +134,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`LongTermMemory.get_entity_provenance()` first parameter is now
   `entity_id: Entity | UUID | str`** (was `entity: Entity | UUID`, positional).
   The runtime already accepted an id string (it does `entity.id if isinstance(…,
-  Entity) else …`); only the annotation was too narrow, forcing an `arg-type`
-  suppression at every id-string call site. **Public-API typing change** — the
+  Entity) else …`); only the annotation was too narrow. **Public-API typing change** — the
   parameter was renamed `entity` → `entity_id` (all in-tree callers pass it
   positionally); code using the `entity=` keyword must switch to `entity_id=`.
-- **`neo4j_agent_memory.llm.from_provider()` is now `@overload`-typed on `kind`.**
-  `kind="llm"` (the default) is statically typed to return `LLMProvider` and
-  `kind="embedding"` to return `EmbeddingProvider`, instead of the
-  `LLMProvider | EmbeddingProvider` union. This removes a downstream `assignment`
-  suppression and a `cast` at the call sites. Annotation-only; runtime is unchanged.
-- **Type-safety Phase 5 — `# type: ignore` audit.** The `src/` suppression count
-  dropped from 29 to 18: the two remaining bare/uncoded ignores were coded and
-  justified, and the bolt-vs-NAMS `attr-defined`/`arg-type` cluster (9 suppressions
-  across `mcp/_tools.py`, `strands/tools.py`, `pydantic_ai/memory.py`) was eliminated
-  by the full-Protocol conformance above rather than suppressed. `ty` diagnostics for
-  `src/` reached **0** (the 3 optional-dep `no-redef` fallbacks now carry a paired
-  `# ty: ignore[unused-ignore-comment]`, matching the existing `mcp/server.py`
-  pattern). Every surviving `# type: ignore` is coded and carries an inline reason.
 
 > **Docs note:** when this ships, flip the "REST-only / no SDK method" notes in
 > `reference/rest-api.adoc`, `reference/ontology-api.adoc`, and

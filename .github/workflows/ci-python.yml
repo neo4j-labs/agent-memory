@@ -65,25 +65,21 @@ jobs:
         run: uv python install 3.12
 
       # All extras so integrations/ is actually analyzed against real framework
-      # types, not stubbed out. Required for the ratchet counts to be comparable
-      # to the committed budget. See the type-safety tracking issue #144.
+      # types, not stubbed out. Without them the checkers only shallowly analyze
+      # integrations/ and would miss real errors. See the type-safety tracking
+      # issue #144.
       - name: Install dependencies
         run: uv sync --all-extras --group dev
 
-      # Checked surface: src, benchmarks, and the top-level examples/*.py demos
-      # (kept in sync with scripts/typecheck_ratchet.py `_targets()`).
+      # Checked surface: src, benchmarks, and the top-level examples/*.py demos.
+      # Both checkers are blocking and the surface is kept at zero errors.
+      # mypy is the source of truth; ty is the second, independent checker
+      # (its complementary rules must also pass).
       - name: Run mypy
         run: uv run mypy src benchmarks examples/*.py
-        continue-on-error: true # Advisory full-error view; the ratchet below is the gate.
 
       - name: Run ty
         run: uv run ty check src benchmarks examples/*.py
-        continue-on-error: true # Advisory until Phase 6 makes it blocking.
-
-      # Blocking on regressions from day one: fails if the mypy/ty error counts
-      # rise above scripts/typecheck-budget.txt (or improve without recording).
-      - name: Type-check ratchet
-        run: uv run python scripts/typecheck_ratchet.py
 
   test:
     runs-on: ubuntu-latest
