@@ -63,7 +63,8 @@ class ShortTermProtocol(Protocol):
         session_id: str,
         role: str,
         content: str,
-        **kwargs: Any,
+        *,
+        conversation_id: str | None = None,
     ) -> Message:
         """Append a message to a session and return the stored Message."""
         ...
@@ -71,7 +72,8 @@ class ShortTermProtocol(Protocol):
     async def get_conversation(
         self,
         session_id: str,
-        **kwargs: Any,
+        *,
+        conversation_id: str | None = None,
     ) -> Conversation:
         """Return the conversation (header + messages) for a session."""
         ...
@@ -79,12 +81,14 @@ class ShortTermProtocol(Protocol):
     async def search_messages(
         self,
         query: str,
-        **kwargs: Any,
+        *,
+        session_id: str | None = None,
+        limit: int = 10,
     ) -> list[Message]:
         """Vector/keyword search across messages (optionally scoped to session_id)."""
         ...
 
-    async def list_sessions(self, **kwargs: Any) -> list[SessionInfo]:
+    async def list_sessions(self, *, limit: int = 100) -> list[SessionInfo]:
         """List sessions known to the backend."""
         ...
 
@@ -98,14 +102,13 @@ class ShortTermProtocol(Protocol):
         """Delete every message in a session."""
         ...
 
-    async def get_context(self, query: str, **kwargs: Any) -> str:
+    async def get_context(self, query: str) -> str:
         """Return assembled context text for a query."""
         ...
 
     async def get_conversation_summary(
         self,
         session_id: str,
-        **kwargs: Any,
     ) -> ConversationSummary:
         """Generate (or fetch) a summary of a conversation."""
         ...
@@ -115,12 +118,18 @@ class ShortTermProtocol(Protocol):
     async def create_conversation(
         self,
         session_id: str,
-        **kwargs: Any,
+        *,
+        conversation_id: str | None = None,
     ) -> Conversation:
         """Explicitly create a conversation node (without adding messages)."""
         ...
 
-    async def list_conversations(self, **kwargs: Any) -> list[Conversation]:
+    async def list_conversations(
+        self,
+        *,
+        user_identifier: str | None = None,
+        limit: int = 100,
+    ) -> list[Conversation]:
         """List conversations; bolt may filter by user_identifier, NAMS by user_id."""
         ...
 
@@ -130,7 +139,8 @@ class ShortTermProtocol(Protocol):
         self,
         session_id: str,
         messages: list[dict[str, Any]],
-        **kwargs: Any,
+        *,
+        conversation_id: str | None = None,
     ) -> list[Message]:
         """Bulk-insert messages in one round-trip. Server-side on NAMS."""
         ...
@@ -138,7 +148,6 @@ class ShortTermProtocol(Protocol):
     async def get_observations(
         self,
         session_id: str,
-        **kwargs: Any,
     ) -> list[dict[str, Any]]:
         """Return inline observations extracted from the session (NAMS Platinum).
 
@@ -151,7 +160,6 @@ class ShortTermProtocol(Protocol):
     async def get_reflections(
         self,
         session_id: str,
-        **kwargs: Any,
     ) -> list[dict[str, Any]]:
         """Return LLM-generated reflections for the session (NAMS Platinum)."""
         ...
