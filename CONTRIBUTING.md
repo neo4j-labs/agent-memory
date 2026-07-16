@@ -103,32 +103,23 @@ Follow these conventions when adding or changing code:
 
 ### Backend-typed clients
 
-`ShortTermProtocol` / `LongTermProtocol` / `ReasoningProtocol`
-(`core/protocols.py`) are the rich, backend-agnostic contract: every method on
-them is genuinely honored by **both** the self-hosted (bolt) and hosted
-(NAMS) backends. `MemoryClient` is generic over these three Protocols
-(`MemoryClient[ST, LT, RT]`, with PEP 696 defaults), so a plain
-`MemoryClient(settings)` — including the `async with MemoryClient(settings) as
-client:` idiom — types `client.short_term` / `.long_term` / `.reasoning` as
-the base Protocols. This is deliberate: it stops call sites from silently
-depending on bolt-only behavior when the same code should run against NAMS
-too. Framework integrations (langchain, pydantic_ai, google_adk,
-openai_agents, microsoft_agent, llamaindex, crewai, agentcore, strands) are
-written against this base `MemoryClient` and must stay agnostic — do not add
-a call in `integrations/` that only one backend supports.
+The base Protocols (`ShortTermProtocol` / `LongTermProtocol` /
+`ReasoningProtocol` in `core/protocols.py`) are the backend-agnostic contract —
+every method is honored by both the self-hosted (bolt) and hosted (NAMS)
+backends. `MemoryClient` is generic over them (PEP 696 defaults), so
+`MemoryClient(settings)` (and `async with MemoryClient(settings)`) types
+`client.short_term` / `.long_term` / `.reasoning` as the base Protocols.
+Framework integrations are written against this agnostic `MemoryClient` and
+must stay agnostic — do not add an `integrations/` call only one backend
+supports.
 
-When a call site genuinely needs bolt-only functionality (geospatial search,
-geocoding, dedup, provenance, tool-usage stats, `bulk`/`add_messages_batch`,
-`extract_entities_from_session`), obtain a backend-typed client instead of
-casting: `await connect(BoltSettings(...))` returns `BoltMemoryClient`, whose
-`.short_term`/`.long_term`/`.reasoning` are the concrete bolt classes.
-`await connect(NamsSettings(...))` returns `NamsMemoryClient` for the
-symmetric hosted case. `BoltSettings`/`NamsSettings` (in
-`config/settings.py`) are `MemorySettings` narrowed to a `Literal["bolt"]` /
-`Literal["nams"]` `backend`, which is what lets `connect()` pick the right
-overload statically, with no runtime `isinstance` check. `connect()` returns
-an already-connected client — it is not an async context manager, so call
-`await client.close()` when done.
+For bolt-only functionality (geospatial, geocoding, dedup, provenance,
+tool-usage stats, `add_messages_batch`, `extract_entities_from_session`), get a
+backend-typed client rather than casting: `await connect(BoltSettings(...))` →
+`BoltMemoryClient` (its `.short_term`/`.long_term`/`.reasoning` are the concrete
+bolt classes), `await connect(NamsSettings(...))` → `NamsMemoryClient`.
+`connect()` returns an already-connected client (not a context manager — call
+`await client.close()`).
 
 ## Running Examples
 

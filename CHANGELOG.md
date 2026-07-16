@@ -52,45 +52,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **`MemoryClient` is now generic (`MemoryClient[ST, LT, RT]`, PEP 696 `TypeVar`
-  defaults) and gains a `connect()` factory for backend-typed access.**
-  `client.short_term` / `client.long_term` / `client.reasoning` now return the
-  base `ShortTermProtocol` / `LongTermProtocol` / `ReasoningProtocol` types by
-  default — the rich, backend-agnostic contract both the self-hosted (bolt)
-  and hosted (NAMS) backends implement. **Public-API typing change:** code that
-  relied on these properties being the concrete bolt classes (to call
-  bolt-only methods — geospatial search, geocoding, dedup, provenance,
-  tool-usage stats, `bulk`/`add_messages_batch`, `extract_entities_from_session`)
-  must now obtain a bolt-typed client or narrow explicitly; the runtime
-  objects are unchanged. New: `from neo4j_agent_memory import connect` +
-  `from neo4j_agent_memory.config.settings import BoltSettings, NamsSettings`
-  — `await connect(BoltSettings(...))` statically returns `BoltMemoryClient`
-  (whose `.short_term`/`.long_term`/`.reasoning` are the concrete bolt
-  classes), `await connect(NamsSettings(...))` returns `NamsMemoryClient`.
-  `connect()` returns an already-connected client — call `await client.close()`
-  when done; it is not an async context manager. The existing `async with
-  MemoryClient(settings) as client:` idiom is unchanged and still yields the
-  base-Protocol-typed client. `BoltMemoryClient` and `NamsMemoryClient` are
-  exported from the package root as ready-made type aliases. Framework
-  integrations (langchain, pydantic_ai, google_adk, openai_agents,
-  microsoft_agent, llamaindex, crewai, agentcore, strands) are typed against
-  the base `MemoryClient` and are unaffected — they already ran on both
-  backends.
-- **NAMS feature gaps made visible by the base Protocol surface.** Some
-  agnostic kwargs are accepted by NAMS but not honored:
-  `add_message(metadata=, ...)` and `add_entity(subtype=, aliases=,
-  metadata=, ...)` are not persisted server-side; `extract_entities=` /
-  `generate_embedding=` are effectively no-ops on NAMS (extraction and
-  embedding generation happen server-side there regardless). `add_fact`'s
-  third positional parameter is named `obj` (not `object`) on the base
-  Protocol, and `get_similar_traces` takes `task`. `supersede_preference` and
-  `get_entity_relationships` are intentionally absent from the base
-  Protocol — the bolt/NAMS contracts genuinely diverge for these — use the
-  concrete bolt class (e.g. via `BoltMemoryClient`) for either.
-- **`ToolCallStatus` moved to `neo4j_agent_memory.core.memory`** (still
-  re-exported from `neo4j_agent_memory.memory.reasoning` — no import break).
-- **`typing-extensions>=4.4` is now a declared runtime dependency** (needed
-  for PEP 696 `TypeVar` defaults on Python versions before 3.13).
+- **`MemoryClient` is now generic over its backend memory types**
+  (`MemoryClient[ST, LT, RT]`, PEP 696 defaults). `client.short_term` /
+  `.long_term` / `.reasoning` return the base `ShortTermProtocol` /
+  `LongTermProtocol` / `ReasoningProtocol` (the backend-agnostic contract) by
+  default. **Public-API typing change** (runtime unchanged): for bolt-only
+  methods (geospatial, geocoding, dedup, provenance, tool-usage stats,
+  `add_messages_batch`, `extract_entities_from_session`) obtain a bolt-typed
+  client — `await connect(BoltSettings(...))` → `BoltMemoryClient`, or
+  `connect(NamsSettings(...))` → `NamsMemoryClient`. `connect()` returns an
+  already-connected client (call `await client.close()`; not a context
+  manager); `async with MemoryClient(settings)` is unchanged. New exports:
+  `connect`, `BoltMemoryClient`, `NamsMemoryClient`, `BoltSettings`,
+  `NamsSettings`.
+- **NAMS honors a subset of the agnostic surface.** `add_message(metadata=)`
+  and `add_entity(subtype=/aliases=/metadata=)` are not persisted on NAMS;
+  `extract_entities=` / `generate_embedding=` are no-ops there (done
+  server-side). `supersede_preference` and `get_entity_relationships` are not
+  on the base Protocol (backend contracts diverge); `add_fact`'s third
+  parameter is `obj`, `get_similar_traces` takes `task`.
+- **`ToolCallStatus` moved to `core.memory`** (re-exported from
+  `memory.reasoning`; no import break); added `typing-extensions>=4.4` runtime
+  dependency (PEP 696 defaults).
 - **Type safety: the Python SDK is now `mypy --strict` + `ty` clean and enforced in
   CI.** Both checkers run as blocking CI steps (and via `make check` / `make
   pre-commit`) over `src/`, `benchmarks/`, and the `examples/*.py` demos, kept at zero
