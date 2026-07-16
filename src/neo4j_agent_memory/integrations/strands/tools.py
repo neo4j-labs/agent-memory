@@ -893,9 +893,7 @@ def _nams_set_entity_feedback_tool(
             async with client:
                 # Platinum-tier — NAMS records the feedback (bolt would
                 # raise NotSupportedError, but this tool is NAMS-only).
-                await client.long_term.set_entity_feedback(
-                    entity_id, feedback, user_identifier=user_id
-                )
+                await client.long_term.set_entity_feedback(entity_id, feedback)
             return f"Recorded {feedback!r} feedback on entity {entity_id}."
 
         return str(_run_async(_set()))

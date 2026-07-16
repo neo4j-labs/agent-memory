@@ -463,7 +463,6 @@ def nams_memory_tools(memory: "MemoryClient") -> list[Callable[..., Any]]:
         await memory.long_term.set_entity_feedback(
             entity_id,
             feedback,
-            user_identifier=user_identifier,
         )
         return f"Recorded {feedback!r} feedback on entity {entity_id}."
 
@@ -478,7 +477,7 @@ def nams_memory_tools(memory: "MemoryClient") -> list[Callable[..., Any]]:
         Returns:
             Formatted history as plain text.
         """
-        entries = await memory.long_term.get_entity_history(entity_id, limit=limit)
+        entries = await memory.long_term.get_entity_history(entity_id)
         if not entries:
             return "No history for this entity."
         lines = []

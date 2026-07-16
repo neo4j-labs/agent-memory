@@ -62,9 +62,7 @@ class TestSetEntityFeedback:
         tools = nams_memory_tools(mock_client)
         set_feedback = next(t for t in tools if t.__name__ == "set_entity_feedback")
         result = await set_feedback(entity_id="e1", feedback="positive", user_identifier="alice")
-        mock_client.long_term.set_entity_feedback.assert_awaited_once_with(
-            "e1", "positive", user_identifier="alice"
-        )
+        mock_client.long_term.set_entity_feedback.assert_awaited_once_with("e1", "positive")
         assert "positive" in result
         assert "e1" in result
 

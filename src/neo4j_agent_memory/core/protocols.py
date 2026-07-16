@@ -201,10 +201,8 @@ class ShortTermProtocol(Protocol):
     async def get_reflections(
         self,
         session_id: str,
-        *,
-        limit: int = 20,
     ) -> list[dict[str, Any]]:
-        """Return generated reflections for the session, capped at ``limit``."""
+        """Return generated reflections for the session."""
         ...
 
 
@@ -402,23 +400,15 @@ class LongTermProtocol(Protocol):
         self,
         entity_id: UUID | str,
         feedback: str,
-        *,
-        user_identifier: str | None = None,
     ) -> None:
-        """Record user feedback (positive/negative) on an entity.
-
-        ``user_identifier`` optionally scopes the feedback to a user
-        identity (multi-tenant).
-        """
+        """Record user feedback (positive/negative) on an entity."""
         ...
 
     async def get_entity_history(
         self,
         entity_id: UUID | str,
-        *,
-        limit: int = 50,
     ) -> list[dict[str, Any]]:
-        """Return the edit/mention history for an entity, capped at ``limit``."""
+        """Return the edit/mention history for an entity."""
         ...
 
 
