@@ -43,6 +43,7 @@ dependencies = [
     "neo4j>=5.20.0",
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
+    "typing-extensions>=4.4",  # PEP 696 TypeVar defaults on Python < 3.13
 ]
 
 [project.optional-dependencies]

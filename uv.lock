@@ -4600,6 +4600,7 @@ dependencies = [
     { name = "neo4j" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "typing-extensions" },
 ]
 
 [package.optional-dependencies]
@@ -4780,6 +4781,7 @@ requires-dist = [
     { name = "spacy", marker = "extra == 'extraction'", specifier = ">=3.7.0" },
     { name = "spacy", marker = "extra == 'spacy'", specifier = ">=3.7.0" },
     { name = "strands-agents", marker = "extra == 'strands'", specifier = ">=0.1.0" },
+    { name = "typing-extensions", specifier = ">=4.4" },
 ]
 provides-extras = ["openai", "anthropic", "sentence-transformers", "vertex-ai", "bedrock", "litellm", "instructor", "google", "aws", "strands", "spacy", "gliner", "extraction", "fuzzy", "cli", "opentelemetry", "opik", "observability", "langchain", "llamaindex", "pydantic-ai", "crewai", "openai-agents", "microsoft-agent", "mcp", "google-adk", "nams", "all", "full"]
 
