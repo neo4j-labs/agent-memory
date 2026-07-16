@@ -23,6 +23,7 @@ from uuid import UUID
 from neo4j_agent_memory.core.memory import ToolCallStatus
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
     from datetime import datetime
 
     from neo4j_agent_memory.memory.long_term import (
@@ -42,6 +43,7 @@ if TYPE_CHECKING:
         Message,
         SessionInfo,
     )
+    from neo4j_agent_memory.schema.models import EntityRef, TraceOutcome
 
 
 @runtime_checkable
@@ -57,8 +59,25 @@ class ShortTermProtocol(Protocol):
         content: str,
         *,
         conversation_id: str | None = None,
+        extract_entities: bool = True,
+        extract_relations: bool = True,
+        generate_embedding: bool = True,
+        metadata: dict[str, Any] | None = None,
+        extraction_mode: Literal["auto", "skip", "explicit"] = "auto",
+        explicit_mentions: list[Any] | None = None,
+        user_identifier: str | None = None,
     ) -> Message:
-        """Append a message to a session and return the stored Message."""
+        """Append a message to a session and return the stored Message.
+
+        ``extract_entities``/``extract_relations`` control automatic
+        entity and relationship extraction from ``content``;
+        ``extraction_mode`` further narrows extraction behavior
+        (``"explicit"`` restricts extraction to ``explicit_mentions``).
+        ``generate_embedding`` controls whether a vector embedding is
+        computed for the message. ``metadata`` attaches arbitrary
+        key/value data. ``user_identifier`` scopes the message to a
+        user identity (multi-tenant).
+        """
         ...
 
     async def get_conversation(
@@ -67,10 +86,12 @@ class ShortTermProtocol(Protocol):
         *,
         conversation_id: str | None = None,
         limit: int | None = None,
+        since: datetime | None = None,
     ) -> Conversation:
         """Return the conversation (header + messages) for a session.
 
-        ``limit`` bounds the number of messages returned.
+        ``limit`` bounds the number of messages returned; ``since``
+        restricts to messages after a given time.
         """
         ...
 
@@ -80,12 +101,27 @@ class ShortTermProtocol(Protocol):
         *,
         session_id: str | None = None,
         limit: int = 10,
+        threshold: float = 0.7,
+        metadata_filters: dict[str, Any] | None = None,
     ) -> list[Message]:
-        """Vector/keyword search across messages (optionally scoped to session_id)."""
+        """Vector/keyword search across messages.
+
+        Optionally scoped to ``session_id``, filtered by a minimum
+        similarity ``threshold``, and narrowed further by
+        ``metadata_filters``.
+        """
         ...
 
-    async def list_sessions(self, *, limit: int = 100) -> list[SessionInfo]:
-        """List sessions known to the backend."""
+    async def list_sessions(
+        self,
+        *,
+        prefix: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+        order_by: Literal["created_at", "updated_at", "message_count"] = "updated_at",
+        order_dir: Literal["asc", "desc"] = "desc",
+    ) -> list[SessionInfo]:
+        """List sessions known to the backend, filtered and paginated."""
         ...
 
     # Silver tier ------------------------------------------------------------
@@ -105,8 +141,18 @@ class ShortTermProtocol(Protocol):
     async def get_conversation_summary(
         self,
         session_id: str,
+        *,
+        max_tokens: int = 500,
+        include_entities: bool = True,
+        summarizer: Callable[[str], str | Awaitable[str]] | None = None,
     ) -> ConversationSummary:
-        """Generate (or fetch) a summary of a conversation."""
+        """Generate (or fetch) a summary of a conversation.
+
+        ``max_tokens`` hints the target summary length,
+        ``include_entities`` includes key entities in the result, and
+        ``summarizer`` supplies a custom summarization function in place
+        of the default.
+        """
         ...
 
     # Gold tier --------------------------------------------------------------
@@ -116,11 +162,13 @@ class ShortTermProtocol(Protocol):
         session_id: str,
         *,
         user_identifier: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> Conversation:
         """Explicitly create a conversation node for a session, without adding messages.
 
         ``user_identifier``, when provided, scopes the conversation to a
-        user identity (multi-tenant).
+        user identity (multi-tenant). ``metadata`` attaches arbitrary
+        key/value data to the conversation.
         """
         ...
 
@@ -153,8 +201,10 @@ class ShortTermProtocol(Protocol):
     async def get_reflections(
         self,
         session_id: str,
+        *,
+        limit: int = 20,
     ) -> list[dict[str, Any]]:
-        """Return generated reflections for the session."""
+        """Return generated reflections for the session, capped at ``limit``."""
         ...
 
 
@@ -169,9 +219,29 @@ class LongTermProtocol(Protocol):
         name: str,
         entity_type: str,
         *,
+        subtype: str | None = None,
         description: str | None = None,
+        aliases: list[str] | None = None,
+        attributes: dict[str, Any] | None = None,
+        resolve: bool = True,
+        generate_embedding: bool = True,
+        deduplicate: bool = True,
+        geocode: bool = True,
+        enrich: bool = True,
+        coordinates: tuple[float, float] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> Any:
         """Create or upsert an entity by name and type.
+
+        ``subtype`` further classifies the entity (e.g. ``VEHICLE`` for
+        ``OBJECT``). ``aliases`` records alternative names; ``attributes``
+        and ``metadata`` attach arbitrary key/value data. ``resolve``,
+        ``deduplicate``, ``geocode``, and ``enrich`` toggle resolution
+        against existing entities, duplicate detection, location
+        geocoding, and background enrichment respectively.
+        ``coordinates`` sets a location's (latitude, longitude) directly.
+        ``generate_embedding`` controls whether a vector embedding is
+        computed for the entity.
 
         Returns the created or updated entity, either alone or paired
         with a deduplication result. Portable code that needs a single
@@ -228,9 +298,15 @@ class LongTermProtocol(Protocol):
         self,
         query: str,
         *,
+        entity_types: list[str] | None = None,
         limit: int = 10,
+        threshold: float = 0.7,
     ) -> list[Entity]:
-        """Vector/keyword search across entities, limited to at most `limit` results."""
+        """Vector/keyword search across entities, limited to at most `limit` results.
+
+        ``entity_types``, when provided, restricts results to the given
+        POLE+O types. ``threshold`` sets the minimum similarity score.
+        """
         ...
 
     async def wait_for_extraction(self) -> bool:
@@ -326,15 +402,23 @@ class LongTermProtocol(Protocol):
         self,
         entity_id: UUID | str,
         feedback: str,
+        *,
+        user_identifier: str | None = None,
     ) -> None:
-        """Record user feedback (positive/negative) on an entity."""
+        """Record user feedback (positive/negative) on an entity.
+
+        ``user_identifier`` optionally scopes the feedback to a user
+        identity (multi-tenant).
+        """
         ...
 
     async def get_entity_history(
         self,
         entity_id: UUID | str,
+        *,
+        limit: int = 50,
     ) -> list[dict[str, Any]]:
-        """Return the edit/mention history for an entity."""
+        """Return the edit/mention history for an entity, capped at ``limit``."""
         ...
 
 
@@ -354,9 +438,19 @@ class ReasoningProtocol(Protocol):
         session_id: str,
         task: str,
         *,
+        generate_embedding: bool = True,
         metadata: dict[str, Any] | None = None,
+        triggered_by_message_id: UUID | str | None = None,
+        user_identifier: str | None = None,
     ) -> ReasoningTrace:
-        """Begin recording a reasoning trace; returns the empty trace."""
+        """Begin recording a reasoning trace; returns the empty trace.
+
+        ``generate_embedding`` controls whether a task embedding is
+        computed. ``metadata`` attaches arbitrary key/value data.
+        ``triggered_by_message_id``, when provided, links the trace to
+        the message that initiated it. ``user_identifier`` scopes the
+        trace to a user identity (multi-tenant).
+        """
         ...
 
     async def add_step(
@@ -366,8 +460,14 @@ class ReasoningProtocol(Protocol):
         thought: str | None = None,
         action: str | None = None,
         observation: str | None = None,
+        generate_embedding: bool = True,
+        metadata: dict[str, Any] | None = None,
     ) -> ReasoningStep:
-        """Append a step (thought/action/observation) to a trace."""
+        """Append a step (thought/action/observation) to a trace.
+
+        ``generate_embedding`` controls whether a step embedding is
+        computed; ``metadata`` attaches arbitrary key/value data.
+        """
         ...
 
     async def record_tool_call(
@@ -379,18 +479,34 @@ class ReasoningProtocol(Protocol):
         result: Any | None = None,
         status: ToolCallStatus = ToolCallStatus.SUCCESS,
         duration_ms: int | None = None,
+        error: str | None = None,
+        auto_observation: bool = False,
+        message_id: UUID | str | None = None,
+        touched_entities: list[EntityRef] | None = None,
     ) -> ToolCall:
-        """Record a tool invocation tied to a reasoning step."""
+        """Record a tool invocation tied to a reasoning step.
+
+        ``error`` records a failure message. ``auto_observation``, when
+        true, sets the parent step's observation from the tool result.
+        ``message_id`` links the call to the message that triggered it.
+        ``touched_entities`` records entities this call affected, for
+        one-hop audit traversal.
+        """
         ...
 
     async def complete_trace(
         self,
         trace_id: UUID | str,
         *,
-        outcome: str | None = None,
+        outcome: str | TraceOutcome | None = None,
         success: bool | None = None,
+        generate_step_embeddings: bool = False,
     ) -> Any:
         """Mark a trace as complete with an optional outcome and success flag.
+
+        ``outcome`` accepts either a free-text summary or a structured
+        :class:`TraceOutcome`. ``generate_step_embeddings`` batch-generates
+        embeddings for any steps recorded without one.
 
         May return the completed trace, or ``None`` if the
         implementation does not materialize one. Portable code that
@@ -440,8 +556,10 @@ class ReasoningProtocol(Protocol):
     async def get_session_traces(
         self,
         session_id: str,
+        *,
+        limit: int = 100,
     ) -> list[ReasoningTrace]:
-        """List traces for a session."""
+        """List traces for a session, capped at ``limit``."""
         ...
 
     async def list_traces(
