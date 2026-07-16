@@ -42,9 +42,9 @@ async def test_add_relationship_not_supported_on_nams(
 
     with pytest.raises(NotSupportedError):
         await nams_client.long_term.add_relationship(
-            source_id=e1.id,
+            source=e1.id,
+            target=e2.id,
             relationship_type="WORKS_AT",
-            target_id=e2.id,
             properties={"since": "2023"},
         )
 

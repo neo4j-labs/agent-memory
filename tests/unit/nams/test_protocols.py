@@ -83,13 +83,16 @@ class TestLongTermProtocol:
             assert required in names
 
     def test_silver_methods_present(self):
+        # supersede_preference / get_entity_relationships are intentionally
+        # absent: bolt and NAMS disagree on arity/return type for both (not
+        # just an optional extra), so no single signature is honest for
+        # both backends without an implementation change. See
+        # LongTermProtocol's class-level comment and task-3-report.md.
         names = _method_names(LongTermProtocol)
         for required in (
             "get_related_entities",
             "get_preferences_for",
-            "supersede_preference",
             "get_facts_about",
-            "get_entity_relationships",
             "get_context",
         ):
             assert required in names

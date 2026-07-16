@@ -29,6 +29,8 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from uuid import UUID
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from neo4j_agent_memory.memory.long_term import (
         Entity,
         Fact,
@@ -188,7 +190,8 @@ class LongTermProtocol(Protocol):
         self,
         name: str,
         entity_type: str,
-        **kwargs: Any,
+        *,
+        description: str | None = None,
     ) -> Any:
         """Create or upsert an entity.
 
@@ -196,6 +199,12 @@ class LongTermProtocol(Protocol):
         tuple (bolt). Portable code that needs a single entity should
         access ``result[0]`` after a type check; convenience helpers may
         normalize this in v0.5+.
+
+        Bolt-only extras (``subtype``, ``aliases``, ``attributes``,
+        ``resolve``, ``deduplicate``, ``geocode``, ``enrich``, ``coordinates``,
+        ``metadata``, …) are NAMS-silently-dropped, so they stay off this
+        Protocol; ``description`` is the one optional field both backends
+        genuinely store.
         """
         ...
 
@@ -203,63 +212,113 @@ class LongTermProtocol(Protocol):
         self,
         category: str,
         preference: str,
-        **kwargs: Any,
+        *,
+        context: str | None = None,
+        confidence: float = 1.0,
+        generate_embedding: bool = True,
+        metadata: dict[str, Any] | None = None,
+        user_identifier: str | None = None,
+        applies_to: list[Any] | None = None,
     ) -> Preference:
-        """Record a user preference."""
+        """Record a user preference.
+
+        NAMS has no preferences endpoint and always raises
+        :class:`NotSupportedError`; its ``**kwargs`` catch-all absorbs this
+        full parameter set structurally, matching bolt's real signature.
+        """
         ...
 
     async def add_fact(
         self,
         subject: str,
         predicate: str,
-        object: str,
-        **kwargs: Any,
+        obj: str,
+        /,
+        *,
+        confidence: float = 1.0,
+        valid_from: datetime | None = None,
+        valid_until: datetime | None = None,
+        generate_embedding: bool = True,
+        metadata: dict[str, Any] | None = None,
     ) -> Fact:
-        """Record a subject-predicate-object fact."""
+        """Record a subject-predicate-object fact.
+
+        The third positional param is positional-only: bolt names it
+        ``obj``, NAMS names it ``object`` — neither name is part of the
+        portable contract, only its position. NAMS has no facts endpoint
+        and always raises :class:`NotSupportedError`.
+        """
         ...
 
     async def add_relationship(
         self,
-        source_id: UUID | str,
+        source: Entity | UUID,
+        target: Entity | UUID,
         relationship_type: str,
-        target_id: UUID | str,
-        **kwargs: Any,
-    ) -> None:
-        """Create a typed relationship between two entities."""
+    ) -> Relationship:
+        """Create a typed relationship between two entities.
+
+        NAMS has no relationships write endpoint and always raises
+        :class:`NotSupportedError`.
+        """
         ...
 
     async def search_entities(
         self,
         query: str,
-        **kwargs: Any,
+        *,
+        limit: int = 10,
     ) -> list[Entity]:
-        """Vector/keyword search across entities."""
+        """Vector/keyword search across entities.
+
+        Bolt's ``entity_types``/``threshold`` and NAMS's ``entity_type``
+        stay off this Protocol — NAMS reads a different key
+        (``entity_type``, singular) than bolt names (``entity_types``,
+        plural), so passing the plural form through the Protocol would be
+        silently dropped on NAMS. ``limit`` is the one filter both honor.
+        """
         ...
 
-    async def wait_for_extraction(self, **kwargs: Any) -> bool:
+    async def wait_for_extraction(self) -> bool:
         """Await async entity extraction (NAMS) or no-op (bolt).
 
-        Returns ``True`` once extraction has caught up (or immediately on
-        bolt), ``False`` on timeout. See the NAMS implementation for the
-        full keyword surface (``query``, ``expected_names``, ``min_results``,
-        ``predicate``, ``timeout``, ``interval``).
+        Bolt always returns ``True`` immediately, ignoring any input, so
+        none of NAMS's rich keyword surface (``query``, ``expected_names``,
+        ``min_results``, ``predicate``, ``timeout``, ``interval``,
+        ``session_id``) belongs on this Protocol — bolt would silently
+        ignore all of it.
         """
         ...
 
     async def search_preferences(
         self,
         query: str,
-        **kwargs: Any,
+        *,
+        category: str | None = None,
+        limit: int = 10,
+        threshold: float = 0.7,
     ) -> list[Preference]:
-        """Vector/keyword search across preferences."""
+        """Vector/keyword search across preferences.
+
+        NAMS has no preferences endpoint and always raises
+        :class:`NotSupportedError`; its ``**kwargs`` catch-all absorbs this
+        full parameter set structurally, matching bolt's real signature.
+        """
         ...
 
     async def search_facts(
         self,
         query: str,
-        **kwargs: Any,
+        *,
+        limit: int = 10,
+        threshold: float = 0.7,
     ) -> list[Fact]:
-        """Vector/keyword search across facts."""
+        """Vector/keyword search across facts.
+
+        NAMS has no facts endpoint and always raises
+        :class:`NotSupportedError`; its ``**kwargs`` catch-all absorbs this
+        full parameter set structurally, matching bolt's real signature.
+        """
         ...
 
     async def get_entity_by_name(self, name: str) -> Entity | None:
@@ -270,38 +329,65 @@ class LongTermProtocol(Protocol):
 
     async def get_related_entities(
         self,
-        entity_id: UUID | str,
-        **kwargs: Any,
+        entity_id: UUID,
+        /,
     ) -> Any:
-        """Return entities related to the given entity (graph traversal)."""
+        """Return entities related to the given entity (graph traversal).
+
+        Positional-only: bolt's param is ``entity`` (``Entity | UUID``),
+        NAMS's is ``entity_id`` (``UUID | str``) — ``UUID`` is the type both
+        accept. Bolt's ``relationship_types``/``depth`` stay off this
+        Protocol: NAMS's ``**kwargs`` never reads them, so it always
+        returns the full unfiltered relationship set regardless.
+        """
         ...
 
-    async def get_preferences_for(self, **kwargs: Any) -> list[Preference]:
-        """Return preferences filtered by category/user_identifier."""
-        ...
-
-    async def supersede_preference(
+    async def get_preferences_for(
         self,
-        preference_id: UUID | str,
-        **kwargs: Any,
-    ) -> None:
-        """Mark a preference as superseded (close its validity window)."""
+        *,
+        user_identifier: str,
+        applies_to: Any | None = None,
+        active_only: bool = True,
+        as_of: datetime | None = None,
+    ) -> list[Preference]:
+        """Return preferences scoped to a user.
+
+        ``user_identifier`` is keyword-only: NAMS's real signature is bare
+        ``**kwargs`` with no positional parameter at all, so it can only
+        ever receive this by keyword. NAMS has no preferences endpoint and
+        always raises :class:`NotSupportedError`.
+        """
         ...
 
-    async def get_facts_about(self, entity_name: str) -> list[Fact]:
-        """Return facts where the entity is the subject."""
-        ...
-
-    async def get_entity_relationships(
+    async def get_facts_about(
         self,
-        entity_id: UUID | str,
-    ) -> list[Relationship]:
-        """Return outgoing relationships from an entity."""
+        subject: str,
+        /,
+    ) -> list[Fact]:
+        """Return facts where the entity is the subject.
+
+        Positional-only: bolt names this param ``subject``, NAMS names it
+        ``entity_name``, and NAMS has no ``**kwargs`` catch-all — only the
+        shared position, not either name, is part of the contract. Bolt's
+        ``limit`` stays off this Protocol: NAMS's signature has no slot to
+        receive it at all.
+        """
         ...
 
-    async def get_context(self, query: str, **kwargs: Any) -> str:
-        """Return assembled context text from long-term memory."""
+    async def get_context(self, query: str) -> str:
+        """Return assembled context text from long-term memory.
+
+        Bolt's ``include_entities``/``include_preferences``/``max_items``
+        stay off this Protocol: NAMS always returns ``""`` regardless of
+        what's passed, so none of them are honored on that side.
+        """
         ...
+
+    # ``supersede_preference`` and ``get_entity_relationships`` are
+    # deliberately absent: both have a real, differently-shaped signature on
+    # each backend (arity or return-type divergence, not just an optional
+    # extra), so no single Protocol signature is honest for both without an
+    # implementation change. See task-3-report.md.
 
     # Gold tier --------------------------------------------------------------
 
@@ -318,15 +404,18 @@ class LongTermProtocol(Protocol):
         self,
         entity_id: UUID | str,
         feedback: str,
-        **kwargs: Any,
     ) -> None:
-        """Record user feedback (positive/negative) on an entity (NAMS only)."""
+        """Record user feedback (positive/negative) on an entity (NAMS only).
+
+        Bolt always raises :class:`NotSupportedError` regardless of input,
+        so NAMS's ``user_score``/``confirmed`` overrides stay off this
+        Protocol.
+        """
         ...
 
     async def get_entity_history(
         self,
         entity_id: UUID | str,
-        **kwargs: Any,
     ) -> list[dict[str, Any]]:
         """Return the edit/mention history for an entity (NAMS only)."""
         ...

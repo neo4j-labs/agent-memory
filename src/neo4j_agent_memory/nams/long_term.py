@@ -251,11 +251,17 @@ class NamsLongTermMemory:
 
     async def add_relationship(
         self,
-        source_id: UUID | str,
+        source: Entity | UUID,
+        target: Entity | UUID,
         relationship_type: str,
-        target_id: UUID | str,
         **kwargs: Any,
-    ) -> None:
+    ) -> Relationship:
+        """Not supported on NAMS.
+
+        Param names/order/return type match bolt's real signature
+        (``LongTermProtocol.add_relationship``) — this always raises before
+        using any of them, so the change is annotation-only.
+        """
         raise NotSupportedError(
             backend="nams",
             method="LongTermMemory.add_relationship",
