@@ -17,8 +17,10 @@ Platinum). Portable code should rely only on the methods declared here.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 from uuid import UUID
+
+from neo4j_agent_memory.memory.reasoning import ToolCallStatus
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -334,8 +336,9 @@ class LongTermProtocol(Protocol):
 class ReasoningProtocol(Protocol):
     """Contract for reasoning memory (traces, steps, tool calls).
 
-    Implementations: :class:`ReasoningMemory` (bolt),
-    :class:`NamsReasoningMemory` (NAMS).
+    Tool-call and trace-completion helpers, tool-usage statistics, and
+    audit-edge writes are backend-capability extensions, not part of
+    this base contract.
     """
 
     # Bronze tier ------------------------------------------------------------
@@ -344,7 +347,8 @@ class ReasoningProtocol(Protocol):
         self,
         session_id: str,
         task: str,
-        **kwargs: Any,
+        *,
+        metadata: dict[str, Any] | None = None,
     ) -> ReasoningTrace:
         """Begin recording a reasoning trace; returns the empty trace."""
         ...
@@ -352,17 +356,23 @@ class ReasoningProtocol(Protocol):
     async def add_step(
         self,
         trace_id: UUID | str,
-        **kwargs: Any,
+        *,
+        thought: str | None = None,
+        action: str | None = None,
+        observation: str | None = None,
     ) -> ReasoningStep:
         """Append a step (thought/action/observation) to a trace."""
         ...
 
     async def record_tool_call(
         self,
-        step_id: UUID | str,
+        step_id: UUID,
         tool_name: str,
         arguments: dict[str, Any],
-        **kwargs: Any,
+        *,
+        result: Any | None = None,
+        status: ToolCallStatus = ToolCallStatus.SUCCESS,
+        duration_ms: int | None = None,
     ) -> ToolCall:
         """Record a tool invocation tied to a reasoning step."""
         ...
@@ -370,23 +380,48 @@ class ReasoningProtocol(Protocol):
     async def complete_trace(
         self,
         trace_id: UUID | str,
-        **kwargs: Any,
-    ) -> None:
-        """Mark a trace as complete with an optional outcome and success flag."""
+        *,
+        outcome: str | None = None,
+        success: bool | None = None,
+    ) -> Any:
+        """Mark a trace as complete with an optional outcome and success flag.
+
+        May return the completed trace, or ``None`` if the
+        implementation does not materialize one. Portable code that
+        needs the trace back should re-fetch it via ``get_trace()``.
+        """
         ...
 
     # Silver tier ------------------------------------------------------------
 
-    async def search_steps(self, query: str, **kwargs: Any) -> list[ReasoningStep]:
-        """Vector/keyword search across reasoning steps."""
+    async def search_steps(
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+        success_only: bool = True,
+        threshold: float = 0.7,
+    ) -> list[Any]:
+        """Vector/keyword search across reasoning steps.
+
+        Returns implementation-defined step records; narrow the
+        element type before use.
+        """
         ...
 
     async def get_similar_traces(
         self,
         query: str,
-        **kwargs: Any,
+        /,
+        *,
+        limit: int = 5,
+        success_only: bool = True,
+        threshold: float = 0.7,
     ) -> list[ReasoningTrace]:
-        """Find traces with similar task descriptions."""
+        """Find traces with similar task descriptions.
+
+        The query is identified positional-only.
+        """
         ...
 
     async def get_trace(self, trace_id: UUID | str) -> ReasoningTrace | None:
@@ -395,7 +430,7 @@ class ReasoningProtocol(Protocol):
 
     async def get_trace_with_steps(
         self,
-        trace_id: UUID | str,
+        trace_id: UUID,
     ) -> ReasoningTrace | None:
         """Fetch a trace with its full step + tool-call chain."""
         ...
@@ -403,13 +438,23 @@ class ReasoningProtocol(Protocol):
     async def get_session_traces(
         self,
         session_id: str,
-        **kwargs: Any,
     ) -> list[ReasoningTrace]:
         """List traces for a session."""
         ...
 
-    async def list_traces(self, **kwargs: Any) -> list[ReasoningTrace]:
-        """List traces globally (paginated)."""
+    async def list_traces(
+        self,
+        *,
+        session_id: str | None = None,
+        success_only: bool | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        limit: int = 100,
+        offset: int = 0,
+        order_by: Literal["started_at", "completed_at"] = "started_at",
+        order_dir: Literal["asc", "desc"] = "desc",
+    ) -> list[ReasoningTrace]:
+        """List traces globally, filtered and paginated."""
         ...
 
     async def get_context(self, query: str, **kwargs: Any) -> str:
@@ -417,14 +462,6 @@ class ReasoningProtocol(Protocol):
         ...
 
     # Gold tier --------------------------------------------------------------
-
-    async def get_tool_stats(self, **kwargs: Any) -> Any:
-        """Return aggregate tool-usage statistics.
-
-        Bolt returns ``dict[str, ToolStats]``; NAMS returns
-        ``list[ToolStats]``. Concrete normalization may happen in v0.5.
-        """
-        ...
 
     async def link_trace_to_message(
         self,
@@ -439,13 +476,8 @@ class ReasoningProtocol(Protocol):
 class CypherQueryProtocol(Protocol):
     """Unified read-only Cypher accessor (``client.query``).
 
-    Implementations: :class:`BoltCypherQuery` (forwards to
-    :class:`Neo4jClient.execute_read`), :class:`NamsCypherQuery`
-    (forwards to ``POST /v1/query``, Platinum tier).
-
-    Both implementations enforce read-only via a shared
-    ``_is_read_only_query`` validator. Write queries raise
-    :class:`ValueError` before any backend round-trip.
+    Executes read-only Cypher and returns result rows. Write queries
+    raise :class:`ValueError` before any backend round-trip.
     """
 
     async def cypher(

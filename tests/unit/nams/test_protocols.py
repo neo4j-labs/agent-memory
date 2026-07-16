@@ -135,9 +135,13 @@ class TestReasoningProtocol:
             assert required in names
 
     def test_gold_methods_present(self):
+        # get_tool_stats is intentionally absent: it's a bolt-only
+        # capability (NAMS raises NotSupportedError unconditionally, and
+        # bolt/NAMS disagree on the aggregate-stats shape). It belongs on
+        # a bolt-specific sub-protocol in a later task, not the base
+        # contract. See task-4-report.md.
         names = _method_names(ReasoningProtocol)
-        for required in ("get_tool_stats", "link_trace_to_message"):
-            assert required in names
+        assert "link_trace_to_message" in names
 
 
 class TestCypherQueryProtocol:

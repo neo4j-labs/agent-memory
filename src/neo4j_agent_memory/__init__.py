@@ -520,13 +520,11 @@ class MemoryClient:
             self._settings.llm if isinstance(self._settings.llm, _LLMProvider) else None
         )
         # The field holds the bolt or NAMS impl (both satisfy the Protocol).
-        # ShortTermMemory and LongTermMemory structurally satisfy their
-        # Protocols, so neither assignment needs an ignore. ReasoningMemory
-        # has narrower concrete signatures than its permissive ``**kwargs``
-        # Protocol methods and still requires the ignore below (conformance
-        # is asserted in tests/typing/; Platinum-only methods raise
-        # NotSupportedError). The property getters re-narrow to the concrete
-        # bolt type.
+        # ShortTermMemory, LongTermMemory, and ReasoningMemory all
+        # structurally satisfy their Protocols, so none of these
+        # assignments need an ignore (conformance is asserted in
+        # tests/typing/; Platinum-only methods raise NotSupportedError).
+        # The property getters re-narrow to the concrete bolt type.
         self._short_term = ShortTermMemory(
             self._client,
             self._embedder,
@@ -543,7 +541,7 @@ class MemoryClient:
             self._enrichment_service,
             multi_tenant=multi_tenant,
         )
-        self._reasoning = ReasoningMemory(  # type: ignore[assignment]
+        self._reasoning = ReasoningMemory(
             self._client,
             self._embedder,
             multi_tenant=multi_tenant,
