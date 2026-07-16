@@ -23,7 +23,10 @@ constructing the adapter directly.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from neo4j_agent_memory.llm.protocol import LLMProvider
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +105,7 @@ def _extract_optional_kwargs(model: Any) -> dict[str, Any]:
     return kwargs
 
 
-def llm_provider_from_framework_model(model: Any) -> Any:
+def llm_provider_from_framework_model(model: Any) -> LLMProvider:
     """Translate a framework-native chat model into an :class:`LLMProvider`.
 
     Strategy:
@@ -149,7 +152,10 @@ def llm_provider_from_framework_model(model: Any) -> Any:
         model_id,
         sorted(kwargs.keys()),
     )
-    return from_provider(model_id, **kwargs)
+    # kwargs carries only api_key/api_base/region (never kind), so pass
+    # kind="llm" explicitly: it resolves from_provider's overload to
+    # LLMProvider (the **kwargs spread would otherwise erase it).
+    return from_provider(model_id, kind="llm", **kwargs)
 
 
 __all__ = [

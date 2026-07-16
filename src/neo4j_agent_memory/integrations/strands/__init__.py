@@ -24,7 +24,7 @@ Example:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from neo4j_agent_memory.integrations._passthrough import (
     llm_provider_from_framework_model as _passthrough,
@@ -49,8 +49,8 @@ def llm_provider_from_strands(model: Any) -> LLMProvider:
         # from_provider is @overloaded on kind; kind defaults to "llm", so
         # this returns an LLMProvider (no cast needed).
         return from_provider(model_id)
-    # _passthrough introspects an arbitrary framework model object (returns Any).
-    return cast("LLMProvider", _passthrough(model))
+    # _passthrough introspects an arbitrary framework model object.
+    return _passthrough(model)
 
 
 try:
