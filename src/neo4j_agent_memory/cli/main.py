@@ -919,6 +919,26 @@ def mcp_serve(
         )
         sys.exit(1)
 
+    # Windows deadlock guard: when a local sentence-transformers embedder is
+    # configured, import its native stack (scipy/torch) up-front on the main
+    # thread, before the event loop starts. Importing it lazily inside the
+    # running loop on the first embed() call deadlocks in the Windows DLL loader
+    # lock (see SentenceTransformerEmbedder / preload()). No-op for cloud
+    # embedders and when sentence-transformers isn't installed.
+    if embedding:
+        from neo4j_agent_memory.embeddings.sentence_transformers import preload
+        from neo4j_agent_memory.llm.adapters.sentence_transformers import (
+            SentenceTransformersProvider,
+        )
+        from neo4j_agent_memory.llm.factory import from_provider
+
+        try:
+            resolved_embedder = from_provider(embedding, kind="embedding")
+        except Exception:
+            resolved_embedder = None
+        if isinstance(resolved_embedder, SentenceTransformersProvider):
+            preload()
+
     asyncio.run(
         run_server(
             neo4j_uri=uri,

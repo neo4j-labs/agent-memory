@@ -1,4 +1,12 @@
-"""Sentence Transformers embedding provider for local embeddings."""
+"""Sentence Transformers embedding provider for local embeddings.
+
+Note on Windows: importing ``sentence_transformers`` (which pulls in scipy's and
+torch's native extensions) for the first time *inside a running asyncio event
+loop* deadlocks in the Windows DLL loader lock — regardless of which thread runs
+the import — hanging the very first ``embed`` call forever. Startup code should
+call :func:`preload` from synchronous context before the event loop starts to
+do that native import safely on the main thread.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +18,19 @@ from neo4j_agent_memory.embeddings.base import BaseEmbedder
 
 if TYPE_CHECKING:
     from sentence_transformers import SentenceTransformer
+
+
+def preload() -> None:
+    """Eagerly import the sentence-transformers stack on the current thread.
+
+    Call this from synchronous startup code *before* any asyncio event loop is
+    running (see the module docstring for why). No-op if sentence-transformers
+    is not installed.
+    """
+    import importlib.util
+
+    if importlib.util.find_spec("sentence_transformers") is not None:
+        importlib.import_module("sentence_transformers")
 
 
 # Model dimensions mapping (common models)
@@ -69,11 +90,16 @@ class SentenceTransformerEmbedder(BaseEmbedder):
 
     async def embed(self, text: str) -> list[float]:
         """Generate embedding for a single text."""
-        model = self._ensure_model()
-
         try:
-            # Run in thread pool since sentence-transformers is sync
+            # Run in thread pool since sentence-transformers is sync.
+            # _ensure_model() must ALSO run in the executor, not on the event
+            # loop thread: the first call lazily imports sentence_transformers
+            # (-> scipy/torch native extensions) and loads the model. Doing that
+            # on the loop thread blocks the whole server for the load; on Windows
+            # the first-time native import even deadlocks in the DLL loader lock
+            # (see the module docstring / preload()).
             loop = asyncio.get_event_loop()
+            model = await loop.run_in_executor(None, self._ensure_model)
             embedding = await loop.run_in_executor(
                 None, lambda: model.encode(text, convert_to_numpy=True)
             )
@@ -86,11 +112,11 @@ class SentenceTransformerEmbedder(BaseEmbedder):
         if not texts:
             return []
 
-        model = self._ensure_model()
-
         try:
-            # Run in thread pool since sentence-transformers is sync
+            # Run in thread pool since sentence-transformers is sync.
+            # _ensure_model() offloaded too — see the note in embed() above.
             loop = asyncio.get_event_loop()
+            model = await loop.run_in_executor(None, self._ensure_model)
             embeddings = await loop.run_in_executor(
                 None, lambda: model.encode(texts, convert_to_numpy=True)
             )
