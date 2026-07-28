@@ -20,7 +20,7 @@
 export type { NamsConfig, NamsScope, NamsLogger, MemoryHit, StoreInput, GraphExtractor } from './vercel-ai-provider-client';
 export type { NamsMemoryConfig } from './vercel-ai-provider-middleware';
 export type {
-  NamsToolsOptions, NamsToolsWithMcpOptions, NamsToolsResult,
+  NamsToolsOptions, NamsToolsWithMcpOptions, NamsToolsResult, McpConnectionStatus,
   McpConfig, QueryInput, StoreInput as ToolStoreInput,
   QueryOutput, StoreOutput
 } from './vercel-ai-provider-tools';
@@ -29,7 +29,7 @@ export type { NamsProviderOptions } from './vercel-ai-provider';
 export { makeClient, getLogger, resolveConversation, findExistingConversation, retrieveMemories, storeMemory } from './vercel-ai-provider-client';
 export { createGraphExtractor } from './vercel-ai-provider-extract';
 export { createNamsMemory } from './vercel-ai-provider-middleware';
-export { createNamsMemoryTools, createNamsTools, enforceQueryMemory, NamsMemoryTools } from './vercel-ai-provider-tools';
+export { createNamsMemoryTools, createNamsTools, enforceQueryMemory, NamsMemoryTools, NamsMcpConnectionError } from './vercel-ai-provider-tools';
 export type { EnforceQueryMemoryOptions } from './vercel-ai-provider-tools';
 export { createNamsProvider } from './vercel-ai-provider';
 
@@ -98,8 +98,13 @@ export function createNams(config: NamsFactoryConfig) {
     /**
      * Tools mode with MCP (optional extension of tools mode).
      * Connects to an MCP server and merges its tools with NAMS memory tools.
-     * Returns { tools, close } — call close() in ToolLoopAgent's onFinish.
+     * Returns { tools, close, mcp } — call close() in ToolLoopAgent's onFinish,
+     * and read `mcp.toolNames` to build a system prompt from the tools that are
+     * actually available rather than the ones you expect to be.
      * When mcpConfig is omitted, behaves identically to .tools() with a no-op close.
+     *
+     * Rejects with NamsMcpConnectionError if the server refuses the connection;
+     * set `mcp.optional` to degrade to memory-only tools instead.
      */
     async toolsWithMcp(scope: NamsScope, mcpConfig?: McpConfig) {
       return createNamsTools({
