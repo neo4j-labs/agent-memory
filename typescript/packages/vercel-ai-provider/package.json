@@ -51,11 +51,11 @@
     "prepublishOnly": "npm run build"
   },
   "peerDependencies": {
-    "@ai-sdk/mcp": "~1.0.0",
-    "@ai-sdk/provider": "~3.0.0",
+    "@ai-sdk/mcp": "^1.0.0 || ^2.0.0",
+    "@ai-sdk/provider": "^3.0.0 || ^4.0.0",
     "@neo4j-labs/agent-memory": "~0.4.0",
-    "ai": "~6.0.0",
-    "zod": "~3.0.0"
+    "ai": "^6.0.0 || ^7.0.0",
+    "zod": "^3.25.76 || ^4.1.8"
   },
   "peerDependenciesMeta": {
     "@ai-sdk/mcp": {
