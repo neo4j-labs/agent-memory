@@ -162,17 +162,17 @@ Middleware and tools modes can also be
 injected baseline context plus explicit memory tools.
 
 > **How does this relate to `@neo4j-labs/agent-memory/middleware/vercel-ai`?**
-> The core SDK ships a minimal middleware for the AI SDK v4-era
+> The core SDK ships a minimal middleware for the AI SDK 4.x-era
 > `LanguageModelV1Middleware` shape that injects current-conversation context.
-> This package targets AI SDK v6 / `LanguageModelV3` and adds a registrable
-> `ProviderV3`, cross-session retrieval, optional graph extraction, explicit
+> This package targets AI SDK v7 / `LanguageModelV4` and adds a registrable
+> `ProviderV4`, cross-session retrieval, optional graph extraction, explicit
 > memory tools, and MCP tool merging. New projects should prefer this package.
 
 ---
 
-## Provider Mode (ProviderV3)
+## Provider Mode (ProviderV4)
 
-Drop NAMS into any Vercel AI SDK project as a standard `ProviderV3`. Memory is fully transparent — no tools, no system prompt changes needed.
+Drop NAMS into any Vercel AI SDK project as a standard `ProviderV4`. Memory is fully transparent — no tools, no system prompt changes needed.
 
 ```ts
 import { createNamsProvider } from '@neo4j-labs/nams-ai-provider';
@@ -387,7 +387,7 @@ for pure tools mode, where the tool call is the *only* retrieval path.
 createNamsProvider({
   // Required
   apiKey:               string,
-  baseProvider:         (modelId: string) => LanguageModelV3,
+  baseProvider:         (modelId: string) => LanguageModelV4,
   scope:                { userId: string, conversationId?: string },
 
   // Optional
@@ -455,7 +455,7 @@ NAMS searches four sources in parallel per turn:
 
 ```bash
 npm install        # install dev dependencies
-npm test           # run the vitest suite (provider, tools, ProviderV3 surface)
+npm test           # run the vitest suite (provider, tools, ProviderV4 surface)
 npm run typecheck  # tsc --noEmit
 npm run build      # tsup → dist/
 ```

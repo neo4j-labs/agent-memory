@@ -1,10 +1,10 @@
 /**
  * Shared test doubles: a controllable fake MemoryClient and a minimal
- * LanguageModelV3 stub that records the params it was called with.
+ * LanguageModelV4 stub that records the params it was called with.
  */
 
 import { vi } from 'vitest';
-import type { LanguageModelV3 } from '@ai-sdk/provider';
+import type { LanguageModelV4 } from '@ai-sdk/provider';
 
 export interface FakeClient {
   shortTerm: {
@@ -50,10 +50,10 @@ export function makeFakeClient(): FakeClient {
 
 export interface FakeModelResult {
   capturedParams: any[];
-  model: LanguageModelV3;
+  model: LanguageModelV4;
 }
 
-/** A LanguageModelV3 stub whose doGenerate returns fixed text and records params. */
+/** A LanguageModelV4 stub whose doGenerate returns fixed text and records params. */
 export function makeFakeModel(
   assistantText = 'Hello back',
   streamChunks?: any[],
@@ -61,7 +61,7 @@ export function makeFakeModel(
   const capturedParams: any[] = [];
 
   const model = {
-    specificationVersion: 'v3',
+    specificationVersion: 'v4',
     provider: 'fake',
     modelId: 'fake-model',
     supportedUrls: {},
@@ -90,7 +90,7 @@ export function makeFakeModel(
       });
       return { stream };
     }),
-  } as unknown as LanguageModelV3;
+  } as unknown as LanguageModelV4;
 
   return { capturedParams, model };
 }

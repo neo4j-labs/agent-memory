@@ -3,7 +3,7 @@
     "target": "ES2020",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "lib": ["ES2020", "dom"],
+    "lib": ["ES2020", "ES2022.Error", "dom"],
     "strict": true,
     "declaration": true,
     "declarationMap": true,

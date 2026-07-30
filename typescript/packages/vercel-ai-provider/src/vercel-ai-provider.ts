@@ -1,18 +1,18 @@
 /**
- * Provider mode — ProviderV3-compatible NAMS provider.
+ * Provider mode — ProviderV4-compatible NAMS provider.
  *
  * Wraps any base AI SDK provider (openai, anthropic, etc.) with NAMS memory —
  * retrieved automatically on every call, persisted after every response.
  */
 
-import type { ProviderV3, LanguageModelV3, EmbeddingModelV3, ImageModelV3 } from '@ai-sdk/provider';
+import type { ProviderV4, LanguageModelV4, EmbeddingModelV4, ImageModelV4 } from '@ai-sdk/provider';
 import { NoSuchModelError } from '@ai-sdk/provider';
 import type { LanguageModel } from 'ai';
 import { createNamsMemory } from './vercel-ai-provider-middleware';
 import { NamsConfig, NamsScope } from './vercel-ai-provider-types';
 
 export interface NamsProviderOptions extends NamsConfig {
-  baseProvider: (modelId: string) => LanguageModelV3;
+  baseProvider: (modelId: string) => LanguageModelV4;
   /**
    * User/conversation scope for this provider instance.
    * Create one provider instance per user session.
@@ -27,26 +27,26 @@ export interface NamsProviderOptions extends NamsConfig {
 }
 
 /**
- * Create a ProviderV3-compatible NAMS provider, registrable with the
+ * Create a ProviderV4-compatible NAMS provider, registrable with the
  * Vercel AI SDK via `createProviderRegistry`.
  */
-export function createNamsProvider(options: NamsProviderOptions): ProviderV3 {
+export function createNamsProvider(options: NamsProviderOptions): ProviderV4 {
   const { baseProvider, scope, ...memoryConfig } = options;
   const memory = createNamsMemory(memoryConfig);
 
   return {
-    specificationVersion: 'v3',
+    specificationVersion: 'v4',
 
-    languageModel(modelId: string): LanguageModelV3 {
+    languageModel(modelId: string): LanguageModelV4 {
       const base = baseProvider(modelId);
       return memory.wrap(base, scope, 'nams');
     },
 
-    embeddingModel(modelId: string): EmbeddingModelV3 {
+    embeddingModel(modelId: string): EmbeddingModelV4 {
       throw new NoSuchModelError({ modelId, modelType: 'embeddingModel' });
     },
 
-    imageModel(modelId: string): ImageModelV3 {
+    imageModel(modelId: string): ImageModelV4 {
       throw new NoSuchModelError({ modelId, modelType: 'imageModel' });
     },
   };

@@ -1,8 +1,8 @@
 /**
- * ProviderV3 surface — what the Vercel AI SDK (and createProviderRegistry)
+ * ProviderV4 surface — what the Vercel AI SDK (and createProviderRegistry)
  * expects from a community provider:
  *
- *  - specificationVersion 'v3'
+ *  - specificationVersion 'v4'
  *  - languageModel(id) delegates to the base provider and wraps it with memory
  *  - embeddingModel / imageModel throw NoSuchModelError (memory-only provider)
  */
@@ -37,7 +37,7 @@ describe('createNamsProvider', () => {
       baseProvider: () => makeFakeModel().model,
       scope: { userId: freshUser() },
     });
-    expect(provider.specificationVersion).toBe('v3');
+    expect(provider.specificationVersion).toBe('v4');
   });
 
   it('languageModel(id) calls the base provider with the model id and wraps it', async () => {
@@ -52,7 +52,7 @@ describe('createNamsProvider', () => {
 
     const wrapped = provider.languageModel('gpt-test');
     expect(baseProvider).toHaveBeenCalledWith('gpt-test');
-    expect(wrapped.specificationVersion).toBe('v3');
+    expect(wrapped.specificationVersion).toBe('v4');
 
     // The wrapped model still generates and persists through NAMS.
     await wrapped.doGenerate({

@@ -7,7 +7,7 @@
  */
 
 import { wrapLanguageModel, type LanguageModel } from 'ai';
-import type { LanguageModelV3, LanguageModelV3Middleware } from '@ai-sdk/provider';
+import type { LanguageModelV4, LanguageModelV4Middleware } from '@ai-sdk/provider';
 import {
   makeClient,
   getLogger,
@@ -94,7 +94,7 @@ const buildMiddleware = (
   extractor: GraphExtractor | undefined,
   maxMemories: number,
   persist: boolean,
-): LanguageModelV3Middleware => {
+): LanguageModelV4Middleware => {
   const client = makeClient(config);
   const log = getLogger(client);
 
@@ -127,7 +127,7 @@ const buildMiddleware = (
   }
 
   return {
-    specificationVersion: 'v3',
+    specificationVersion: 'v4',
     // Retrieve memories for the user query and inject them into the prompt.
     transformParams: async ({ params }) => {
       const userText = lastUserText(params.prompt);
@@ -199,7 +199,7 @@ const buildMiddleware = (
 
 /**
  * Create a NAMS memory provider. `wrap(model, scope)` returns a drop-in
- * LanguageModelV3 with transparent memory retrieval and persistence.
+ * LanguageModelV4 with transparent memory retrieval and persistence.
  */
 export function createNamsMemory(config: NamsMemoryConfig) {
   const extractor = config.extractionModel ? createGraphExtractor(config.extractionModel) : undefined;
@@ -207,7 +207,7 @@ export function createNamsMemory(config: NamsMemoryConfig) {
   const persist = config.persistInteractions ?? true;
 
   return {
-    wrap(model: LanguageModelV3, scope: NamsScope, providerId?: string): LanguageModelV3 {
+    wrap(model: LanguageModelV4, scope: NamsScope, providerId?: string): LanguageModelV4 {
       const middleware = buildMiddleware(config, scope, extractor, maxMemories, persist);
       return wrapLanguageModel({ model, middleware, ...(providerId && { providerId }) });
     },
