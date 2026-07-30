@@ -206,13 +206,16 @@ describe('store_memory', () => {
 });
 
 describe('enforceQueryMemory', () => {
+  // enforceQueryMemory reads only stepNumber and steps. AI SDK v7 widened the
+  // prepareStep options with several more required fields (instructions,
+  // initialMessages, responseMessages, …) that this hook never touches, so the
+  // fixture casts once here rather than restating unused fields at every call.
+  type StepOptions = Parameters<ReturnType<typeof enforceQueryMemory>>[0];
+
   const stepOptions = (stepNumber: number, toolNames: string[][] = []) => ({
     stepNumber,
-    steps: toolNames.map(names => ({ toolCalls: names.map(toolName => ({ toolName })) })) as never,
-    model: {} as never,
-    messages: [],
-    experimental_context: undefined,
-  });
+    steps: toolNames.map(names => ({ toolCalls: names.map(toolName => ({ toolName })) })),
+  }) as unknown as StepOptions;
 
   it('requires a tool call while query_memory has not been executed', async () => {
     const prepareStep = enforceQueryMemory();

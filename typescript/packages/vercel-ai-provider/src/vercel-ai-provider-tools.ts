@@ -52,6 +52,11 @@ export type StoreInput = z.infer<typeof storeSchema>;
 export type QueryOutput = { found: boolean; count?: number; message?: string; memories: MemoryHit[] };
 export type StoreOutput = { stored: boolean; type: string; preview: string; message: string };
 
+/**
+ * AI SDK v7 added a third `CONTEXT` generic to `tool<INPUT, OUTPUT, CONTEXT>`.
+ */
+type ToolContext = Record<string, unknown>;
+
 //Options
 
 export interface NamsToolsOptions extends NamsConfig, NamsScope {
@@ -129,7 +134,7 @@ export function createNamsMemoryTools(options: NamsToolsOptions) {
   const getConvId = (): Promise<string> =>
     (convIdPromise ??= resolveConversation(client, options, scope));
 
-  const query_memory = tool<QueryInput, QueryOutput>({
+  const query_memory = tool<QueryInput, QueryOutput, ToolContext>({
     description:
       'Search NAMS (Neo4j Agent Memory System) for context relevant to the current message. ' +
       'Call this before answering, every turn.',
@@ -148,7 +153,7 @@ export function createNamsMemoryTools(options: NamsToolsOptions) {
     },
   });
 
-  const store_memory = tool<StoreInput, StoreOutput>({
+  const store_memory = tool<StoreInput, StoreOutput, ToolContext>({
     description:
       'Persist important information to NAMS (Neo4j graph). ' +
       'Call this BEFORE giving your final answer whenever the conversation ' +

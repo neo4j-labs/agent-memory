@@ -2,7 +2,7 @@
  * Neo4j Agent Memory (NAMS) — unified entry point.
  *
  * Three integration modes backed by the same @neo4j-labs/agent-memory client:
- * - Provider   — `createNamsProvider(...)`: a registrable ProviderV3; memory is
+ * - Provider   — `createNamsProvider(...)`: a registrable ProviderV4; memory is
  *                retrieved + persisted automatically on every call
  * - Middleware — `createNams(...).wrap(model, scope)`: decorate an existing
  *                model instance with the same transparent memory
@@ -34,7 +34,7 @@ export type { EnforceQueryMemoryOptions } from './vercel-ai-provider-tools';
 export { createNamsProvider } from './vercel-ai-provider';
 
 import type { LanguageModel } from 'ai';
-import type { LanguageModelV3 } from '@ai-sdk/provider';
+import type { LanguageModelV4 } from '@ai-sdk/provider';
 import type { NamsConfig, NamsScope } from './vercel-ai-provider-client';
 import type { NamsMemoryConfig } from './vercel-ai-provider-middleware';
 import type { McpConfig } from './vercel-ai-provider-tools';
@@ -52,7 +52,7 @@ export interface NamsFactoryConfig extends NamsConfig {
 
 /**
  * Create a unified NAMS instance covering the middleware and tools modes.
- * (For provider mode — a registrable ProviderV3 — use `createNamsProvider`.)
+ * (For provider mode — a registrable ProviderV4 — use `createNamsProvider`.)
  *
  * - `.wrap(model, scope)`             → middleware mode (transparent memory)
  * - `.tools(scope)`                   → tools mode (query_memory / store_memory)
@@ -77,7 +77,7 @@ export function createNams(config: NamsFactoryConfig) {
      * Memory is retrieved + persisted automatically; no tool calls emitted.
      * Pass the returned model directly to ToolLoopAgent / generateText.
      */
-    wrap(model: LanguageModelV3, scope: NamsScope): LanguageModelV3 {
+    wrap(model: LanguageModelV4, scope: NamsScope): LanguageModelV4 {
       return memory.wrap(model, scope);
     },
 
