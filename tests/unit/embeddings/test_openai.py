@@ -144,3 +144,96 @@ class TestOpenAIEmbedderTruncation:
 
         assert result == []
         mock_client.embeddings.create.assert_not_called()
+
+
+class TestTruncateToTokensWithRealTiktoken:
+    """Tests that exercise the real ``tiktoken`` path (no patching).
+
+    ``tiktoken`` is installed in the dev environment, so calling
+    ``_truncate_to_tokens`` without any fixture that hides it exercises the
+    primary code path: ``tiktoken.encoding_for_model`` / ``enc.encode`` /
+    ``enc.decode``, including the ``KeyError`` fallback to ``cl100k_base``.
+    """
+
+    def test_real_tiktoken_under_budget_passthrough(self):
+        """Real tiktoken path: short input returns unchanged."""
+        import tiktoken
+
+        from neo4j_agent_memory.embeddings.openai import _truncate_to_tokens
+
+        text = "hello world"
+        enc = tiktoken.encoding_for_model("text-embedding-3-small")
+        assert len(enc.encode(text)) < 8000
+
+        assert _truncate_to_tokens(text, "text-embedding-3-small") is text
+
+    def test_real_tiktoken_over_budget_truncates_to_exact_token_count(self, caplog):
+        """Real tiktoken path: oversize input is truncated to at-most-budget tokens."""
+        import tiktoken
+
+        from neo4j_agent_memory.embeddings.openai import (
+            _DEFAULT_MAX_INPUT_TOKENS,
+            _TOKEN_HEADROOM,
+            _truncate_to_tokens,
+        )
+
+        budget = _DEFAULT_MAX_INPUT_TOKENS - _TOKEN_HEADROOM
+        enc = tiktoken.encoding_for_model("text-embedding-3-small")
+        oversize = "hello world " * 5000
+        assert len(enc.encode(oversize)) > budget, (
+            "test fixture is not oversized under the real encoder; adjust the multiplier"
+        )
+
+        with caplog.at_level(logging.WARNING, logger="neo4j_agent_memory.embeddings.openai"):
+            result = _truncate_to_tokens(oversize, "text-embedding-3-small")
+
+        re_encoded = enc.encode(result)
+        assert len(re_encoded) <= budget
+        assert any(
+            "exceeds token budget" in rec.message and "truncating" in rec.message
+            for rec in caplog.records
+        )
+
+    def test_real_tiktoken_unknown_model_falls_back_to_cl100k_base_encoding(self, caplog):
+        """Unknown model: ``KeyError`` from ``encoding_for_model`` is caught, falls back to cl100k_base."""
+        import tiktoken
+
+        from neo4j_agent_memory.embeddings.openai import (
+            _DEFAULT_MAX_INPUT_TOKENS,
+            _TOKEN_HEADROOM,
+            _truncate_to_tokens,
+        )
+
+        budget = _DEFAULT_MAX_INPUT_TOKENS - _TOKEN_HEADROOM
+        cl100k = tiktoken.get_encoding("cl100k_base")
+
+        short_text = "hello world"
+        result_short = _truncate_to_tokens(short_text, "some-made-up-nonexistent-model-xyz")
+        assert result_short == short_text
+
+        oversize = "hello world " * 5000
+        assert len(cl100k.encode(oversize)) > budget, (
+            "test fixture is not oversized under cl100k_base; adjust the multiplier"
+        )
+
+        with caplog.at_level(logging.WARNING, logger="neo4j_agent_memory.embeddings.openai"):
+            result_long = _truncate_to_tokens(oversize, "some-made-up-nonexistent-model-xyz")
+
+        re_encoded = cl100k.encode(result_long)
+        assert len(re_encoded) <= budget
+
+    def test_real_tiktoken_truncated_output_is_never_longer_in_tokens_than_original(self):
+        """Sanity invariant: truncation strictly shrinks token count for oversize input."""
+        import tiktoken
+
+        from neo4j_agent_memory.embeddings.openai import _truncate_to_tokens
+
+        enc = tiktoken.encoding_for_model("text-embedding-3-small")
+        oversize = "hello world " * 5000
+        original_token_count = len(enc.encode(oversize))
+        assert original_token_count > 8000
+
+        result = _truncate_to_tokens(oversize, "text-embedding-3-small")
+        truncated_token_count = len(enc.encode(result))
+
+        assert truncated_token_count < original_token_count
