@@ -397,6 +397,7 @@ createNamsProvider({
   maxMemories?:         number,   // Max memories retrieved and injected into the prompt per turn (capped at 12). Default: 6
   persistInteractions?: boolean,  // Save each turn. Default: true
   extractionModel?:     LanguageModel, // Enables graph entity extraction
+  extractionOptions?:   GraphExtractorOptions, // Tunes extraction, e.g. { skipEntity }
 });
 ```
 
@@ -435,6 +436,31 @@ const nams = createNamsProvider({
 > currently doesn't), extracted entities are stored and relationship writes
 > are skipped with a warning — the graph gains edges automatically once the
 > endpoint is available.
+
+Extraction skips **self-referential** entities: when the agent answers "what do
+you remember about me?" and stores its own answer, extraction would otherwise
+mint entities *about remembering* (`long-term memories [Concept]`,
+`profile details [Object]`). Those meta-entities are the closest match for the
+next such question, so they outrank the real facts and every ask degrades the
+next one. Skipped entities are logged at `warn`.
+
+The guard keys on the distinction extraction already asks for: **named** — i.e.
+proper-noun — entities. An agent describing its own recall yields common nouns
+(`profile details`, `preferences`); the facts worth keeping are proper nouns
+(`Priya`, `Bangalore`, `Acme Analytics`). No vocabulary list is involved, so it
+holds as models rephrase, and it declines to fire on caseless scripts (`北京`,
+`القاهرة`) rather than rejecting them. A second rule drops names that are just
+their own type repeated (`Organization [Organization]`).
+
+Known cost: brand names styled all-lowercase (`npm`, `git`) read as common nouns
+and are skipped. Override the guard if your domain is full of them:
+
+```ts
+extractionOptions: {
+  // "preferences" is a real entity here; drop raw identifiers instead.
+  skipEntity: (e) => /^[a-z0-9_]+$/.test(e.name),
+}
+```
 
 ---
 

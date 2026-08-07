@@ -28,6 +28,7 @@ export type { NamsProviderOptions } from './vercel-ai-provider';
 
 export { makeClient, getLogger, resolveConversation, findExistingConversation, retrieveMemories, storeMemory } from './vercel-ai-provider-client';
 export { createGraphExtractor } from './vercel-ai-provider-extract';
+export type { GraphExtractorOptions } from './vercel-ai-provider-extract';
 export { createNamsMemory } from './vercel-ai-provider-middleware';
 export { createNamsMemoryTools, createNamsTools, enforceQueryMemory, NamsMemoryTools, NamsMcpConnectionError } from './vercel-ai-provider-tools';
 export type { EnforceQueryMemoryOptions } from './vercel-ai-provider-tools';
@@ -37,6 +38,7 @@ import type { LanguageModel } from 'ai';
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import type { NamsConfig, NamsScope } from './vercel-ai-provider-client';
 import type { NamsMemoryConfig } from './vercel-ai-provider-middleware';
+import type { GraphExtractorOptions } from './vercel-ai-provider-extract';
 import type { McpConfig } from './vercel-ai-provider-tools';
 import { createNamsMemory } from './vercel-ai-provider-middleware';
 import { createNamsMemoryTools, createNamsTools } from './vercel-ai-provider-tools';
@@ -46,6 +48,7 @@ export type NamsMode = 'provider' | 'middleware' | 'tools';
 
 export interface NamsFactoryConfig extends NamsConfig {
   extractionModel?: LanguageModel;
+  extractionOptions?: GraphExtractorOptions;
   maxMemories?: number;
   persistInteractions?: boolean;
 }
@@ -65,6 +68,7 @@ export function createNams(config: NamsFactoryConfig) {
     workspaceId: config.workspaceId,
     logger: config.logger,
     extractionModel: config.extractionModel,
+    extractionOptions: config.extractionOptions,
     maxMemories: config.maxMemories,
     persistInteractions: config.persistInteractions,
   };

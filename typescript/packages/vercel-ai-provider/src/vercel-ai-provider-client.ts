@@ -36,6 +36,55 @@ export function resolveLogger(config: NamsConfig): NamsLogger {
   return config.logger ?? defaultLogger;
 }
 
+/**
+ * Report a graph-extraction failure. The first one logs at `error`, the rest at
+ * `warn`.
+ *
+ * Extraction failing is not a transient miss: a rejected schema or a bad model
+ * config fails identically on every call, forever, while storage still succeeds
+ * and the request still returns. Logging the first occurrence at `warn` is how
+ * `extractionModel` stayed a silent no-op through a release.
+ */
+export function reportExtractionFailure(client: MemoryClient, message: string, err: unknown): void {
+  const state = getState(client);
+  if (state.extractionFailed) {
+    state.logger.warn(message, err);
+    return;
+  }
+  state.extractionFailed = true;
+  state.logger.error(
+    `${message} — graph extraction is disabled for every memory until this is fixed`,
+    err,
+  );
+}
+
+/**
+ * Report a failed relationship write.
+ *
+ * The hosted REST API has no relationship endpoint and raises `NotSupportedError`
+ * for every edge — a permanent condition, not a transient one. Since graph
+ * extraction attempts one write per extracted edge per stored memory, logging
+ * each occurrence would emit an unbounded stream of identical lines. The
+ * unsupported case is therefore reported once per client and then suppressed;
+ * genuine write failures still log every time.
+ */
+export function reportRelationshipFailure(client: MemoryClient, err: unknown): void {
+  const state = getState(client);
+
+  if ((err as { name?: string })?.name !== 'NotSupportedError') {
+    state.logger.warn('addRelationship failed', err);
+    return;
+  }
+
+  if (state.relationshipWritesUnsupported) return;
+  state.relationshipWritesUnsupported = true;
+  state.logger.warn(
+    'this backend has no relationship endpoint — extracted entities are stored, ' +
+    'edges are skipped. Further occurrences are suppressed.',
+    err,
+  );
+}
+
 export function makeClient(config: NamsConfig): MemoryClient {
   const client = new MemoryClient({
     endpoint: config.endpoint ?? DEFAULT_ENDPOINT,
@@ -127,11 +176,25 @@ const RETRIEVAL = {
   maxLongterm:5
 };
 
-function deduplicatePush(hits: MemoryHit[], seen: Set<string>, hit: MemoryHit): void {
+function deduplicatePush(
+  hits: MemoryHit[],
+  seen: Set<string>,
+  hit: MemoryHit,
+  aliasKey?: string,
+): void {
   const k = hit.content?.trim();
   if (!k || seen.has(k)) return;
   seen.add(k);
+  const alias = aliasKey?.trim();
+  if (alias) seen.add(alias);
   hits.push(hit);
+}
+
+function entityContent(e: { name?: string; description?: string }): string {
+  const name = e.name?.trim();
+  const description = e.description?.trim();
+  if (name && description) return `${name} — ${description}`;
+  return name || description || '';
 }
 
 // Keyword + case-variant fallback
@@ -281,7 +344,7 @@ export async function retrieveMemories(
     searchWithFallback(
       query,
       (q) => client.longTerm.searchEntities(q, { limit: RETRIEVAL.maxLongterm }),
-      (e) => e.description ?? e.name,
+      entityContent,
       log,
       'searchEntities',
     ),
@@ -295,11 +358,11 @@ export async function retrieveMemories(
 
   for (const e of longHits) {
     deduplicatePush(hits, seen, {
-      content: e.description ?? e.name,
+      content: entityContent(e),
       source: 'long-term',
       type: e.type ?? 'entity',
       score: e.confidence,
-    });
+    }, e.description ?? e.name);
   }
   for (const m of shortHits) {
     deduplicatePush(hits, seen, { content: m.content, source: 'conversation', type: 'message' });
@@ -348,7 +411,7 @@ export async function storeMemory(
       await opts.extractor(client, input);
       return;
     } catch (err) {
-      getLogger(client).warn('graph extraction failed, falling back to flat entity', err);
+      reportExtractionFailure(client, 'graph extraction failed, falling back to flat entity', err);
     }
   }
 

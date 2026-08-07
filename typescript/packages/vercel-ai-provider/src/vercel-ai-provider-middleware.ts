@@ -13,8 +13,9 @@ import {
   getLogger,
   resolveConversation,
   retrieveMemories,
+  reportExtractionFailure,
 } from './vercel-ai-provider-client';
-import { createGraphExtractor } from './vercel-ai-provider-extract';
+import { createGraphExtractor, type GraphExtractorOptions } from './vercel-ai-provider-extract';
 import { GraphExtractor, MemoryHit, NamsConfig, NamsScope } from './vercel-ai-provider-types';
 
 export interface NamsMemoryConfig extends NamsConfig {
@@ -24,6 +25,8 @@ export interface NamsMemoryConfig extends NamsConfig {
   persistInteractions?: boolean;
   /** When set, build a real entity graph per stored turn (one extra model call). */
   extractionModel?: LanguageModel;
+  /** Tunes the extractor built from `extractionModel` (e.g. override the self-referential guard). */
+  extractionOptions?: GraphExtractorOptions;
 }
 
 
@@ -122,7 +125,7 @@ const buildMiddleware = (
     if (extractor && (userText || assistantText)) {
       const combined = `User: ${userText}\nAssistant: ${assistantText}`.trim();
       await extractor(client, { content: combined, type: 'interaction' })
-        .catch(e => log.warn('turn extraction failed', e));
+        .catch(e => reportExtractionFailure(client, 'turn extraction failed', e));
     }
   }
 
@@ -202,7 +205,9 @@ const buildMiddleware = (
  * LanguageModelV4 with transparent memory retrieval and persistence.
  */
 export function createNamsMemory(config: NamsMemoryConfig) {
-  const extractor = config.extractionModel ? createGraphExtractor(config.extractionModel) : undefined;
+  const extractor = config.extractionModel
+    ? createGraphExtractor(config.extractionModel, config.extractionOptions)
+    : undefined;
   const maxMemories = config.maxMemories ?? 6;
   const persist = config.persistInteractions ?? true;
 

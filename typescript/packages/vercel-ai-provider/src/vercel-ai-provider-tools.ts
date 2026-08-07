@@ -26,7 +26,7 @@ import {
   type NamsScope,
   type MemoryHit,
 } from './vercel-ai-provider-client';
-import { createGraphExtractor } from './vercel-ai-provider-extract';
+import { createGraphExtractor, type GraphExtractorOptions } from './vercel-ai-provider-extract';
 
 //Schemas
 
@@ -61,6 +61,8 @@ type ToolContext = Record<string, unknown>;
 
 export interface NamsToolsOptions extends NamsConfig, NamsScope {
   extractionModel?: LanguageModel;
+  /** Tunes the extractor built from `extractionModel` (e.g. override the self-referential guard). */
+  extractionOptions?: GraphExtractorOptions;
 }
 
 /** MCP server connection config. Headers are sent on every request (e.g. Authorization). */
@@ -128,7 +130,9 @@ export class NamsMcpConnectionError extends Error {
 export function createNamsMemoryTools(options: NamsToolsOptions) {
   const client = makeClient(options);
   const scope: NamsScope = { userId: options.userId, conversationId: options.conversationId };
-  const extractor = options.extractionModel ? createGraphExtractor(options.extractionModel) : undefined;
+  const extractor = options.extractionModel
+    ? createGraphExtractor(options.extractionModel, options.extractionOptions)
+    : undefined;
 
   let convIdPromise: Promise<string> | null = null;
   const getConvId = (): Promise<string> =>
@@ -157,7 +161,10 @@ export function createNamsMemoryTools(options: NamsToolsOptions) {
     description:
       'Persist important information to NAMS (Neo4j graph). ' +
       'Call this BEFORE giving your final answer whenever the conversation ' +
-      'contains facts, preferences, or patterns worth remembering.',
+      'contains facts, preferences, or patterns worth remembering. ' +
+      'Store only NEW information the user supplied in this conversation. ' +
+      'Never store what query_memory returned, or a summary of what you ' +
+      'remember — that is already stored, and re-storing it degrades recall.',
     inputSchema: zodSchema(storeSchema),
     execute: async ({ content, type, confidence, tags }) => {
       try {
