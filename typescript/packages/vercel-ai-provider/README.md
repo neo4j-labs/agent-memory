@@ -444,17 +444,6 @@ mint entities *about remembering* (`long-term memories [Concept]`,
 next such question, so they outrank the real facts and every ask degrades the
 next one. Skipped entities are logged at `warn`.
 
-The guard keys on the distinction extraction already asks for: **named** — i.e.
-proper-noun — entities. An agent describing its own recall yields common nouns
-(`profile details`, `preferences`); the facts worth keeping are proper nouns
-(`Priya`, `Bangalore`, `Acme Analytics`). No vocabulary list is involved, so it
-holds as models rephrase, and it declines to fire on caseless scripts (`北京`,
-`القاهرة`) rather than rejecting them. A second rule drops names that are just
-their own type repeated (`Organization [Organization]`).
-
-Known cost: brand names styled all-lowercase (`npm`, `git`) read as common nouns
-and are skipped. Override the guard if your domain is full of them:
-
 ```ts
 extractionOptions: {
   // "preferences" is a real entity here; drop raw identifiers instead.
