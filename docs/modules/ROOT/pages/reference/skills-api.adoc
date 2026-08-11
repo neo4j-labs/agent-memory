@@ -8,7 +8,7 @@
 icon:flask[] *Preview.* The Skills surface is exposed over the NAMS **REST API**
 and **MCP** only — there is no `client.skill` accessor in the Python or
 TypeScript SDK yet, and nothing on the bolt backend. Paths below are under the
-versioned base (e.g. `https://memory.neo4jlabs.com/v1`); all are workspace-scoped
+versioned base (e.g. `+https://memory.neo4jlabs.com/v1+`); all are workspace-scoped
 and gated by the `skills:read` / `skills:write` scopes. For the concept, see
 xref:explanation/skills.adoc[Agent Skills].
 ====

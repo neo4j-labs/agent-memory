@@ -408,7 +408,7 @@ defaults to NAMS. Falls back to bolt when unset.
 
 | `MEMORY_ENDPOINT`
 | NAMS endpoint base URL. REST mode when the URL contains `/v\d+`.
-| `https://memory.neo4jlabs.com/v1`
+| `+https://memory.neo4jlabs.com/v1+`
 
 | `MEMORY_WORKSPACE_ID`
 | NAMS workspace id. Lifted into `NamsConfig.workspace_id` and sent as the
