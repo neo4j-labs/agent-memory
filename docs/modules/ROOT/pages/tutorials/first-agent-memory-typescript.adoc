@@ -13,7 +13,7 @@ A simple chat application where the AI assistant remembers conversation history 
 
 * Node.js 20+ or Bun
 * An OpenAI API key
-* Either a `nams_*` API key for `https://memory.neo4jlabs.com/v1` (recommended) or a local Neo4j + bridge server
+* Either a `nams_*` API key for the link:https://memory.neo4jlabs.com/[hosted service] (recommended) or a local Neo4j + bridge server
 
 == Step 1: Create the Project
 

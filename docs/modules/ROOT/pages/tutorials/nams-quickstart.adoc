@@ -146,7 +146,7 @@ The same Cypher query works on bolt too — `client.query.cypher` is backend-agn
 == What just happened?
 
 * `MemoryClient()` with no arguments inspected the environment, saw `MEMORY_API_KEY`, and built a NAMS-backed client.
-* Every method call became an HTTPS POST/GET to `https://memory.neo4jlabs.com/v1/...`.
+* Every method call became an HTTPS POST/GET to `+https://memory.neo4jlabs.com/v1/...+`.
 * NAMS embedded your messages, deduplicated the entity, and stored the trace — all server-side.
 * `client.query.cypher` ran a read-only query against the hosted graph.
 

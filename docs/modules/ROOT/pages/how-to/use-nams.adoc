@@ -70,7 +70,7 @@ async with MemoryClient(settings) as client:
 | Field | Default | Description
 
 | `endpoint`
-| `https://memory.neo4jlabs.com/v1`
+| `+https://memory.neo4jlabs.com/v1+`
 | Base URL. The `/v\d+` suffix triggers REST mode; other shapes use the TCK bridge protocol.
 | `api_key`
 | `None`

@@ -62,7 +62,7 @@ The SDKs consume an existing key — set it once and the backend auto-selects NA
 | Variable | Purpose
 
 | `MEMORY_API_KEY` | Your `nams_…` key. When set (and `NAM_BACKEND` is unspecified) the backend defaults to NAMS.
-| `MEMORY_ENDPOINT` | Override the service URL (default `https://memory.neo4jlabs.com/v1`).
+| `MEMORY_ENDPOINT` | Override the service URL (default `+https://memory.neo4jlabs.com/v1+`).
 | `MEMORY_WORKSPACE_ID` | Workspace id, lifted into `NamsConfig.workspace_id` and sent as `X-Workspace-Id`.
 | `NAM_BACKEND` | Force `bolt` or `nams`.
 | `NAM_NAMS__*` | Nested `NamsConfig` overrides (timeout, retries, …).

@@ -1,7 +1,7 @@
 = REST API Reference
 :description: Hosted-service REST endpoints mapped to client SDK methods in each language.
 
-The hosted service at `https://memory.neo4jlabs.com/v1` exposes a REST API.
+The hosted service at `+https://memory.neo4jlabs.com/v1+` exposes a REST API.
 This page is a curated companion to the machine-readable contract — it maps
 every endpoint to its bridge-protocol equivalent and the corresponding method
 on each language client.
@@ -22,7 +22,7 @@ casing.
 == Base URL & versioning
 
 All endpoints are served under a major-version prefix: the production base URL
-is `https://memory.neo4jlabs.com/v1`. The SDK appends paths to the configured
+is `+https://memory.neo4jlabs.com/v1+`. The SDK appends paths to the configured
 `MEMORY_ENDPOINT` (default the URL above). The `/v{n}` prefix also selects the
 REST transport; endpoints without it use the TCK bridge protocol (see
 xref:explanation/backends.adoc[Bolt vs NAMS]).

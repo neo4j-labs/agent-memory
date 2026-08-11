@@ -73,7 +73,7 @@ const memory = new MemoryClient({
 |`endpoint`
 |`string`
 |The NAMS REST endpoint. Auto-selects REST transport when ending in `/v\d+`.
-|`https://memory.neo4jlabs.com/v1`
+|`+https://memory.neo4jlabs.com/v1+`
 
 |`apiKey`
 |`string`

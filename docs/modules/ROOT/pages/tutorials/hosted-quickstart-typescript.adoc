@@ -2,8 +2,8 @@
 :description: Five-minute quickstart for the hosted Neo4j Agent Memory Service.
 
 This tutorial walks you from zero to a working agent against the hosted
-service at `https://memory.neo4jlabs.com/v1`, using whichever language client
-fits your stack.
+service at link:https://memory.neo4jlabs.com/[memory.neo4jlabs.com], using
+whichever language client fits your stack.
 
 == Prerequisites
 
