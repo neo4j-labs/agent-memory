@@ -30,8 +30,11 @@ export { makeClient, getLogger, resolveConversation, findExistingConversation, r
 export { createGraphExtractor } from './vercel-ai-provider-extract';
 export type { GraphExtractorOptions } from './vercel-ai-provider-extract';
 export { createNamsMemory } from './vercel-ai-provider-middleware';
-export { createNamsMemoryTools, createNamsTools, enforceQueryMemory, NamsMemoryTools, NamsMcpConnectionError } from './vercel-ai-provider-tools';
-export type { EnforceQueryMemoryOptions } from './vercel-ai-provider-tools';
+export { createNamsMemoryTools, createNamsTools, enforceQueryMemory, ensureMemoryStored, NamsMemoryTools, NamsMcpConnectionError } from './vercel-ai-provider-tools';
+export type {
+  EnforceQueryMemoryOptions, EnsureMemoryStoredOptions, EnsureMemoryStoredResult,
+  FinishedTurn, UnstoredTurn,
+} from './vercel-ai-provider-tools';
 export { createNamsProvider } from './vercel-ai-provider';
 
 import type { LanguageModel } from 'ai';

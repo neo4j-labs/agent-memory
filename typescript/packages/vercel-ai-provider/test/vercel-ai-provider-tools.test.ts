@@ -34,6 +34,7 @@ import {
   createNamsMemoryTools,
   createNamsTools,
   enforceQueryMemory,
+  ensureMemoryStored,
 } from '../src/vercel-ai-provider-tools';
 import type { QueryOutput, StoreOutput } from '../src/vercel-ai-provider-tools';
 
@@ -246,6 +247,111 @@ describe('enforceQueryMemory', () => {
     expect(await prepareStep(stepOptions(0)))
       .toEqual({ toolChoice: { type: 'tool', toolName: 'query_memory' } });
     expect(await prepareStep(stepOptions(1, [['query_memory']]))).toBeUndefined();
+  });
+});
+
+describe('ensureMemoryStored', () => {
+  const tools = (conversationId: string) =>
+    createNamsMemoryTools({ apiKey: 'k', userId: freshUser(), conversationId });
+
+  it('persists the assistant turn as an interaction when store_memory never ran', async () => {
+    const t = tools('conv-e1');
+
+    const result = await ensureMemoryStored(t)({
+      text: 'Noted — you prefer dark mode.',
+      toolCalls: [{ toolName: 'query_memory' }],
+    });
+
+    expect(result).toEqual({
+      stored: true,
+      input: { content: 'Noted — you prefer dark mode.', type: 'interaction' },
+    });
+    expect(fake.shortTerm.addMessage).toHaveBeenCalledWith(
+      'conv-e1', 'assistant', 'Noted — you prefer dark mode.',
+    );
+    // interaction → short-term only. The agent's own summary must never become
+    // a long-term entity; that is the self-referential loop the extractor rejects.
+    expect(fake.longTerm.addEntity).not.toHaveBeenCalled();
+  });
+
+  it('does nothing when the model already called store_memory', async () => {
+    const t = tools('conv-e2');
+
+    const result = await ensureMemoryStored(t)({
+      text: 'Stored that for you.',
+      toolCalls: [{ toolName: 'query_memory' }, { toolName: 'store_memory' }],
+    });
+
+    expect(result).toEqual({ stored: false, reason: 'already-stored' });
+    expect(fake.shortTerm.addMessage).not.toHaveBeenCalled();
+  });
+
+  it('reads per-step tool calls when the aggregate is absent', async () => {
+    const t = tools('conv-e3');
+
+    const result = await ensureMemoryStored(t)({
+      text: 'done',
+      steps: [{ toolCalls: [{ toolName: 'read_file' }] }, { toolCalls: [{ toolName: 'store_memory' }] }],
+    });
+
+    expect(result).toEqual({ stored: false, reason: 'already-stored' });
+  });
+
+  it('stores nothing when the turn produced no text', async () => {
+    const t = tools('conv-e4');
+
+    expect(await ensureMemoryStored(t)({ text: '   ', toolCalls: [] }))
+      .toEqual({ stored: false, reason: 'nothing-to-store' });
+    expect(fake.shortTerm.addMessage).not.toHaveBeenCalled();
+  });
+
+  it('honours a custom fallback, including returning null to skip', async () => {
+    const t = tools('conv-e5');
+
+    const stored = await ensureMemoryStored(t, {
+      fallback: ({ text, toolNames }) => ({
+        content: `[${toolNames.join(',')}] ${text}`,
+        type: 'fact',
+        confidence: 0.9,
+      }),
+    })({ text: 'Alex works at TechCorp', toolCalls: [{ toolName: 'query_memory' }] });
+
+    expect(stored).toMatchObject({ stored: true });
+    expect(fake.longTerm.addEntity).toHaveBeenCalledWith(
+      '[query_memory] Alex works at TechCorp', 'fact',
+      { description: '[query_memory] Alex works at TechCorp' },
+    );
+
+    const skipped = await ensureMemoryStored(t, { fallback: () => null })({ text: 'anything' });
+    expect(skipped).toEqual({ stored: false, reason: 'nothing-to-store' });
+  });
+
+  it('reports failure instead of throwing into a completed response', async () => {
+    fake.shortTerm.addMessage.mockRejectedValue(new Error('write failed'));
+    const t = tools('conv-e6');
+
+    expect(await ensureMemoryStored(t)({ text: 'hello' }))
+      .toEqual({ stored: false, reason: 'failed' });
+  });
+
+  it('works with the MCP-merged tool set', async () => {
+    mcpHolder.tools = { search: { description: 'mcp search' } };
+    const { tools: merged } = await createNamsTools({
+      apiKey: 'k',
+      userId: freshUser(),
+      conversationId: 'conv-e7',
+      mcp: { url: 'https://mcp.example.com/mcp', toolPrefix: 'mcp_' },
+    });
+
+    const result = await ensureMemoryStored(merged)({ text: 'merged turn' });
+
+    expect(result).toMatchObject({ stored: true });
+    expect(fake.shortTerm.addMessage).toHaveBeenCalledWith('conv-e7', 'assistant', 'merged turn');
+  });
+
+  it('throws at wiring time on a tool set it did not create', () => {
+    const t = tools('conv-e8');
+    expect(() => ensureMemoryStored({ ...t })).toThrow(/spreading it into a new object/);
   });
 });
 

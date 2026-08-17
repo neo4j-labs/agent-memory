@@ -15,6 +15,7 @@ import {
   type ToolSet,
 } from 'ai';
 import { z } from 'zod';
+import type { MemoryClient } from '@neo4j-labs/agent-memory';
 import {
   makeClient,
   getLogger,
@@ -25,6 +26,8 @@ import {
   type NamsConfig,
   type NamsScope,
   type MemoryHit,
+  type GraphExtractor,
+  type StoreInput as MemoryStoreInput,
 } from './vercel-ai-provider-client';
 import { createGraphExtractor, type GraphExtractorOptions } from './vercel-ai-provider-extract';
 
@@ -127,6 +130,14 @@ export class NamsMcpConnectionError extends Error {
   }
 }
 
+interface MemoryToolsHandle {
+  client: MemoryClient;
+  getConvId: () => Promise<string>;
+  extractor?: GraphExtractor;
+}
+
+const handleByToolSet = new WeakMap<object, MemoryToolsHandle>();
+
 export function createNamsMemoryTools(options: NamsToolsOptions) {
   const client = makeClient(options);
   const scope: NamsScope = { userId: options.userId, conversationId: options.conversationId };
@@ -183,7 +194,88 @@ export function createNamsMemoryTools(options: NamsToolsOptions) {
     },
   });
 
-  return { query_memory, store_memory };
+  const tools = { query_memory, store_memory };
+  handleByToolSet.set(tools, { client, getConvId, extractor });
+  return tools;
+}
+
+export interface FinishedTurn {
+  /** Assistant text from the final step. */
+  text?: string;
+  /** Tool calls across all steps, as the AI SDK aggregates them. */
+  toolCalls?: ReadonlyArray<{ toolName: string }>;
+  /** Per-step tool calls, used when the aggregate is absent. */
+  steps?: ReadonlyArray<{ toolCalls?: ReadonlyArray<{ toolName: string }> }>;
+}
+
+/** The turn as handed to a custom `fallback`, once it is known nothing was stored. */
+export interface UnstoredTurn {
+  /** Final assistant text, or `''` when the model produced none. */
+  text: string;
+  /** Every tool the model called this turn, deduplicated. */
+  toolNames: string[];
+}
+
+export interface EnsureMemoryStoredOptions {
+  /**
+   * What to persist when the model never called `store_memory`. Return `null`
+   * to store nothing. Default: the assistant's final text as an `interaction`.
+   */
+  fallback?: (turn: UnstoredTurn) => MemoryStoreInput | null;
+}
+
+export type EnsureMemoryStoredResult =
+  | { stored: true; input: MemoryStoreInput }
+  | { stored: false; reason: 'already-stored' | 'nothing-to-store' | 'failed' };
+
+/**
+ * `interaction` routes to short-term conversation memory, which mirrors what
+ * middleware mode guarantees. Storing the assistant's own text as a `fact`
+ * instead would feed it to the graph extractor — and an agent summarising what
+ * it remembers is precisely the self-referential input the extractor's skip
+ * guard exists to reject. Callers who do want facts pass their own `fallback`.
+ */
+const defaultFallback = (turn: UnstoredTurn): MemoryStoreInput | null =>
+  turn.text ? { content: turn.text, type: 'interaction' } : null;
+
+const toolNamesOf = (event: FinishedTurn): string[] => [
+  ...new Set([
+    ...(event.toolCalls ?? []).map(c => c.toolName),
+    ...(event.steps ?? []).flatMap(s => (s.toolCalls ?? []).map(c => c.toolName)),
+  ]),
+];
+
+
+export function ensureMemoryStored(
+  tools: ToolSet,
+  options: EnsureMemoryStoredOptions = {},
+): (event: FinishedTurn) => Promise<EnsureMemoryStoredResult> {
+  const handle = handleByToolSet.get(tools);
+  if (!handle) {
+    throw new Error(
+      'ensureMemoryStored() expects the tool set returned by createNamsMemoryTools() / ' +
+      'createNams().tools() / .toolsWithMcp(), not a copy of it. Pass that object directly — ' +
+      'spreading it into a new object ({ ...tools }) loses the memory client it is bound to.',
+    );
+  }
+  const fallback = options.fallback ?? defaultFallback;
+
+  return async (event) => {
+    const toolNames = toolNamesOf(event);
+    if (toolNames.includes('store_memory')) return { stored: false, reason: 'already-stored' };
+
+    const input = fallback({ text: event.text?.trim() ?? '', toolNames });
+    if (!input?.content?.trim()) return { stored: false, reason: 'nothing-to-store' };
+
+    try {
+      const convId = await handle.getConvId();
+      await storeMemory(handle.client, convId, input, { extractor: handle.extractor });
+      return { stored: true, input };
+    } catch (err) {
+      getLogger(handle.client).error('ensureMemoryStored failed to persist the turn', err);
+      return { stored: false, reason: 'failed' };
+    }
+  };
 }
 
 export interface EnforceQueryMemoryOptions {
@@ -289,9 +381,12 @@ export async function createNamsTools(options: NamsToolsWithMcpOptions): Promise
         (prefix ? '' : ' — set mcp.toolPrefix to namespace MCP tools and avoid this'),
       );
     }
+    const merged: ToolSet = { ...namsTools, ...mcpTools };
+    const handle = handleByToolSet.get(namsTools);
+    if (handle) handleByToolSet.set(merged, handle);
 
     return {
-      tools: { ...namsTools, ...mcpTools },
+      tools: merged,
       close: () => mcpClient.close(),
       mcp: { connected: true, toolNames },
     };

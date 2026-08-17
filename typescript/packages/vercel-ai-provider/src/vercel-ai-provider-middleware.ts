@@ -30,17 +30,29 @@ export interface NamsMemoryConfig extends NamsConfig {
 }
 
 
-const injectIntoLastUser = (prompt: any[], block: string): void => {
+const lastUserIndex = (prompt: any[]): number => {
   for (let i = prompt.length - 1; i >= 0; i--) {
-    const msg = prompt[i];
-    if (msg?.role !== 'user') continue;
-    if (typeof msg.content === 'string') {
-      msg.content = `${block}\n\n${msg.content}`;
-    } else if (Array.isArray(msg.content)) {
-      msg.content.unshift({ type: 'text', text: `${block}\n\n` });
-    }
-    return;
+    if (prompt[i]?.role === 'user') return i;
   }
+  return -1;
+}
+
+/**
+ * Return a copy of the prompt with `block` prepended to its last user message.
+ */
+const withMemoryBlock = (prompt: any[], block: string): any[] => {
+  const i = lastUserIndex(prompt);
+  if (i < 0) return prompt;
+
+  const msg = prompt[i];
+  let content: unknown;
+  if (typeof msg.content === 'string') content = `${block}\n\n${msg.content}`;
+  else if (Array.isArray(msg.content)) content = [{ type: 'text', text: `${block}\n\n` }, ...msg.content];
+  else return prompt;
+
+  const next = [...prompt];
+  next[i] = { ...msg, content };
+  return next;
 }
 
 const toolCallInput = (part: any): string => {
@@ -77,17 +89,16 @@ const formatMemoryBlock = (memories: MemoryHit[]): string => {
 
 // Text of the most recent user message in the prompt.
 const lastUserText = (prompt: any[]): string => {
-  for (let i = prompt.length - 1; i >= 0; i--) {
-    const msg = prompt[i];
-    if (msg?.role !== 'user') continue;
-    if (typeof msg.content === 'string') return msg.content;
-    if (Array.isArray(msg.content))
-      return msg.content
-        .filter((p: any) => p?.type === 'text')
-        .map((p: any) => p.text as string)
-        .join('')
-        .trim();
-  }
+  const i = lastUserIndex(prompt);
+  if (i < 0) return '';
+  const msg = prompt[i];
+  if (typeof msg.content === 'string') return msg.content;
+  if (Array.isArray(msg.content))
+    return msg.content
+      .filter((p: any) => p?.type === 'text')
+      .map((p: any) => p.text as string)
+      .join('')
+      .trim();
   return '';
 }
 
@@ -135,7 +146,6 @@ const buildMiddleware = (
     transformParams: async ({ params }) => {
       const userText = lastUserText(params.prompt);
       if (!userText) return params;
-
       originalUserText.set(params as object, userText);
 
       let convId: string;
@@ -151,8 +161,9 @@ const buildMiddleware = (
 
       if (memories.length === 0) return params;
 
-      injectIntoLastUser(params.prompt, formatMemoryBlock(memories));
-      return params;
+      const augmented = { ...params, prompt: withMemoryBlock(params.prompt, formatMemoryBlock(memories)) };
+      originalUserText.set(augmented as object, userText);
+      return augmented;
     },
 
     wrapGenerate: async ({ doGenerate, params }) => {

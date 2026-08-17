@@ -245,31 +245,31 @@ describe('createGraphExtractor — self-referential guard', () => {
   it('still stores the real entities alongside skipped ones, and drops their dangling edges', async () => {
     mockedGenerateText.mockResolvedValue(graphResult(
       [
-        { name: 'Priya', type: 'Person' },
+        { name: 'Alex', type: 'Person' },
         { name: 'Acme Analytics', type: 'Organization' },
         { name: 'stored memories', type: 'Concept' },
       ],
       [
-        { from: 'Priya', to: 'Acme Analytics', type: 'WORKS_AT' },
-        { from: 'Priya', to: 'stored memories', type: 'HAS' },
+        { from: 'Alex', to: 'Acme Analytics', type: 'WORKS_AT' },
+        { from: 'Alex', to: 'stored memories', type: 'HAS' },
       ],
     ));
 
     const extract = createGraphExtractor({} as any);
-    await extract(fake as any, { content: 'Priya works at Acme Analytics', type: 'fact' });
+    await extract(fake as any, { content: 'Alex works at Acme Analytics', type: 'fact' });
 
     const stored = fake.longTerm.addEntity.mock.calls.map((c: any[]) => c[0]);
-    expect(stored).toEqual(['Priya', 'Acme Analytics']);
+    expect(stored).toEqual(['Alex', 'Acme Analytics']);
     expect(fake.longTerm.addRelationship).toHaveBeenCalledTimes(1);
     expect(fake.longTerm.addRelationship).toHaveBeenCalledWith(
-      'ent-Priya', 'ent-Acme Analytics', 'WORKS_AT',
+      'ent-Alex', 'ent-Acme Analytics', 'WORKS_AT',
     );
   });
 
   it('honours a caller-supplied skipEntity override', async () => {
     mockedGenerateText.mockResolvedValue(graphResult([
       { name: 'preferences', type: 'Concept' },
-      { name: 'Priya', type: 'Person' },
+      { name: 'Alex', type: 'Person' },
     ]));
 
     // A domain where "preferences" is a real entity and people are not wanted.
