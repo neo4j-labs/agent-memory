@@ -43,4 +43,8 @@ export type GraphExtractor = (client: MemoryClient, input: StoreInput) => Promis
 export interface ClientState {
   convCache: Map<string, string>;
   logger: NamsLogger;
+  /** Set once graph extraction has failed, so only the first failure logs at error level. */
+  extractionFailed?: boolean;
+  /** Set once the backend has reported relationship writes unsupported, to suppress per-edge repeats. */
+  relationshipWritesUnsupported?: boolean;
 }

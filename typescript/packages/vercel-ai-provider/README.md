@@ -264,7 +264,7 @@ return createUIMessageStreamResponse({ stream });
 Expose `query_memory` and `store_memory` as explicit AI SDK tools. The model decides when to call them, and the calls are visible in your UI — useful for debugging or when you want the user to see memory activity:
 
 ```ts
-import { createNams, enforceQueryMemory } from '@neo4j-labs/nams-ai-provider';
+import { createNams, enforceQueryMemory, ensureMemoryStored } from '@neo4j-labs/nams-ai-provider';
 import { openai } from '@ai-sdk/openai';
 import {
   ToolLoopAgent,
@@ -284,6 +284,7 @@ const agent = new ToolLoopAgent({
     'giving your final answer.',
   tools,
   prepareStep:  enforceQueryMemory(),
+  onFinish:     ensureMemoryStored(tools),
   stopWhen:     stepCountIs(10),
 });
 
@@ -306,11 +307,51 @@ memory. After `graceSteps` steps (default: 3) without a query, the next step
 forces `query_memory` directly, so the loop can never exhaust its budget
 without the query having run; `{ graceSteps: 0 }` forces it as the literal
 first step. Keep `graceSteps` at least two below your `stopWhen` budget so the
-forced query and the final answer both fit. There is no equivalent forcing
-hook for `store_memory` (the loop ends when the model emits final text) — if
-persistence must be guaranteed, check `steps` in `onFinish` and call
-`store_memory.execute()` yourself, or use provider / middleware mode where
-both directions happen unconditionally in code.
+forced query and the final answer both fit.
+
+### Guaranteeing persistence with `ensureMemoryStored()`
+
+`prepareStep` cannot guarantee the *write* side: the loop ends when the model
+emits final text, so there is no later step to force `store_memory` into.
+`ensureMemoryStored(tools)` is an `onFinish` hook that closes the gap after the
+loop instead — if the model never called `store_memory`, it persists the turn
+itself:
+
+```ts
+const tools = nams.tools({ userId: session.userId });
+
+const agent = new ToolLoopAgent({
+  model:       openai('gpt-5.4-mini'),
+  tools,
+  prepareStep: enforceQueryMemory(),      // retrieval guaranteed mid-loop
+  onFinish:    ensureMemoryStored(tools), // persistence guaranteed after it
+  stopWhen:    stepCountIs(10),
+});
+```
+
+It returns `{ stored: true, input }` when it wrote, or `{ stored: false, reason }`
+where `reason` is `'already-stored'`, `'nothing-to-store'`, or `'failed'` — a
+failed write logs and reports rather than throwing into a response that has
+already been generated.
+
+By default it stores the assistant's final text as an **`interaction`**
+(short-term conversation memory), matching what middleware mode records. It
+deliberately does not store it as a `fact`: an agent's summary of what it
+remembers is exactly the self-referential input that degrades recall, which is
+why the graph extractor skips such entities. Pass `fallback` to decide for
+yourself — including returning `null` to store nothing:
+
+```ts
+onFinish: ensureMemoryStored(tools, {
+  // The onFinish event carries no user message; close over your own prompt.
+  fallback: ({ text }) => ({ content: `User: ${prompt}\nAssistant: ${text}`, type: 'interaction' }),
+})
+```
+
+Pass the tool set object itself, not a copy — `ensureMemoryStored({ ...tools })`
+throws immediately, because a spread loses the binding to the memory client.
+In provider and middleware mode you need none of this: both directions happen
+unconditionally in code.
 
 ### Tools Mode with MCP (optional)
 
@@ -397,6 +438,7 @@ createNamsProvider({
   maxMemories?:         number,   // Max memories retrieved and injected into the prompt per turn (capped at 12). Default: 6
   persistInteractions?: boolean,  // Save each turn. Default: true
   extractionModel?:     LanguageModel, // Enables graph entity extraction
+  extractionOptions?:   GraphExtractorOptions, // Tunes extraction, e.g. { skipEntity }
 });
 ```
 
@@ -435,6 +477,20 @@ const nams = createNamsProvider({
 > currently doesn't), extracted entities are stored and relationship writes
 > are skipped with a warning — the graph gains edges automatically once the
 > endpoint is available.
+
+Extraction skips **self-referential** entities: when the agent answers "what do
+you remember about me?" and stores its own answer, extraction would otherwise
+mint entities *about remembering* (`long-term memories [Concept]`,
+`profile details [Object]`). Those meta-entities are the closest match for the
+next such question, so they outrank the real facts and every ask degrades the
+next one. Skipped entities are logged at `warn`.
+
+```ts
+extractionOptions: {
+  // "preferences" is a real entity here; drop raw identifiers instead.
+  skipEntity: (e) => /^[a-z0-9_]+$/.test(e.name),
+}
+```
 
 ---
 

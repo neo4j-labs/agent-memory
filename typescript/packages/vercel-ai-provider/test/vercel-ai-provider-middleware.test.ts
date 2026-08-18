@@ -184,6 +184,65 @@ describe('middleware mode — persistence', () => {
     expect(assistantCalls).toHaveLength(2);
   });
 
+  it('injects exactly one memory block when a step is retried', async () => {
+    // The AI SDK rebuilds the params object per retry attempt but reuses the
+    // same prompt array, and transformParams re-runs on every attempt. Editing
+    // that array in place stacked a second memory block onto the first.
+    fake.longTerm.searchEntities.mockResolvedValue([
+      { name: 'Alex', description: 'works at TechCorp', type: 'person', confidence: 0.9 },
+    ]);
+
+    const seen: string[] = [];
+    const { model } = makeFakeModel();
+    (model as any).doGenerate = vi.fn(async (p: any) => {
+      seen.push(p.prompt.at(-1).content.map((c: any) => c.text).join(''));
+      return {
+        content: [{ type: 'text', text: 'ok' }],
+        finishReason: 'stop',
+        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        warnings: [],
+      };
+    });
+
+    const wrapped = createNamsMemory({ apiKey: 'k' }).wrap(model, {
+      userId: freshUser(),
+      conversationId: 'conv-retry',
+    });
+
+    const prompt = userPrompt('Where do I work?');
+    await wrapped.doGenerate({ prompt } as any);   // attempt 1
+    await wrapped.doGenerate({ prompt } as any);   // retry: same prompt array
+
+    const blocks = (s: string) => (s.match(/Relevant long-term memory/g) ?? []).length;
+    expect(blocks(seen[0])).toBe(1);
+    expect(blocks(seen[1])).toBe(1);
+    // The caller's array is never touched.
+    expect(prompt[0].content).toEqual([{ type: 'text', text: 'Where do I work?' }]);
+  });
+
+  it('persists the user text, never the memory-augmented prompt, across a retry', async () => {
+    fake.longTerm.searchEntities.mockResolvedValue([
+      { name: 'Alex', description: 'works at TechCorp', type: 'person', confidence: 0.9 },
+    ]);
+
+    const { model } = makeFakeModel('answer');
+    const wrapped = createNamsMemory({ apiKey: 'k' }).wrap(model, {
+      userId: freshUser(),
+      conversationId: 'conv-retry-persist',
+    });
+
+    const prompt = userPrompt('Where do I work?');
+    await wrapped.doGenerate({ prompt } as any);
+    await wrapped.doGenerate({ prompt } as any);
+
+    const userCalls = fake.shortTerm.addMessage.mock.calls.filter(c => c[1] === 'user');
+    expect(userCalls).toHaveLength(1);
+    expect(userCalls[0][2]).toBe('Where do I work?');
+    // A leaked memory block would poison short-term memory permanently, since
+    // the stored message is itself retrievable on later turns.
+    expect(userCalls[0][2]).not.toContain('Relevant long-term memory');
+  });
+
   it('does not persist when persistInteractions is false', async () => {
     const { model } = makeFakeModel();
     const wrapped = createNamsMemory({ apiKey: 'k', persistInteractions: false }).wrap(model, {

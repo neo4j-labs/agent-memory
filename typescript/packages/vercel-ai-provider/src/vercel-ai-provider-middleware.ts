@@ -13,8 +13,9 @@ import {
   getLogger,
   resolveConversation,
   retrieveMemories,
+  reportExtractionFailure,
 } from './vercel-ai-provider-client';
-import { createGraphExtractor } from './vercel-ai-provider-extract';
+import { createGraphExtractor, type GraphExtractorOptions } from './vercel-ai-provider-extract';
 import { GraphExtractor, MemoryHit, NamsConfig, NamsScope } from './vercel-ai-provider-types';
 
 export interface NamsMemoryConfig extends NamsConfig {
@@ -24,20 +25,34 @@ export interface NamsMemoryConfig extends NamsConfig {
   persistInteractions?: boolean;
   /** When set, build a real entity graph per stored turn (one extra model call). */
   extractionModel?: LanguageModel;
+  /** Tunes the extractor built from `extractionModel` (e.g. override the self-referential guard). */
+  extractionOptions?: GraphExtractorOptions;
 }
 
 
-const injectIntoLastUser = (prompt: any[], block: string): void => {
+const lastUserIndex = (prompt: any[]): number => {
   for (let i = prompt.length - 1; i >= 0; i--) {
-    const msg = prompt[i];
-    if (msg?.role !== 'user') continue;
-    if (typeof msg.content === 'string') {
-      msg.content = `${block}\n\n${msg.content}`;
-    } else if (Array.isArray(msg.content)) {
-      msg.content.unshift({ type: 'text', text: `${block}\n\n` });
-    }
-    return;
+    if (prompt[i]?.role === 'user') return i;
   }
+  return -1;
+}
+
+/**
+ * Return a copy of the prompt with `block` prepended to its last user message.
+ */
+const withMemoryBlock = (prompt: any[], block: string): any[] => {
+  const i = lastUserIndex(prompt);
+  if (i < 0) return prompt;
+
+  const msg = prompt[i];
+  let content: unknown;
+  if (typeof msg.content === 'string') content = `${block}\n\n${msg.content}`;
+  else if (Array.isArray(msg.content)) content = [{ type: 'text', text: `${block}\n\n` }, ...msg.content];
+  else return prompt;
+
+  const next = [...prompt];
+  next[i] = { ...msg, content };
+  return next;
 }
 
 const toolCallInput = (part: any): string => {
@@ -74,17 +89,16 @@ const formatMemoryBlock = (memories: MemoryHit[]): string => {
 
 // Text of the most recent user message in the prompt.
 const lastUserText = (prompt: any[]): string => {
-  for (let i = prompt.length - 1; i >= 0; i--) {
-    const msg = prompt[i];
-    if (msg?.role !== 'user') continue;
-    if (typeof msg.content === 'string') return msg.content;
-    if (Array.isArray(msg.content))
-      return msg.content
-        .filter((p: any) => p?.type === 'text')
-        .map((p: any) => p.text as string)
-        .join('')
-        .trim();
-  }
+  const i = lastUserIndex(prompt);
+  if (i < 0) return '';
+  const msg = prompt[i];
+  if (typeof msg.content === 'string') return msg.content;
+  if (Array.isArray(msg.content))
+    return msg.content
+      .filter((p: any) => p?.type === 'text')
+      .map((p: any) => p.text as string)
+      .join('')
+      .trim();
   return '';
 }
 
@@ -122,7 +136,7 @@ const buildMiddleware = (
     if (extractor && (userText || assistantText)) {
       const combined = `User: ${userText}\nAssistant: ${assistantText}`.trim();
       await extractor(client, { content: combined, type: 'interaction' })
-        .catch(e => log.warn('turn extraction failed', e));
+        .catch(e => reportExtractionFailure(client, 'turn extraction failed', e));
     }
   }
 
@@ -132,7 +146,6 @@ const buildMiddleware = (
     transformParams: async ({ params }) => {
       const userText = lastUserText(params.prompt);
       if (!userText) return params;
-
       originalUserText.set(params as object, userText);
 
       let convId: string;
@@ -148,8 +161,9 @@ const buildMiddleware = (
 
       if (memories.length === 0) return params;
 
-      injectIntoLastUser(params.prompt, formatMemoryBlock(memories));
-      return params;
+      const augmented = { ...params, prompt: withMemoryBlock(params.prompt, formatMemoryBlock(memories)) };
+      originalUserText.set(augmented as object, userText);
+      return augmented;
     },
 
     wrapGenerate: async ({ doGenerate, params }) => {
@@ -202,7 +216,9 @@ const buildMiddleware = (
  * LanguageModelV4 with transparent memory retrieval and persistence.
  */
 export function createNamsMemory(config: NamsMemoryConfig) {
-  const extractor = config.extractionModel ? createGraphExtractor(config.extractionModel) : undefined;
+  const extractor = config.extractionModel
+    ? createGraphExtractor(config.extractionModel, config.extractionOptions)
+    : undefined;
   const maxMemories = config.maxMemories ?? 6;
   const persist = config.persistInteractions ?? true;
 

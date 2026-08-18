@@ -16,6 +16,8 @@
  *     tool call: store_memory({"content":"User uses Neovim as their editor","type":"fact","confidence":0.9,"tags":["e…
  *   step 2 [unconstrained]
  *
+ *   ensureMemoryStored: already-stored
+ *
  *   assistant: Try Telescope for fuzzy finding and Harpoon for quick file
  *   switching.
  *
@@ -28,7 +30,7 @@
 
 import { openai } from '@ai-sdk/openai';
 import { ToolLoopAgent, stepCountIs } from 'ai';
-import { createNams, enforceQueryMemory } from '../src/index';
+import { createNams, enforceQueryMemory, ensureMemoryStored } from '../src/index';
 
 const userId = process.env.NAMS_DEMO_USER ?? 'demo-user-tools-chat';
 const model = process.env.NAMS_DEMO_MODEL ?? 'gpt-5.4-mini';
@@ -45,6 +47,12 @@ async function main(): Promise<void> {
       'giving your final answer.',
     tools,
     prepareStep: enforceQueryMemory(),
+    onFinish: async (event) => {
+      const outcome = await ensureMemoryStored(tools)(event);
+      console.log(
+        `\nensureMemoryStored: ${outcome.stored ? 'persisted the turn' : outcome.reason}`,
+      );
+    },
     stopWhen: stepCountIs(6),
   });
 

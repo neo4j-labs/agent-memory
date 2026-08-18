@@ -9,6 +9,7 @@ import type { ProviderV4, LanguageModelV4, EmbeddingModelV4, ImageModelV4 } from
 import { NoSuchModelError } from '@ai-sdk/provider';
 import type { LanguageModel } from 'ai';
 import { createNamsMemory } from './vercel-ai-provider-middleware';
+import type { GraphExtractorOptions } from './vercel-ai-provider-extract';
 import { NamsConfig, NamsScope } from './vercel-ai-provider-types';
 
 export interface NamsProviderOptions extends NamsConfig {
@@ -24,6 +25,8 @@ export interface NamsProviderOptions extends NamsConfig {
   persistInteractions?: boolean;
   /** When set, builds a real entity graph per stored turn (one extra model call). */
   extractionModel?: LanguageModel;
+  /** Tunes the extractor built from `extractionModel` (e.g. override the self-referential guard). */
+  extractionOptions?: GraphExtractorOptions;
 }
 
 /**
