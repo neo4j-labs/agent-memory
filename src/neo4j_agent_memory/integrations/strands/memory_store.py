@@ -14,7 +14,13 @@ from typing import TYPE_CHECKING, Any
 from typing_extensions import Unpack
 
 try:
-    from strands.memory import MemoryEntry, MemoryStore, MemoryStoreConfig, SearchOptions
+    from strands.memory import (
+        AddMessagesContext,
+        MemoryEntry,
+        MemoryStore,
+        MemoryStoreConfig,
+        SearchOptions,
+    )
 except ImportError as import_error:  # pragma: no cover - exercised via package __init__
     raise ImportError(
         "strands-agents>=1.44.0 is required for the Strands memory store. "
@@ -22,10 +28,13 @@ except ImportError as import_error:  # pragma: no cover - exercised via package 
     ) from import_error
 
 from neo4j_agent_memory.core.exceptions import NotSupportedError
+from neo4j_agent_memory.integrations.strands._messages import _message_text
 from neo4j_agent_memory.integrations.strands._retrieval import _retrieve_entries
 
 if TYPE_CHECKING:
     from types import TracebackType
+
+    from strands.types.content import Message as StrandsMessage
 
     from neo4j_agent_memory import MemoryClient, MemorySettings
     from neo4j_agent_memory.nams.endpoints import TransportMode
@@ -38,6 +47,9 @@ _STORE_KEY = "strands_memory_store"
 #: Strands' own per-store default when neither caller nor store sets a limit
 #: (mirrors ``strands.memory.memory_manager.DEFAULT_MAX_SEARCH_RESULTS``).
 _DEFAULT_MAX_SEARCH_RESULTS = 3
+
+#: NAMS caps bulk message writes; chunk to stay inside it on both backends.
+_BULK_CHUNK = 100
 
 __all__ = ["Neo4jMemoryStore", "Neo4jMemoryStoreConfig"]
 
@@ -293,6 +305,60 @@ class Neo4jMemoryStore(MemoryStore):
             user_identifier=self.user_id,
         )
         return {"kind": "message", "id": str(message.id)}
+
+    async def add_messages(
+        self,
+        messages: list[StrandsMessage],
+        context: AddMessagesContext | None = None,
+    ) -> dict[str, Any]:
+        """Ingest a batch of conversation turns into the sink conversation.
+
+        The backend extracts them — server-side on NAMS, inline on bolt — so no
+        model call happens here. Extraction writes are at-least-once and
+        ``AddMessagesContext.sequence_numbers`` repeat on a retry, so a
+        ``(run_id, sequence_number)`` set skips turns already written by this
+        instance. The dedupe is in-process only: sequence numbers reset each run,
+        so there is nothing durable to key on.
+        """
+        if not self.writable:
+            raise ValueError(
+                f"Neo4jMemoryStore '{self.name}': store is not writable. "
+                "Set writable=True to enable add_messages()."
+            )
+        await self.initialize()
+
+        sequence_numbers = (context.sequence_numbers if context else None) or []
+        payload: list[dict[str, Any]] = []
+        tokens: list[tuple[str, int] | None] = []
+        skipped = 0
+
+        for index, message in enumerate(messages):
+            text = _message_text(message)
+            if not text.strip():
+                skipped += 1
+                continue
+            token: tuple[str, int] | None = None
+            if index < len(sequence_numbers):
+                token = (self._run_id, sequence_numbers[index])
+                if token in self._written:
+                    skipped += 1
+                    continue
+            payload.append({"role": message.get("role", "user"), "content": text})
+            tokens.append(token)
+
+        if not payload:
+            return {"written": 0, "skipped": skipped}
+
+        sink = await self._resolve_sink()
+        for start in range(0, len(payload), _BULK_CHUNK):
+            await self._client.short_term.bulk_add_messages(
+                sink,
+                payload[start : start + _BULK_CHUNK],
+                extract_entities=True,
+                user_identifier=self.user_id,
+            )
+        self._written.update(token for token in tokens if token is not None)
+        return {"written": len(payload), "skipped": skipped}
 
     async def aclose(self) -> None:
         """Close the client only when the store constructed it."""

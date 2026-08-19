@@ -55,25 +55,6 @@ class TestConstruction:
         assert store._owns_client is True
         assert isinstance(store._client, MemoryClient)
 
-    def test_add_messages_is_not_declared_yet(self) -> None:
-        """Scope guard: `add` landed in task 7, `add_messages` lands in task 8.
-
-        `_has_method` compares `getattr(type(store), name)` against the Protocol's
-        own stub by identity, so an undefined method reads as absent. `add` is now
-        real, so `_has_write_sink` is already True; the both-sinks assertion lives
-        in task 8.
-        """
-        from strands.memory.types import _has_method, _has_write_sink
-
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
-
-        store = Neo4jMemoryStore(name="graph", client=FakeMemoryClient())
-
-        assert _has_method(store, "initialize") is True
-        assert _has_method(store, "add") is True
-        assert _has_method(store, "add_messages") is False
-        assert _has_write_sink(store) is True
-
 
 class TestLifecycle:
     @pytest.mark.asyncio
@@ -511,3 +492,153 @@ class TestAdd:
 
         with pytest.raises(ValueError, match="empty"):
             await store.add("   ")
+
+
+class TestAddMessages:
+    @pytest.mark.asyncio
+    async def test_writes_the_batch_to_the_sink_with_extraction(self) -> None:
+        from strands.memory import AddMessagesContext
+
+        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+
+        client = FakeMemoryClient()
+        store = Neo4jMemoryStore(name="graph", client=client)
+        await store.initialize()
+
+        result = await store.add_messages(
+            [
+                {"role": "user", "content": [{"text": "I prefer dark mode"}]},
+                {"role": "assistant", "content": [{"text": "Noted"}]},
+            ],
+            AddMessagesContext(sequence_numbers=[0, 1]),
+        )
+
+        call = client.short_term.bulk_calls[-1]
+        assert call["kwargs"]["extract_entities"] is True
+        assert [m["content"] for m in call["messages"]] == ["I prefer dark mode", "Noted"]
+        assert [m["role"] for m in call["messages"]] == ["user", "assistant"]
+        assert result == {"written": 2, "skipped": 0}
+
+    @pytest.mark.asyncio
+    async def test_a_retried_batch_is_not_written_twice(self) -> None:
+        """Extraction writes are at-least-once; the same sequence numbers repeat."""
+        from strands.memory import AddMessagesContext
+
+        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+
+        client = FakeMemoryClient()
+        store = Neo4jMemoryStore(name="graph", client=client)
+        await store.initialize()
+        batch = [{"role": "user", "content": [{"text": "ok"}]}]
+
+        first = await store.add_messages(batch, AddMessagesContext(sequence_numbers=[0]))
+        second = await store.add_messages(batch, AddMessagesContext(sequence_numbers=[0]))
+
+        assert first == {"written": 1, "skipped": 0}
+        assert second == {"written": 0, "skipped": 1}
+        assert len(client.short_term.bulk_calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_identical_text_with_distinct_sequence_numbers_is_kept(self) -> None:
+        """Dedupe keys on sequence number, not content — two 'ok's are two messages."""
+        from strands.memory import AddMessagesContext
+
+        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+
+        client = FakeMemoryClient()
+        store = Neo4jMemoryStore(name="graph", client=client)
+        await store.initialize()
+
+        result = await store.add_messages(
+            [
+                {"role": "user", "content": [{"text": "ok"}]},
+                {"role": "user", "content": [{"text": "ok"}]},
+            ],
+            AddMessagesContext(sequence_numbers=[3, 4]),
+        )
+
+        assert result == {"written": 2, "skipped": 0}
+
+    @pytest.mark.asyncio
+    async def test_without_sequence_numbers_everything_is_written(self) -> None:
+        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+
+        client = FakeMemoryClient()
+        store = Neo4jMemoryStore(name="graph", client=client)
+        await store.initialize()
+        batch = [{"role": "user", "content": [{"text": "ok"}]}]
+
+        assert await store.add_messages(batch, None) == {"written": 1, "skipped": 0}
+        assert await store.add_messages(batch, None) == {"written": 1, "skipped": 0}
+
+    @pytest.mark.asyncio
+    async def test_messages_with_no_text_blocks_are_dropped(self) -> None:
+        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+
+        client = FakeMemoryClient()
+        store = Neo4jMemoryStore(name="graph", client=client)
+        await store.initialize()
+
+        result = await store.add_messages(
+            [{"role": "assistant", "content": [{"toolUse": {"name": "x", "input": {}}}]}],
+            None,
+        )
+
+        assert result == {"written": 0, "skipped": 1}
+        assert client.short_term.bulk_calls == []
+
+    @pytest.mark.asyncio
+    async def test_batches_larger_than_100_are_chunked(self) -> None:
+        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+
+        client = FakeMemoryClient()
+        store = Neo4jMemoryStore(name="graph", client=client)
+        await store.initialize()
+
+        messages = [{"role": "user", "content": [{"text": f"m{i}"}]} for i in range(250)]
+        result = await store.add_messages(messages, None)
+
+        assert result == {"written": 250, "skipped": 0}
+        assert [len(c["messages"]) for c in client.short_term.bulk_calls] == [100, 100, 50]
+
+    @pytest.mark.asyncio
+    async def test_rejects_writes_when_not_writable(self) -> None:
+        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+
+        store = Neo4jMemoryStore(name="graph", client=FakeMemoryClient(), writable=False)
+        await store.initialize()
+
+        with pytest.raises(ValueError, match="not writable"):
+            await store.add_messages([{"role": "user", "content": [{"text": "x"}]}], None)
+
+
+class TestWriteSinks:
+    def test_declares_both_write_sinks(self) -> None:
+        """Both sinks on one class: server-side extraction, `add` still available."""
+        from strands.memory.types import _has_method, _has_write_sink
+
+        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+
+        store = Neo4jMemoryStore(name="graph", client=FakeMemoryClient())
+
+        assert _has_method(store, "add") is True
+        assert _has_method(store, "add_messages") is True
+        assert _has_write_sink(store) is True
+
+    def test_server_side_extraction_is_the_resolved_default(self) -> None:
+        """`add_messages` present -> no ModelExtractor, so no extra model call.
+
+        Non-vacuous only here: with `add` alone (task 7) this would resolve to a
+        ModelExtractor, and with neither sink it resolves to None trivially.
+        """
+        from strands.memory.extraction.resolve_extraction_config import (
+            _resolve_extraction_config,
+        )
+
+        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+
+        store = Neo4jMemoryStore(name="graph", client=FakeMemoryClient(), extraction=True)
+        resolved = _resolve_extraction_config(store.extraction, store)
+
+        assert resolved is not None
+        assert resolved.extractor is None

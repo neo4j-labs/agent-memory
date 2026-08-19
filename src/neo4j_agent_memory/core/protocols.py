@@ -187,8 +187,13 @@ class ShortTermProtocol(Protocol):
         self,
         session_id: str,
         messages: list[dict[str, Any]],
+        **kwargs: Any,
     ) -> list[Message]:
-        """Bulk-insert messages for a session in one round-trip, preserving order."""
+        """Bulk-insert messages for a session in one round-trip, preserving order.
+
+        ``**kwargs`` forwards backend-specific knobs (``extract_entities``,
+        ``user_identifier``, …) — both implementations already accept them.
+        """
         ...
 
     async def get_observations(

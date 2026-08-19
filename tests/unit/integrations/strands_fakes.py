@@ -21,6 +21,7 @@ class FakeShortTerm:
         # key -> Conversation. Bolt: key == session_id. NAMS: key == str(uuid).
         self.conversations: dict[str, Conversation] = {}
         self.add_message_calls: list[dict[str, Any]] = []
+        self.bulk_calls: list[dict[str, Any]] = []
         self.deleted_message_ids: list[str] = []
         self.fail_next_add = False
         self.list_conversations_calls: list[dict[str, Any]] = []
@@ -77,6 +78,21 @@ class FakeShortTerm:
         msg = Message(role=MessageRole(role), content=content)
         self.conversations[session_id].messages.append(msg)
         return msg
+
+    async def bulk_add_messages(
+        self, session_id: str, messages: list[dict[str, Any]], **kwargs: Any
+    ) -> list[Message]:
+        recorded_kwargs = {} if self._nams_mode else kwargs
+        self.bulk_calls.append(
+            {"session_id": session_id, "messages": messages, "kwargs": recorded_kwargs}
+        )
+        if session_id not in self.conversations:
+            if self._nams_mode:
+                raise NamMemoryError(f"NAMS: unknown conversation {session_id}")
+            await self.create_conversation(session_id=session_id)
+        stored = [Message(role=MessageRole(m["role"]), content=m["content"]) for m in messages]
+        self.conversations[session_id].messages.extend(stored)
+        return stored
 
     async def delete_message(self, message_id: Any, **kwargs: Any) -> bool:
         if self._nams_mode:
