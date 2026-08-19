@@ -52,6 +52,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **NAMS Platinum wrapper surfaces now match backend behavior.** Removed ignored
+  `user_identifier`/`user_id` feedback parameters and enforce history/reflection
+  `limit` values in the MCP, Pydantic AI, and Strands-facing wrappers. This does
+  not change backend or multi-tenant isolation semantics.
+
 - **`MemoryClient` is now generic over its backend memory types**
   (`MemoryClient[ST, LT, RT]`, PEP 696 defaults). `client.short_term` /
   `.long_term` / `.reasoning` return the base `ShortTermProtocol` /
