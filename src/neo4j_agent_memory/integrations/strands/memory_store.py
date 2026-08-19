@@ -14,12 +14,14 @@ from typing import TYPE_CHECKING
 from typing_extensions import Unpack
 
 try:
-    from strands.memory import MemoryStore, MemoryStoreConfig
+    from strands.memory import MemoryEntry, MemoryStore, MemoryStoreConfig, SearchOptions
 except ImportError as import_error:  # pragma: no cover - exercised via package __init__
     raise ImportError(
         "strands-agents>=1.44.0 is required for the Strands memory store. "
         "Install with: pip install 'neo4j-agent-memory[strands]'"
     ) from import_error
+
+from neo4j_agent_memory.integrations.strands._retrieval import _retrieve_entries
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -31,6 +33,10 @@ logger = logging.getLogger(__name__)
 
 #: Conversation-metadata key marking a conversation as a memory-store sink.
 _STORE_KEY = "strands_memory_store"
+
+#: Strands' own per-store default when neither caller nor store sets a limit
+#: (mirrors ``strands.memory.memory_manager.DEFAULT_MAX_SEARCH_RESULTS``).
+_DEFAULT_MAX_SEARCH_RESULTS = 3
 
 __all__ = ["Neo4jMemoryStore", "Neo4jMemoryStoreConfig"]
 
@@ -177,6 +183,34 @@ class Neo4jMemoryStore(MemoryStore):
         if not getattr(self._client, "is_connected", False):
             await self._client.connect()
         self._initialized = True
+
+    async def search(self, query: str, options: SearchOptions | None = None) -> list[MemoryEntry]:
+        """Search long-term memory. No sink resolution: reads don't need one.
+
+        Limit precedence: per-call option, then ``self.max_search_results``,
+        then Strands' own default. Per-kind failures are isolated in
+        ``_retrieve_entries``; a total failure here propagates so
+        ``MemoryManager.search`` can log a dead store rather than see an
+        empty, misleadingly-successful result.
+        """
+        await self.initialize()
+        limit = (options or {}).get("max_search_results")
+        if limit is None:
+            limit = self.max_search_results
+        if limit is None:
+            limit = _DEFAULT_MAX_SEARCH_RESULTS
+
+        rows = await _retrieve_entries(
+            self._client.long_term,
+            query,
+            limit=limit,
+            min_score=self._min_score,
+            include_entities=self._include_entities,
+            include_preferences=self._include_preferences,
+            include_facts=self._include_facts,
+            nams=self.is_nams,
+        )
+        return [MemoryEntry(content=row.content, metadata=row.metadata) for row in rows]
 
     async def aclose(self) -> None:
         """Close the client only when the store constructed it."""

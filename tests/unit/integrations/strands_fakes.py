@@ -103,6 +103,7 @@ class FakeLongTerm:
         self.fail_preferences = False
         self.fail_facts = False
         self.search_calls: int = 0
+        self.search_kwargs: list[dict[str, Any]] = []
 
     async def _maybe_fail(self) -> None:
         if self.fail_searches:
@@ -110,11 +111,13 @@ class FakeLongTerm:
 
     async def search_entities(self, query: str, **kwargs: Any) -> list[Any]:
         self.search_calls += 1
+        self.search_kwargs.append({"query": query, **kwargs})
         await self._maybe_fail()
         return self.entities
 
     async def search_preferences(self, query: str, **kwargs: Any) -> list[Any]:
         self.search_calls += 1
+        self.search_kwargs.append({"query": query, **kwargs})
         if self.fail_preferences:
             raise RuntimeError("preference backend down")
         await self._maybe_fail()
@@ -122,6 +125,7 @@ class FakeLongTerm:
 
     async def search_facts(self, query: str, **kwargs: Any) -> list[Any]:
         self.search_calls += 1
+        self.search_kwargs.append({"query": query, **kwargs})
         if self.fail_facts:
             raise RuntimeError("fact backend down")
         await self._maybe_fail()

@@ -238,3 +238,99 @@ class TestSinkResolution:
         await store._resolve_sink()
 
         assert client.short_term.list_conversations_calls == []
+
+
+class TestSearch:
+    @pytest.mark.asyncio
+    async def test_returns_memory_entries_with_metadata(self) -> None:
+        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+        from neo4j_agent_memory.memory.long_term import Entity, Preference
+
+        client = FakeMemoryClient()
+        entity = Entity(name="Acme Corp", type="ORGANIZATION")
+        entity.metadata["similarity"] = 0.9
+        client.long_term.entities = [entity]
+        client.long_term.preferences = [Preference(category="ui", preference="dark mode")]
+
+        store = Neo4jMemoryStore(name="graph", client=client)
+        await store.initialize()
+        entries = await store.search("acme")
+
+        assert [e.content for e in entries] == [
+            "[entity] Acme Corp (ORGANIZATION)",
+            "[preference] ui: dark mode",
+        ]
+        assert entries[0].metadata is not None
+        assert entries[0].metadata["kind"] == "entity"
+        assert entries[0].metadata["score"] == 0.9
+
+    @pytest.mark.asyncio
+    async def test_limit_precedence_call_then_store_then_default(self) -> None:
+        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+
+        client = FakeMemoryClient()
+        store = Neo4jMemoryStore(
+            name="graph", client=client, include_preferences=False, include_facts=False
+        )
+        await store.initialize()
+
+        await store.search("q")
+        assert client.long_term.search_kwargs[-1]["limit"] == 3  # protocol default
+
+        store.max_search_results = 7
+        await store.search("q")
+        assert client.long_term.search_kwargs[-1]["limit"] == 7
+
+        await store.search("q", {"max_search_results": 2})
+        assert client.long_term.search_kwargs[-1]["limit"] == 2
+
+    @pytest.mark.asyncio
+    async def test_kind_flags_are_honoured(self) -> None:
+        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+        from neo4j_agent_memory.memory.long_term import Preference
+
+        client = FakeMemoryClient()
+        client.long_term.preferences = [Preference(category="ui", preference="dark mode")]
+
+        store = Neo4jMemoryStore(
+            name="graph",
+            client=client,
+            include_entities=False,
+            include_preferences=True,
+            include_facts=False,
+        )
+        await store.initialize()
+        entries = await store.search("q")
+
+        assert len(entries) == 1
+        assert entries[0].metadata is not None
+        assert entries[0].metadata["kind"] == "preference"
+
+    @pytest.mark.asyncio
+    async def test_nams_returns_entities_only(self) -> None:
+        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+        from neo4j_agent_memory.memory.long_term import Entity, Preference
+
+        client = FakeMemoryClient(nams_mode=True)
+        client.long_term.entities = [Entity(name="Acme Corp", type="ORGANIZATION")]
+        client.long_term.preferences = [Preference(category="ui", preference="dark mode")]
+
+        store = Neo4jMemoryStore(name="graph", client=client)
+        await store.initialize()
+        entries = await store.search("q")
+
+        assert len(entries) == 1
+        assert entries[0].metadata is not None
+        assert entries[0].metadata["kind"] == "entity"
+
+    @pytest.mark.asyncio
+    async def test_search_does_not_mint_a_sink(self) -> None:
+        """Reads are conversation-independent; only writes need the sink."""
+        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+
+        client = FakeMemoryClient()
+        store = Neo4jMemoryStore(name="graph", client=client)
+        await store.initialize()
+        await store.search("q")
+
+        assert client.short_term.conversations == {}
