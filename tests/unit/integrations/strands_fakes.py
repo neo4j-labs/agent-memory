@@ -96,6 +96,8 @@ class FakeLongTerm:
         self.preferences: list[Any] = []
         self.facts: list[Any] = []
         self.fail_searches = False
+        self.fail_preferences = False
+        self.fail_facts = False
         self.search_calls: int = 0
 
     async def _maybe_fail(self) -> None:
@@ -109,11 +111,15 @@ class FakeLongTerm:
 
     async def search_preferences(self, query: str, **kwargs: Any) -> list[Any]:
         self.search_calls += 1
+        if self.fail_preferences:
+            raise RuntimeError("preference backend down")
         await self._maybe_fail()
         return self.preferences
 
     async def search_facts(self, query: str, **kwargs: Any) -> list[Any]:
         self.search_calls += 1
+        if self.fail_facts:
+            raise RuntimeError("fact backend down")
         await self._maybe_fail()
         return self.facts
 

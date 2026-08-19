@@ -89,3 +89,75 @@ async def _retrieve_context(
         return ""
     body = "\n".join(f"- {line}" for line in lines)
     return f"<{cfg.context_tag}>\nRelevant memory:\n{body}\n</{cfg.context_tag}>"
+
+
+@dataclass
+class _EntryRow:
+    """One long-term hit, formatted for a Strands ``MemoryEntry``."""
+
+    content: str
+    metadata: dict[str, Any]
+
+
+def _entity_row(entity: Entity) -> _EntryRow:
+    metadata: dict[str, Any] = {
+        "kind": "entity",
+        "id": str(entity.id),
+        "type": entity.full_type or entity.type,
+    }
+    score = (entity.metadata or {}).get("similarity")
+    if score is not None:
+        # NAMS never sets "similarity" — omit rather than default to 0, which
+        # would misrepresent an unscored hit as a bad match.
+        metadata["score"] = score
+    return _EntryRow(content=_format_entity(entity), metadata=metadata)
+
+
+def _preference_row(preference: Preference) -> _EntryRow:
+    return _EntryRow(
+        content=_format_preference(preference),
+        metadata={"kind": "preference", "id": str(preference.id), "type": preference.category},
+    )
+
+
+def _fact_row(fact: Fact) -> _EntryRow:
+    return _EntryRow(
+        content=_format_fact(fact),
+        metadata={"kind": "fact", "id": str(fact.id), "type": fact.predicate},
+    )
+
+
+async def _retrieve_entries(
+    long_term: LongTermProtocol,
+    query: str,
+    *,
+    limit: int,
+    min_score: float,
+    include_entities: bool,
+    include_preferences: bool,
+    include_facts: bool,
+    nams: bool,
+) -> list[_EntryRow]:
+    """Sibling of ``_retrieve_context``: same fan-out, rows instead of a string.
+
+    Per-kind failures are logged and skipped so one dead index doesn't lose
+    the others' hits. NAMS has no preference/fact search endpoints, so those
+    are skipped rather than raised on every call.
+    """
+    wanted: list[tuple[str, bool, Callable[..., Awaitable[list[Any]]], Callable[..., _EntryRow]]] = [
+        ("entity", include_entities, long_term.search_entities, _entity_row),
+        ("preference", include_preferences and not nams, long_term.search_preferences, _preference_row),
+        ("fact", include_facts and not nams, long_term.search_facts, _fact_row),
+    ]
+    active = [(kind, search, row) for kind, on, search, row in wanted if on]
+    results = await asyncio.gather(
+        *(search(query, limit=limit, threshold=min_score) for _, search, _ in active),
+        return_exceptions=True,
+    )
+    rows: list[_EntryRow] = []
+    for (kind, _, to_row), result in zip(active, results):
+        if isinstance(result, BaseException):
+            logger.warning("Long-term %s search failed: %s", kind, result)
+            continue
+        rows.extend(to_row(item) for item in result)
+    return rows
