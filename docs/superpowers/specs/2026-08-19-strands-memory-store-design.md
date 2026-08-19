@@ -130,7 +130,7 @@ the model sees:
 | `kind` | `entity` \| `preference` \| `fact` |
 | `id` | node id |
 | `type` | `full_type` for entities, `category` for preferences |
-| `score` | similarity, bolt only — `search_entities` sets `entity.metadata["similarity"]`; NAMS returns none |
+| `score` | similarity, bolt only — `search_entities`, `search_preferences` and `search_facts` each set `metadata["similarity"]` (`memory/long_term.py:1059`, `:1126`, `:2065`); NAMS sets none, and an absent score is omitted rather than zeroed |
 
 ### Both sinks on one class
 
