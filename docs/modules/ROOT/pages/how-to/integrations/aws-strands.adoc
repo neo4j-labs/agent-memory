@@ -2,6 +2,15 @@
 :description: Integrate Neo4j Agent Memory with AWS Strands Agents SDK
 :keywords: strands, aws, bedrock, neo4j, agent, tools, session manager
 
+[NOTE]
+====
+This is the *Python* guide, which covers both backends, the hosted NAMS and
+the self-hosted Neo4j or Aura over Bolt. If you are using TypeScript, see
+xref:how-to/typescript/strands.adoc[Strands Agents (TypeScript)]. That SDK
+wires up different Strands surfaces (`SnapshotStorage`,
+`ConversationManager`, reasoning hooks) and is NAMS-only.
+====
+
 This guide shows how to add Neo4j Context Graph memory to AWS Strands agents.
 The integration offers two complementary modes, usable independently or
 together on the same agent:
@@ -613,6 +622,7 @@ requires no LLM or API key.
 
 == See Also
 
+* xref:how-to/typescript/strands.adoc[Strands Agents (TypeScript)] — the TypeScript guide
 * xref:tutorials/strands-agent-quickstart.adoc[Strands Agent Tutorial]
 * xref:how-to/integrations/aws-bedrock-embeddings.adoc[Configure Bedrock Embeddings]
 * xref:how-to/integrations/aws-hybrid-memory.adoc[Hybrid Memory Provider]
