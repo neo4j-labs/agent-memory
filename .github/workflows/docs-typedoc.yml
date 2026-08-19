@@ -1,5 +1,11 @@
 name: TypeDoc
 
+# Regenerates the TypeScript API reference (TypeDoc) into the Antora docs
+# component at docs/modules/ROOT/attachments/api/typescript/ and commits the
+# result to main. The Antora attachments family is published verbatim by the
+# labs-pages docs build, so the API reference ships with the rest of the docs
+# site — no GitHub Pages involved.
+
 on:
   push:
     branches: [main]
@@ -8,28 +14,18 @@ on:
       - 'typescript/typedoc.json'
       - 'typescript/package.json'
       - '.github/workflows/docs-typedoc.yml'
-    tags:
-      - 'typescript-v*'
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
   group: 'typedoc'
   cancel-in-progress: true
 
 jobs:
-  build-deploy:
+  build-commit:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
-    defaults:
-      run:
-        working-directory: typescript
     steps:
       - uses: actions/checkout@v4
 
@@ -41,20 +37,38 @@ jobs:
           cache-dependency-path: typescript/package-lock.json
 
       - name: Install dependencies
+        working-directory: typescript
         run: npm ci
 
-      - name: Build TypeDoc
+      - name: Build TypeDoc into Antora attachments
+        # Output path is set in typescript/typedoc.json:
+        # ../docs/modules/ROOT/attachments/api/typescript
+        working-directory: typescript
         run: npm run docs:api
 
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
+      - name: Commit regenerated API reference
+        id: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/modules/ROOT/attachments/api/typescript
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "TypeDoc output unchanged; nothing to commit."
+          else
+            git commit -m "docs(typescript): regenerate TypeDoc API reference"
+            git pull --rebase origin main
+            git push origin main
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Upload TypeDoc artifact
-        uses: actions/upload-pages-artifact@v3
+      # Pushes made with GITHUB_TOKEN do not trigger other workflows, so
+      # trigger-labs-build.yml won't fire for the commit above — dispatch the
+      # labs-pages rebuild directly.
+      - name: Trigger Labs Pages rebuild
+        if: steps.commit.outputs.changed == 'true'
+        uses: peter-evans/repository-dispatch@v3
         with:
-          # Matches `out` in typescript/typedoc.json
-          path: typescript/docs-api
-
-      - name: Deploy to GitHub Pages
-        id: deploy
-        uses: actions/deploy-pages@v4
+          token: ${{ secrets.LABS_PAGES_TOKEN }}
+          repository: neo4j-contrib/labs-pages
+          event-type: agent-memory-docs-update

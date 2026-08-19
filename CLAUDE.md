@@ -2421,4 +2421,5 @@ When adding or modifying documentation:
 - **Builder**: Antora (`antora antora-playbook.yml`) with the Neo4j Labs UI bundle
 - **Navigation**: `docs/modules/ROOT/nav.adoc` (single source, hand-maintained)
 - **Output**: Static HTML in `docs/build/site/`
-- **Deployment**: Vercel (`docs/vercel.json`, `outputDirectory: build/site`; auto-deploys on push to main)
+- **Deployment**: Neo4j Labs Pages — pushes to `main` touching `docs/**` dispatch a rebuild of `neo4j-contrib/labs-pages` (`.github/workflows/trigger-labs-build.yml`), which consumes this repo's Antora component and publishes to `neo4j.com/labs/agent-memory`
+- **TypeScript API reference**: TypeDoc output is generated into `docs/modules/ROOT/attachments/api/typescript/` (Antora attachments, published verbatim with the docs site) and kept fresh by `.github/workflows/docs-typedoc.yml`, which commits regenerated output to `main` and dispatches the labs-pages rebuild. `typescript/typedoc.json` sets the output path; run `npm run docs:api` in `typescript/` to regenerate locally.

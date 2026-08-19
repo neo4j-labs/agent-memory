@@ -104,8 +104,8 @@ All four ship as subpath exports. See each integration's
 - [Architecture overview](https://neo4j.com/labs/agent-memory/explanation/graph-architecture)
 - [Troubleshooting](https://neo4j.com/labs/agent-memory/how-to/typescript/troubleshooting)
 
-Full API reference (TypeDoc) is published at
-[neo4j-labs.github.io/agent-memory/typescript/](https://neo4j-labs.github.io/agent-memory/typescript/).
+Full API reference (TypeDoc) is bundled with the docs site — see the
+[TypeScript API reference](https://neo4j.com/labs/agent-memory/reference/typescript-api).
 
 ## 🔧 Configuration
 
