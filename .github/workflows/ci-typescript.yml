@@ -72,7 +72,7 @@ jobs:
           cache: 'npm'
           cache-dependency-path: typescript/package-lock.json
 
-      - name: Build SDK (populates typescript/dist for file: deps)
+      - name: 'Build SDK (populates typescript/dist for file: deps)'
         working-directory: typescript
         run: |
           npm ci
