@@ -99,32 +99,29 @@ class _EntryRow:
     metadata: dict[str, Any]
 
 
-def _entity_row(entity: Entity) -> _EntryRow:
-    metadata: dict[str, Any] = {
-        "kind": "entity",
-        "id": str(entity.id),
-        "type": entity.full_type or entity.type,
-    }
-    score = (entity.metadata or {}).get("similarity")
+def _row(
+    kind: str, entry_id: Any, entry_type: str, source_metadata: dict[str, Any] | None, content: str
+) -> _EntryRow:
+    metadata: dict[str, Any] = {"kind": kind, "id": str(entry_id), "type": entry_type}
+    score = (source_metadata or {}).get("similarity")
     if score is not None:
-        # NAMS never sets "similarity" — omit rather than default to 0, which
-        # would misrepresent an unscored hit as a bad match.
+        # Bolt sets "similarity" on entities, preferences, and facts alike; NAMS
+        # sets it on none. Omit rather than default to 0, which would misrepresent
+        # an unscored hit as a bad match.
         metadata["score"] = score
-    return _EntryRow(content=_format_entity(entity), metadata=metadata)
+    return _EntryRow(content=content, metadata=metadata)
+
+
+def _entity_row(entity: Entity) -> _EntryRow:
+    return _row("entity", entity.id, entity.full_type or entity.type, entity.metadata, _format_entity(entity))
 
 
 def _preference_row(preference: Preference) -> _EntryRow:
-    return _EntryRow(
-        content=_format_preference(preference),
-        metadata={"kind": "preference", "id": str(preference.id), "type": preference.category},
-    )
+    return _row("preference", preference.id, preference.category, preference.metadata, _format_preference(preference))
 
 
 def _fact_row(fact: Fact) -> _EntryRow:
-    return _EntryRow(
-        content=_format_fact(fact),
-        metadata={"kind": "fact", "id": str(fact.id), "type": fact.predicate},
-    )
+    return _row("fact", fact.id, fact.predicate, fact.metadata, _format_fact(fact))
 
 
 async def _retrieve_entries(

@@ -15,6 +15,18 @@ def _entity() -> Entity:
     return e
 
 
+def _preference() -> Preference:
+    p = Preference(category="ui", preference="dark mode")
+    p.metadata["similarity"] = 0.71
+    return p
+
+
+def _fact() -> Fact:
+    f = Fact(subject="Ada", predicate="works_at", object="Acme")
+    f.metadata["similarity"] = 0.55
+    return f
+
+
 class TestRetrieveEntries:
     @pytest.mark.asyncio
     async def test_maps_each_kind_to_a_row_with_metadata(self) -> None:
@@ -23,8 +35,8 @@ class TestRetrieveEntries:
 
         long_term = FakeLongTerm()
         long_term.entities = [_entity()]
-        long_term.preferences = [Preference(category="ui", preference="dark mode")]
-        long_term.facts = [Fact(subject="Ada", predicate="works_at", object="Acme")]
+        long_term.preferences = [_preference()]
+        long_term.facts = [_fact()]
 
         rows = await _retrieve_entries(
             long_term,
@@ -43,6 +55,8 @@ class TestRetrieveEntries:
         assert rows[0].metadata["score"] == 0.83
         assert rows[0].metadata["type"] == "ORGANIZATION"
         assert rows[1].metadata["type"] == "ui"
+        assert rows[1].metadata["score"] == 0.71
+        assert rows[2].metadata["score"] == 0.55
         assert "id" in rows[0].metadata
 
     @pytest.mark.asyncio
@@ -88,11 +102,14 @@ class TestRetrieveEntries:
 
         long_term = FakeLongTerm()
         long_term.entities = [Entity(name="Acme Corp", type="ORGANIZATION")]  # no similarity
+        long_term.preferences = [Preference(category="ui", preference="dark mode")]  # no similarity
+        long_term.facts = [Fact(subject="Ada", predicate="works_at", object="Acme")]  # no similarity
 
         rows = await _retrieve_entries(
             long_term, "q", limit=10, min_score=0.2,
-            include_entities=True, include_preferences=False, include_facts=False,
-            nams=True,
+            include_entities=True, include_preferences=True, include_facts=True,
+            nams=False,
         )
 
-        assert "score" not in rows[0].metadata
+        assert [r.metadata["kind"] for r in rows] == ["entity", "preference", "fact"]
+        assert all("score" not in r.metadata for r in rows)
