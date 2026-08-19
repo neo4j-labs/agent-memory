@@ -28,7 +28,7 @@ import {
   AuthenticationError,
   TransportError,
 } from "../../src/errors.js";
-import { Neo4jSessionStorage } from "../../src/integrations/strands.js";
+import { Neo4jSessionStorage } from "../../src/integrations/strands/index.js";
 
 const ENDPOINT = "https://memory.test/v1";
 const API_KEY = "nams_test_key";

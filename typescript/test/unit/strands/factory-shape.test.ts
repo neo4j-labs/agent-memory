@@ -13,7 +13,7 @@ import {
   AfterToolCallEvent,
   type LocalAgent,
 } from "@strands-agents/sdk";
-import { connectMemoryToAgent } from "../../../src/integrations/strands.js";
+import { connectMemoryToAgent } from "../../../src/integrations/strands/index.js";
 
 function makeMemoryStub() {
   return {

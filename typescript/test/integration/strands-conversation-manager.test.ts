@@ -16,7 +16,7 @@ import {
   type LocalAgent,
 } from "@strands-agents/sdk";
 import { MemoryClient } from "../../src/client.js";
-import { Neo4jConversationManager } from "../../src/integrations/strands.js";
+import { Neo4jConversationManager } from "../../src/integrations/strands/index.js";
 
 const ENDPOINT = "https://memory.test/v1";
 const API_KEY = "nams_test_key";
