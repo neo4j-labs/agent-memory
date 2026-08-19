@@ -284,13 +284,20 @@ class TestSearch:
         await store.search("q", {"max_search_results": 2})
         assert client.long_term.search_kwargs[-1]["limit"] == 2
 
+        # Explicit 0 must stay 0, not fall through to a truthiness check.
+        await store.search("q", {"max_search_results": 0})
+        assert client.long_term.search_kwargs[-1]["limit"] == 0
+
     @pytest.mark.asyncio
     async def test_kind_flags_are_honoured(self) -> None:
+        """All three kinds have data; only the enabled one should ever be searched."""
         from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
-        from neo4j_agent_memory.memory.long_term import Preference
+        from neo4j_agent_memory.memory.long_term import Entity, Fact, Preference
 
         client = FakeMemoryClient()
+        client.long_term.entities = [Entity(name="Acme Corp", type="ORGANIZATION")]
         client.long_term.preferences = [Preference(category="ui", preference="dark mode")]
+        client.long_term.facts = [Fact(subject="Acme", predicate="located_in", object="NYC")]
 
         store = Neo4jMemoryStore(
             name="graph",
@@ -305,6 +312,10 @@ class TestSearch:
         assert len(entries) == 1
         assert entries[0].metadata is not None
         assert entries[0].metadata["kind"] == "preference"
+        # Proves entities/facts were never searched, not merely that they
+        # returned nothing (a dropped include_* kwarg would sail through
+        # on len(entries) == 1 alone).
+        assert client.long_term.search_calls == 1
 
     @pytest.mark.asyncio
     async def test_nams_returns_entities_only(self) -> None:
@@ -325,12 +336,31 @@ class TestSearch:
 
     @pytest.mark.asyncio
     async def test_search_does_not_mint_a_sink(self) -> None:
-        """Reads are conversation-independent; only writes need the sink."""
+        """Reads are conversation-independent; only writes need the sink.
+
+        Must use nams_mode=True: on bolt, _resolve_sink() makes no backend
+        call at all (it just sets self._sink_key locally), so an accidental
+        _resolve_sink() call from search() would be invisible there. NAMS
+        genuinely calls list_conversations (and possibly create_conversation),
+        so this is the only client mode that can catch that regression.
+        """
         from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
 
-        client = FakeMemoryClient()
+        client = FakeMemoryClient(nams_mode=True)
         store = Neo4jMemoryStore(name="graph", client=client)
         await store.initialize()
         await store.search("q")
 
+        assert client.short_term.list_conversations_calls == []
         assert client.short_term.conversations == {}
+
+    @pytest.mark.asyncio
+    async def test_search_initializes_without_a_prior_initialize_call(self) -> None:
+        """Standalone use (no MemoryManager.init_agent) must still connect."""
+        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+
+        client = FakeMemoryClient()
+        store = Neo4jMemoryStore(name="graph", client=client)
+        await store.search("q")
+
+        assert client.connect_calls == 1
