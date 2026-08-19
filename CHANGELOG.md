@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Strands MemoryStore** (`Neo4jMemoryStore`) — cross-session recall for Strands
+  agents via `MemoryManager(stores=[...])`: long-term search, plus writes that feed
+  server-side extraction. Entities only on NAMS. Needs `strands-agents>=1.44.0`.
 - **Strands SessionManager** (`Neo4jSessionManager`) — automatic conversation
   persistence/restore for AWS Strands agents via `Agent(session_manager=...)`,
   backed by any `MemoryClient` (bolt or NAMS). Includes opt-in long-term
@@ -51,6 +54,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   type-check without per-call-site `attr-defined` suppressions.
 
 ### Changed
+
+- `strands` extra requires `strands-agents>=1.44.0` (was `>=0.1.0`).
+- `ShortTermProtocol.bulk_add_messages` accepts `**kwargs`, as both backends already did.
 
 - **`MemoryClient` is now generic over its backend memory types**
   (`MemoryClient[ST, LT, RT]`, PEP 696 defaults). `client.short_term` /
