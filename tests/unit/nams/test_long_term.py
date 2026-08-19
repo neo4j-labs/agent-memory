@@ -180,6 +180,40 @@ class TestAddEntity:
         assert entity.type == "PERSON"
 
     @respx.mock
+    async def test_merged_resolution_tolerates_null_fields_on_canonical_entity(self, long_term):
+        # NAMS projects unset node properties as JSON null — a manually
+        # created entity has no confidence/sourceStage/updatedAt. Those
+        # nulls must fall back to model defaults, not fail float parsing.
+        respx.post("https://memory.test/v1/entities").respond(
+            200,
+            json={
+                "id": SAMPLE_ENTITY["id"],
+                "resolution": "merged",
+                "merged_into": SAMPLE_ENTITY["id"],
+                "confidence": 0.93,
+            },
+        )
+        respx.get(f"https://memory.test/v1/entities/{SAMPLE_ENTITY['id']}").respond(
+            200,
+            json={
+                "id": SAMPLE_ENTITY["id"],
+                "name": "Alice",
+                "type": "person",
+                "description": None,
+                "confidence": None,
+                "sourceStage": None,
+                "createdAt": "2026-05-17T12:00:00Z",
+                "updatedAt": None,
+                "relationships": [],
+            },
+        )
+        entity = await long_term.add_entity("Alice Smith", "PERSON")
+        assert isinstance(entity, Entity)
+        assert entity.name == "Alice"
+        assert entity.confidence == 1.0  # model default
+        assert entity.description is None
+
+    @respx.mock
     async def test_merged_resolution_falls_back_to_request_fields(self, long_term):
         # If the follow-up read fails, synthesize a parseable Entity from the
         # request instead of raising a ValidationError.

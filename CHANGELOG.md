@@ -168,7 +168,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   confidence}` with no `name`/`type`, which previously failed Pydantic `Entity`
   parsing. The client now follows up with `GET /entities/{id}` and returns the
   canonical merged-into entity (falling back to the request's name/type if that
-  read fails).
+  read fails). Entity responses with explicit `null` fields (NAMS projects
+  unset node properties as JSON `null` — e.g. `confidence` on a manually
+  created entity) now fall back to model defaults instead of failing
+  validation.
 
 > **Docs note:** when this ships, flip the "REST-only / no SDK method" notes in
 > `reference/rest-api.adoc`, `reference/ontology-api.adoc`, and

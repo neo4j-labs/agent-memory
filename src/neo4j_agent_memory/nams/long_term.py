@@ -167,10 +167,16 @@ def _normalize_entity(payload: dict[str, Any] | None) -> dict[str, Any]:
     doesn't provide — we default them so Pydantic parsing succeeds.
     NAMS types come back lowercase; uppercase them so package-side
     consumers see the same type values they sent.
+
+    Explicit ``null`` fields are dropped so model defaults apply — NAMS
+    projects unset node properties as JSON ``null`` (e.g. ``confidence``
+    on a manually-created entity), which would otherwise fail parsing
+    for non-optional fields like ``confidence: float``.
     """
     from datetime import datetime, timezone
 
     data = snakeize_keys(payload) if isinstance(payload, dict) else {}
+    data = {k: v for k, v in data.items() if v is not None}
     if "created_at" not in data:
         data["created_at"] = datetime.now(timezone.utc).isoformat()
     if "metadata" not in data:

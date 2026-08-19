@@ -120,20 +120,23 @@ interface WireGraph {
   edges?: WireGraphEdge[];
 }
 
+// NAMS projects unset node properties as JSON null (e.g. `confidence` on a
+// manually-created entity) — normalize those to undefined so Entity's
+// optional fields stay `T | undefined` at runtime, matching their types.
 function toEntity(w: WireEntity): Entity {
   return {
     id: w.id,
     name: w.name,
     type: w.type,
-    subtype: w.subtype,
-    description: w.description,
-    embedding: w.embedding,
-    canonicalName: w.canonical_name,
+    subtype: w.subtype ?? undefined,
+    description: w.description ?? undefined,
+    embedding: w.embedding ?? undefined,
+    canonicalName: w.canonical_name ?? undefined,
     createdAt: w.created_at ?? "",
-    updatedAt: w.updated_at,
-    confidence: w.confidence,
-    sourceStage: w.source_stage,
-    relationships: w.relationships?.map(toRelRef),
+    updatedAt: w.updated_at ?? undefined,
+    confidence: w.confidence ?? undefined,
+    sourceStage: w.source_stage ?? undefined,
+    relationships: w.relationships?.map(toRelRef) ?? undefined,
   };
 }
 

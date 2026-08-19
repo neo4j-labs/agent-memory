@@ -54,6 +54,34 @@ describe("LongTermMemory.addEntity merged resolution", () => {
     expect(entity.type).toBe("person");
   });
 
+  it("normalizes null fields on the canonical entity to undefined", async () => {
+    // NAMS projects unset node properties as JSON null — a manually created
+    // entity has no confidence/sourceStage/updatedAt.
+    const t = mockTransport((method) => {
+      if (method === "add_entity") return MERGED_WIRE;
+      if (method === "get_entity") {
+        return {
+          id: ENTITY_ID,
+          name: "Alice",
+          type: "person",
+          description: null,
+          confidence: null,
+          source_stage: null,
+          created_at: "2026-05-17T12:00:00Z",
+          updated_at: null,
+          relationships: [],
+        };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+    const lt = new LongTermMemory(t as never);
+    const entity = await lt.addEntity("Alice Smith", "person");
+    expect(entity.name).toBe("Alice");
+    expect(entity.confidence).toBeUndefined();
+    expect(entity.description).toBeUndefined();
+    expect(entity.updatedAt).toBeUndefined();
+  });
+
   it("falls back to request fields when the follow-up read fails", async () => {
     const t = mockTransport((method) => {
       if (method === "add_entity") return MERGED_WIRE;

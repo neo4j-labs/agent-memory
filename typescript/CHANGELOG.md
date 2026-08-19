@@ -18,7 +18,11 @@ appear in minor versions with a callout in this file.
   `name`/`type`, which previously flowed into an Entity with `undefined`
   name and type. The client now follows up with `GET /entities/{id}` and
   returns the canonical merged-into entity (falling back to the request's
-  name/type if that read fails). Mirrors the same fix in the Python SDK.
+  name/type if that read fails). Entity responses with explicit `null` fields
+  (NAMS projects unset node properties as JSON `null` — e.g. `confidence` on a
+  manually created entity) are now normalized to `undefined` so optional
+  Entity fields match their declared types at runtime. Mirrors the same fix
+  in the Python SDK.
 
 ## 0.4.0 — NAMS alignment
 
