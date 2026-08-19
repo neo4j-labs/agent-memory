@@ -25,7 +25,7 @@ import {
   Neo4jConversationManager,
   connectMemoryToAgent,
   registerReasoningHooks,
-} from "../../src/integrations/strands.js";
+} from "../../src/integrations/strands/index.js";
 
 const ENDPOINT = "https://memory.test/v1";
 const API_KEY = "nams_test_key";

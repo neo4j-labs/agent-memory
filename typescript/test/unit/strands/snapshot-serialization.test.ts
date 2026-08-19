@@ -10,7 +10,7 @@ import type { Snapshot } from "@strands-agents/sdk";
 import {
   Neo4jSessionStorage,
   isSyntheticStrandsMessage,
-} from "../../../src/integrations/strands.js";
+} from "../../../src/integrations/strands/index.js";
 
 interface StoredMessage {
   id: string;
