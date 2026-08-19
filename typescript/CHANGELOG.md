@@ -48,8 +48,9 @@ namespaced `typescript-v*` tags.
   and homepage fields point at the new location.
 - Documentation is now served from
   [neo4j.com/labs/agent-memory/](https://neo4j.com/labs/agent-memory/)
-  under the unified Antora site. TypeDoc API reference is published at
-  [neo4j-labs.github.io/agent-memory/typescript/](https://neo4j-labs.github.io/agent-memory/typescript/).
+  under the unified Antora site. TypeDoc API reference is bundled with that
+  site — see the
+  [TypeScript API reference](https://neo4j.com/labs/agent-memory/reference/typescript-api).
 - Release tags are now namespaced as `typescript-v*` (e.g.
   `typescript-v0.3.0`); the Python SDK uses `python-v*`.
 

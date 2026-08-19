@@ -213,7 +213,7 @@ This project uses GitHub Actions for continuous integration and deployment.
 | **TypeScript E2E** (`e2e-typescript.yml`) | Push, PR, nightly | Run TypeScript SDK e2e suite against live NAMS sandbox (uses `MEMORY_API_KEY` secret) |
 | **Publish Python** (`publish-python.yml`) | Git tags `python-v*` | Build and publish to PyPI, create GitHub releases |
 | **Publish TypeScript** (`publish-typescript.yml`) | Git tags `typescript-v*` | Build and publish to npm with provenance |
-| **TypeDoc** (`docs-typedoc.yml`) | Push to `main` (TS docs paths) or `typescript-v*` tags | Build TypeDoc API reference, deploy to GitHub Pages |
+| **TypeDoc** (`docs-typedoc.yml`) | Push to `main` (TS docs paths) | Regenerate TypeDoc API reference into `docs/modules/ROOT/attachments/api/typescript/`, commit to `main`, and dispatch the labs-pages docs rebuild |
 | **TCK Conformance** (`tck-conformance.yml`) | Nightly + workflow_dispatch | Run agent-memory-tck Bronze suite against the published `@neo4j-labs/agent-memory` package |
 | **NAMS Integration** (`nams-integration.yml`) | Push, PR, nightly | Run NAMS sandbox integration tests (Python side, uses `NAMS_SANDBOX_KEY` secret) |
 
