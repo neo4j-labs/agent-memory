@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from types import TracebackType
 
     from neo4j_agent_memory import MemoryClient, MemorySettings
+    from neo4j_agent_memory.nams.endpoints import TransportMode
 
 logger = logging.getLogger(__name__)
 
@@ -100,16 +101,26 @@ class Neo4jMemoryStore(MemoryStore):
             self._client = _MemoryClient(settings)
 
     @classmethod
-    def for_nams(cls, **store_config: Unpack[Neo4jMemoryStoreConfig]) -> Neo4jMemoryStore:
+    def for_nams(
+        cls,
+        *,
+        endpoint: str | None = None,
+        api_key: str | None = None,
+        transport_mode: TransportMode = "auto",
+        **store_config: Unpack[Neo4jMemoryStoreConfig],
+    ) -> Neo4jMemoryStore:
         """Construct a store against hosted NAMS.
 
         Reads ``MEMORY_API_KEY`` (and optionally ``MEMORY_ENDPOINT``) from the
-        environment, mirroring :meth:`Neo4jSessionManager.for_nams`.
+        environment when not passed explicitly.
         """
-        if "client" not in store_config and "settings" not in store_config:
-            from neo4j_agent_memory import MemorySettings
+        from neo4j_agent_memory.integrations.strands.config import (
+            build_nams_settings,
+            resolve_nams_connection,
+        )
 
-            store_config["settings"] = MemorySettings(backend="nams")
+        endpoint, api_key = resolve_nams_connection(endpoint, api_key)
+        store_config["settings"] = build_nams_settings(endpoint, api_key, transport_mode)
         return cls(**store_config)
 
     @property
@@ -117,7 +128,7 @@ class Neo4jMemoryStore(MemoryStore):
         return bool(getattr(self._client, "is_nams", False))
 
     async def initialize(self) -> None:
-        """Connect the client and resolve the write sink. Idempotent."""
+        """Connect the client if not already connected. Idempotent."""
         if self._initialized:
             return
         if not getattr(self._client, "is_connected", False):

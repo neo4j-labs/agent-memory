@@ -41,6 +41,20 @@ class TestConstruction:
         assert store.description is not None and "graph" in store.description.lower()
         assert store.graph_tools is True
 
+    def test_settings_construction_owns_the_client(self) -> None:
+        """Settings-constructed stores build and own a real MemoryClient.
+
+        MemoryClient.__init__ is lazy (no connection, no embedder until
+        .connect()), so this is cheap and does not touch the network.
+        """
+        from neo4j_agent_memory import MemoryClient, MemorySettings
+        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+
+        store = Neo4jMemoryStore(name="graph", settings=MemorySettings(neo4j={"password": "p"}))
+
+        assert store._owns_client is True
+        assert isinstance(store._client, MemoryClient)
+
     def test_write_sinks_are_not_declared_yet(self) -> None:
         """Scope guard: `add` lands in task 7, `add_messages` in task 8.
 
@@ -88,12 +102,38 @@ class TestLifecycle:
 
     @pytest.mark.asyncio
     async def test_context_manager_closes_an_owned_client(self) -> None:
+        """Ownership must come from the constructor (settings=), not a monkey-patched flag."""
+        from unittest.mock import AsyncMock
+
+        from neo4j_agent_memory import MemorySettings
         from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
 
-        client = FakeMemoryClient()
-        store = Neo4jMemoryStore(name="graph", client=client)
-        store._owns_client = True  # simulate settings-constructed
+        store = Neo4jMemoryStore(name="graph", settings=MemorySettings(neo4j={"password": "p"}))
+        store._client.connect = AsyncMock()  # type: ignore[method-assign]
+        store._client.close = AsyncMock()  # type: ignore[method-assign]
+
         async with store:
             pass
 
-        assert client.close_calls == 1
+        store._client.close.assert_awaited_once()
+
+
+class TestForNams:
+    def test_builds_nams_settings_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+
+        monkeypatch.setenv("MEMORY_API_KEY", "test-key")
+
+        store = Neo4jMemoryStore.for_nams(name="graph")
+
+        settings = store._client._settings
+        assert settings.backend == "nams"
+        assert settings.nams.validate_on_connect is False
+
+    def test_raises_without_api_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+
+        monkeypatch.delenv("MEMORY_API_KEY", raising=False)
+
+        with pytest.raises(ValueError, match="api_key is required"):
+            Neo4jMemoryStore.for_nams(name="graph")
