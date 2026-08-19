@@ -6,7 +6,7 @@
     "src/mcp/index.ts",
     "src/integrations/langchain.ts",
     "src/integrations/mastra.ts",
-    "src/integrations/strands.ts",
+    "src/integrations/strands/index.ts",
     "src/testing.ts"
   ],
   "out": "docs-api",
