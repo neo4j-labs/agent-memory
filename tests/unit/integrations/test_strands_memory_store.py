@@ -209,3 +209,15 @@ class TestSinkResolution:
         await team.initialize()
 
         assert await personal._resolve_sink() != await team._resolve_sink()
+
+    @pytest.mark.asyncio
+    async def test_bolt_does_not_scan_conversations(self) -> None:
+        """On bolt the deterministic name is the key; a list scan would be wasted work."""
+        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+
+        client = FakeMemoryClient()
+        store = Neo4jMemoryStore(name="graph", client=client)
+        await store.initialize()
+        await store._resolve_sink()
+
+        assert client.short_term.list_conversations_calls == []
