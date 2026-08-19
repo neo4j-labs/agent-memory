@@ -2,6 +2,15 @@
 :toc: left
 :source-highlighter: rouge
 
+[NOTE]
+====
+This is the *TypeScript* guide, and it is NAMS-only. The TypeScript client
+has no Bolt transport. If you are using Python, see
+xref:how-to/integrations/aws-strands.adoc[AWS Strands Agents (Python)]. That
+SDK covers both backends and exposes a different surface set (session
+manager with opt-in retrieval injection, plus agent-callable memory tools).
+====
+
 The `@neo4j-labs/agent-memory/integrations/strands` subpath plugs into
 all three of Strands' orthogonal extension surfaces:
 
@@ -170,4 +179,5 @@ of `@neo4j-labs/agent-memory` without a CHANGELOG callout.
 - link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/strands[Runnable Strands example]
 - link:observability.adoc[Enable request logging]
 - link:handle-errors.adoc[Error handling]
+- xref:how-to/integrations/aws-strands.adoc[AWS Strands Agents (Python)] — the Python guide
 - https://strandsagents.com[Strands Agents docs]

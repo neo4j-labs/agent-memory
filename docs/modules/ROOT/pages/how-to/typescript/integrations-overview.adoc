@@ -1,5 +1,5 @@
 = Framework Integrations
-:description: Memory-augmented LLM applications with Vercel AI SDK, LangChain JS, Mastra, LangGraph, PydanticAI, Semantic Kernel, ellmer.
+:description: Memory-augmented LLM applications with Vercel AI SDK, LangChain JS, Mastra, Strands Agents, LangGraph, PydanticAI, Semantic Kernel, ellmer.
 
 Each first-class agent framework ships a thin wrapper around `MemoryClient`.
 Pick yours below.
@@ -61,6 +61,27 @@ import { Agent } from "@mastra/core/agent";
 const memory = new Neo4jMastraMemory(client);
 const agent = new Agent({ name: "scout", memory });
 ----
+
+== Strands Agents (TypeScript)
+
+`connectMemoryToAgent` returns the `sessionManager` and
+`conversationManager` for a Strands `Agent` — session state persists to a
+NAMS conversation, three-tier context is injected on every model call, and
+reasoning hooks capture each turn.
+
+[source,ts]
+----
+import { Agent } from "@strands-agents/sdk";
+import { connectMemoryToAgent } from "@neo4j-labs/agent-memory/integrations/strands";
+
+const conv = await client.shortTerm.createConversation({ userId: "alice" });
+const agent = new Agent({
+  ...await connectMemoryToAgent(client, { conversationId: conv.id }),
+  model,
+});
+----
+
+See xref:how-to/typescript/strands.adoc[Strands Agents (TypeScript)].
 
 == LangGraph (Python)
 
