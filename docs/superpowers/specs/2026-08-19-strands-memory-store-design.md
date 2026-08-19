@@ -144,13 +144,18 @@ still validates. One class per SDK, no per-transport split.
 `AddMessagesContext` carries no session identity, so the store owns its scope — matching
 the Bedrock KB precedent ("for per-tenant isolation, construct one store per scope").
 
-- Writes go to a dedicated sink conversation, minted in `initialize()` unless
-  `conversation_id` is given. Its session id is deterministic —
+- Writes go to a dedicated sink conversation. Its name is deterministic —
   `strands-memory-store/{user_id or "_"}/{name}` — so restarts reuse one sink instead of
-  accumulating orphans. Where the backend accepts conversation metadata at creation the
-  sink is also tagged (mirroring `_SESSION_KEY` in the session manager); NAMS cannot set
-  metadata after creation, so the tag is best-effort and the deterministic id is the
-  contract.
+  accumulating orphans. Resolution splits by backend, as
+  `Neo4jSessionManager._aresolve_conversation` does:
+  - **bolt**: the deterministic name *is* the conversation key, and the first write
+    auto-creates the conversation (`add_message` and `add_messages_batch` both call
+    `_ensure_conversation`). So resolution makes no backend call. Nothing is tagged: bolt's
+    `CREATE_CONVERSATION` (`graph/queries.py`) has no metadata property, and
+    `create_conversation` drops a `metadata` kwarg (`memory/short_term.py:521-524`).
+  - **NAMS**: ids are server-minted and client session ids are dropped, so the sink is
+    found by matching `_STORE_KEY` metadata (accepted at creation, unsettable afterwards)
+    and the returned id is cached.
 - Reads are conversation-independent; only `user_id` narrows them.
 - Pointing the sink at the chat conversation duplicates `Message` nodes in the readable
   history: documented as unsupported, not guarded.
