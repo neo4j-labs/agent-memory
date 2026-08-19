@@ -165,7 +165,12 @@ class FakeLongTerm:
         from neo4j_agent_memory.memory.long_term import Entity
 
         self.added_entities.append((name, entity_type))
-        return Entity(name=name, type=entity_type), None
+        entity = Entity(name=name, type=entity_type)
+        # Real NAMS add_entity returns a bare Entity (nams/long_term.py:205-210);
+        # bolt returns (Entity, DeduplicationResult).
+        if self.nams_mode:
+            return entity
+        return entity, None
 
 
 class FakeReasoning:

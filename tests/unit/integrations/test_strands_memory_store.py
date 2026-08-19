@@ -432,6 +432,36 @@ class TestAdd:
         await store.add("Acme Corp", {"kind": "entity", "type": "ORGANIZATION"})
 
         assert client.long_term.added_entities == [("Acme Corp", "ORGANIZATION")]
+        assert client.short_term.add_message_calls == []
+
+    @pytest.mark.asyncio
+    async def test_kind_entity_defaults_name_and_type(self) -> None:
+        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+
+        client = FakeMemoryClient()
+        store = Neo4jMemoryStore(name="graph", client=client)
+        await store.initialize()
+        await store.add("Acme Corp", {"kind": "entity"})
+
+        assert client.long_term.added_entities == [("Acme Corp", "OBJECT")]
+
+    @pytest.mark.asyncio
+    async def test_kind_entity_on_nams_returns_bare_entity_id(self) -> None:
+        """NAMS add_entity returns a bare Entity, not a (Entity, Dedup) tuple.
+
+        Without the isinstance narrowing in `_add_typed`, this raises trying
+        to subscript a bare Entity as a tuple.
+        """
+        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+
+        client = FakeMemoryClient(nams_mode=True)
+        store = Neo4jMemoryStore(name="graph", client=client)
+        await store.initialize()
+        result = await store.add("Acme Corp", {"kind": "entity", "type": "ORGANIZATION"})
+
+        assert client.long_term.added_entities == [("Acme Corp", "ORGANIZATION")]
+        assert result["kind"] == "entity"
+        assert result["id"]
 
     @pytest.mark.asyncio
     async def test_unsupported_kind_on_nams_falls_back_to_the_sink(self, caplog) -> None:
@@ -445,6 +475,22 @@ class TestAdd:
         assert result["kind"] == "message"
         assert client.short_term.add_message_calls[-1]["content"] == "dark mode"
         assert "falling back" in caplog.text.lower()
+
+    @pytest.mark.asyncio
+    async def test_unsupported_kind_warning_is_logged_once_per_store(self, caplog) -> None:
+        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+
+        client = FakeMemoryClient(nams_mode=True)
+        store = Neo4jMemoryStore(name="graph", client=client)
+        await store.initialize()
+
+        with caplog.at_level("WARNING"):
+            await store.add("dark mode", {"kind": "preference", "category": "ui"})
+            await store.add("another one", {"kind": "preference", "category": "ui"})
+
+        warnings = [r for r in caplog.records if "unsupported on this backend" in r.message]
+        assert len(warnings) == 1
+        assert len(client.short_term.add_message_calls) == 2
 
     @pytest.mark.asyncio
     async def test_rejects_writes_when_not_writable(self) -> None:

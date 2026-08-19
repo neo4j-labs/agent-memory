@@ -98,6 +98,7 @@ class Neo4jMemoryStore(MemoryStore):
         self._run_id = uuid.uuid4().hex
         self._written: set[tuple[str, int]] = set()
         self._initialized = False
+        self._warned_unsupported_kinds: set[str] = set()
 
         if client is not None:
             self._client: MemoryClient = client
@@ -240,13 +241,17 @@ class Neo4jMemoryStore(MemoryStore):
             try:
                 return await self._add_typed(kind, content, meta)
             except NotSupportedError as error:
-                logger.warning(
-                    "Neo4jMemoryStore '%s': %s unsupported on this backend (%s); "
-                    "falling back to the message sink.",
-                    self.name,
-                    kind,
-                    error,
-                )
+                if kind not in self._warned_unsupported_kinds:
+                    self._warned_unsupported_kinds.add(kind)
+                    logger.warning(
+                        "Neo4jMemoryStore '%s': %s unsupported on this backend (%s); "
+                        "falling back to the message sink. (This warning is logged "
+                        "once per store; further %s writes fall back silently.)",
+                        self.name,
+                        kind,
+                        error,
+                        kind,
+                    )
 
         return await self._add_to_sink(content)
 
@@ -268,13 +273,15 @@ class Neo4jMemoryStore(MemoryStore):
                 )
             fact = await long_term.add_fact(subject, predicate, obj)
             return {"kind": "fact", "id": str(fact.id)}
-        # add_entity returns (Entity, DeduplicationResult) on bolt but a bare
-        # Entity on NAMS (no dedup pipeline there).
-        entity_result = await long_term.add_entity(
-            meta.get("name", content), meta.get("type", "OBJECT")
-        )
-        entity = entity_result[0] if isinstance(entity_result, tuple) else entity_result
-        return {"kind": "entity", "id": str(entity.id)}
+        if kind == "entity":
+            # add_entity returns (Entity, DeduplicationResult) on bolt but a bare
+            # Entity on NAMS (no dedup pipeline there).
+            entity_result = await long_term.add_entity(
+                meta.get("name", content), meta.get("type", "OBJECT")
+            )
+            entity = entity_result[0] if isinstance(entity_result, tuple) else entity_result
+            return {"kind": "entity", "id": str(entity.id)}
+        raise ValueError(f"Neo4jMemoryStore '{self.name}': unknown kind '{kind}'")
 
     async def _add_to_sink(self, content: str) -> dict[str, Any]:
         sink = await self._resolve_sink()
