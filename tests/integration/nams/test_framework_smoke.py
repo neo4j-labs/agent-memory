@@ -141,11 +141,11 @@ async def test_crewai_smoke(nams_client: MemoryClient, nams_session: str) -> Non
     except (ImportError, AttributeError):
         pytest.skip("crewai integration unavailable")
 
-    # CrewAI's adapter is crew-scoped (no session_id) and uses an internal
-    # crew id rather than a pre-created NAMS conversation, so we assert it
-    # constructs against a NAMS-backed client and round-trip the write path
-    # through the shared client.
-    _ = Neo4jCrewMemory(memory_client=nams_client)
+    # CrewAI's adapter is crew-scoped: crew_id (not session_id) names the
+    # conversation it writes under. We assert it constructs against a
+    # NAMS-backed client and round-trip the write path through the shared
+    # client.
+    _ = Neo4jCrewMemory(memory_client=nams_client, crew_id=f"{nams_session}-crew")
     marker = _marker()
 
     async def store() -> None:
