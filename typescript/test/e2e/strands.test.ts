@@ -34,7 +34,7 @@ import {
   Neo4jConversationManager,
   Neo4jSessionStorage,
   registerReasoningHooks,
-} from "../../src/integrations/strands.js";
+} from "../../src/integrations/strands/index.js";
 import { metadataFor } from "./tck-provenance.js";
 
 const API_KEY = (process.env.MEMORY_API_KEY ?? "").trim();

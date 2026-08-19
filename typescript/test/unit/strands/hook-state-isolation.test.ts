@@ -17,7 +17,7 @@ import {
   AfterInvocationEvent,
   type LocalAgent,
 } from "@strands-agents/sdk";
-import { registerReasoningHooks } from "../../../src/integrations/strands.js";
+import { registerReasoningHooks } from "../../../src/integrations/strands/index.js";
 
 type Recorded = { kind: string; args: unknown[] };
 

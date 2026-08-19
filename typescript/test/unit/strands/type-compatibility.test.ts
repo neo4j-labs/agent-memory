@@ -13,7 +13,7 @@ import type {
 import {
   Neo4jConversationManager,
   Neo4jSessionStorage,
-} from "../../../src/integrations/strands.js";
+} from "../../../src/integrations/strands/index.js";
 import { MemoryClient } from "../../../src/client.js";
 
 describe("Strands type compatibility", () => {

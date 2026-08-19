@@ -7,7 +7,7 @@
 
 import { describe, it, expect } from "vitest";
 import { BeforeInvocationEvent } from "@strands-agents/sdk";
-import { Neo4jConversationManager } from "../../../src/integrations/strands.js";
+import { Neo4jConversationManager } from "../../../src/integrations/strands/index.js";
 
 function makeMemoryStub(ctx: unknown | (() => Promise<unknown>)) {
   return {
