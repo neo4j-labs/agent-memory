@@ -55,14 +55,13 @@ class TestConstruction:
         assert store._owns_client is True
         assert isinstance(store._client, MemoryClient)
 
-    def test_write_sinks_are_not_declared_yet(self) -> None:
-        """Scope guard: `add` lands in task 7, `add_messages` in task 8.
+    def test_add_messages_is_not_declared_yet(self) -> None:
+        """Scope guard: `add` landed in task 7, `add_messages` lands in task 8.
 
         `_has_method` compares `getattr(type(store), name)` against the Protocol's
-        own stub by identity, so an undefined method reads as absent. Stubbing
-        either sink here would flip write-sink detection before the methods do
-        anything — hence this asserts the intermediate state rather than the
-        final one. The both-sinks assertions live in task 8.
+        own stub by identity, so an undefined method reads as absent. `add` is now
+        real, so `_has_write_sink` is already True; the both-sinks assertion lives
+        in task 8.
         """
         from strands.memory.types import _has_method, _has_write_sink
 
@@ -71,9 +70,9 @@ class TestConstruction:
         store = Neo4jMemoryStore(name="graph", client=FakeMemoryClient())
 
         assert _has_method(store, "initialize") is True
-        assert _has_method(store, "add") is False
+        assert _has_method(store, "add") is True
         assert _has_method(store, "add_messages") is False
-        assert _has_write_sink(store) is False
+        assert _has_write_sink(store) is True
 
 
 class TestLifecycle:
@@ -364,3 +363,105 @@ class TestSearch:
         await store.search("q")
 
         assert client.connect_calls == 1
+
+
+class TestAdd:
+    @pytest.mark.asyncio
+    async def test_default_writes_a_message_into_the_sink_with_extraction(self) -> None:
+        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+
+        client = FakeMemoryClient()
+        store = Neo4jMemoryStore(name="graph", client=client)
+        await store.initialize()
+        result = await store.add("The user prefers dark mode")
+
+        call = client.short_term.add_message_calls[-1]
+        assert call["content"] == "The user prefers dark mode"
+        assert call["role"] == "user"
+        assert call["extract_entities"] is True
+        assert result["kind"] == "message"
+
+    @pytest.mark.asyncio
+    async def test_kind_preference_routes_to_add_preference(self) -> None:
+        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+
+        client = FakeMemoryClient()
+        store = Neo4jMemoryStore(name="graph", client=client)
+        await store.initialize()
+        result = await store.add("dark mode", {"kind": "preference", "category": "ui"})
+
+        assert client.long_term.added_preferences == [("ui", "dark mode")]
+        assert result["kind"] == "preference"
+        assert client.short_term.add_message_calls == []
+
+    @pytest.mark.asyncio
+    async def test_kind_preference_without_category_defaults_to_memory(self) -> None:
+        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+
+        client = FakeMemoryClient()
+        store = Neo4jMemoryStore(name="graph", client=client)
+        await store.initialize()
+        await store.add("dark mode", {"kind": "preference"})
+
+        assert client.long_term.added_preferences == [("memory", "dark mode")]
+
+    @pytest.mark.asyncio
+    async def test_kind_fact_requires_a_triple(self) -> None:
+        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+
+        client = FakeMemoryClient()
+        store = Neo4jMemoryStore(name="graph", client=client)
+        await store.initialize()
+
+        await store.add(
+            "Ada works at Acme",
+            {"kind": "fact", "subject": "Ada", "predicate": "works_at", "object": "Acme"},
+        )
+        assert client.long_term.added_facts == [("Ada", "works_at", "Acme")]
+
+        with pytest.raises(ValueError, match="subject.*predicate.*object"):
+            await store.add("Ada works at Acme", {"kind": "fact"})
+
+    @pytest.mark.asyncio
+    async def test_kind_entity_routes_to_add_entity(self) -> None:
+        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+
+        client = FakeMemoryClient()
+        store = Neo4jMemoryStore(name="graph", client=client)
+        await store.initialize()
+        await store.add("Acme Corp", {"kind": "entity", "type": "ORGANIZATION"})
+
+        assert client.long_term.added_entities == [("Acme Corp", "ORGANIZATION")]
+
+    @pytest.mark.asyncio
+    async def test_unsupported_kind_on_nams_falls_back_to_the_sink(self, caplog) -> None:
+        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+
+        client = FakeMemoryClient(nams_mode=True)
+        store = Neo4jMemoryStore(name="graph", client=client)
+        await store.initialize()
+        result = await store.add("dark mode", {"kind": "preference", "category": "ui"})
+
+        assert result["kind"] == "message"
+        assert client.short_term.add_message_calls[-1]["content"] == "dark mode"
+        assert "falling back" in caplog.text.lower()
+
+    @pytest.mark.asyncio
+    async def test_rejects_writes_when_not_writable(self) -> None:
+        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+
+        store = Neo4jMemoryStore(name="graph", client=FakeMemoryClient(), writable=False)
+        await store.initialize()
+
+        with pytest.raises(ValueError, match="not writable"):
+            await store.add("anything")
+
+    @pytest.mark.asyncio
+    async def test_rejects_empty_content(self) -> None:
+        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+
+        store = Neo4jMemoryStore(name="graph", client=FakeMemoryClient())
+        await store.initialize()
+
+        with pytest.raises(ValueError, match="empty"):
+            await store.add("   ")

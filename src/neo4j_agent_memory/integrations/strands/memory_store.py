@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from typing_extensions import Unpack
 
@@ -21,6 +21,7 @@ except ImportError as import_error:  # pragma: no cover - exercised via package 
         "Install with: pip install 'neo4j-agent-memory[strands]'"
     ) from import_error
 
+from neo4j_agent_memory.core.exceptions import NotSupportedError
 from neo4j_agent_memory.integrations.strands._retrieval import _retrieve_entries
 
 if TYPE_CHECKING:
@@ -211,6 +212,80 @@ class Neo4jMemoryStore(MemoryStore):
             nams=self.is_nams,
         )
         return [MemoryEntry(content=row.content, metadata=row.metadata) for row in rows]
+
+    async def add(self, content: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Add one piece of content.
+
+        Default sink: a message in the store's conversation, written with
+        extraction on — the one path available on every backend. ``metadata["kind"]``
+        opts into a typed write (``preference`` / ``fact`` / ``entity``); on a
+        backend that does not expose it, the write falls back to the default sink
+        so the memory is never silently dropped.
+
+        Extraction writes are at-least-once, so this tolerates duplicates.
+        """
+        if not self.writable:
+            raise ValueError(
+                f"Neo4jMemoryStore '{self.name}': store is not writable. "
+                "Set writable=True to enable add()."
+            )
+        if not content.strip():
+            raise ValueError(f"Neo4jMemoryStore '{self.name}': content must not be empty")
+
+        await self.initialize()
+        meta = metadata or {}
+        kind = meta.get("kind")
+
+        if kind in ("preference", "fact", "entity"):
+            try:
+                return await self._add_typed(kind, content, meta)
+            except NotSupportedError as error:
+                logger.warning(
+                    "Neo4jMemoryStore '%s': %s unsupported on this backend (%s); "
+                    "falling back to the message sink.",
+                    self.name,
+                    kind,
+                    error,
+                )
+
+        return await self._add_to_sink(content)
+
+    async def _add_typed(self, kind: str, content: str, meta: dict[str, Any]) -> dict[str, Any]:
+        long_term = self._client.long_term
+        if kind == "preference":
+            preference = await long_term.add_preference(meta.get("category", "memory"), content)
+            return {"kind": "preference", "id": str(preference.id)}
+        if kind == "fact":
+            subject, predicate, obj = (
+                meta.get("subject"),
+                meta.get("predicate"),
+                meta.get("object"),
+            )
+            if not (subject and predicate and obj):
+                raise ValueError(
+                    f"Neo4jMemoryStore '{self.name}': kind='fact' requires "
+                    "subject, predicate and object in metadata"
+                )
+            fact = await long_term.add_fact(subject, predicate, obj)
+            return {"kind": "fact", "id": str(fact.id)}
+        # add_entity returns (Entity, DeduplicationResult) on bolt but a bare
+        # Entity on NAMS (no dedup pipeline there).
+        entity_result = await long_term.add_entity(
+            meta.get("name", content), meta.get("type", "OBJECT")
+        )
+        entity = entity_result[0] if isinstance(entity_result, tuple) else entity_result
+        return {"kind": "entity", "id": str(entity.id)}
+
+    async def _add_to_sink(self, content: str) -> dict[str, Any]:
+        sink = await self._resolve_sink()
+        message = await self._client.short_term.add_message(
+            sink,
+            "user",
+            content,
+            extract_entities=True,
+            user_identifier=self.user_id,
+        )
+        return {"kind": "message", "id": str(message.id)}
 
     async def aclose(self) -> None:
         """Close the client only when the store constructed it."""

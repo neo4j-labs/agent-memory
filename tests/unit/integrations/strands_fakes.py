@@ -104,10 +104,24 @@ class FakeLongTerm:
         self.fail_facts = False
         self.search_calls: int = 0
         self.search_kwargs: list[dict[str, Any]] = []
+        self.added_preferences: list[tuple[str, str]] = []
+        self.added_facts: list[tuple[str, str, str]] = []
+        self.added_entities: list[tuple[str, str]] = []
+        self.nams_mode = False
 
     async def _maybe_fail(self) -> None:
         if self.fail_searches:
             raise RuntimeError("search backend down")
+
+    def _reject_on_nams(self, method: str) -> None:
+        if self.nams_mode:
+            from neo4j_agent_memory.core.exceptions import NotSupportedError
+
+            raise NotSupportedError(
+                backend="nams",
+                method=f"LongTermMemory.{method}",
+                message="NAMS provides entity endpoints only.",
+            )
 
     async def search_entities(self, query: str, **kwargs: Any) -> list[Any]:
         self.search_calls += 1
@@ -118,6 +132,7 @@ class FakeLongTerm:
     async def search_preferences(self, query: str, **kwargs: Any) -> list[Any]:
         self.search_calls += 1
         self.search_kwargs.append({"query": query, **kwargs})
+        self._reject_on_nams("search_preferences")
         if self.fail_preferences:
             raise RuntimeError("preference backend down")
         await self._maybe_fail()
@@ -126,10 +141,31 @@ class FakeLongTerm:
     async def search_facts(self, query: str, **kwargs: Any) -> list[Any]:
         self.search_calls += 1
         self.search_kwargs.append({"query": query, **kwargs})
+        self._reject_on_nams("search_facts")
         if self.fail_facts:
             raise RuntimeError("fact backend down")
         await self._maybe_fail()
         return self.facts
+
+    async def add_preference(self, category: str, preference: str, **kwargs: Any) -> Any:
+        self._reject_on_nams("add_preference")
+        self.added_preferences.append((category, preference))
+        from neo4j_agent_memory.memory.long_term import Preference
+
+        return Preference(category=category, preference=preference)
+
+    async def add_fact(self, subject: str, predicate: str, obj: str, **kwargs: Any) -> Any:
+        self._reject_on_nams("add_fact")
+        self.added_facts.append((subject, predicate, obj))
+        from neo4j_agent_memory.memory.long_term import Fact
+
+        return Fact(subject=subject, predicate=predicate, object=obj)
+
+    async def add_entity(self, name: str, entity_type: str, **kwargs: Any) -> Any:
+        from neo4j_agent_memory.memory.long_term import Entity
+
+        self.added_entities.append((name, entity_type))
+        return Entity(name=name, type=entity_type), None
 
 
 class FakeReasoning:
@@ -170,6 +206,7 @@ class FakeMemoryClient:
         self._nams_mode = nams_mode
         self.short_term = FakeShortTerm(nams_mode)
         self.long_term = FakeLongTerm()
+        self.long_term.nams_mode = nams_mode
         self.reasoning = FakeReasoning()
         self.connect_calls = 0
         self.close_calls = 0
