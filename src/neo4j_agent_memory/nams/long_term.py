@@ -35,7 +35,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from neo4j_agent_memory.core.exceptions import NotSupportedError
+from neo4j_agent_memory.core.exceptions import MemoryError, NotSupportedError
 from neo4j_agent_memory.memory.long_term import (
     Entity,
     Fact,
@@ -215,6 +215,13 @@ class NamsLongTermMemory:
         ``{name, type, description?}`` per spec. Bolt-only kwargs
         (``subtype``, ``aliases``, ``attributes``, ``confidence``,
         ``deduplicate``, ``geocode``, ``enrich``, etc.) are silently dropped.
+
+        NAMS resolves-before-create: when the name is close enough to an
+        existing entity, the server merges onto it and responds
+        ``{id, resolution: "merged", merged_into, confidence}`` — no
+        ``name``/``type``. We follow up with ``GET /entities/{id}`` and
+        return the canonical merged-into entity (falling back to the
+        request's name/type if that read fails).
         """
         et = entity_type or kwargs.get("type") or kwargs.get("label")
         if et is None:
@@ -227,7 +234,43 @@ class NamsLongTermMemory:
             }
         )
         payload = await self._transport.request(_SPEC_ADD_ENTITY, json=body)
+        if isinstance(payload, dict) and payload.get("resolution") == "merged":
+            payload = await self._resolve_merged_entity(payload, name=name, nams_type=body["type"])
         return payload_to_model(_normalize_entity(payload), Entity)
+
+    async def _resolve_merged_entity(
+        self,
+        payload: dict[str, Any],
+        *,
+        name: str,
+        nams_type: str,
+    ) -> dict[str, Any]:
+        """Turn a ``resolution: "merged"`` create response into entity fields.
+
+        The merged response carries only ``{id, merged_into, confidence}``,
+        so we fetch the canonical entity it merged into. If that read
+        fails (or comes back without a name), synthesize a minimal record
+        from the request so the caller still gets a parseable Entity.
+        """
+        merged_id = payload.get("merged_into") or payload.get("mergedInto") or payload.get("id")
+        if merged_id:
+            try:
+                detail = await self._transport.request(
+                    _SPEC_GET_ENTITY,
+                    path_params={"entity_id": _to_str(merged_id)},
+                )
+            except MemoryError:
+                detail = None
+            if isinstance(detail, dict) and detail.get("name"):
+                return detail
+        return _drop_none(
+            {
+                "id": merged_id,
+                "name": name,
+                "type": nams_type,
+                "confidence": payload.get("confidence"),
+            }
+        )
 
     async def add_preference(self, category: str, preference: str, **kwargs: Any) -> Preference:
         raise NotSupportedError(

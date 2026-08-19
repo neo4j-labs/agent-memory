@@ -155,6 +155,70 @@ class TestAddEntity:
         assert body == {"name": "Alice", "type": "person", "description": "Test entity"}
 
     @respx.mock
+    async def test_merged_resolution_fetches_canonical_entity(self, long_term):
+        # NAMS resolves-before-create: a near-duplicate name merges onto the
+        # existing entity and the response carries no name/type — the client
+        # must follow up with GET /entities/{id} for the canonical record.
+        respx.post("https://memory.test/v1/entities").respond(
+            200,
+            json={
+                "id": SAMPLE_ENTITY["id"],
+                "resolution": "merged",
+                "merged_into": SAMPLE_ENTITY["id"],
+                "confidence": 0.93,
+            },
+        )
+        get_route = respx.get(f"https://memory.test/v1/entities/{SAMPLE_ENTITY['id']}").respond(
+            200, json={**SAMPLE_ENTITY, "relationships": []}
+        )
+        entity = await long_term.add_entity("Alice Smith", "PERSON")
+        assert get_route.called
+        assert isinstance(entity, Entity)
+        assert str(entity.id) == SAMPLE_ENTITY["id"]
+        # The canonical (merged-into) record wins over the requested name.
+        assert entity.name == "Alice"
+        assert entity.type == "PERSON"
+
+    @respx.mock
+    async def test_merged_resolution_falls_back_to_request_fields(self, long_term):
+        # If the follow-up read fails, synthesize a parseable Entity from the
+        # request instead of raising a ValidationError.
+        respx.post("https://memory.test/v1/entities").respond(
+            200,
+            json={
+                "id": SAMPLE_ENTITY["id"],
+                "resolution": "merged",
+                "merged_into": SAMPLE_ENTITY["id"],
+                "confidence": 0.93,
+            },
+        )
+        respx.get(f"https://memory.test/v1/entities/{SAMPLE_ENTITY['id']}").respond(
+            404, json={"error": "entity not found"}
+        )
+        entity = await long_term.add_entity("Alice Smith", "PERSON")
+        assert isinstance(entity, Entity)
+        assert str(entity.id) == SAMPLE_ENTITY["id"]
+        assert entity.name == "Alice Smith"
+        assert entity.type == "PERSON"
+        assert entity.confidence == 0.93
+
+    @respx.mock
+    async def test_review_pending_resolution_parses(self, long_term):
+        # review_pending responses include full entity fields plus the
+        # resolution/duplicate_of extras — those must parse cleanly.
+        respx.post("https://memory.test/v1/entities").respond(
+            201,
+            json={
+                **SAMPLE_ENTITY,
+                "resolution": "review_pending",
+                "duplicate_of": "00000000-0000-0000-0000-000000000002",
+            },
+        )
+        entity = await long_term.add_entity("Alice", "PERSON")
+        assert isinstance(entity, Entity)
+        assert entity.name == "Alice"
+
+    @respx.mock
     async def test_bolt_only_kwargs_dropped(self, long_term):
         route = respx.post("https://memory.test/v1/entities").respond(201, json=SAMPLE_ENTITY)
         await long_term.add_entity(

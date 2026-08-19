@@ -5,7 +5,7 @@
  * entity feedback, history, merge-by-id, graph view, and provenance.
  */
 
-import { ValidationError } from "../errors.js";
+import { MemoryError, ValidationError } from "../errors.js";
 import type { Transport } from "../transport/index.js";
 import type {
   AddRelationshipOptions,
@@ -52,6 +52,18 @@ interface WireEntityRelRef {
   target_id: string;
   target_name?: string;
   properties?: Record<string, unknown>;
+}
+
+/**
+ * Hosted create response when NAMS resolves-before-create merges the new
+ * name onto an existing entity: `{id, resolution: "merged", merged_into,
+ * confidence}` — no name/type fields.
+ */
+interface WireMergedResolution {
+  id?: string;
+  resolution: string;
+  merged_into?: string;
+  confidence?: number;
 }
 
 interface WirePreference {
@@ -192,13 +204,48 @@ export class LongTermMemory {
     entityType: string,
     options?: { description?: string },
   ): Promise<Entity> {
-    const wire = await this.transport.request<WireEntity>("add_entity", {
+    const wire = await this.transport.request<WireEntity | WireMergedResolution>("add_entity", {
       name,
       entity_type: entityType,
       type: entityType,
       description: options?.description,
     });
-    return toEntity(wire);
+    // NAMS resolves-before-create: a sufficiently similar name merges onto an
+    // existing entity and the response carries no name/type — follow up with
+    // a GET for the canonical merged-into record.
+    if (wire && typeof wire === "object" && "resolution" in wire && wire.resolution === "merged") {
+      return this.resolveMergedEntity(wire, name, entityType);
+    }
+    return toEntity(wire as WireEntity);
+  }
+
+  /**
+   * Turn a `resolution: "merged"` create response into the canonical Entity.
+   *
+   * Fetches the merged-into entity; if that read fails (or no id was
+   * returned), synthesizes a minimal record from the request so the caller
+   * still gets a well-formed Entity.
+   */
+  private async resolveMergedEntity(
+    wire: WireMergedResolution,
+    name: string,
+    entityType: string,
+  ): Promise<Entity> {
+    const mergedId = wire.merged_into ?? wire.id;
+    if (mergedId) {
+      try {
+        return await this.getEntity(mergedId);
+      } catch (error) {
+        if (!(error instanceof MemoryError)) throw error;
+        // Canonical record unreadable — fall through to the synthesized form.
+      }
+    }
+    return toEntity({
+      id: mergedId ?? "",
+      name,
+      type: entityType,
+      confidence: wire.confidence,
+    });
   }
 
   async addPreference(

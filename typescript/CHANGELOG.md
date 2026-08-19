@@ -9,6 +9,17 @@ appear in minor versions with a callout in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`longTerm.addEntity` no longer returns a malformed Entity when the
+  hosted service auto-merges the create onto an existing entity.** NAMS
+  resolves-before-create: a sufficiently similar name responds
+  `{id, resolution: "merged", merged_into, confidence}` with no
+  `name`/`type`, which previously flowed into an Entity with `undefined`
+  name and type. The client now follows up with `GET /entities/{id}` and
+  returns the canonical merged-into entity (falling back to the request's
+  name/type if that read fails). Mirrors the same fix in the Python SDK.
+
 ## 0.4.0 — NAMS alignment
 
 Adds workspace addressing, a first-class ontology surface
