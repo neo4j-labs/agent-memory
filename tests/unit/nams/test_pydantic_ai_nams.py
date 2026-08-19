@@ -95,6 +95,22 @@ class TestGetEntityHistory:
         result = await get_history("e1")
         assert "No history" in result
 
+    @pytest.mark.parametrize("limit", [0, -1])
+    async def test_non_positive_limit_returns_no_history(self, mock_client, limit):
+        mock_client.long_term.get_entity_history = AsyncMock(
+            return_value=[
+                {"conversation_id": "c1", "mention_count": 5},
+                {"conversation_id": "c2", "mention_count": 1},
+            ]
+        )
+        tools = nams_memory_tools(mock_client)
+        get_history = next(t for t in tools if t.__name__ == "get_entity_history")
+
+        result = await get_history("e1", limit=limit)
+
+        assert result == "No history for this entity."
+        mock_client.long_term.get_entity_history.assert_awaited_once_with("e1")
+
 
 class TestGetEntityProvenance:
     async def test_formats_provenance(self, mock_client):

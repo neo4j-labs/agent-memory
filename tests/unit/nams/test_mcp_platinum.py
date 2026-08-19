@@ -111,6 +111,21 @@ class TestPlatinumToolExecution:
         assert data["history"][0]["mention_count"] == 3
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("limit", [0, -1])
+    async def test_get_entity_history_non_positive_limit_returns_empty(
+        self, server, mock_client, limit
+    ):
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "memory_get_entity_history", {"entity_id": "e1", "limit": limit}
+            )
+            data = json.loads(result.content[0].text)
+
+        assert data["entity_id"] == "e1"
+        assert data["history"] == []
+        mock_client.long_term.get_entity_history.assert_awaited_once_with("e1")
+
+    @pytest.mark.asyncio
     async def test_feedback_tool_does_not_expose_ignored_user_identifier(self, server):
         async with Client(server) as client:
             tools = await client.list_tools()
@@ -134,6 +149,21 @@ class TestPlatinumToolExecution:
             data = json.loads(result.content[0].text)
         assert data["session_id"] == "s1"
         assert len(data["reflections"]) == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("limit", [0, -1])
+    async def test_get_reflections_non_positive_limit_returns_empty(
+        self, server, mock_client, limit
+    ):
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "memory_get_reflections", {"session_id": "s1", "limit": limit}
+            )
+            data = json.loads(result.content[0].text)
+
+        assert data["session_id"] == "s1"
+        assert data["reflections"] == []
+        mock_client.short_term.get_reflections.assert_awaited_once_with("s1")
 
 
 class TestServerWiring:
