@@ -32,10 +32,14 @@ class FakeShortTerm:
     ) -> Conversation:
         conv_id = uuid.uuid4()
         key = str(conv_id) if self._nams_mode else str(session_id)
+        # Real bolt's CREATE_CONVERSATION has no metadata property; only NAMS
+        # accepts and stores it. Mirror that so bolt-mode tests can't lean on
+        # metadata a real bolt conversation would never carry.
+        metadata = kwargs.get("metadata") or {} if self._nams_mode else {}
         conv = Conversation(
             id=conv_id,
             session_id=str(session_id),
-            metadata=kwargs.get("metadata") or {},
+            metadata=metadata,
         )
         self.conversations[key] = conv
         return conv

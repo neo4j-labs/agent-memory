@@ -136,26 +136,24 @@ class Neo4jMemoryStore(MemoryStore):
         """Return the conversation key writes go to, creating the sink if needed.
 
         An explicit ``conversation_id`` is used verbatim. Otherwise: bolt keys
-        conversations by ``session_id`` and ``create_conversation`` is idempotent
-        under it, so the deterministic sink name is created (or reused) directly
-        with no list round-trip. NAMS mints its own ids, so metadata is the only
-        portable handle — list and match ``_STORE_KEY`` metadata, else create.
-        Same split as ``Neo4jSessionManager._aresolve_conversation``.
+        conversations by ``session_id`` and ``add_message``/``add_messages_batch``
+        both auto-create the sink via ``_ensure_conversation`` on first write, so
+        the deterministic sink name *is* the whole contract — no backend call is
+        made here, and none is needed. Bolt's ``CREATE_CONVERSATION`` query also
+        has no metadata property, so tagging one is not possible even if we
+        called ``create_conversation`` eagerly. NAMS mints its own conversation
+        ids, so metadata is the only portable handle there — list and match
+        ``_STORE_KEY`` metadata, else create. Same split as
+        ``Neo4jSessionManager._aresolve_conversation``.
         """
         if self._sink_key is not None:
             return self._sink_key
 
-        short_term = self._client.short_term
-
         if not self.is_nams:
-            await short_term.create_conversation(
-                session_id=self._sink_name,
-                metadata={_STORE_KEY: self._sink_name, "session_type": "MEMORY_STORE"},
-                user_identifier=self.user_id,
-            )
             self._sink_key = self._sink_name
             return self._sink_key
 
+        short_term = self._client.short_term
         conversations = await short_term.list_conversations(
             user_identifier=self.user_id, limit=1000
         )

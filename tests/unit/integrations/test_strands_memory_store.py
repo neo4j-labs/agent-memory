@@ -142,6 +142,7 @@ class TestForNams:
 class TestSinkResolution:
     @pytest.mark.asyncio
     async def test_creates_a_deterministically_named_sink(self) -> None:
+        """Bolt keys conversations by session_id; the deterministic name is the whole contract."""
         from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
 
         client = FakeMemoryClient()
@@ -149,13 +150,13 @@ class TestSinkResolution:
         await store.initialize()
         key = await store._resolve_sink()
 
-        conv = client.short_term.conversations[key]
-        assert conv.session_id == "strands-memory-store/alice/graph"
-        assert conv.metadata["strands_memory_store"] == "strands-memory-store/alice/graph"
+        assert key == "strands-memory-store/alice/graph"
+        assert client.short_term.conversations == {}  # nothing minted
+        assert client.short_term.list_conversations_calls == []
 
     @pytest.mark.asyncio
     async def test_reuses_an_existing_sink_across_instances(self) -> None:
-        """Deterministic name + metadata match, so a restart does not mint a second sink."""
+        """Bolt needs no round-trip for reuse: same name, same key, every time."""
         from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
 
         client = FakeMemoryClient()
@@ -168,7 +169,8 @@ class TestSinkResolution:
         key_two = await second._resolve_sink()
 
         assert key_one == key_two
-        assert len(client.short_term.conversations) == 1
+        assert client.short_term.conversations == {}
+        assert client.short_term.list_conversations_calls == []
 
     @pytest.mark.asyncio
     async def test_reuses_the_nams_server_minted_id_by_metadata(self) -> None:
@@ -185,7 +187,22 @@ class TestSinkResolution:
         key_two = await second._resolve_sink()
 
         assert key_one == key_two
+        assert key_one != "strands-memory-store/_/graph"  # the cached key is the minted uuid
+        only_conv = next(iter(client.short_term.conversations.values()))
+        assert key_one == str(only_conv.id)
         assert len(client.short_term.conversations) == 1
+
+    @pytest.mark.asyncio
+    async def test_nams_scans_conversations_once(self) -> None:
+        """Symmetric to the bolt no-scan case: NAMS needs exactly one list round-trip."""
+        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+
+        client = FakeMemoryClient(nams_mode=True)
+        store = Neo4jMemoryStore(name="graph", client=client)
+        await store.initialize()
+        await store._resolve_sink()
+
+        assert len(client.short_term.list_conversations_calls) == 1
 
     @pytest.mark.asyncio
     async def test_explicit_conversation_id_is_used_verbatim(self) -> None:
