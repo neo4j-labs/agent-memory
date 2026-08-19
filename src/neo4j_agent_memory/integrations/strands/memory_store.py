@@ -127,6 +127,40 @@ class Neo4jMemoryStore(MemoryStore):
     def is_nams(self) -> bool:
         return bool(getattr(self._client, "is_nams", False))
 
+    @property
+    def _sink_name(self) -> str:
+        """Deterministic sink name, stable across processes and restarts."""
+        return f"strands-memory-store/{self.user_id or '_'}/{self.name}"
+
+    async def _resolve_sink(self) -> str:
+        """Return the conversation key writes go to, creating the sink if needed.
+
+        An explicit ``conversation_id`` is used verbatim. Otherwise the sink is
+        found by matching ``_STORE_KEY`` metadata against the deterministic sink
+        name — bolt keys conversations by ``session_id`` and NAMS mints its own
+        ids, so metadata is the portable handle. Same resolution strategy as
+        ``Neo4jSessionManager._aresolve_conversation``.
+        """
+        if self._sink_key is not None:
+            return self._sink_key
+
+        short_term = self._client.short_term
+        conversations = await short_term.list_conversations(
+            user_identifier=self.user_id, limit=1000
+        )
+        for conversation in conversations:
+            if (conversation.metadata or {}).get(_STORE_KEY) == self._sink_name:
+                self._sink_key = str(conversation.id) if self.is_nams else self._sink_name
+                return self._sink_key
+
+        created = await short_term.create_conversation(
+            session_id=self._sink_name,
+            metadata={_STORE_KEY: self._sink_name, "session_type": "MEMORY_STORE"},
+            user_identifier=self.user_id,
+        )
+        self._sink_key = str(created.id) if self.is_nams else self._sink_name
+        return self._sink_key
+
     async def initialize(self) -> None:
         """Connect the client if not already connected. Idempotent."""
         if self._initialized:

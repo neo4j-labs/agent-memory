@@ -137,3 +137,75 @@ class TestForNams:
 
         with pytest.raises(ValueError, match="api_key is required"):
             Neo4jMemoryStore.for_nams(name="graph")
+
+
+class TestSinkResolution:
+    @pytest.mark.asyncio
+    async def test_creates_a_deterministically_named_sink(self) -> None:
+        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+
+        client = FakeMemoryClient()
+        store = Neo4jMemoryStore(name="graph", client=client, user_id="alice")
+        await store.initialize()
+        key = await store._resolve_sink()
+
+        conv = client.short_term.conversations[key]
+        assert conv.session_id == "strands-memory-store/alice/graph"
+        assert conv.metadata["strands_memory_store"] == "strands-memory-store/alice/graph"
+
+    @pytest.mark.asyncio
+    async def test_reuses_an_existing_sink_across_instances(self) -> None:
+        """Deterministic name + metadata match, so a restart does not mint a second sink."""
+        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+
+        client = FakeMemoryClient()
+        first = Neo4jMemoryStore(name="graph", client=client)
+        await first.initialize()
+        key_one = await first._resolve_sink()
+
+        second = Neo4jMemoryStore(name="graph", client=client)
+        await second.initialize()
+        key_two = await second._resolve_sink()
+
+        assert key_one == key_two
+        assert len(client.short_term.conversations) == 1
+
+    @pytest.mark.asyncio
+    async def test_reuses_the_nams_server_minted_id_by_metadata(self) -> None:
+        """NAMS mints conversation ids, so reuse matches on metadata, not id."""
+        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+
+        client = FakeMemoryClient(nams_mode=True)
+        first = Neo4jMemoryStore(name="graph", client=client)
+        await first.initialize()
+        key_one = await first._resolve_sink()
+
+        second = Neo4jMemoryStore(name="graph", client=client)
+        await second.initialize()
+        key_two = await second._resolve_sink()
+
+        assert key_one == key_two
+        assert len(client.short_term.conversations) == 1
+
+    @pytest.mark.asyncio
+    async def test_explicit_conversation_id_is_used_verbatim(self) -> None:
+        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+
+        client = FakeMemoryClient()
+        store = Neo4jMemoryStore(name="graph", client=client, conversation_id="chat-42")
+        await store.initialize()
+
+        assert await store._resolve_sink() == "chat-42"
+        assert client.short_term.conversations == {}  # nothing minted
+
+    @pytest.mark.asyncio
+    async def test_two_stores_with_different_names_get_different_sinks(self) -> None:
+        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+
+        client = FakeMemoryClient()
+        personal = Neo4jMemoryStore(name="personal", client=client)
+        team = Neo4jMemoryStore(name="team", client=client)
+        await personal.initialize()
+        await team.initialize()
+
+        assert await personal._resolve_sink() != await team._resolve_sink()
