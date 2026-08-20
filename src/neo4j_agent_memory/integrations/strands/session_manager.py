@@ -57,6 +57,12 @@ logger = logging.getLogger(__name__)
 #: Conversation-metadata key linking a Conversation to a Strands session id.
 _SESSION_KEY = "strands_session_id"
 
+#: Shared by the double-extraction ValueError and the double-injection warning.
+_COEXISTENCE_HINT = (
+    "Set extraction=False on Neo4jMemoryStore (recall only, recommended), or "
+    "extract_entities=False on Neo4jSessionManager (let the store own extraction)."
+)
+
 __all__ = ["Neo4jRetrievalConfig", "Neo4jSessionManager"]
 
 
@@ -112,6 +118,7 @@ class Neo4jSessionManager(SessionManager):
         self._last_persisted: StoredMessage | None = None  # last stored (late redaction)
         self._trace_id: UUID | None = None  # lazy reasoning trace (record_tool_calls)
         self._closed = False
+        self._warned_double_injection = False
 
     @property
     def _is_nams(self) -> bool:
@@ -199,8 +206,59 @@ class Neo4jSessionManager(SessionManager):
 
     # ----------------------------------------------------- SessionManager API
 
+    def _our_stores(self, agent: Agent) -> list[Any]:
+        """Neo4jMemoryStore instances registered on the agent's MemoryManager.
+
+        Reads ``MemoryManager._stores`` — a private, pinned by
+        ``test_strands_coexistence.py::TestPrivateAttributeCoupling``.
+        """
+        manager = getattr(agent, "memory_manager", None)
+        if manager is None:
+            return []
+        from neo4j_agent_memory.integrations.strands.memory_store import Neo4jMemoryStore
+
+        stores = getattr(manager, "_stores", None) or []
+        return [store for store in stores if isinstance(store, Neo4jMemoryStore)]
+
+    def _check_memory_manager_coexistence(self, agent: Agent) -> None:
+        """Guard the two overlaps possible with a paired Neo4jMemoryStore.
+
+        Pairing itself is supported: this manager persists/restores the
+        transcript, the store feeds the agent loop. Not supported: both
+        sides extracting the same turns, both sides injecting into the
+        same user message.
+        """
+        stores = self._our_stores(agent)
+        if not stores:
+            return
+
+        extracting = [store for store in stores if store.extraction]
+        if extracting:
+            # NAMS extracts every write server-side (add_message drops
+            # extraction kwargs there), so our own extract_entities flag
+            # cannot avert the duplication on that backend.
+            if self._extract_entities or self._is_nams:
+                raise ValueError(
+                    f"Neo4jSessionManager and Neo4jMemoryStore "
+                    f"'{extracting[0].name}' would write and extract the same "
+                    f"turns twice. {_COEXISTENCE_HINT}"
+                )
+
+        if self._retrieval_config is not None and not self._warned_double_injection:
+            manager = getattr(agent, "memory_manager", None)
+            if getattr(manager, "_injection_config", None) is not False:
+                self._warned_double_injection = True
+                logger.warning(
+                    "Memory is being injected twice: Neo4jRetrievalConfig on this "
+                    "session manager and MemoryManager injection from "
+                    "Neo4jMemoryStore '%s'. Drop retrieval_config, or pass "
+                    "injection=False to MemoryManager.",
+                    stores[0].name,
+                )
+
     def initialize(self, agent: Agent, **kwargs: Any) -> None:
         """Restore the agent's conversation history from the graph."""
+        self._check_memory_manager_coexistence(agent)
         try:
             restored = self._bridge.run(self._ainitialize())
         except Exception as e:

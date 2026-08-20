@@ -63,6 +63,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `strands` extra requires `strands-agents>=1.44.0` (was `>=0.1.0`).
+- **`Neo4jSessionManager` now guards against a paired `Neo4jMemoryStore` duplicating its work**: raises if both would extract the same turns (always, on NAMS), warns once if both would inject context.
 - `ShortTermProtocol.bulk_add_messages` takes explicit keyword-only params
   (`generate_embeddings`, `extract_entities`, `extract_relations`, `user_identifier`)
   instead of `**kwargs`.

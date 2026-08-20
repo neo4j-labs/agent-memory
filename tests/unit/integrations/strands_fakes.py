@@ -289,3 +289,12 @@ class FakeMemoryClient:
     async def close(self) -> None:
         self.close_calls += 1
         self._connected = False
+
+
+class FakeAgent:
+    """Minimal Agent stand-in for the session manager's initialize(agent)."""
+
+    def __init__(self, memory_manager: Any = None) -> None:
+        self.memory_manager = memory_manager
+        self.messages: list[Any] = []
+        self.state: dict[str, Any] = {}
