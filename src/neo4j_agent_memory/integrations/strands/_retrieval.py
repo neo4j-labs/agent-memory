@@ -113,11 +113,23 @@ def _row(
 
 
 def _entity_row(entity: Entity) -> _EntryRow:
-    return _row("entity", entity.id, entity.full_type or entity.type, entity.metadata, _format_entity(entity))
+    return _row(
+        "entity",
+        entity.id,
+        entity.full_type or entity.type,
+        entity.metadata,
+        _format_entity(entity),
+    )
 
 
 def _preference_row(preference: Preference) -> _EntryRow:
-    return _row("preference", preference.id, preference.category, preference.metadata, _format_preference(preference))
+    return _row(
+        "preference",
+        preference.id,
+        preference.category,
+        preference.metadata,
+        _format_preference(preference),
+    )
 
 
 def _fact_row(fact: Fact) -> _EntryRow:
@@ -141,9 +153,16 @@ async def _retrieve_entries(
     the others' hits. NAMS has no preference/fact search endpoints, so those
     are skipped rather than raised on every call.
     """
-    wanted: list[tuple[str, bool, Callable[..., Awaitable[list[Any]]], Callable[..., _EntryRow]]] = [
+    wanted: list[
+        tuple[str, bool, Callable[..., Awaitable[list[Any]]], Callable[..., _EntryRow]]
+    ] = [
         ("entity", include_entities, long_term.search_entities, _entity_row),
-        ("preference", include_preferences and not nams, long_term.search_preferences, _preference_row),
+        (
+            "preference",
+            include_preferences and not nams,
+            long_term.search_preferences,
+            _preference_row,
+        ),
         ("fact", include_facts and not nams, long_term.search_facts, _fact_row),
     ]
     active = [(kind, search, row) for kind, on, search, row in wanted if on]

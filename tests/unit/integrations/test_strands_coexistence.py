@@ -30,9 +30,7 @@ class TestDoubleExtraction:
     def test_raises_when_both_sides_extract(self) -> None:
         from neo4j_agent_memory.integrations.strands import Neo4jSessionManager
 
-        manager = Neo4jSessionManager(
-            "s1", memory_client=FakeMemoryClient(), extract_entities=True
-        )
+        manager = Neo4jSessionManager("s1", memory_client=FakeMemoryClient(), extract_entities=True)
         agent = FakeAgent(memory_manager=_manager_with_store(extraction=True))
 
         with pytest.raises(ValueError) as excinfo:
@@ -58,9 +56,7 @@ class TestDoubleExtraction:
     def test_allows_the_recommended_pairing(self) -> None:
         from neo4j_agent_memory.integrations.strands import Neo4jSessionManager
 
-        manager = Neo4jSessionManager(
-            "s1", memory_client=FakeMemoryClient(), extract_entities=True
-        )
+        manager = Neo4jSessionManager("s1", memory_client=FakeMemoryClient(), extract_entities=True)
         agent = FakeAgent(memory_manager=_manager_with_store())  # extraction off
 
         manager.initialize(agent)  # must not raise
@@ -88,9 +84,7 @@ class TestDoubleExtraction:
 
         from neo4j_agent_memory.integrations.strands import Neo4jSessionManager
 
-        manager = Neo4jSessionManager(
-            "s1", memory_client=FakeMemoryClient(), extract_entities=True
-        )
+        manager = Neo4jSessionManager("s1", memory_client=FakeMemoryClient(), extract_entities=True)
         agent = FakeAgent(
             memory_manager=MemoryManager(stores=[TestMemoryStore(name="t", extraction=True)])
         )

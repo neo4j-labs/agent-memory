@@ -834,8 +834,7 @@ class TestGetTools:
         centre = Entity(name="Acme Corp", type="ORGANIZATION")
         client.long_term.entities = [centre]
         client.long_term.related = [
-            (Entity(name=f"Person {i}", type="PERSON"), "WORKS_AT")
-            for i in range(_MAX_EDGES + 10)
+            (Entity(name=f"Person {i}", type="PERSON"), "WORKS_AT") for i in range(_MAX_EDGES + 10)
         ]
 
         result = await _entity_graph(client, "Acme Corp", depth=1, nams=False)
