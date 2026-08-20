@@ -130,3 +130,53 @@ async def test_add_messages_reuses_the_same_sink_across_instances(clean_memory_c
 
     conversation = await clean_memory_client.short_term.get_conversation(sink_name)
     assert len(conversation.messages) == 2, "both instances' batches landed in the one sink"
+
+
+@pytest.mark.integration
+def test_an_owned_client_survives_the_loop_change_strands_forces(neo4j_connection_info) -> None:
+    """The Quick Start's shape: ``settings=``, driven by synchronous ``Agent(...)``.
+
+    ``Agent.__init__`` calls ``MemoryManager.init_agent`` -> ``store.initialize()``
+    through ``strands._async.run_async`` (``asyncio.run`` in a throwaway thread),
+    and every ``Agent.__call__`` runs on a *different* loop. The neo4j async
+    driver stays bound to the loop that opened it, so before the rebind in
+    ``initialize()`` this raised ``RuntimeError: Task ... attached to a
+    different loop`` from deep inside the driver.
+
+    Real work, not ``search()``: with no embedder ``search()`` short-circuits
+    to ``[]`` without touching the driver, so it would pass either way.
+    """
+    from pydantic import SecretStr
+    from strands._async import run_async
+
+    from neo4j_agent_memory import MemorySettings
+    from neo4j_agent_memory.config.settings import Neo4jConfig
+    from neo4j_agent_memory.integrations.strands import (
+        Neo4jMemoryStore,
+        Neo4jMemoryStoreConfig,
+    )
+
+    settings = MemorySettings(
+        neo4j=Neo4jConfig(
+            uri=neo4j_connection_info["uri"],
+            username=neo4j_connection_info["username"],
+            password=SecretStr(neo4j_connection_info["password"]),
+        )
+    )
+    store = Neo4jMemoryStore(Neo4jMemoryStoreConfig(name="loop-rebind", settings=settings))
+
+    # Loop A — what Agent.__init__ does.
+    run_async(store.initialize)
+    connecting_loop = store._loop
+    assert connecting_loop is not None
+
+    # Loop B — what Agent.__call__ does.
+    async def real_work() -> list[dict[str, object]]:
+        await store.initialize()
+        return await store._client.query.cypher("RETURN 1 AS n")
+
+    try:
+        assert run_async(real_work) == [{"n": 1}]
+        assert store._loop is not connecting_loop, "the store rebound to the new loop"
+    finally:
+        run_async(store.aclose)

@@ -141,6 +141,82 @@ class TestLifecycle:
 
         store._client.close.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    async def test_aclose_resets_initialization_so_reentry_reconnects(self) -> None:
+        """Re-entering the context manager must reconnect, not skip on a stale flag.
+
+        Ownership comes from the constructor (``settings=``) as it must; only
+        the transport underneath is swapped for a call-counting fake, so the
+        store still closes on exit and has to reconnect on re-entry.
+        """
+        from pydantic import SecretStr
+
+        from neo4j_agent_memory import MemorySettings
+        from neo4j_agent_memory.config.settings import Neo4jConfig
+
+        store = _store(
+            name="graph", settings=MemorySettings(neo4j=Neo4jConfig(password=SecretStr("p")))
+        )
+        client = FakeMemoryClient()
+        store._client = client  # type: ignore[assignment]
+
+        async with store:
+            pass
+        async with store:
+            pass
+
+        assert client.connect_calls == 2
+        assert client.close_calls == 2
+
+
+class TestEventLoopRebinding:
+    """Strands' synchronous entry points drive each call on a fresh loop.
+
+    ``Agent.__init__`` runs ``initialize()`` through
+    ``strands._async.run_async`` (``asyncio.run`` in a throwaway thread) and
+    every ``Agent.__call__`` uses a *different* loop. The neo4j driver and
+    the NAMS transport bind to the loop that opened them, so the store has
+    to notice the change. See ``tests/integration/`` for the same scenario
+    end-to-end against a real Neo4j.
+    """
+
+    def test_a_borrowed_client_raises_a_named_error_on_a_new_loop(self) -> None:
+        """A client we were handed is not ours to close or reconnect — so: raise.
+
+        The error has to name the problem and both remedies; the alternative
+        is an opaque ``RuntimeError`` from inside the neo4j driver.
+        """
+        from strands._async import run_async
+
+        client = FakeMemoryClient()
+        store = _store(name="graph", client=client)
+
+        run_async(store.initialize)
+
+        with pytest.raises(RuntimeError, match="different event loop") as raised:
+            run_async(store.initialize)
+
+        message = str(raised.value)
+        assert "settings=" in message and "client=" in message
+        # Untouched: neither closed nor reconnected behind the owner's back.
+        assert client.close_calls == 0
+        assert client.connect_calls == 1
+
+    def test_the_same_loop_stays_idempotent(self) -> None:
+        """Only a *changed* loop triggers the rebind path."""
+        from strands._async import run_async
+
+        client = FakeMemoryClient()
+        store = _store(name="graph", client=client)
+
+        async def twice() -> None:
+            await store.initialize()
+            await store.initialize()
+
+        run_async(twice)
+
+        assert client.connect_calls == 1
+
 
 class TestForNams:
     def test_builds_nams_settings_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:

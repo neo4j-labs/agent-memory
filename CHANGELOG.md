@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   agents via `MemoryManager(stores=[...])`: long-term search, plus writes that feed
   server-side extraction. Entities only on NAMS. Needs `strands-agents>=1.44.0`.
   `get_tools()` adds `get_entity_graph` (multi-hop bolt, 1-hop NAMS) and, bolt-only with a configured user_id, the user-scoped `get_user_preferences`.
+  A store built from `settings=` owns its client and rebinds it when the event
+  loop changes (Strands' synchronous `Agent(...)` runs every call on a fresh
+  loop); a client passed as `client=` is never closed or reconnected, and a
+  loop change raises a named error instead of an opaque driver `RuntimeError`.
 - **Strands SessionManager** (`Neo4jSessionManager`) — automatic conversation
   persistence/restore for AWS Strands agents via `Agent(session_manager=...)`,
   backed by any `MemoryClient` (bolt or NAMS). Includes opt-in long-term

@@ -7,6 +7,7 @@ see the design spec's positioning section.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from dataclasses import dataclass, replace
@@ -54,20 +55,25 @@ _BULK_CHUNK = 100
 __all__ = ["Neo4jMemoryStore", "Neo4jMemoryStoreConfig"]
 
 
+def _running_loop() -> asyncio.AbstractEventLoop | None:
+    """The running loop, or ``None`` outside one."""
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+
+
 @dataclass
 class Neo4jMemoryStoreConfig:
     """Configuration for :class:`Neo4jMemoryStore`.
-
-    A plain dataclass, not a ``TypedDict``: every field is a checked
-    attribute (``config.user_id``, never ``config.get("user_id")``), so a
-    typo is a ``mypy --strict`` error rather than a silently-``None`` read.
-    Reuse one config across several stores — personal / team / org — with
-    ``dataclasses.replace(config, name="team")``.
 
     ``name``, ``description``, ``max_search_results``, ``writable`` and
     ``extraction`` are the fields ``MemoryStore``'s protocol requires the
     store to expose as instance attributes; the rest are Neo4j connection,
     scoping, and search knobs.
+
+    Reuse one config across several stores — personal / team / org — with
+    ``dataclasses.replace(config, name="team")``.
     """
 
     name: str
@@ -136,12 +142,12 @@ class Neo4jMemoryStore(MemoryStore):
         self._include_facts = config.include_facts
         self._min_score = config.min_score
 
-        self._conversation_id = config.conversation_id
         self._sink_key: str | None = config.conversation_id
         self._owns_client = config.client is None
         self._run_id = uuid.uuid4().hex
         self._written: set[tuple[str, int]] = set()
         self._initialized = False
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._warned_unsupported_kinds: set[str] = set()
 
         if config.client is not None:
@@ -225,11 +231,56 @@ class Neo4jMemoryStore(MemoryStore):
         return sink_key
 
     async def initialize(self) -> None:
-        """Connect the client if not already connected. Idempotent."""
+        """Connect the client, rebinding it if the event loop changed.
+
+        Idempotent per loop. The neo4j async driver and the NAMS HTTP
+        transport both bind to the loop that opened them, while Strands'
+        synchronous entry points run every call on a fresh, throwaway loop
+        (``strands._async.run_async`` is ``asyncio.run`` in a worker
+        thread): ``Agent.__init__`` initializes the store on one loop and
+        each ``Agent.__call__`` drives it from another. A client bound to
+        the first loop then raises ``RuntimeError: ... attached to a
+        different loop`` from deep inside the driver.
+
+        So: record the loop we connected on, and when it changes,
+
+        * **owned client** (built from ``settings=``) — close and reconnect
+          on the current loop. One reconnect per synchronous ``Agent(...)``
+          invocation is the price of that entry point.
+        * **borrowed client** (passed as ``client=``) — raise. Closing or
+          reconnecting someone else's client is not ours to do, and a clear
+          error beats the driver's opaque one.
+        """
+        loop = asyncio.get_running_loop()
+
         if self._initialized:
-            return
-        if not self._client.is_connected:
+            if self._loop is loop:
+                return
+            if not self._owns_client:
+                raise RuntimeError(
+                    f"Neo4jMemoryStore '{self.name}': the MemoryClient passed as "
+                    "client= was connected on a different event loop and its "
+                    "transport cannot be driven from this one. Strands' synchronous "
+                    "Agent(...) entry point runs each call on a fresh loop, so a "
+                    "borrowed client only works when your own loop drives the agent. "
+                    "Either hand the store a MemoryClient connected on the loop that "
+                    "drives the agent, or construct the store from settings= so it "
+                    "owns its client and can rebind it."
+                )
+            try:
+                await self._client.close()
+            except Exception as error:  # noqa: BLE001 - the old loop is usually gone
+                logger.debug(
+                    "Neo4jMemoryStore '%s': closing the client bound to the previous "
+                    "event loop failed (expected once that loop is gone): %s",
+                    self.name,
+                    error,
+                )
             await self._client.connect()
+        elif not self._client.is_connected:
+            await self._client.connect()
+
+        self._loop = loop
         self._initialized = True
 
     async def search(self, query: str, options: SearchOptions | None = None) -> list[MemoryEntry]:
@@ -405,9 +456,29 @@ class Neo4jMemoryStore(MemoryStore):
         return build_store_tools(self)
 
     async def aclose(self) -> None:
-        """Close the client only when the store constructed it."""
+        """Close the client only when the store constructed it.
+
+        Resets the initialization state either way, so re-entering the
+        async context manager reconnects instead of short-circuiting on a
+        stale ``_initialized``.
+        """
         if self._owns_client:
-            await self._client.close()
+            stale = self._loop is not None and self._loop is not _running_loop()
+            try:
+                await self._client.close()
+            except Exception:
+                # A client bound to a loop that has since closed cannot be
+                # shut down cleanly from here — its sockets went with the
+                # loop. Anywhere else, the caller deserves the error.
+                if not stale:
+                    raise
+                logger.debug(
+                    "Neo4jMemoryStore '%s': client bound to a closed event loop; "
+                    "skipping its shutdown.",
+                    self.name,
+                )
+        self._initialized = False
+        self._loop = None
 
     async def __aenter__(self) -> Neo4jMemoryStore:
         await self.initialize()
