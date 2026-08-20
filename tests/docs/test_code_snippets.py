@@ -241,6 +241,8 @@ class TestSnippetImports:
             "nams_context_graph_tools",
             "Neo4jSessionManager",
             "Neo4jRetrievalConfig",
+            "Neo4jMemoryStore",
+            "Neo4jMemoryStoreConfig",
             "HybridMemoryProvider",
             "StrandsConfig",
             "MemoryType",
