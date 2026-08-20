@@ -140,6 +140,10 @@ class FakeLongTerm:
         self.added_facts: list[tuple[str, str, str]] = []
         self.added_entities: list[tuple[str, str]] = []
         self.nams_mode = False
+        self.related: list[tuple[Any, str]] = []
+        self.related_kwargs: list[dict[str, Any]] = []
+        self.expansion: dict[str, list[dict[str, Any]]] = {"nodes": [], "edges": []}
+        self.expand_calls: list[str] = []
 
     async def _maybe_fail(self) -> None:
         if self.fail_searches:
@@ -203,6 +207,20 @@ class FakeLongTerm:
         if self.nams_mode:
             return entity
         return entity, None
+
+    async def get_related_entities(self, entity: Any, **kwargs: Any) -> list[tuple[Any, Any]]:
+        self._reject_on_nams("get_related_entities")
+        self.related_kwargs.append(kwargs)
+
+        class _Rel:
+            def __init__(self, rel_type: str) -> None:
+                self.relationship_type = rel_type
+
+        return [(other, _Rel(rel_type)) for other, rel_type in self.related]
+
+    async def expand_graph(self, node_id: str, **kwargs: Any) -> dict[str, list[dict[str, Any]]]:
+        self.expand_calls.append(str(node_id))
+        return self.expansion
 
 
 class FakeReasoning:

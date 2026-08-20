@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Strands MemoryStore** (`Neo4jMemoryStore`) — cross-session recall for Strands
   agents via `MemoryManager(stores=[...])`: long-term search, plus writes that feed
   server-side extraction. Entities only on NAMS. Needs `strands-agents>=1.44.0`.
+  `get_tools()` adds `get_entity_graph` (multi-hop bolt, 1-hop NAMS) and, bolt-only, `get_user_preferences`.
 - **Strands SessionManager** (`Neo4jSessionManager`) — automatic conversation
   persistence/restore for AWS Strands agents via `Agent(session_manager=...)`,
   backed by any `MemoryClient` (bolt or NAMS). Includes opt-in long-term

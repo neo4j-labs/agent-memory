@@ -34,6 +34,7 @@ if TYPE_CHECKING:
 
     from strands.memory import ExtractionConfig
     from strands.types.content import Message as StrandsMessage
+    from strands.types.tools import AgentTool
 
     from neo4j_agent_memory import MemoryClient, MemorySettings
     from neo4j_agent_memory.nams.endpoints import TransportMode
@@ -390,6 +391,18 @@ class Neo4jMemoryStore(MemoryStore):
             )
         self._written.update(token for token in tokens if token is not None)
         return {"written": len(payload), "skipped": skipped}
+
+    def get_tools(self) -> list[AgentTool]:
+        """Graph-native tools registered alongside the manager's own tools.
+
+        Empty when ``graph_tools=False``. Never includes ``search_memory`` or
+        ``add_memory`` — those belong to the ``MemoryManager``.
+        """
+        if not self.graph_tools:
+            return []
+        from neo4j_agent_memory.integrations.strands._store_tools import build_store_tools
+
+        return build_store_tools(self)
 
     async def aclose(self) -> None:
         """Close the client only when the store constructed it."""

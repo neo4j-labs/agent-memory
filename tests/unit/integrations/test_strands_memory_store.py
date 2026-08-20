@@ -685,3 +685,77 @@ class TestWriteSinks:
 
         assert resolved is not None
         assert resolved.extractor is None
+
+
+class TestGetTools:
+    def test_bolt_exposes_both_graph_tools(self) -> None:
+        store = _store(name="graph", client=FakeMemoryClient())
+        names = {t.tool_name for t in store.get_tools()}
+
+        assert names == {"get_entity_graph", "get_user_preferences"}
+
+    def test_nams_omits_the_preferences_tool(self) -> None:
+        """NAMS exposes no preferences endpoint; expand_graph covers traversal."""
+        store = _store(name="graph", client=FakeMemoryClient(nams_mode=True))
+        names = {t.tool_name for t in store.get_tools()}
+
+        assert names == {"get_entity_graph"}
+
+    def test_graph_tools_false_exposes_nothing(self) -> None:
+        store = _store(name="graph", client=FakeMemoryClient(), graph_tools=False)
+
+        assert store.get_tools() == []
+
+    def test_no_name_collision_with_the_managers_own_tools(self) -> None:
+        store = _store(name="graph", client=FakeMemoryClient())
+        names = {t.tool_name for t in store.get_tools()}
+
+        assert "search_memory" not in names
+        assert "add_memory" not in names
+
+    @pytest.mark.asyncio
+    async def test_entity_graph_traverses_with_depth_on_bolt(self) -> None:
+        from neo4j_agent_memory.integrations.strands._store_tools import _entity_graph
+        from neo4j_agent_memory.memory.long_term import Entity
+
+        client = FakeMemoryClient()
+        centre = Entity(name="Acme Corp", type="ORGANIZATION")
+        client.long_term.entities = [centre]
+        client.long_term.related = [(Entity(name="Ada", type="PERSON"), "WORKS_AT")]
+
+        result = await _entity_graph(client, "Acme Corp", depth=2, nams=False)
+
+        assert result["center"] == "Acme Corp"
+        assert {"from": "Ada", "relationship": "WORKS_AT", "to": "Acme Corp"} in result["edges"]
+        assert client.long_term.related_kwargs[-1]["depth"] == 2
+
+    @pytest.mark.asyncio
+    async def test_entity_graph_uses_expand_graph_on_nams(self) -> None:
+        """NAMS: name resolved via search, then a 1-hop expansion by node id."""
+        from neo4j_agent_memory.integrations.strands._store_tools import _entity_graph
+        from neo4j_agent_memory.memory.long_term import Entity
+
+        client = FakeMemoryClient(nams_mode=True)
+        centre = Entity(name="Acme Corp", type="ORGANIZATION")
+        client.long_term.entities = [centre]
+        client.long_term.expansion = {
+            "nodes": [{"id": "n2", "name": "Ada", "type": "PERSON"}],
+            "edges": [{"from": "n2", "to": str(centre.id), "type": "WORKS_AT"}],
+        }
+
+        result = await _entity_graph(client, "Acme Corp", depth=3, nams=True)
+
+        assert client.long_term.expand_calls == [str(centre.id)]
+        assert result["depth"] == 1  # 1 hop is all NAMS offers
+        assert result["nodes"]
+
+    @pytest.mark.asyncio
+    async def test_entity_graph_reports_an_unknown_entity(self) -> None:
+        from neo4j_agent_memory.integrations.strands._store_tools import _entity_graph
+
+        client = FakeMemoryClient()
+        client.long_term.entities = []
+
+        result = await _entity_graph(client, "Nobody", depth=1, nams=False)
+
+        assert result["error"] == "entity not found: Nobody"

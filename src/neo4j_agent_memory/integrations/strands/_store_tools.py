@@ -1,0 +1,118 @@
+"""Graph-native @tool functions bound to one memory store's client.
+
+The tools a ``MemoryManager`` cannot provide: multi-hop traversal and
+preference lookup. Deliberately excludes search/add, which the manager owns
+as ``search_memory`` / ``add_memory`` — and ``add_memory`` is already the name
+``context_graph_tools`` uses, so re-exposing it here would collide.
+
+Unlike ``tools.py``, these bind to the store's own client instead of the
+factory's per-call cached clients, so nothing can close a transport the store
+is still using.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    from strands.types.tools import AgentTool
+
+    from neo4j_agent_memory import MemoryClient
+    from neo4j_agent_memory.integrations.strands.memory_store import Neo4jMemoryStore
+
+_MAX_EDGES = 50
+
+
+async def _entity_graph(
+    client: MemoryClient, entity_name: str, *, depth: int, nams: bool
+) -> dict[str, Any]:
+    """Return the neighbourhood of a named entity.
+
+    bolt traverses ``get_related_entities`` to ``depth``; NAMS exposes only a
+    1-hop ``expand_graph`` keyed by node id, so the name is resolved through
+    entity search first and the reported depth is 1.
+    """
+    matches = await client.long_term.search_entities(entity_name, limit=1)
+    if not matches:
+        return {"error": f"entity not found: {entity_name}"}
+    centre = matches[0]
+
+    # expand_graph (NAMS) and the depth kwarg on get_related_entities (bolt)
+    # are both outside LongTermProtocol's portable subset -- the nams flag
+    # already picks the right one at runtime, so cast past the protocol here.
+    long_term = cast(Any, client.long_term)
+
+    if nams:
+        expansion = await long_term.expand_graph(str(centre.id))
+        return {
+            "center": centre.display_name,
+            "depth": 1,
+            "nodes": list(expansion.get("nodes") or [])[:_MAX_EDGES],
+            "edges": list(expansion.get("edges") or [])[:_MAX_EDGES],
+        }
+
+    related = await long_term.get_related_entities(centre, depth=depth)
+    nodes = [{"name": centre.display_name, "type": centre.type, "is_center": True}]
+    edges: list[dict[str, str]] = []
+    for other, relationship in related[:_MAX_EDGES]:
+        nodes.append({"name": other.display_name, "type": other.type, "is_center": False})
+        edges.append(
+            {
+                "from": other.display_name,
+                "relationship": getattr(relationship, "relationship_type", "RELATED_TO"),
+                "to": centre.display_name,
+            }
+        )
+    return {"center": centre.display_name, "depth": depth, "nodes": nodes, "edges": edges}
+
+
+async def _user_preferences(
+    client: MemoryClient, category: str | None, *, limit: int
+) -> list[dict[str, Any]]:
+    """Return known preferences, optionally narrowed to one category."""
+    preferences = await client.long_term.search_preferences(
+        category or "preference", limit=limit
+    )
+    if category:
+        preferences = [p for p in preferences if p.category.lower() == category.lower()]
+    return [
+        {"category": p.category, "preference": p.preference, "context": p.context}
+        for p in preferences
+    ]
+
+
+def build_store_tools(store: Neo4jMemoryStore) -> list[AgentTool]:
+    """Build the store's graph tools, gated by what the backend exposes."""
+    from strands import tool
+
+    client = store._client
+    nams = store.is_nams
+
+    @tool
+    async def get_entity_graph(entity_name: str, depth: int = 2) -> dict[str, Any]:
+        """Explore the graph neighbourhood of an entity.
+
+        Use this to find how an entity connects to others — who works where,
+        what happened at which location.
+
+        Args:
+            entity_name: The entity to start from.
+            depth: How many hops to traverse. Hosted backends traverse one hop
+                regardless.
+        """
+        return await _entity_graph(client, entity_name, depth=max(1, min(depth, 3)), nams=nams)
+
+    @tool
+    async def get_user_preferences(category: str | None = None, limit: int = 20) -> Any:
+        """Retrieve known user preferences, optionally filtered by category.
+
+        Args:
+            category: Optional category such as "food" or "ui".
+            limit: Maximum preferences to return.
+        """
+        return await _user_preferences(client, category, limit=limit)
+
+    tools: list[AgentTool] = [get_entity_graph]
+    if not nams:
+        tools.append(get_user_preferences)
+    return tools
