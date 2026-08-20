@@ -1,9 +1,10 @@
 """Graph-native @tool functions bound to one memory store's client.
 
 The tools a ``MemoryManager`` cannot provide: multi-hop traversal and
-preference lookup. Deliberately excludes search/add, which the manager owns
-as ``search_memory`` / ``add_memory`` — and ``add_memory`` is already the name
-``context_graph_tools`` uses, so re-exposing it here would collide.
+scoped preference lookup. Deliberately excludes search/add, which the
+manager owns as ``search_memory`` / ``add_memory`` — and ``add_memory`` is
+already the name ``context_graph_tools`` uses, so re-exposing it here would
+collide.
 
 Unlike ``tools.py``, these bind to the store's own client instead of the
 factory's per-call cached clients, so nothing can close a transport the store
@@ -71,17 +72,23 @@ async def _entity_graph(
 
 
 async def _user_preferences(
-    client: MemoryClient, category: str | None, *, limit: int
+    client: MemoryClient, user_id: str, category: str | None, *, limit: int
 ) -> list[dict[str, Any]]:
-    """Return known preferences, optionally narrowed to one category."""
-    preferences = await client.long_term.search_preferences(
-        category or "preference", limit=limit
-    )
+    """Return the configured user's preferences, optionally narrowed to one category.
+
+    ``get_preferences_for`` is user-scoped and needs no embedder, unlike
+    ``search_preferences`` (which returns ``[]`` with no embedder and no
+    ``:User`` filter at all -- both a silent-empty and a cross-tenant-leak
+    risk). It is not on ``LongTermProtocol`` either, so cast to the concrete
+    class.
+    """
+    bolt_long_term = cast("LongTermMemory", client.long_term)
+    preferences = await bolt_long_term.get_preferences_for(user_id, active_only=True)
     if category:
         preferences = [p for p in preferences if p.category.lower() == category.lower()]
     return [
         {"category": p.category, "preference": p.preference, "context": p.context}
-        for p in preferences
+        for p in preferences[:limit]
     ]
 
 
@@ -106,17 +113,30 @@ def build_store_tools(store: Neo4jMemoryStore) -> list[AgentTool]:
         """
         return await _entity_graph(client, entity_name, depth=max(1, min(depth, 3)), nams=nams)
 
-    @tool
-    async def get_user_preferences(category: str | None = None, limit: int = 20) -> Any:
-        """Retrieve known user preferences, optionally filtered by category.
-
-        Args:
-            category: Optional category such as "food" or "ui".
-            limit: Maximum preferences to return.
-        """
-        return await _user_preferences(client, category, limit=limit)
-
     tools: list[AgentTool] = [get_entity_graph]
-    if not nams:
+
+    # get_preferences_for requires a user identifier and is bolt-only (NAMS
+    # has no preferences endpoint); an unscoped variant is exactly what
+    # risked leaking another tenant's preferences, so ship the tool only
+    # when both conditions hold. Unscoped recall still reaches the model
+    # through the manager's own search_memory, which includes preferences
+    # on bolt regardless.
+    if not nams and store.user_id:
+        user_id = store.user_id
+
+        @tool
+        async def get_user_preferences(category: str | None = None, limit: int = 20) -> Any:
+            """Retrieve the configured user's preferences, optionally filtered by category.
+
+            Returns only preferences belonging to this store's configured
+            user -- not a global listing across all users.
+
+            Args:
+                category: Optional category such as "food" or "ui".
+                limit: Maximum preferences to return.
+            """
+            return await _user_preferences(client, user_id, category, limit=limit)
+
         tools.append(get_user_preferences)
+
     return tools

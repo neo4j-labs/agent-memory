@@ -689,14 +689,21 @@ class TestWriteSinks:
 
 class TestGetTools:
     def test_bolt_exposes_both_graph_tools(self) -> None:
-        store = _store(name="graph", client=FakeMemoryClient())
+        store = _store(name="graph", client=FakeMemoryClient(), user_id="alice")
         names = {t.tool_name for t in store.get_tools()}
 
         assert names == {"get_entity_graph", "get_user_preferences"}
 
+    def test_bolt_omits_preferences_tool_without_a_user_id(self) -> None:
+        """get_preferences_for requires a user identifier; with none, no tool."""
+        store = _store(name="graph", client=FakeMemoryClient())
+        names = {t.tool_name for t in store.get_tools()}
+
+        assert names == {"get_entity_graph"}
+
     def test_nams_omits_the_preferences_tool(self) -> None:
         """NAMS exposes no preferences endpoint; expand_graph covers traversal."""
-        store = _store(name="graph", client=FakeMemoryClient(nams_mode=True))
+        store = _store(name="graph", client=FakeMemoryClient(nams_mode=True), user_id="alice")
         names = {t.tool_name for t in store.get_tools()}
 
         assert names == {"get_entity_graph"}
@@ -705,13 +712,6 @@ class TestGetTools:
         store = _store(name="graph", client=FakeMemoryClient(), graph_tools=False)
 
         assert store.get_tools() == []
-
-    def test_no_name_collision_with_the_managers_own_tools(self) -> None:
-        store = _store(name="graph", client=FakeMemoryClient())
-        names = {t.tool_name for t in store.get_tools()}
-
-        assert "search_memory" not in names
-        assert "add_memory" not in names
 
     @pytest.mark.asyncio
     async def test_entity_graph_traverses_with_depth_on_bolt(self) -> None:
@@ -726,8 +726,45 @@ class TestGetTools:
         result = await _entity_graph(client, "Acme Corp", depth=2, nams=False)
 
         assert result["center"] == "Acme Corp"
+        assert {"name": "Ada", "type": "PERSON", "is_center": False} in result["nodes"]
         assert {"from": "Ada", "relationship": "WORKS_AT", "to": "Acme Corp"} in result["edges"]
         assert client.long_term.related_kwargs[-1]["depth"] == 2
+
+    @pytest.mark.asyncio
+    async def test_entity_graph_depth_is_clamped_to_three_by_the_tool(self) -> None:
+        """The @tool wrapper clamps depth to [1, 3]; _entity_graph itself trusts its caller."""
+        from neo4j_agent_memory.memory.long_term import Entity
+
+        client = FakeMemoryClient()
+        centre = Entity(name="Acme Corp", type="ORGANIZATION")
+        client.long_term.entities = [centre]
+
+        store = _store(name="graph", client=client, user_id="alice")
+        tools = {t.tool_name: t for t in store.get_tools()}
+
+        await tools["get_entity_graph"](entity_name="Acme Corp", depth=99)
+
+        assert client.long_term.related_kwargs[-1]["depth"] == 3
+
+    @pytest.mark.asyncio
+    async def test_entity_graph_caps_edges_at_max_edges_on_bolt(self) -> None:
+        from neo4j_agent_memory.integrations.strands._store_tools import (
+            _MAX_EDGES,
+            _entity_graph,
+        )
+        from neo4j_agent_memory.memory.long_term import Entity
+
+        client = FakeMemoryClient()
+        centre = Entity(name="Acme Corp", type="ORGANIZATION")
+        client.long_term.entities = [centre]
+        client.long_term.related = [
+            (Entity(name=f"Person {i}", type="PERSON"), "WORKS_AT")
+            for i in range(_MAX_EDGES + 10)
+        ]
+
+        result = await _entity_graph(client, "Acme Corp", depth=1, nams=False)
+
+        assert len(result["edges"]) == _MAX_EDGES
 
     @pytest.mark.asyncio
     async def test_entity_graph_uses_expand_graph_on_nams(self) -> None:
@@ -747,7 +784,8 @@ class TestGetTools:
 
         assert client.long_term.expand_calls == [str(centre.id)]
         assert result["depth"] == 1  # 1 hop is all NAMS offers
-        assert result["nodes"]
+        assert result["nodes"] == client.long_term.expansion["nodes"]
+        assert result["edges"] == client.long_term.expansion["edges"]
 
     @pytest.mark.asyncio
     async def test_entity_graph_reports_an_unknown_entity(self) -> None:
@@ -759,3 +797,30 @@ class TestGetTools:
         result = await _entity_graph(client, "Nobody", depth=1, nams=False)
 
         assert result["error"] == "entity not found: Nobody"
+
+    @pytest.mark.asyncio
+    async def test_get_user_preferences_forwards_the_stores_user_id(self) -> None:
+        """Regression guard: a hard-coded or dropped user id must fail this."""
+        client = FakeMemoryClient()
+        store = _store(name="graph", client=client, user_id="alice")
+        tools = {t.tool_name: t for t in store.get_tools()}
+
+        await tools["get_user_preferences"]()
+
+        assert client.long_term.preferences_for_calls[-1]["user_identifier"] == "alice"
+
+    @pytest.mark.asyncio
+    async def test_get_user_preferences_category_filter_narrows_results(self) -> None:
+        from neo4j_agent_memory.memory.long_term import Preference
+
+        client = FakeMemoryClient()
+        client.long_term.preferences_for = [
+            Preference(category="food", preference="loves sushi"),
+            Preference(category="ui", preference="dark mode"),
+        ]
+        store = _store(name="graph", client=client, user_id="alice")
+        tools = {t.tool_name: t for t in store.get_tools()}
+
+        result = await tools["get_user_preferences"](category="food")
+
+        assert result == [{"category": "food", "preference": "loves sushi", "context": None}]

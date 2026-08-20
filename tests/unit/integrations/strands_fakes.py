@@ -144,6 +144,8 @@ class FakeLongTerm:
         self.related_kwargs: list[dict[str, Any]] = []
         self.expansion: dict[str, list[dict[str, Any]]] = {"nodes": [], "edges": []}
         self.expand_calls: list[str] = []
+        self.preferences_for: list[Any] = []
+        self.preferences_for_calls: list[dict[str, Any]] = []
 
     async def _maybe_fail(self) -> None:
         if self.fail_searches:
@@ -221,6 +223,11 @@ class FakeLongTerm:
     async def expand_graph(self, node_id: str, **kwargs: Any) -> dict[str, list[dict[str, Any]]]:
         self.expand_calls.append(str(node_id))
         return self.expansion
+
+    async def get_preferences_for(self, user_identifier: str, **kwargs: Any) -> list[Any]:
+        self._reject_on_nams("get_preferences_for")
+        self.preferences_for_calls.append({"user_identifier": user_identifier, **kwargs})
+        return self.preferences_for
 
 
 class FakeReasoning:
