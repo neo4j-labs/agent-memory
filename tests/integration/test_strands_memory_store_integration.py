@@ -180,3 +180,39 @@ def test_an_owned_client_survives_the_loop_change_strands_forces(neo4j_connectio
         assert store._loop is not connecting_loop, "the store rebound to the new loop"
     finally:
         run_async(store.aclose)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_entity_graph_reports_what_the_bolt_stack_can_actually_report(
+    clean_memory_client,
+) -> None:
+    """Pins the edge payload against a real Neo4j — and a library defect under it.
+
+    ``Neo4jClient.execute_read`` returns ``result.data()``, which renders a
+    relationship as ``(start_props, type, end_props)`` and drops its
+    properties entirely. ``LongTermMemory.get_related_entities`` therefore
+    falls through to ``type="RELATED_TO"`` for every hit even though
+    ``CREATE_ENTITY_RELATIONSHIP`` stored ``r.type = "WORKS_AT"``, and it
+    hardcodes ``source_id`` to the centre because
+    ``GET_ENTITY_RELATIONSHIPS`` matches undirected.
+
+    That defect is the library's, not the store's, and is deliberately left
+    for a separate change; this test pins today's behaviour so a fix shows
+    up here (and in ``strands_fakes.FakeLongTerm.get_related_entities``,
+    which mirrors it) rather than silently changing what the tool tells the
+    model.
+    """
+    from neo4j_agent_memory.integrations.strands._store_tools import _entity_graph
+
+    long_term = clean_memory_client.long_term
+    acme, _ = await long_term.add_entity("Acme Corp", "ORGANIZATION", deduplicate=False)
+    ada, _ = await long_term.add_entity("Ada Lovelace", "PERSON", deduplicate=False)
+    await long_term.add_relationship(ada, acme, "WORKS_AT")
+
+    result = await _entity_graph(clean_memory_client, "Acme Corp", depth=2, nams=False)
+
+    assert result["center"] == "Acme Corp"
+    assert result["edges"] == [
+        {"from": "Acme Corp", "relationship": "RELATED_TO", "to": "Ada Lovelace"}
+    ]

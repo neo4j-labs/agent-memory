@@ -61,11 +61,23 @@ async def _entity_graph(
     edges: list[dict[str, str]] = []
     for other, relationship in related[:_MAX_EDGES]:
         nodes.append({"name": other.display_name, "type": other.type, "is_center": False})
+        # Report the orientation the library reports rather than inventing one:
+        # GET_ENTITY_RELATIONSHIPS matches undirected and get_related_entities
+        # sets source_id to the centre for every hit, so these ids are the only
+        # direction available. Likewise `type` is what the library resolved --
+        # today always "RELATED_TO", because execute_read's result.data()
+        # flattens a relationship to (start, type, end) and drops its
+        # properties, so the property-level type never survives the round trip.
+        # A library-side fix would flow through here unchanged.
+        names = {
+            str(centre.id): centre.display_name,
+            str(other.id): other.display_name,
+        }
         edges.append(
             {
-                "from": other.display_name,
-                "relationship": getattr(relationship, "relationship_type", "RELATED_TO"),
-                "to": centre.display_name,
+                "from": names.get(str(relationship.source_id), centre.display_name),
+                "relationship": relationship.type,
+                "to": names.get(str(relationship.target_id), other.display_name),
             }
         )
     return {"center": centre.display_name, "depth": depth, "nodes": nodes, "edges": edges}
@@ -79,8 +91,9 @@ async def _user_preferences(
     ``get_preferences_for`` is user-scoped and needs no embedder, unlike
     ``search_preferences`` (which returns ``[]`` with no embedder and no
     ``:User`` filter at all -- both a silent-empty and a cross-tenant-leak
-    risk). It is not on ``LongTermProtocol`` either, so cast to the concrete
-    class.
+    risk). It *is* on ``LongTermProtocol`` (``core/protocols.py``), but
+    declared with a keyword-only ``user_identifier`` against the concrete
+    class's positional one, so the cast is still required.
     """
     bolt_long_term = cast("LongTermMemory", client.long_term)
     preferences = await bolt_long_term.get_preferences_for(user_id, active_only=True)
@@ -92,14 +105,37 @@ async def _user_preferences(
     ]
 
 
+def _tool_prefix(name: str) -> str:
+    """The store's name, reduced to something legal in a tool name.
+
+    Tool names are namespaced per store so they can coexist both with
+    ``context_graph_tools``' identically-named tools and with a second
+    store's (``dataclasses.replace(config, name="team")`` is the documented
+    way to run personal / team / org stores side by side).
+    """
+    slug = "".join(char if char.isalnum() else "_" for char in name.lower()).strip("_")
+    while "__" in slug:
+        slug = slug.replace("__", "_")
+    return slug or "store"
+
+
 def build_store_tools(store: Neo4jMemoryStore) -> list[AgentTool]:
-    """Build the store's graph tools, gated by what the backend exposes."""
+    """Build the store's graph tools, gated by what the backend exposes.
+
+    Names are prefixed with the store's own name. ``ToolRegistry`` silently
+    *overwrites* a duplicate name for ``@tool`` functions (its duplicate
+    check is skipped whenever ``supports_hot_reload`` is true, which it
+    always is for decorated functions), so unprefixed ``get_entity_graph``
+    / ``get_user_preferences`` would replace the factory's tools of those
+    names -- which take different arguments -- with no warning.
+    """
     from strands import tool
 
     client = store._client
     nams = store.is_nams
+    prefix = _tool_prefix(store.name)
 
-    @tool
+    @tool(name=f"{prefix}_get_entity_graph")
     async def get_entity_graph(entity_name: str, depth: int = 2) -> dict[str, Any]:
         """Explore the graph neighbourhood of an entity.
 
@@ -124,7 +160,7 @@ def build_store_tools(store: Neo4jMemoryStore) -> list[AgentTool]:
     if not nams and store.user_id:
         user_id = store.user_id
 
-        @tool
+        @tool(name=f"{prefix}_get_user_preferences")
         async def get_user_preferences(category: str | None = None, limit: int = 20) -> Any:
             """Retrieve the configured user's preferences, optionally filtered by category.
 

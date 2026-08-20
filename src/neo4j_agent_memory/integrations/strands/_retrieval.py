@@ -100,8 +100,15 @@ class _EntryRow:
 
 
 def _row(
-    kind: str, entry_id: Any, entry_type: str, source_metadata: dict[str, Any] | None, content: str
+    *,
+    kind: str,
+    entry_id: Any,
+    entry_type: str,
+    source_metadata: dict[str, Any] | None,
+    content: str,
 ) -> _EntryRow:
+    """Build one row. Keyword-only: three of five params are plain strings,
+    so a transposition would otherwise type-check silently."""
     metadata: dict[str, Any] = {"kind": kind, "id": str(entry_id), "type": entry_type}
     score = (source_metadata or {}).get("similarity")
     if score is not None:
@@ -114,26 +121,32 @@ def _row(
 
 def _entity_row(entity: Entity) -> _EntryRow:
     return _row(
-        "entity",
-        entity.id,
-        entity.full_type or entity.type,
-        entity.metadata,
-        _format_entity(entity),
+        kind="entity",
+        entry_id=entity.id,
+        entry_type=entity.full_type or entity.type,
+        source_metadata=entity.metadata,
+        content=_format_entity(entity),
     )
 
 
 def _preference_row(preference: Preference) -> _EntryRow:
     return _row(
-        "preference",
-        preference.id,
-        preference.category,
-        preference.metadata,
-        _format_preference(preference),
+        kind="preference",
+        entry_id=preference.id,
+        entry_type=preference.category,
+        source_metadata=preference.metadata,
+        content=_format_preference(preference),
     )
 
 
 def _fact_row(fact: Fact) -> _EntryRow:
-    return _row("fact", fact.id, fact.predicate, fact.metadata, _format_fact(fact))
+    return _row(
+        kind="fact",
+        entry_id=fact.id,
+        entry_type=fact.predicate,
+        source_metadata=fact.metadata,
+        content=_format_fact(fact),
+    )
 
 
 async def _retrieve_entries(
@@ -148,6 +161,15 @@ async def _retrieve_entries(
     nams: bool,
 ) -> list[_EntryRow]:
     """Sibling of ``_retrieve_context``: same fan-out, rows instead of a string.
+
+    ``limit`` caps the *total* rows returned, not each kind: Strands treats a
+    store's result count as a per-store cap (``MemoryManager.search``) and
+    injection then slices the concatenation to the same number, so returning
+    ``limit`` rows per kind would let a saturated entity search crowd
+    preferences and facts out of the model's context entirely. The budget is
+    handed out round-robin, so every enabled kind with a hit is represented
+    before any kind takes a second row, and unused capacity flows to whoever
+    has more hits.
 
     Per-kind failures are logged and skipped so one dead index doesn't lose
     the others' hits. NAMS has no preference/fact search endpoints, so those
@@ -170,10 +192,34 @@ async def _retrieve_entries(
         *(search(query, limit=limit, threshold=min_score) for _, search, _ in active),
         return_exceptions=True,
     )
-    rows: list[_EntryRow] = []
+    per_kind: list[list[_EntryRow]] = []
     for (kind, _, to_row), result in zip(active, results):
         if isinstance(result, BaseException):
             logger.warning("Long-term %s search failed: %s", kind, result)
+            per_kind.append([])
             continue
-        rows.extend(to_row(item) for item in result)
+        per_kind.append([to_row(item) for item in result])
+
+    rows: list[_EntryRow] = []
+    for share, hits in zip(_share_budget([len(hits) for hits in per_kind], limit), per_kind):
+        rows.extend(hits[:share])
     return rows
+
+
+def _share_budget(counts: list[int], limit: int) -> list[int]:
+    """Split ``limit`` rows across kinds, round-robin, so none is starved.
+
+    One row to each kind that still has hits, then a second to each, and so
+    on until the budget or the hits run out — which also means a kind with
+    more hits absorbs whatever the others leave unused.
+    """
+    take = [0] * len(counts)
+    remaining = min(limit, sum(counts))
+    while remaining > 0:
+        for index, available in enumerate(counts):
+            if remaining == 0:
+                break
+            if take[index] < available:
+                take[index] += 1
+                remaining -= 1
+    return take

@@ -355,7 +355,16 @@ class Neo4jMemoryStore(MemoryStore):
     async def _add_typed(self, kind: str, content: str, meta: dict[str, Any]) -> dict[str, Any]:
         long_term = self._client.long_term
         if kind == "preference":
-            preference = await long_term.add_preference(meta.get("category", "memory"), content)
+            # user_identifier as everywhere else in this class: without it
+            # multi_tenant=True raises ValueError (not NotSupportedError, so
+            # no sink fallback), and the preference gets no
+            # (:User)-[:HAS_PREFERENCE] edge -- which is exactly what the
+            # store's own get_user_preferences tool reads.
+            preference = await long_term.add_preference(
+                meta.get("category", "memory"),
+                content,
+                user_identifier=self.user_id,
+            )
             return {"kind": "preference", "id": str(preference.id)}
         if kind == "fact":
             subject = meta.get("subject")

@@ -140,12 +140,19 @@ class FakeLongTerm:
         self.added_facts: list[tuple[str, str, str]] = []
         self.added_entities: list[tuple[str, str]] = []
         self.nams_mode = False
-        self.related: list[tuple[Any, str]] = []
+        self.related: list[Any] = []
         self.related_kwargs: list[dict[str, Any]] = []
         self.expansion: dict[str, list[dict[str, Any]]] = {"nodes": [], "edges": []}
         self.expand_calls: list[str] = []
         self.preferences_for: list[Any] = []
         self.preferences_for_calls: list[dict[str, Any]] = []
+        #: Preferences that got a ``(:User)-[:HAS_PREFERENCE]`` edge, keyed by
+        #: user -- the only ones ``get_preferences_for`` can see.
+        self.preferences_by_user: dict[str, list[Any]] = {}
+        #: Mirrors ``MemorySettings.memory.multi_tenant``: bolt's
+        #: ``_enforce_multi_tenant`` raises ``ValueError`` (not
+        #: ``NotSupportedError``) when it is on and no identifier is passed.
+        self.multi_tenant = False
 
     async def _maybe_fail(self) -> None:
         if self.fail_searches:
@@ -185,12 +192,24 @@ class FakeLongTerm:
         await self._maybe_fail()
         return self.facts
 
-    async def add_preference(self, category: str, preference: str, **kwargs: Any) -> Any:
+    async def add_preference(
+        self, category: str, preference: str, *, user_identifier: str | None = None, **kwargs: Any
+    ) -> Any:
         self._reject_on_nams("add_preference")
+        if self.multi_tenant and user_identifier is None:
+            raise ValueError(
+                "MemorySettings.memory.multi_tenant=True but no user_identifier was supplied."
+            )
         self.added_preferences.append((category, preference))
         from neo4j_agent_memory.memory.long_term import Preference
 
-        return Preference(category=category, preference=preference)
+        stored = Preference(category=category, preference=preference)
+        # Bolt writes the (:User)-[:HAS_PREFERENCE] edge only when
+        # user_identifier is given, and get_preferences_for reads exactly
+        # that edge -- so an unscoped write is invisible to it.
+        if user_identifier is not None:
+            self.preferences_by_user.setdefault(user_identifier, []).append(stored)
+        return stored
 
     async def add_fact(self, subject: str, predicate: str, obj: str, **kwargs: Any) -> Any:
         self._reject_on_nams("add_fact")
@@ -211,14 +230,30 @@ class FakeLongTerm:
         return entity, None
 
     async def get_related_entities(self, entity: Any, **kwargs: Any) -> list[tuple[Any, Any]]:
+        """Real ``Relationship`` objects, shaped as the bolt path really shapes them.
+
+        The bolt implementation cannot report a relationship's own type or
+        direction: ``Neo4jClient.execute_read`` returns ``result.data()``,
+        which renders a relationship as ``(start_props, type, end_props)`` and
+        drops its properties, so ``memory/long_term.py``'s parse falls through
+        to ``type="RELATED_TO"`` for every hit, with ``source_id`` hardcoded
+        to the centre. Verified live against Neo4j 5 (see
+        ``tests/integration/test_strands_memory_store_integration.py``). This
+        fake reproduces that rather than inventing a richer relationship the
+        production stack never returns.
+        """
         self._reject_on_nams("get_related_entities")
         self.related_kwargs.append(kwargs)
+        from neo4j_agent_memory.memory.long_term import Relationship
 
-        class _Rel:
-            def __init__(self, rel_type: str) -> None:
-                self.relationship_type = rel_type
-
-        return [(other, _Rel(rel_type)) for other, rel_type in self.related]
+        centre_id = getattr(entity, "id", entity)
+        return [
+            (
+                other,
+                Relationship(source_id=centre_id, target_id=other.id, type="RELATED_TO"),
+            )
+            for other in self.related
+        ]
 
     async def expand_graph(self, node_id: str, **kwargs: Any) -> dict[str, list[dict[str, Any]]]:
         self.expand_calls.append(str(node_id))
@@ -227,7 +262,7 @@ class FakeLongTerm:
     async def get_preferences_for(self, user_identifier: str, **kwargs: Any) -> list[Any]:
         self._reject_on_nams("get_preferences_for")
         self.preferences_for_calls.append({"user_identifier": user_identifier, **kwargs})
-        return self.preferences_for
+        return [*self.preferences_for, *self.preferences_by_user.get(user_identifier, [])]
 
 
 class FakeReasoning:

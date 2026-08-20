@@ -20,9 +20,10 @@
 - **`add()`** — default sink writes a message with extraction on;
   `metadata["kind"]` (`"preference"` / `"fact"` / `"entity"`) routes to a
   typed write instead.
-- **`get_tools()`** — graph-native tools (`get_entity_graph`, and, bolt-only
-  with a configured `user_id`, `get_user_preferences`) that a `MemoryManager`
-  cannot provide on its own.
+- **`get_tools()`** — graph-native tools that a `MemoryManager` cannot provide
+  on its own: `{name}_get_entity_graph`, and — bolt-only, with a configured
+  `user_id` — `{name}_get_user_preferences`. The store's `name` prefixes them
+  so they coexist with `context_graph_tools`' identically-named tools.
 
 `Neo4jSessionManager` (`examples/strands-session-manager/`) remains for
 transcript persistence — the session manager restores sessions, the memory
@@ -63,7 +64,7 @@ search('what does the user prefer?'):
       entity: [entity] Acme Corp (ORGANIZATION)
   preference: [preference] ui: Prefers dark mode
 add(...): {'kind': 'message', 'id': '...'}
-tools: ['get_entity_graph', 'get_user_preferences']
+tools: ['graph_get_entity_graph', 'graph_get_user_preferences']
 ```
 
 ## With a real agent

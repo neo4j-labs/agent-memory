@@ -127,7 +127,7 @@ protocol requires as store attributes):
 |---|---|---|
 | `client` \| `settings` | — | pre-connected `MemoryClient`, or settings the store builds one from |
 | `conversation_id` | minted in `initialize()` | write sink target |
-| `user_id` | `None` | scopes reads in multi-tenant mode |
+| `user_id` | `None` | scopes *writes* in multi-tenant mode, and gates the `get_user_preferences` tool. Reads are not narrowed — the long-term search APIs take no user filter |
 | `include_entities` | `True` | search fan-out |
 | `include_preferences` | `True` | auto-gated off on NAMS |
 | `include_facts` | `True` | auto-gated off on NAMS |
@@ -141,11 +141,11 @@ Inherited defaults: `writable=True`, `extraction=False`, `max_search_results=Non
 
 | Member | Maps to | Notes |
 |---|---|---|
-| `search` | concurrent `search_entities` / `search_preferences` / `search_facts` | reshape of `_retrieval.py` `_retrieve_context`. Per-kind failures isolated and logged; whole-search failures propagate. Limit precedence: `options["max_search_results"]` → `self.max_search_results` → manager default |
-| `add` | default: message into the sink with extraction. `metadata["kind"]` ∈ `{preference, fact, entity}` routes to `add_preference` / `add_fact` / `add_entity` | `NotSupportedError` falls back to the sink, logged once. **Not** `long_term.add()`, which makes the whole string an entity *name* of type `OBJECT` (`memory/long_term.py:389-398`) |
+| `search` | concurrent `search_entities` / `search_preferences` / `search_facts` | reshape of `_retrieval.py` `_retrieve_context`. Per-kind failures isolated and logged; whole-search failures propagate. Limit precedence: `options["max_search_results"]` → `self.max_search_results` → manager default. The limit caps the *total* rows, handed out round-robin across the enabled kinds: Strands treats it as a per-store cap (`memory_manager.py`) and injection slices the concatenation to the same number, so a per-kind limit would let saturated entity hits crowd preferences and facts out entirely |
+| `add` | default: message into the sink with extraction. `metadata["kind"]` ∈ `{preference, fact, entity}` routes to `add_preference` / `add_fact` / `add_entity`, passing `user_identifier` where the primitive takes one (only `add_preference` does) | `NotSupportedError` falls back to the sink, logged once. **Not** `long_term.add()`, which makes the whole string an entity *name* of type `OBJECT` (`memory/long_term.py:389-398`) |
 | `add_messages` | `bulk_add_messages(sink_id, msgs, extract_entities=True)` | protocol alias forwarding kwargs to `add_messages_batch` (`memory/short_term.py:560-572`) |
 | `initialize` | connect an owned client; mint the sink when `conversation_id` was omitted | idempotent |
-| `get_tools` | `get_entity_graph`, `get_user_preferences` | bound to the store's own client, not the tools factory's cached clients. Excludes search/add, which would collide with `context_graph_tools`' `add_memory` and the manager's own tool of that name |
+| `get_tools` | `{name}_get_entity_graph`, `{name}_get_user_preferences` | bound to the store's own client, not the tools factory's cached clients. Excludes search/add, which would collide with `context_graph_tools`' `add_memory` and the manager's own tool of that name. Names carry the store's `name` as a prefix because `ToolRegistry.register_tool` skips its duplicate-name check for `@tool` functions (`supports_hot_reload` is always true there) and silently overwrites — so unprefixed names would replace the factory's identically-named tools, which take different arguments |
 
 Tool availability is backend-gated; the differing depth is stated in the tool description
 the model sees:
@@ -214,6 +214,15 @@ Durability stays where Strands puts it: background extraction plus
 
 As the session manager: a store built from `settings` owns its client and closes it via
 `aclose()` / async context manager; a store handed a live `MemoryClient` never closes it.
+
+Both transports bind to the event loop that opened them, and Strands' synchronous
+entry points run every call on a fresh loop (`strands._async.run_async` is
+`asyncio.run` in a worker thread), so `Agent.__init__` initializes the store on one
+loop and each `Agent.__call__` drives it from another. `initialize()` therefore
+records the running loop: on a change it closes and reconnects an **owned** client,
+and raises a named error for a **borrowed** one — reconnecting someone else's client
+is not the store's call, and the alternative is an opaque `RuntimeError` from inside
+the driver.
 The existing warning against sharing one client between the tools factory and the session
 manager extends to the store.
 
@@ -314,7 +323,7 @@ gets no guard.
 | Layer | Coverage |
 |---|---|
 | Python unit | `search` fan-out with per-kind isolation; limit precedence; `MemoryEntry` metadata; `add` kind routing incl. `NotSupportedError` fallback; `add_messages` dedupe across a retried batch; sink minting idempotence; `get_tools`; client ownership; both guards |
-| Python integration | bolt via docker-compose; NAMS gated on a key, skipped without |
+| Python integration | bolt via docker-compose. A key-gated NAMS suite is **not yet implemented** |
 | TS unit | mirrored test names against the existing msw/bridge setup, in `test/unit/strands/memory-store.test.ts` |
 | Guards | extend `tests/unit/integrations/strands_fakes.py` with a fake agent exposing `memory_manager`; assert the private-attribute read fails loudly if strands moves it |
 | Examples | `tests/examples/test_no_phantom_methods.py` covers the new example automatically |
@@ -371,5 +380,7 @@ against `strands-agents/harness-sdk`, needing explicit approval.
 - A store paired with the session manager writes turns to a sink separate from the
   readable history, so turn text exists twice in the graph. Entities converge via
   resolution/dedupe; the duplication is in messages, not knowledge.
-- Guard 1 reads one private strands attribute (`MemoryManager._stores`).
+- The guards read two private strands attributes: `MemoryManager._stores` (guard 1)
+  and `MemoryManager._injection_config` (guard 2). Both reads are in one file and
+  pinned by a test that fails loudly on a strands rename.
 - No TS guard when `Neo4jSessionStorage` is used without `Neo4jConversationManager`.

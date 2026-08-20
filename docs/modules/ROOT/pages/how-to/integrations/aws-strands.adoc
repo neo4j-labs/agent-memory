@@ -177,7 +177,9 @@ attribute, not a dict key. Pass exactly one of `client` (a pre-connected
 
 | `max_search_results`
 | `None`
-| Per-store cap; falls back to the manager's default (3) when unset.
+| Cap on the *total* rows one `search()` returns, shared across entities,
+  preferences and facts so no kind is crowded out. Falls back to the
+  manager's default (3) when unset.
 
 | `writable`
 | `True`
@@ -189,11 +191,15 @@ attribute, not a dict key. Pass exactly one of `client` (a pre-connected
 
 | `conversation_id`
 | minted
-| Explicit write-sink override; otherwise a deterministic name is minted in `initialize()`.
+| Explicit write-sink override; otherwise a deterministic name is minted in
+  `initialize()`. Do *not* point it at a chat conversation — see
+  <<_store_limitations>>.
 
 | `user_id`
 | `None`
-| Scopes reads/writes to one tenant; gates the `get_user_preferences` tool.
+| Scopes *writes* to one tenant (the `:User` edges on messages and
+  preferences) and gates the `get_user_preferences` tool. It does *not*
+  narrow `search()` — the long-term search APIs take no user filter.
 
 | `include_entities` / `include_preferences` / `include_facts`
 | `True`
@@ -241,18 +247,20 @@ so no extra model call happens. This is what a `MemoryManager` with
 === Graph tools
 
 `get_tools()` returns graph-native tools the manager itself can't provide,
-bound to the store's own client:
+bound to the store's own client. Names are prefixed with the store's `name`
+so they coexist with the tools factory's (see <<_store_limitations>>) —
+a store named `graph` yields `graph_get_entity_graph`:
 
 [cols="1,1,1,3"]
 |===
 | Tool | bolt | NAMS | Notes
 
-| `get_entity_graph`
+| `{name}_get_entity_graph`
 | yes
 | yes
 | Configurable `depth` on bolt (`get_related_entities`); NAMS traverses one hop only (`expand_graph`, keyed by node id — the entity name is resolved via search first).
 
-| `get_user_preferences`
+| `{name}_get_user_preferences`
 | yes, if `user_id` set
 | omitted
 | Bolt-only, and only shipped when the store has a configured `user_id` (scopes the lookup to that tenant). NAMS has no preferences endpoint.
@@ -276,7 +284,7 @@ recommended:
 | Store stays recall-only (`extraction=False`, the default); the session manager persists the transcript and extracts (bolt in place, NAMS server-side).
 
 | Store + session manager, with the store also extracting
-| Raises at construction — both would write and extract the same turns twice. Exception: bolt with the session manager's own `extract_entities=False` does not raise, since then neither side extracts locally.
+| Raises at construction — both would write and extract the same turns twice. Exception: bolt with the session manager's own `extract_entities=False` does not raise, since then only one side extracts — the store.
 |===
 
 Recommended configuration:
@@ -300,6 +308,40 @@ Separately, `Neo4jSessionManager`'s own `Neo4jRetrievalConfig` and the
 manager's default injection both fold context into the last user message —
 pairing them injects memory twice. The session manager logs a warning
 (once) naming the fix; see <<_retrieval_injection>>.
+
+[[_store_limitations]]
+=== Limitations
+
+* **The sink conversation is separate from the readable chat history.**
+  Paired with `Neo4jSessionManager`, a turn the store ingests exists twice
+  in the graph: once in the restorable transcript, once in the store's
+  sink. The duplication is in `Message` nodes, not knowledge — entities
+  converge through resolution and dedupe.
+
+* **Retry dedupe is in-process only.** `AddMessagesContext.sequence_numbers`
+  reset every run, so the `(run_id, sequence_number)` set that skips
+  already-written turns cannot outlive the process. A restart in the middle
+  of a retried extraction batch can duplicate messages in the sink.
+
+* **Pointing `conversation_id` at the chat conversation is unsupported.**
+  It duplicates `Message` nodes *inside* the readable history, so restored
+  transcripts gain phantom turns. Not guarded — leave `conversation_id`
+  unset and let the store mint its own sink.
+
+* **Owned clients rebind across event loops; borrowed ones do not.**
+  Strands' synchronous `Agent(...)` runs each call on a fresh event loop,
+  and both Neo4j transports bind to the loop that opened them. A store built
+  from `settings=` owns its client and reconnects it when the loop changes
+  (one reconnect per invocation). A client passed as `client=` is never
+  closed or reconnected on your behalf: a loop change raises, naming both
+  remedies. Drive the agent from your own loop, or hand the store
+  `settings=`.
+
+* **Tool names are namespaced.** `get_tools()` prefixes each tool with the
+  store's `name` (`graph_get_entity_graph`), so the store's tools coexist
+  with `context_graph_tools`' identically-purposed `get_entity_graph` /
+  `get_user_preferences` — which take different arguments — instead of
+  silently replacing them in the agent's tool registry.
 
 See `examples/strands-memory-store/` for a runnable demo (`search()`,
 `add()`, `get_tools()`) that requires no LLM or API key.

@@ -396,6 +396,47 @@ class TestSearch:
         assert client.long_term.search_kwargs[-1]["limit"] == 0
 
     @pytest.mark.asyncio
+    async def test_the_limit_caps_the_total_and_no_kind_is_starved(self) -> None:
+        """Entities alone could fill the limit; a preference must still get through.
+
+        Strands treats a store's row count as the per-store cap and then
+        slices the concatenation to the same number, so returning ``limit``
+        rows *per kind* meant five entity hits pushed every preference and
+        fact out of the injected block — starving exactly what a POLE graph
+        is for.
+        """
+        from neo4j_agent_memory.memory.long_term import Entity, Fact, Preference
+
+        client = FakeMemoryClient()
+        client.long_term.entities = [Entity(name=f"E{i}", type="OBJECT") for i in range(10)]
+        client.long_term.preferences = [Preference(category="ui", preference="dark mode")]
+        client.long_term.facts = [Fact(subject="Ada", predicate="uses", object="Python")]
+
+        store = _store(name="graph", client=client, max_search_results=5)
+        await store.initialize()
+        entries = await store.search("q")
+
+        kinds = [e.metadata["kind"] for e in entries if e.metadata]
+        assert len(entries) == 5, "the limit caps the total, not each kind"
+        assert kinds.count("preference") == 1
+        assert kinds.count("fact") == 1
+        assert kinds.count("entity") == 3, "unused capacity flows to the kind with more hits"
+
+    @pytest.mark.asyncio
+    async def test_a_lone_kind_may_use_the_whole_budget(self) -> None:
+        """Round-robin must not reserve capacity for kinds that returned nothing."""
+        from neo4j_agent_memory.memory.long_term import Entity
+
+        client = FakeMemoryClient()
+        client.long_term.entities = [Entity(name=f"E{i}", type="OBJECT") for i in range(10)]
+
+        store = _store(name="graph", client=client, max_search_results=4)
+        await store.initialize()
+        entries = await store.search("q")
+
+        assert len(entries) == 4
+
+    @pytest.mark.asyncio
     async def test_kind_flags_are_honoured(self) -> None:
         """All three kinds have data; only the enabled one should ever be searched."""
         from neo4j_agent_memory.memory.long_term import Entity, Fact, Preference
@@ -768,21 +809,21 @@ class TestGetTools:
         store = _store(name="graph", client=FakeMemoryClient(), user_id="alice")
         names = {t.tool_name for t in store.get_tools()}
 
-        assert names == {"get_entity_graph", "get_user_preferences"}
+        assert names == {"graph_get_entity_graph", "graph_get_user_preferences"}
 
     def test_bolt_omits_preferences_tool_without_a_user_id(self) -> None:
         """get_preferences_for requires a user identifier; with none, no tool."""
         store = _store(name="graph", client=FakeMemoryClient())
         names = {t.tool_name for t in store.get_tools()}
 
-        assert names == {"get_entity_graph"}
+        assert names == {"graph_get_entity_graph"}
 
     def test_nams_omits_the_preferences_tool(self) -> None:
         """NAMS exposes no preferences endpoint; expand_graph covers traversal."""
         store = _store(name="graph", client=FakeMemoryClient(nams_mode=True), user_id="alice")
         names = {t.tool_name for t in store.get_tools()}
 
-        assert names == {"get_entity_graph"}
+        assert names == {"graph_get_entity_graph"}
 
     def test_graph_tools_false_exposes_nothing(self) -> None:
         store = _store(name="graph", client=FakeMemoryClient(), graph_tools=False)
@@ -797,13 +838,20 @@ class TestGetTools:
         client = FakeMemoryClient()
         centre = Entity(name="Acme Corp", type="ORGANIZATION")
         client.long_term.entities = [centre]
-        client.long_term.related = [(Entity(name="Ada", type="PERSON"), "WORKS_AT")]
+        client.long_term.related = [Entity(name="Ada", type="PERSON")]
 
         result = await _entity_graph(client, "Acme Corp", depth=2, nams=False)
 
         assert result["center"] == "Acme Corp"
         assert {"name": "Ada", "type": "PERSON", "is_center": False} in result["nodes"]
-        assert {"from": "Ada", "relationship": "WORKS_AT", "to": "Acme Corp"} in result["edges"]
+        # "RELATED_TO", centre-as-source: the only thing the bolt stack can
+        # report today. get_related_entities reads relationship properties out
+        # of execute_read's result.data(), which flattens a relationship to
+        # (start, type, end) and loses them, so the property-level type never
+        # survives and source_id is hardcoded to the centre. Pre-existing
+        # library defect, pinned here and in the integration suite so a fix
+        # shows up as a failing assertion rather than going unnoticed.
+        assert {"from": "Acme Corp", "relationship": "RELATED_TO", "to": "Ada"} in result["edges"]
         assert client.long_term.related_kwargs[-1]["depth"] == 2
 
     @pytest.mark.asyncio
@@ -818,7 +866,7 @@ class TestGetTools:
         store = _store(name="graph", client=client, user_id="alice")
         tools = {t.tool_name: t for t in store.get_tools()}
 
-        await tools["get_entity_graph"](entity_name="Acme Corp", depth=99)
+        await tools["graph_get_entity_graph"](entity_name="Acme Corp", depth=99)
 
         assert client.long_term.related_kwargs[-1]["depth"] == 3
 
@@ -834,7 +882,7 @@ class TestGetTools:
         centre = Entity(name="Acme Corp", type="ORGANIZATION")
         client.long_term.entities = [centre]
         client.long_term.related = [
-            (Entity(name=f"Person {i}", type="PERSON"), "WORKS_AT") for i in range(_MAX_EDGES + 10)
+            Entity(name=f"Person {i}", type="PERSON") for i in range(_MAX_EDGES + 10)
         ]
 
         result = await _entity_graph(client, "Acme Corp", depth=1, nams=False)
@@ -880,7 +928,7 @@ class TestGetTools:
         store = _store(name="graph", client=client, user_id="alice")
         tools = {t.tool_name: t for t in store.get_tools()}
 
-        await tools["get_user_preferences"]()
+        await tools["graph_get_user_preferences"]()
 
         assert client.long_term.preferences_for_calls[-1]["user_identifier"] == "alice"
 
@@ -896,6 +944,96 @@ class TestGetTools:
         store = _store(name="graph", client=client, user_id="alice")
         tools = {t.tool_name: t for t in store.get_tools()}
 
-        result = await tools["get_user_preferences"](category="food")
+        result = await tools["graph_get_user_preferences"](category="food")
 
         assert result == [{"category": "food", "preference": "loves sushi", "context": None}]
+
+
+class TestToolNamespacing:
+    """The store's tools must not silently replace the factory's.
+
+    ``ToolRegistry.register_tool`` raises on a duplicate name only when the
+    tool does not support hot reload — and ``@tool``-decorated functions
+    always do, so both sides' tools take the same code path into
+    ``registry[name] = tool`` and the later registration wins, with no
+    warning. Both sides ship ``get_entity_graph`` and
+    ``get_user_preferences``, and they take different arguments.
+    """
+
+    def test_names_are_prefixed_with_the_store_name(self) -> None:
+        store = _store(name="graph", client=FakeMemoryClient(), user_id="alice")
+
+        names = {t.tool_name for t in store.get_tools()}
+
+        assert names == {"graph_get_entity_graph", "graph_get_user_preferences"}
+
+    def test_no_name_collides_with_the_tools_factory(self) -> None:
+        from neo4j_agent_memory.integrations.strands import context_graph_tools
+
+        store = _store(name="graph", client=FakeMemoryClient(), user_id="alice")
+        factory_names = {
+            t.tool_name
+            for t in context_graph_tools(neo4j_uri="bolt://localhost:7687", neo4j_password="p")
+        }
+        store_names = {t.tool_name for t in store.get_tools()}
+
+        assert factory_names & store_names == set()
+        # And the names the collision was about are the factory's alone.
+        assert {"get_entity_graph", "get_user_preferences"} <= factory_names
+
+    def test_two_stores_on_one_manager_get_distinct_names(self) -> None:
+        """`dataclasses.replace(config, name="team")` is the documented multi-store shape."""
+        client = FakeMemoryClient()
+        personal = _store(name="personal", client=client, user_id="alice")
+        team = _store(name="team", client=client, user_id="alice")
+
+        personal_names = {t.tool_name for t in personal.get_tools()}
+        team_names = {t.tool_name for t in team.get_tools()}
+
+        assert personal_names & team_names == set()
+
+    def test_a_name_needing_sanitising_still_yields_a_legal_prefix(self) -> None:
+        store = _store(name="Team / Graph!", client=FakeMemoryClient())
+
+        names = {t.tool_name for t in store.get_tools()}
+
+        assert names == {"team_graph_get_entity_graph"}
+
+
+class TestPreferenceRoundTrip:
+    @pytest.mark.asyncio
+    async def test_a_written_preference_is_readable_by_the_stores_own_tool(self) -> None:
+        """``add(kind="preference")`` must be visible to ``get_user_preferences``.
+
+        Both are user-scoped: the write needs ``user_identifier`` for the
+        ``(:User)-[:HAS_PREFERENCE]`` edge, and ``get_preferences_for`` reads
+        precisely that edge. Without it the store wrote something its own
+        tool could never return.
+        """
+        client = FakeMemoryClient()
+        store = _store(name="graph", client=client, user_id="alice")
+        await store.initialize()
+
+        await store.add("Prefers dark mode", {"kind": "preference", "category": "ui"})
+
+        tools = {t.tool_name: t for t in store.get_tools()}
+        result = await tools["graph_get_user_preferences"]()
+
+        assert [p["preference"] for p in result] == ["Prefers dark mode"]
+
+    @pytest.mark.asyncio
+    async def test_a_preference_write_is_tenant_scoped(self) -> None:
+        """Under multi_tenant=True an unscoped write raises ValueError, not NotSupportedError.
+
+        ValueError is not caught by ``add``'s ``NotSupportedError`` fallback,
+        so it would have surfaced as a hard failure rather than a sink write.
+        """
+        client = FakeMemoryClient()
+        client.long_term.multi_tenant = True
+        store = _store(name="graph", client=client, user_id="alice")
+        await store.initialize()
+
+        await store.add("Prefers dark mode", {"kind": "preference"})
+
+        assert client.long_term.added_preferences == [("memory", "Prefers dark mode")]
+        assert client.short_term.add_message_calls == [], "no fallback to the sink"

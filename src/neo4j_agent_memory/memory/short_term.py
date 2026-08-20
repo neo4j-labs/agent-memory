@@ -401,7 +401,7 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
             on_batch_complete: Callback after each batch completes (batch_num, batch_messages)
             user_identifier: When provided, scopes the conversation to a
                 :User node via ``(:User)-[:HAS_CONVERSATION]->(:Conversation)``.
-                Required when ``MemorySettings.multi_tenant=True``.
+                Required when ``MemorySettings.memory.multi_tenant=True``.
 
         Returns:
             List of created Message objects
@@ -703,7 +703,7 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
                 describing the entities to MERGE on and link.
             user_identifier: When provided, scopes the conversation to a
                 :User node via ``(:User)-[:HAS_CONVERSATION]->(:Conversation)``.
-                Required when ``MemorySettings.multi_tenant=True``.
+                Required when ``MemorySettings.memory.multi_tenant=True``.
 
         Returns:
             The created message
