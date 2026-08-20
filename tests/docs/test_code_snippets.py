@@ -359,6 +359,13 @@ class TestStrandsDocImports:
             nams_context_graph_tools,
         )
 
+    def test_strands_memory_store_doc_imports_resolve(self) -> None:
+        pytest.importorskip("strands", reason="strands-agents not installed")
+        from neo4j_agent_memory.integrations.strands import (  # noqa: F401
+            Neo4jMemoryStore,
+            Neo4jMemoryStoreConfig,
+        )
+
 
 @pytest.mark.docs
 class TestSnippetConsistency:

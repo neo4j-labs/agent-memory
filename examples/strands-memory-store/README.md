@@ -50,6 +50,12 @@ NEO4J_PASSWORD=test-password uv run python examples/strands-memory-store/main.py
 No LLM API key required — `llm=None` plus a local `sentence-transformers`
 embedder.
 
+The container's data volume persists across `make neo4j-stop` / `neo4j-start`
+(only `neo4j-clean` wipes it). If this container previously ran against a
+different-dimension embedder (e.g. OpenAI's 1536-dim default), connecting
+here fails with `EmbeddingDimensionMismatchError`, not a silent problem —
+run `make neo4j-clean && make neo4j-start` to reset.
+
 Expected output:
 
 ```

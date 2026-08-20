@@ -276,7 +276,7 @@ recommended:
 | Store stays recall-only (`extraction=False`, the default); the session manager persists the transcript and extracts (bolt in place, NAMS server-side).
 
 | Store + session manager, with the store also extracting
-| Raises at construction — both would write and extract the same turns twice.
+| Raises at construction — both would write and extract the same turns twice. Exception: bolt with the session manager's own `extract_entities=False` does not raise, since then neither side extracts locally.
 |===
 
 Recommended configuration:
