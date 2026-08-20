@@ -19,6 +19,8 @@ if TYPE_CHECKING:
 
     from neo4j_agent_memory import MemoryClient
     from neo4j_agent_memory.integrations.strands.memory_store import Neo4jMemoryStore
+    from neo4j_agent_memory.memory.long_term import LongTermMemory
+    from neo4j_agent_memory.nams.long_term import NamsLongTermMemory
 
 _MAX_EDGES = 50
 
@@ -37,13 +39,11 @@ async def _entity_graph(
         return {"error": f"entity not found: {entity_name}"}
     centre = matches[0]
 
-    # expand_graph (NAMS) and the depth kwarg on get_related_entities (bolt)
-    # are both outside LongTermProtocol's portable subset -- the nams flag
-    # already picks the right one at runtime, so cast past the protocol here.
-    long_term = cast(Any, client.long_term)
-
     if nams:
-        expansion = await long_term.expand_graph(str(centre.id))
+        # expand_graph is NAMS-only, excluded from LongTermProtocol -- cast to
+        # the concrete class so the call stays checked instead of untyped.
+        nams_long_term = cast("NamsLongTermMemory", client.long_term)
+        expansion = await nams_long_term.expand_graph(str(centre.id))
         return {
             "center": centre.display_name,
             "depth": 1,
@@ -51,7 +51,11 @@ async def _entity_graph(
             "edges": list(expansion.get("edges") or [])[:_MAX_EDGES],
         }
 
-    related = await long_term.get_related_entities(centre, depth=depth)
+    # get_related_entities' depth kwarg diverges from LongTermProtocol's
+    # portable, no-depth signature (core/protocols.py documents this as
+    # deliberate) -- cast to the concrete class so the call stays checked.
+    bolt_long_term = cast("LongTermMemory", client.long_term)
+    related = await bolt_long_term.get_related_entities(centre, depth=depth)
     nodes = [{"name": centre.display_name, "type": centre.type, "is_center": True}]
     edges: list[dict[str, str]] = []
     for other, relationship in related[:_MAX_EDGES]:
