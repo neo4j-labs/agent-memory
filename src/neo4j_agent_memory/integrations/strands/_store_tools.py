@@ -21,7 +21,6 @@ if TYPE_CHECKING:
     from neo4j_agent_memory import MemoryClient
     from neo4j_agent_memory.integrations.strands.memory_store import Neo4jMemoryStore
     from neo4j_agent_memory.memory.long_term import LongTermMemory
-    from neo4j_agent_memory.nams.long_term import NamsLongTermMemory
 
 _MAX_EDGES = 50
 
@@ -41,10 +40,20 @@ async def _entity_graph(
     centre = matches[0]
 
     if nams:
-        # expand_graph is NAMS-only, excluded from LongTermProtocol -- cast to
-        # the concrete class so the call stays checked instead of untyped.
-        nams_long_term = cast("NamsLongTermMemory", client.long_term)
-        expansion = await nams_long_term.expand_graph(str(centre.id))
+        # expand_graph is NAMS-only, excluded from LongTermProtocol. Narrow with
+        # a real check rather than a cast: inside this branch httpx is installed
+        # by definition, so importing the NAMS module here is safe -- the same
+        # nested-import shape `for_nams` uses for `build_nams_settings`.
+        from neo4j_agent_memory.nams.long_term import NamsLongTermMemory
+
+        long_term = client.long_term
+        if not isinstance(long_term, NamsLongTermMemory):
+            raise TypeError(
+                f"Neo4jMemoryStore: the client reports the NAMS backend, but its "
+                f"long_term layer is {type(long_term).__name__}, not "
+                f"NamsLongTermMemory -- expand_graph exists only on NAMS."
+            )
+        expansion = await long_term.expand_graph(str(centre.id))
         return {
             "center": centre.display_name,
             "depth": 1,
