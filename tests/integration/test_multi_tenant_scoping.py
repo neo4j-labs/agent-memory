@@ -7,6 +7,7 @@ Covers:
 * ``add_message(user_identifier=...)`` writes
   ``(:User)-[:HAS_CONVERSATION]->(:Conversation)`` and denormalizes
   ``user_identifier`` onto the Conversation node.
+* ``add_messages_batch(user_identifier=...)`` does the same on the bulk path.
 * ``start_trace(user_identifier=...)`` writes
   ``(:User)-[:HAS_TRACE]->(:ReasoningTrace)``.
 """
@@ -111,6 +112,54 @@ class TestUserScopedConversation:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+class TestUserScopedBulkMessages:
+    """Bulk-path coverage for the ``add_messages_batch(user_identifier=...)`` fix.
+
+    Previously ``add_messages_batch`` had no ``user_identifier`` parameter, so
+    a multi-tenant deployment writing through the bulk path got an unscoped,
+    unlinked conversation and no enforcement error.
+    """
+
+    async def test_add_messages_batch_writes_has_conversation_edge(
+        self, clean_memory_client, session_id
+    ):
+        client = clean_memory_client
+        await client.users.upsert_user(identifier="sara@omg.com")
+
+        await client.short_term.add_messages_batch(
+            session_id,
+            [{"role": "user", "content": "Find healthcare team"}],
+            user_identifier="sara@omg.com",
+        )
+
+        rows = await client.graph.execute_read(
+            """
+            MATCH (u:User {identifier: 'sara@omg.com'})-[:HAS_CONVERSATION]->(c:Conversation)
+            RETURN c.session_id AS session_id, c.user_identifier AS user_identifier
+            """,
+        )
+        assert len(rows) == 1
+        assert rows[0]["session_id"] == session_id
+        assert rows[0]["user_identifier"] == "sara@omg.com"
+
+    async def test_conversation_discoverable_via_list_conversations(
+        self, clean_memory_client, session_id
+    ):
+        client = clean_memory_client
+        await client.users.upsert_user(identifier="sara@omg.com")
+
+        await client.short_term.add_messages_batch(
+            session_id,
+            [{"role": "user", "content": "Find healthcare team"}],
+            user_identifier="sara@omg.com",
+        )
+
+        conversations = await client.short_term.list_conversations(user_identifier="sara@omg.com")
+        assert [c.session_id for c in conversations] == [session_id]
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 class TestUserScopedReasoningTrace:
     async def test_start_trace_writes_has_trace_edge(self, clean_memory_client, session_id):
         client = clean_memory_client
@@ -147,6 +196,14 @@ class TestMultiTenantGuardrail:
     ):
         with pytest.raises(ValueError, match="user_identifier"):
             await multi_tenant_client.reasoning.start_trace(session_id, "Some task")
+
+    async def test_add_messages_batch_raises_without_user_identifier(
+        self, multi_tenant_client, session_id
+    ):
+        with pytest.raises(ValueError, match="user_identifier"):
+            await multi_tenant_client.short_term.add_messages_batch(
+                session_id, [{"role": "user", "content": "Hello"}]
+            )
 
     async def test_add_preference_raises_without_user_identifier(self, multi_tenant_client):
         with pytest.raises(ValueError, match="user_identifier"):

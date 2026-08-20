@@ -53,11 +53,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   they raised `AttributeError`). This lets `client.short_term` / `client.long_term`
   type-check without per-call-site `attr-defined` suppressions.
 
+### Fixed
+
+- **`add_messages_batch` now accepts `user_identifier`**, enforcing `multi_tenant`
+  and linking the conversation to its `:User`; previously the bulk path silently
+  wrote unscoped, unlinked conversations.
+
 ### Changed
 
 - `strands` extra requires `strands-agents>=1.44.0` (was `>=0.1.0`).
-- `ShortTermProtocol.bulk_add_messages` accepts `**kwargs`, as both backends already did.
-
+- `ShortTermProtocol.bulk_add_messages` takes explicit keyword-only params
+  (`generate_embeddings`, `extract_entities`, `extract_relations`, `user_identifier`)
+  instead of `**kwargs`.
 - **`MemoryClient` is now generic over its backend memory types**
   (`MemoryClient[ST, LT, RT]`, PEP 696 defaults). `client.short_term` /
   `.long_term` / `.reasoning` return the base `ShortTermProtocol` /

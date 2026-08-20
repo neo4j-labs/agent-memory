@@ -187,12 +187,21 @@ class ShortTermProtocol(Protocol):
         self,
         session_id: str,
         messages: list[dict[str, Any]],
-        **kwargs: Any,
+        *,
+        generate_embeddings: bool = True,
+        extract_entities: bool = False,
+        extract_relations: bool = True,
+        user_identifier: str | None = None,
     ) -> list[Message]:
         """Bulk-insert messages for a session in one round-trip, preserving order.
 
-        ``**kwargs`` forwards backend-specific knobs (``extract_entities``,
-        ``user_identifier``, …) — both implementations already accept them.
+        The portable subset: honoured on bolt (including tenant scoping via
+        ``user_identifier``, enforced when ``multi_tenant=True``); ignored on
+        NAMS (extraction is server-side there, and tenancy comes from the API
+        key/workspace, not a per-call argument). Bolt-only tuning
+        (``batch_size``) and the progress callbacks are intentionally off
+        this protocol — reach for ``BoltMemoryClient.add_messages_batch``
+        when you need those.
         """
         ...
 

@@ -80,8 +80,24 @@ class FakeShortTerm:
         return msg
 
     async def bulk_add_messages(
-        self, session_id: str, messages: list[dict[str, Any]], **kwargs: Any
+        self,
+        session_id: str,
+        messages: list[dict[str, Any]],
+        *,
+        generate_embeddings: bool = True,
+        extract_entities: bool = False,
+        extract_relations: bool = True,
+        user_identifier: str | None = None,
     ) -> list[Message]:
+        # Explicit parameters mirroring ShortTermProtocol.bulk_add_messages
+        # (no **kwargs catch-all) so this fake can't absorb a keyword the
+        # real bolt backend would reject.
+        kwargs = {
+            "generate_embeddings": generate_embeddings,
+            "extract_entities": extract_entities,
+            "extract_relations": extract_relations,
+            "user_identifier": user_identifier,
+        }
         recorded_kwargs = {} if self._nams_mode else kwargs
         self.bulk_calls.append(
             {"session_id": session_id, "messages": messages, "kwargs": recorded_kwargs}
@@ -89,7 +105,7 @@ class FakeShortTerm:
         if session_id not in self.conversations:
             if self._nams_mode:
                 raise NamMemoryError(f"NAMS: unknown conversation {session_id}")
-            await self.create_conversation(session_id=session_id)
+            await self.create_conversation(session_id=session_id, user_identifier=user_identifier)
         stored = [Message(role=MessageRole(m["role"]), content=m["content"]) for m in messages]
         self.conversations[session_id].messages.extend(stored)
         return stored
