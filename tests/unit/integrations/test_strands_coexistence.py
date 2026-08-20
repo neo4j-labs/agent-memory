@@ -76,6 +76,13 @@ class TestDoubleExtraction:
         manager.initialize(agent)  # must not raise
 
     def test_ignores_a_memory_manager_holding_only_foreign_stores(self) -> None:
+        """extraction=True on the foreign store, deliberately: the point is that
+        ``_our_stores`` filters by ``isinstance(store, Neo4jMemoryStore)``, not by
+        the extraction flag. A foreign store with extraction off would pass this
+        test even if the isinstance filter were replaced by duck-typing (e.g.
+        ``getattr(s, "extraction", False)``) — that regression must still fail
+        here, on a store that both extracts and isn't ours.
+        """
         from strands.memory import MemoryManager
         from strands.vended_memory_stores.test_memory_store import TestMemoryStore
 
@@ -84,7 +91,9 @@ class TestDoubleExtraction:
         manager = Neo4jSessionManager(
             "s1", memory_client=FakeMemoryClient(), extract_entities=True
         )
-        agent = FakeAgent(memory_manager=MemoryManager(stores=[TestMemoryStore(name="t")]))
+        agent = FakeAgent(
+            memory_manager=MemoryManager(stores=[TestMemoryStore(name="t", extraction=True)])
+        )
 
         manager.initialize(agent)  # not our store, not our problem
 
