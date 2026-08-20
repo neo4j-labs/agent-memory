@@ -160,6 +160,9 @@ class TestMappingHelpers:
 
 from types import SimpleNamespace
 
+#: Entity ids in canned NAMS payloads must parse as UUIDs (``Entity.id: UUID``).
+_ENTITY_ID = "11111111-1111-1111-1111-111111111111"
+
 
 def _make_manager(nams_mode: bool = False, **kwargs):
     """Build a manager wired to a FakeMemoryClient. Caller must close()."""
@@ -213,21 +216,20 @@ class TestInitialize:
             manager.close()
 
     def test_nams_resolves_existing_conversation_by_metadata(self) -> None:
-        import asyncio
-
         manager, client = _make_manager(nams_mode=True)
+        existing_id = "22222222-2222-2222-2222-222222222222"
+        client.wire.responses["list_conversations"] = {
+            "conversations": [
+                {"id": existing_id, "metadata": {"strands_session_id": "sess-1"}},
+                {"id": "33333333-3333-3333-3333-333333333333", "metadata": {}},
+            ]
+        }
         try:
-            existing = asyncio.run(
-                client.short_term.create_conversation(
-                    session_id="sess-1",
-                    metadata={"strands_session_id": "sess-1"},
-                )
-            )
             agent = _fake_agent()
             manager.initialize(agent)
-            assert manager._conversation_key == str(existing.id)
+            assert manager._conversation_key == existing_id
             # No second conversation was created.
-            assert len(client.short_term.conversations) == 1
+            assert client.wire.calls_for("create_conversation") == []
         finally:
             manager.close()
 
@@ -236,10 +238,19 @@ class TestInitialize:
         try:
             agent = _fake_agent()
             manager.initialize(agent)
-            assert len(client.short_term.conversations) == 1
-            conv = next(iter(client.short_term.conversations.values()))
-            assert conv.metadata["strands_session_id"] == "sess-1"
-            assert manager._conversation_key == str(conv.id)
+            created = client.wire.last("create_conversation")
+            # NAMS' create body is {userId?, metadata?} -- session_id and title
+            # are client-side concepts and never reach the server, so the
+            # Strands session id survives the round trip only inside metadata.
+            assert created.json == {
+                "metadata": {"strands_session_id": "sess-1", "session_type": "AGENT"}
+            }
+            assert manager._conversation_key
+            # The key is the server-minted id from the create response, and the
+            # subsequent history load is scoped to it.
+            assert client.wire.last("get_conversation").path_params == {
+                "conversation_id": manager._conversation_key
+            }
         finally:
             manager.close()
 
@@ -499,6 +510,11 @@ class TestRedaction:
                     {"role": "user", "content": [{"text": "[REDACTED]"}]}, agent
                 )
             assert any("redact" in r.message.lower() for r in caplog.records)
+            # Nothing was attempted on the wire: the original message stands and
+            # no second write followed it. (NAMS' real delete_message raises
+            # NotSupportedError, so a call would surface as an exception here.)
+            assert [c.method for c in client.wire.calls_for("add_message")] == ["add_message"]
+            assert client.wire.last("add_message").json["content"] == "secret"
         finally:
             manager.close()
 
@@ -657,7 +673,16 @@ class TestRetrievalInjection:
         finally:
             manager.close()
 
-    def test_nams_skips_unsupported_preference_and_fact_searches(self) -> None:
+    def test_nams_skips_unsupported_preference_and_fact_searches(self, caplog) -> None:
+        """The real NAMS methods raise ``NotSupportedError``; they must not be called.
+
+        ``_retrieve_context`` gathers with ``return_exceptions=True`` and logs
+        per-kind failures, so a call would not fail the turn -- it would just
+        log. Hence both checks: the entity line is present, and neither a
+        preference/fact request nor a "search failed" warning appeared.
+        """
+        import logging
+
         from neo4j_agent_memory.integrations.strands.session_manager import (
             Neo4jRetrievalConfig,
         )
@@ -665,27 +690,18 @@ class TestRetrievalInjection:
         manager, client = _make_manager(
             nams_mode=True, retrieval_config=Neo4jRetrievalConfig(include_facts=True)
         )
-        client.long_term.entities = [
-            SimpleNamespace(
-                display_name="Acme",
-                type="ORGANIZATION",
-                full_type="ORGANIZATION",
-                description=None,
-            )
-        ]
-
-        # Make preference/fact searches behave like real NAMS: raise if called.
-        async def boom(query, **kwargs):
-            raise AssertionError("must not be called on NAMS")
-
-        client.long_term.search_preferences = boom
-        client.long_term.search_facts = boom
+        client.wire.responses["search_entities"] = {
+            "entities": [{"id": _ENTITY_ID, "name": "Acme", "type": "organization"}]
+        }
         try:
             manager.initialize(_fake_agent())
             message = {"role": "user", "content": [{"text": "Acme?"}]}
-            manager._inject_context(message)
+            with caplog.at_level(logging.WARNING):
+                manager._inject_context(message)
             text = message["content"][0]["text"]
             assert "[entity] Acme (ORGANIZATION)" in text  # entity search still works
+            assert client.wire.methods.count("search_entities") == 1
+            assert "search failed" not in caplog.text.lower()
         finally:
             manager.close()
 
@@ -798,11 +814,11 @@ class TestInitializeExtended:
         try:
             agent = _fake_agent()
             manager.initialize(agent)
-            # _aresolve_conversation calls list_conversations with scoping kwargs.
-            calls = client.short_term.list_conversations_calls
+            # _aresolve_conversation calls list_conversations with scoping kwargs,
+            # which NAMS receives as the camelCase query string ?userId=&limit=.
+            calls = client.wire.calls_for("list_conversations")
             assert len(calls) == 1
-            assert calls[0].get("user_identifier") == "alice"
-            assert calls[0].get("limit") == 1000
+            assert calls[0].params == {"userId": "alice", "limit": 1000}
         finally:
             manager.close()
 

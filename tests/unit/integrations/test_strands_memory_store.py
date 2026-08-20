@@ -10,6 +10,9 @@ pytest.importorskip("strands", reason="strands-agents not installed")
 
 from tests.unit.integrations.strands_fakes import FakeMemoryClient
 
+#: Entity ids in canned NAMS payloads must parse as UUIDs (``Entity.id: UUID``).
+_ENTITY_ID = "11111111-1111-1111-1111-111111111111"
+
 
 def _store(**kw: Any) -> Any:
     """Build a Neo4jMemoryStore from loose kwargs via its real config dataclass.
@@ -293,12 +296,26 @@ class TestSinkResolution:
 
     @pytest.mark.asyncio
     async def test_reuses_the_nams_server_minted_id_by_metadata(self) -> None:
-        """NAMS mints conversation ids, so reuse matches on metadata, not id."""
+        """NAMS mints conversation ids, so reuse matches on metadata, not id.
+
+        The reuse contract spans two round-trips, so it is asserted across
+        them: the first store's ``POST /conversations`` body is fed back as
+        the second store's ``GET /conversations`` listing. That pins the
+        invariant that actually matters -- the metadata the store *writes*
+        is the metadata it later *matches on* -- rather than trusting a fake
+        server to echo it.
+        """
 
         client = FakeMemoryClient(nams_mode=True)
         first = _store(name="graph", client=client)
         await first.initialize()
         key_one = await first._resolve_sink()
+
+        created = client.wire.last("create_conversation")
+        assert created.json["metadata"]["strands_memory_store"] == "strands-memory-store/_/graph"
+        client.wire.responses["list_conversations"] = {
+            "conversations": [{"id": key_one, "metadata": created.json["metadata"]}]
+        }
 
         second = _store(name="graph", client=client)
         await second.initialize()
@@ -306,9 +323,8 @@ class TestSinkResolution:
 
         assert key_one == key_two
         assert key_one != "strands-memory-store/_/graph"  # the cached key is the minted uuid
-        only_conv = next(iter(client.short_term.conversations.values()))
-        assert key_one == str(only_conv.id)
-        assert len(client.short_term.conversations) == 1
+        # Exactly one conversation was ever created: the second store matched.
+        assert len(client.wire.calls_for("create_conversation")) == 1
 
     @pytest.mark.asyncio
     async def test_nams_scans_conversations_once(self) -> None:
@@ -319,7 +335,7 @@ class TestSinkResolution:
         await store.initialize()
         await store._resolve_sink()
 
-        assert len(client.short_term.list_conversations_calls) == 1
+        assert len(client.wire.calls_for("list_conversations")) == 1
 
     @pytest.mark.asyncio
     async def test_explicit_conversation_id_is_used_verbatim(self) -> None:
@@ -466,11 +482,20 @@ class TestSearch:
 
     @pytest.mark.asyncio
     async def test_nams_returns_entities_only(self) -> None:
-        from neo4j_agent_memory.memory.long_term import Entity, Preference
+        """NAMS has entity search only, so that is the only request made.
+
+        The real ``NamsLongTermMemory.search_preferences`` /
+        ``search_facts`` raise ``NotSupportedError``, and ``_retrieve_entries``
+        swallows per-kind failures -- so "only entities came back" alone would
+        pass even if they had been called. The recorded call list is what
+        proves they were skipped.
+        """
 
         client = FakeMemoryClient(nams_mode=True)
-        client.long_term.entities = [Entity(name="Acme Corp", type="ORGANIZATION")]
-        client.long_term.preferences = [Preference(category="ui", preference="dark mode")]
+        client.wire.responses["search_entities"] = {
+            "entities": [{"id": _ENTITY_ID, "name": "Acme Corp", "type": "organization"}],
+            "searchType": "vector",
+        }
 
         store = _store(name="graph", client=client)
         await store.initialize()
@@ -479,6 +504,7 @@ class TestSearch:
         assert len(entries) == 1
         assert entries[0].metadata is not None
         assert entries[0].metadata["kind"] == "entity"
+        assert client.wire.methods == ["search_entities"]
 
     @pytest.mark.asyncio
     async def test_search_does_not_mint_a_sink(self) -> None:
@@ -496,8 +522,7 @@ class TestSearch:
         await store.initialize()
         await store.search("q")
 
-        assert client.short_term.list_conversations_calls == []
-        assert client.short_term.conversations == {}
+        assert client.wire.methods == ["search_entities"]  # no list, no create
 
     @pytest.mark.asyncio
     async def test_search_initializes_without_a_prior_initialize_call(self) -> None:
@@ -584,6 +609,11 @@ class TestAdd:
 
         Without the isinstance narrowing in `_add_typed`, this raises trying
         to subscript a bare Entity as a tuple.
+
+        Note the POLE+O type is *not* what reaches the server:
+        ``NamsLongTermMemory`` maps it into NAMS' own lowercase vocabulary
+        (``ORGANIZATION`` -> ``organization``) and drops everything NAMS'
+        create body has no field for.
         """
 
         client = FakeMemoryClient(nams_mode=True)
@@ -591,7 +621,7 @@ class TestAdd:
         await store.initialize()
         result = await store.add("Acme Corp", {"kind": "entity", "type": "ORGANIZATION"})
 
-        assert client.long_term.added_entities == [("Acme Corp", "ORGANIZATION")]
+        assert client.wire.last("add_entity").json == {"name": "Acme Corp", "type": "organization"}
         assert result["kind"] == "entity"
         assert result["id"]
 
@@ -603,7 +633,9 @@ class TestAdd:
         result = await store.add("dark mode", {"kind": "preference", "category": "ui"})
 
         assert result["kind"] == "message"
-        assert client.short_term.add_message_calls[-1]["content"] == "dark mode"
+        # NAMS accepts only {content, role} on a message: the sink write carries
+        # no category, no user identifier, no extraction flag.
+        assert client.wire.last("add_message").json == {"content": "dark mode", "role": "user"}
         assert "falling back" in caplog.text.lower()
 
     @pytest.mark.asyncio
@@ -618,7 +650,7 @@ class TestAdd:
 
         warnings = [r for r in caplog.records if "unsupported on this backend" in r.message]
         assert len(warnings) == 1
-        assert len(client.short_term.add_message_calls) == 2
+        assert len(client.wire.calls_for("add_message")) == 2
 
     @pytest.mark.asyncio
     async def test_rejects_writes_when_not_writable(self) -> None:
@@ -893,22 +925,26 @@ class TestGetTools:
     async def test_entity_graph_uses_expand_graph_on_nams(self) -> None:
         """NAMS: name resolved via search, then a 1-hop expansion by node id."""
         from neo4j_agent_memory.integrations.strands._store_tools import _entity_graph
-        from neo4j_agent_memory.memory.long_term import Entity
 
         client = FakeMemoryClient(nams_mode=True)
-        centre = Entity(name="Acme Corp", type="ORGANIZATION")
-        client.long_term.entities = [centre]
-        client.long_term.expansion = {
+        expansion = {
             "nodes": [{"id": "n2", "name": "Ada", "type": "PERSON"}],
-            "edges": [{"from": "n2", "to": str(centre.id), "type": "WORKS_AT"}],
+            "edges": [{"from": "n2", "to": _ENTITY_ID, "type": "WORKS_AT"}],
         }
+        client.wire.responses["search_entities"] = {
+            "entities": [{"id": _ENTITY_ID, "name": "Acme Corp", "type": "organization"}]
+        }
+        client.wire.responses["expand_graph"] = expansion
 
         result = await _entity_graph(client, "Acme Corp", depth=3, nams=True)
 
-        assert client.long_term.expand_calls == [str(centre.id)]
+        # The searched name goes out as the query; the *id* it resolved to is
+        # what the expansion is keyed by (NAMS has no expand-by-name).
+        assert client.wire.last("search_entities").json == {"query": "Acme Corp", "limit": 1}
+        assert client.wire.last("expand_graph").json == {"nodeId": _ENTITY_ID, "loadedIds": []}
         assert result["depth"] == 1  # 1 hop is all NAMS offers
-        assert result["nodes"] == client.long_term.expansion["nodes"]
-        assert result["edges"] == client.long_term.expansion["edges"]
+        assert result["nodes"] == expansion["nodes"]
+        assert result["edges"] == expansion["edges"]
 
     @pytest.mark.asyncio
     async def test_entity_graph_reports_an_unknown_entity(self) -> None:
