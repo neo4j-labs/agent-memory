@@ -22,8 +22,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   replacing them in the agent's registry, and `max_search_results` caps the
   *total* rows per `search()` — shared across entities, preferences and facts
   so no kind is crowded out.
-- **`build_nams_settings(..., workspace_id=)`** — optional explicit workspace for the
-  Strands NAMS helpers, instead of only the ambient `MEMORY_WORKSPACE_ID`.
 - **Strands SessionManager** (`Neo4jSessionManager`) — automatic conversation
   persistence/restore for AWS Strands agents via `Agent(session_manager=...)`,
   backed by any `MemoryClient` (bolt or NAMS). Includes opt-in long-term

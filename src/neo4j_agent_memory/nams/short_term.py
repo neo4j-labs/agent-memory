@@ -185,15 +185,12 @@ def _normalize_conversation(
 ) -> dict[str, Any]:
     """Map NAMS Conversation response → bolt Pydantic shape.
 
-    NAMS returns ``{id, userId, workspaceId, metadata, createdAt,
-    updatedAt}`` from GET, and ``{id, userId, workspaceId, metadata}``
-    from create — verified live: ``metadata`` round-trips through both
-    create and ``list_conversations``. The bolt Pydantic ``Conversation``
-    model requires ``id``, ``session_id``, and ``created_at``. We
-    synthesize ``session_id`` from the caller-supplied value (which is
-    typically the NAMS conversation UUID). ``metadata`` still defaults to
-    ``{}`` below when absent, since older or differently-configured NAMS
-    deployments may omit it.
+    NAMS returns ``{id, userId, workspaceId, metadata, createdAt, updatedAt}``
+    from GET and ``{id, userId, workspaceId, metadata}`` from create. The bolt
+    ``Conversation`` model requires ``id``, ``session_id`` and ``created_at``,
+    so ``session_id`` is synthesized from the caller-supplied value (typically
+    the NAMS conversation UUID) and ``metadata`` defaults to ``{}`` when a
+    deployment omits it.
     """
     data = snakeize_keys(payload) if isinstance(payload, dict) else {}
     if "session_id" not in data:

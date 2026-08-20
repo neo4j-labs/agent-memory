@@ -385,11 +385,10 @@ class FakeLongTerm:
         direction: ``Neo4jClient.execute_read`` returns ``result.data()``,
         which renders a relationship as ``(start_props, type, end_props)`` and
         drops its properties, so ``memory/long_term.py``'s parse falls through
-        to ``type="RELATED_TO"`` for every hit, with ``source_id`` hardcoded
-        to the centre. Verified live against Neo4j 5 (see
-        ``tests/integration/test_strands_memory_store_integration.py``). This
-        fake reproduces that rather than inventing a richer relationship the
-        production stack never returns.
+        to ``type="RELATED_TO"`` for every hit, with ``source_id`` hardcoded to
+        the centre. ``tests/integration/test_strands_memory_store_integration.py``
+        asserts this against a live Neo4j; the fake reproduces it rather than
+        inventing a richer relationship the production stack never returns.
         """
         self.related_kwargs.append(kwargs)
         from neo4j_agent_memory.memory.long_term import Relationship
