@@ -147,7 +147,9 @@ class Neo4jMemoryStore(MemoryStore):
         self._run_id = uuid.uuid4().hex
         self._written: set[tuple[str, int]] = set()
         self._initialized = False
-        self._loop: asyncio.AbstractEventLoop | None = None
+        # The loop we last connected on -- only ever compared against the
+        # current running loop, never awaited on (see `initialize()`).
+        self._connected_loop: asyncio.AbstractEventLoop | None = None
         self._warned_unsupported_kinds: set[str] = set()
 
         if config.client is not None:
@@ -206,29 +208,26 @@ class Neo4jMemoryStore(MemoryStore):
         if self._sink_key is not None:
             return self._sink_key
 
-        if not self.is_nams:
-            sink_key = self._sink_name
-            self._sink_key = sink_key
-            return sink_key
+        key = self._sink_name if not self.is_nams else await self._resolve_nams_sink()
+        self._sink_key = key
+        return key
 
+    async def _resolve_nams_sink(self) -> str:
+        """List NAMS conversations, matching this store's ``_STORE_KEY`` metadata, else create one."""
         short_term = self._client.short_term
         conversations = await short_term.list_conversations(
             user_identifier=self.user_id, limit=1000
         )
         for conversation in conversations:
             if (conversation.metadata or {}).get(_STORE_KEY) == self._sink_name:
-                sink_key = str(conversation.id)
-                self._sink_key = sink_key
-                return sink_key
+                return str(conversation.id)
 
         created = await short_term.create_conversation(
             session_id=self._sink_name,
             metadata={_STORE_KEY: self._sink_name, "session_type": "MEMORY_STORE"},
             user_identifier=self.user_id,
         )
-        sink_key = str(created.id)
-        self._sink_key = sink_key
-        return sink_key
+        return str(created.id)
 
     async def initialize(self) -> None:
         """Connect the client, rebinding it if the event loop changed.
@@ -254,7 +253,7 @@ class Neo4jMemoryStore(MemoryStore):
         loop = asyncio.get_running_loop()
 
         if self._initialized:
-            if self._loop is loop:
+            if self._connected_loop is loop:
                 return
             if not self._owns_client:
                 raise RuntimeError(
@@ -280,7 +279,7 @@ class Neo4jMemoryStore(MemoryStore):
         elif not self._client.is_connected:
             await self._client.connect()
 
-        self._loop = loop
+        self._connected_loop = loop
         self._initialized = True
 
     async def search(self, query: str, options: SearchOptions | None = None) -> list[MemoryEntry]:
@@ -472,7 +471,7 @@ class Neo4jMemoryStore(MemoryStore):
         stale ``_initialized``.
         """
         if self._owns_client:
-            stale = self._loop is not None and self._loop is not _running_loop()
+            stale = self._connected_loop is not None and self._connected_loop is not _running_loop()
             try:
                 await self._client.close()
             except Exception:
@@ -487,7 +486,7 @@ class Neo4jMemoryStore(MemoryStore):
                     self.name,
                 )
         self._initialized = False
-        self._loop = None
+        self._connected_loop = None
 
     async def __aenter__(self) -> Neo4jMemoryStore:
         await self.initialize()

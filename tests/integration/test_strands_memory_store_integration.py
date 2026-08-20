@@ -167,7 +167,7 @@ def test_an_owned_client_survives_the_loop_change_strands_forces(neo4j_connectio
 
     # Loop A — what Agent.__init__ does.
     run_async(store.initialize)
-    connecting_loop = store._loop
+    connecting_loop = store._connected_loop
     assert connecting_loop is not None
 
     # Loop B — what Agent.__call__ does.
@@ -177,7 +177,7 @@ def test_an_owned_client_survives_the_loop_change_strands_forces(neo4j_connectio
 
     try:
         assert run_async(real_work) == [{"n": 1}]
-        assert store._loop is not connecting_loop, "the store rebound to the new loop"
+        assert store._connected_loop is not connecting_loop, "the store rebound to the new loop"
     finally:
         run_async(store.aclose)
 

@@ -91,12 +91,12 @@ async def _user_preferences(
     ``get_preferences_for`` is user-scoped and needs no embedder, unlike
     ``search_preferences`` (which returns ``[]`` with no embedder and no
     ``:User`` filter at all -- both a silent-empty and a cross-tenant-leak
-    risk). It *is* on ``LongTermProtocol`` (``core/protocols.py``), but
-    declared with a keyword-only ``user_identifier`` against the concrete
-    class's positional one, so the cast is still required.
+    risk). It *is* on ``LongTermProtocol`` (``core/protocols.py``), keyword-only
+    ``user_identifier`` and all, so no cast is needed here.
     """
-    bolt_long_term = cast("LongTermMemory", client.long_term)
-    preferences = await bolt_long_term.get_preferences_for(user_id, active_only=True)
+    preferences = await client.long_term.get_preferences_for(
+        user_identifier=user_id, active_only=True
+    )
     if category:
         preferences = [p for p in preferences if p.category.lower() == category.lower()]
     return [
@@ -135,8 +135,7 @@ def build_store_tools(store: Neo4jMemoryStore) -> list[AgentTool]:
     nams = store.is_nams
     prefix = _tool_prefix(store.name)
 
-    @tool(name=f"{prefix}_get_entity_graph")
-    async def get_entity_graph(entity_name: str, depth: int = 2) -> dict[str, Any]:
+    async def _get_entity_graph(entity_name: str, depth: int = 2) -> dict[str, Any]:
         """Explore the graph neighbourhood of an entity.
 
         Use this to find how an entity connects to others — who works where,
@@ -149,6 +148,13 @@ def build_store_tools(store: Neo4jMemoryStore) -> list[AgentTool]:
         """
         return await _entity_graph(client, entity_name, depth=max(1, min(depth, 3)), nams=nams)
 
+    # Annotated explicitly as AgentTool: @tool's overloads resolve this correctly
+    # under mypy --strict and ty, but some IDEs' inference falls back to the
+    # undecorated function's callable type instead of the decorator's declared
+    # return type. The explicit annotation on the assignment target sidesteps
+    # that inference gap without a cast/ignore/Any.
+    get_entity_graph: AgentTool = tool(name=f"{prefix}_get_entity_graph")(_get_entity_graph)
+
     tools: list[AgentTool] = [get_entity_graph]
 
     # get_preferences_for requires a user identifier and is bolt-only (NAMS
@@ -160,8 +166,7 @@ def build_store_tools(store: Neo4jMemoryStore) -> list[AgentTool]:
     if not nams and store.user_id:
         user_id = store.user_id
 
-        @tool(name=f"{prefix}_get_user_preferences")
-        async def get_user_preferences(category: str | None = None, limit: int = 20) -> Any:
+        async def _get_user_preferences(category: str | None = None, limit: int = 20) -> Any:
             """Retrieve the configured user's preferences, optionally filtered by category.
 
             Returns only preferences belonging to this store's configured
@@ -173,6 +178,9 @@ def build_store_tools(store: Neo4jMemoryStore) -> list[AgentTool]:
             """
             return await _user_preferences(client, user_id, category, limit=limit)
 
+        get_user_preferences: AgentTool = tool(name=f"{prefix}_get_user_preferences")(
+            _get_user_preferences
+        )
         tools.append(get_user_preferences)
 
     return tools
