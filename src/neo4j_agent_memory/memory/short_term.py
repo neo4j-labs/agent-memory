@@ -1357,7 +1357,7 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         """
         if self._embedder is None or not names:
             return {}
-        uniq = list(dict.fromkeys(n for n in names if n))
+        uniq: list[str] = list(dict.fromkeys(n for n in names if n))
         try:
             vectors = await self._embedder.embed_batch(uniq)
             return dict(zip(uniq, vectors))
