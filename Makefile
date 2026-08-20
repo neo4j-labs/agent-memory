@@ -1,4 +1,4 @@
-.PHONY: help install install-all install-dev lint format typecheck ty test test-unit test-integration test-integration-mcp test-e2e test-all test-docker test-ci test-no-docker test-quick test-file test-match test-aws test-nams-unit test-nams-integration test-nams-staging test-nams-sandbox test-nams-local test-nams coverage coverage-all coverage-ci coverage-mcp test-examples test-examples-quick test-examples-no-neo4j test-docs test-docs-syntax test-docs-build test-docs-links neo4j-start neo4j-stop neo4j-logs clean build publish docs docs-diagrams-list docs-diagrams-status docs-diagrams-missing docs-diagrams-manifest docs-diagrams-add-refs docs-diagrams-generate example-basic example-resolution example-langchain example-pydantic examples chat-agent-install chat-agent-backend chat-agent-frontend chat-agent ts-install ts-build ts-test ts-test-unit ts-test-integration ts-lint ts-docs ts-conformance ts-pack ts-clean ts-test-examples
+.PHONY: help install install-all install-dev lint format typecheck ty test test-unit test-integration test-integration-mcp test-e2e test-strands-agent-e2e test-all test-docker test-ci test-no-docker test-quick test-file test-match test-aws test-nams-unit test-nams-integration test-nams-staging test-nams-sandbox test-nams-local test-nams coverage coverage-all coverage-ci coverage-mcp test-examples test-examples-quick test-examples-no-neo4j test-docs test-docs-syntax test-docs-build test-docs-links neo4j-start neo4j-stop neo4j-logs clean build publish docs docs-diagrams-list docs-diagrams-status docs-diagrams-missing docs-diagrams-manifest docs-diagrams-add-refs docs-diagrams-generate example-basic example-resolution example-langchain example-pydantic examples chat-agent-install chat-agent-backend chat-agent-frontend chat-agent ts-install ts-build ts-test ts-test-unit ts-test-integration ts-lint ts-docs ts-conformance ts-pack ts-clean ts-test-examples
 
 # Default target
 help:
@@ -145,6 +145,12 @@ test-integration-mcp:
 test-e2e:
 	@echo "Running end-to-end MCP flow tests with testcontainers..."
 	uv run pytest tests/integration/test_mcp_e2e.py -v --timeout=300
+
+# End-to-end: a real Strands Agent + Neo4jMemoryStore against live NAMS and a
+# local Ollama. Skips cleanly unless MEMORY_API_KEY is in the *process* env and
+# the Ollama endpoint answers. NAMS_E2E_KEEP=1 leaves the run's data in place.
+test-strands-agent-e2e:
+	uv run --env-file .env pytest tests/e2e/test_strands_agent_nams_e2e.py -v -s --timeout=900
 
 # NAMS unit tests (respx-based, no Docker required) — v0.4
 test-nams-unit:

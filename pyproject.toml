@@ -193,6 +193,7 @@ markers = [
     "imports: marks tests as import validation (medium)",
     "slow: marks tests as slow (external link checks, full builds)",
     "aws: marks tests as AWS integration tests (require AWS credentials)",
+    "e2e: marks tests as end-to-end tests driving a real framework agent against live services (skip unless credentials + a local LLM are reachable)",
 ]
 filterwarnings = [
     "ignore::DeprecationWarning",
