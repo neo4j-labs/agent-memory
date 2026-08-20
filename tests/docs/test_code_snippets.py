@@ -241,6 +241,8 @@ class TestSnippetImports:
             "nams_context_graph_tools",
             "Neo4jSessionManager",
             "Neo4jRetrievalConfig",
+            "Neo4jMemoryStore",
+            "Neo4jMemoryStoreConfig",
             "HybridMemoryProvider",
             "StrandsConfig",
             "MemoryType",
@@ -357,6 +359,13 @@ class TestStrandsDocImports:
             nams_context_graph_tools,
         )
 
+    def test_strands_memory_store_doc_imports_resolve(self) -> None:
+        pytest.importorskip("strands", reason="strands-agents not installed")
+        from neo4j_agent_memory.integrations.strands import (  # noqa: F401
+            Neo4jMemoryStore,
+            Neo4jMemoryStoreConfig,
+        )
+
 
 @pytest.mark.docs
 class TestSnippetConsistency:
@@ -439,6 +448,30 @@ class TestSettingsFieldDrift:
     }
 
     @staticmethod
+    def _foreign_names(tree: ast.AST) -> set[str]:
+        """Names a snippet imported from somewhere other than this library.
+
+        Class names are not unique across the ecosystem: ``ExtractionConfig``
+        is both ``neo4j_agent_memory.config.settings.ExtractionConfig`` and
+        ``strands.memory.ExtractionConfig``, and the two share no fields. A
+        name-only lookup reports the wrong model's fields for the wrong class,
+        so a snippet that explicitly imports the third-party one is skipped.
+        Bare, un-imported usages are still checked — fragment snippets rely on
+        that.
+        """
+        names: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                if (node.module or "").startswith("neo4j_agent_memory"):
+                    continue
+                names.update(alias.asname or alias.name for alias in node.names)
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if not alias.name.startswith("neo4j_agent_memory"):
+                        names.add((alias.asname or alias.name).split(".")[0])
+        return names
+
+    @staticmethod
     def _resolve_model_fields(class_name: str) -> set[str] | None:
         spec = TestSettingsFieldDrift._MODELS_TO_CHECK.get(class_name)
         if spec is None:
@@ -466,6 +499,8 @@ class TestSettingsFieldDrift:
                 # Syntax test owns this — skip here so we only report drift.
                 continue
 
+            foreign = self._foreign_names(tree)
+
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Call):
                     continue
@@ -476,6 +511,9 @@ class TestSettingsFieldDrift:
                 elif isinstance(func, ast.Attribute):
                     class_name = func.attr
                 else:
+                    continue
+
+                if class_name in foreign:
                     continue
 
                 fields = self._resolve_model_fields(class_name)
