@@ -31,11 +31,25 @@ source filters out keys that are not top-level model fields), so::
 
 Requires, or it skips cleanly:
 
-* ``MEMORY_API_KEY`` (plus optional ``MEMORY_ENDPOINT`` / ``MEMORY_WORKSPACE_ID``).
+* ``NAMS_E2E_WORKSPACE_ID`` — a **throwaway** workspace, necessarily different
+  from ``MEMORY_WORKSPACE_ID``. See "Why a throwaway workspace" below.
+* ``MEMORY_API_KEY`` (plus optional ``MEMORY_ENDPOINT``).
 * A local Ollama answering on ``OLLAMA_BASE_URL`` (default
   ``http://localhost:11434/v1``) serving a **tool-calling** model.
   ``MemoryManager`` registers ``search_memory`` plus the store's graph tools, so
   a model that rejects ``tools`` cannot drive this test at all.
+
+Why a throwaway workspace
+=========================
+Teardown is only as complete as NAMS lets it be. ``clear_session`` deletes the
+conversation; the entities NAMS extracted *from* it survive in the workspace.
+``NamsLongTermMemory`` declares a ``DELETE /entities/{id}`` endpoint spec
+(``_SPEC_DELETE_ENTITY``) but exposes no ``delete_entity()`` method, so there is
+no public route to remove them — nor the pending fuzzy-merge candidates the
+resolver files against them. A run is therefore a **one-way write**, which is
+why this test refuses to target a workspace anybody works in. The gate lives in
+``tests/nams_live.py``; it is checked before the credential and Ollama gates so
+that the reason a run did not happen is never ambiguous.
 
 Environment knobs
 =================
@@ -44,22 +58,20 @@ Environment knobs
 ``NAMS_E2E_KEEP=1``
     **Skip teardown** and leave this run's conversation in the workspace, for
     inspecting it in the NAMS web UI. Unset (the default) deletes every
-    conversation the run created and asserts they are gone, so the committed
-    test stays well-behaved against a shared workspace.
+    conversation the run created and asserts they are gone — as much cleanup as
+    the SDK can do.
 
-Two things observed while building this, so nobody re-derives them
-=================================================================
-*Teardown is only as complete as NAMS lets it be.* ``clear_session`` deletes
-the conversation; the entities NAMS extracted *from* it survive in the
-workspace. ``NamsLongTermMemory`` declares a ``DELETE /entities/{id}`` endpoint
-spec but exposes no ``delete_entity()`` method, so there is no public route to
-remove them. Hence the deliberately disposable, run-id-suffixed entity names.
+The one thing that makes the gate look broken
+=============================================
+*The ``opik`` pytest plugin loads the repo-root ``.env`` into ``os.environ``,*
+whatever the shell says. So under ``uv run pytest`` the credentials *and*
+``MEMORY_WORKSPACE_ID`` are present even without ``--env-file``, and the skip
+gates look inert locally. To see them actually skip, disable that plugin::
 
-*The ``opik`` pytest plugin loads the repo-root ``.env`` into ``os.environ``.*
-So under ``uv run pytest`` the credentials are present even without
-``--env-file``, and the skip gate looks inert locally. To see it actually skip,
-disable that plugin: ``uv run pytest ... -p no:opik``. In CI, where there is no
-``.env``, the gate holds either way.
+    uv run pytest tests/e2e/test_strands_agent_nams_e2e.py -p no:opik
+
+Two agents lost an hour to this before it was written here. In CI, where there
+is no ``.env``, the gates hold either way.
 """
 
 from __future__ import annotations
@@ -76,6 +88,13 @@ from collections.abc import AsyncGenerator, Iterator
 from typing import Any
 
 import pytest
+
+from tests.nams_live import skip_without_throwaway_workspace, unique_codename
+
+#: The only workspace this run is allowed to write to. Resolved before every
+#: other gate so a run that would have landed in somebody's working workspace
+#: reports *that*, rather than whichever credential it also happens to lack.
+THROWAWAY_WORKSPACE_ID = skip_without_throwaway_workspace()
 
 pytest.importorskip("strands", reason="strands-agents not installed")
 
@@ -137,9 +156,19 @@ USER_ID = f"e2e-user-{RUN_ID}"
 #: prints something the owner can search the workspace for.
 SINK_NAME = f"strands-memory-store/{USER_ID}/{STORE_NAME}"
 
-#: A token no other workspace data can contain, so recall assertions are about
-#: *our* memory rather than a nearest-neighbour hit on someone else's.
-TOKEN = f"Zorbium{RUN_ID.upper()}"
+#: The fixture entity's name: pronounceable nonsense no other workspace data can
+#: contain, so recall assertions are about *our* memory rather than a
+#: nearest-neighbour hit on someone else's.
+#:
+#: Drawn from ``tests.nams_live``'s mutually-distant codename pool and
+#: deliberately **not** ``RUN_ID``-suffixed. A shared stem plus a hex suffix
+#: (the first cut: ``Zorbium89980F486C``, ``Zorbium868C72705A``, …) makes every
+#: run ~85% similar to every previous one, so NAMS' resolver filed a pending
+#: fuzzy-merge candidate per pair — a review backlog that, per the note above,
+#: nothing in the SDK can clear. Codenames are <= 54.5% similar to each other,
+#: well under the threshold. ``RUN_ID`` still namespaces the store name and user
+#: id below (sink naming, not entity data), so runs stay traceable.
+TOKEN = unique_codename()
 
 #: Seeded via ``store.add()``. Recall is asserted against this rather than
 #: against the model's own turn text: NAMS extracts server-side and
@@ -173,7 +202,11 @@ def _ollama_models() -> list[str] | None:
 
 
 def _skip_reason() -> str | None:
-    """Why this test cannot run here, or ``None`` when it can."""
+    """Why this test cannot run here, or ``None`` when it can.
+
+    The throwaway-workspace gate is *not* checked here: it runs at module scope
+    (see ``THROWAWAY_WORKSPACE_ID``) so it wins over these reachability checks.
+    """
     if not os.environ.get("MEMORY_API_KEY"):
         return (
             "MEMORY_API_KEY is not in the process environment. Run with "
@@ -201,8 +234,15 @@ def _gate() -> None:
 
 
 def _nams_settings() -> Any:
+    """NAMS settings pinned to the throwaway workspace.
+
+    ``workspace_id`` is passed explicitly (the client transmits it as
+    ``X-Workspace-Id``) rather than left to ``MemorySettings``' fallback onto
+    ``MEMORY_WORKSPACE_ID`` — which is exactly the working workspace this test
+    must not touch.
+    """
     endpoint, api_key = resolve_nams_connection()
-    return build_nams_settings(endpoint, api_key)
+    return build_nams_settings(endpoint, api_key, workspace_id=THROWAWAY_WORKSPACE_ID)
 
 
 async def _our_conversations(client: MemoryClient) -> list[Any]:
@@ -228,7 +268,12 @@ def nams_teardown() -> Iterator[None]:
     fails mid-test -- the point is never to leave data in a shared workspace.
     ``NAMS_E2E_KEEP=1`` opts out, for inspecting the run in the NAMS web UI.
     """
-    print(f"\n[run] id={RUN_ID} store={STORE_NAME} user_id={USER_ID} sink_name={SINK_NAME}")
+    # TOKEN is printed because it is no longer derivable from RUN_ID: it is the
+    # only handle on the entities this run leaves behind in the workspace.
+    print(
+        f"\n[run] id={RUN_ID} store={STORE_NAME} user_id={USER_ID} "
+        f"sink_name={SINK_NAME} codename={TOKEN}"
+    )
     try:
         yield
     finally:

@@ -10,6 +10,19 @@ sink across restarts instead of minting a fresh conversation every time.
 The spec's Testing table (``docs/superpowers/specs/2026-08-19-strands-memory-store-design.md``)
 promised this suite as "key-gated NAMS ... not yet implemented" — this
 closes that gap.
+
+Gated on a throwaway workspace
+==============================
+This test writes to live NAMS, and the SDK cannot fully undo it:
+``clear_session`` deletes the sink conversation but not the entities NAMS
+extracted from it, and there is no ``delete_entity()``. So it refuses to run
+unless ``NAMS_E2E_WORKSPACE_ID`` names a workspace that is *not*
+``MEMORY_WORKSPACE_ID`` — see ``tests/nams_live.py`` for the full reasoning.
+
+To watch that skip actually happen, pass ``-p no:opik``: the ``opik`` pytest
+plugin loads the repo-root ``.env`` into ``os.environ`` whatever the shell says,
+so under a plain ``uv run pytest`` the workspace variables are present and the
+gate looks inert. Two agents lost an hour to that before it was written down.
 """
 
 from __future__ import annotations
@@ -18,14 +31,44 @@ from collections.abc import AsyncIterator
 
 import pytest
 import pytest_asyncio
+from pydantic import SecretStr
+
+from tests.nams_live import skip_without_throwaway_workspace
+
+# First gate, before the credential and dependency gates: a run that would land
+# in somebody's working workspace must report *that* as the reason it did not
+# happen, not a missing key it also happens to lack.
+THROWAWAY_WORKSPACE_ID = skip_without_throwaway_workspace()
 
 pytest.importorskip("strands", reason="strands-agents not installed")
 
-from neo4j_agent_memory import MemoryClient
+from neo4j_agent_memory import MemoryClient, NamsConfig
 from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore, Neo4jMemoryStoreConfig
 from neo4j_agent_memory.integrations.strands.memory_store import _STORE_KEY
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.fixture
+def nams_config(nams_credentials: tuple[str, str, str | None]) -> NamsConfig:
+    """Overrides ``conftest.py``'s fixture to pin the **throwaway** workspace.
+
+    The conftest default resolves the workspace from ``MEMORY_WORKSPACE_ID`` /
+    ``NAMS_SANDBOX_WORKSPACE_ID``. This module must never write there, so the
+    id from ``NAMS_E2E_WORKSPACE_ID`` is wired into ``NamsConfig`` explicitly
+    (the client transmits it as ``X-Workspace-Id``) rather than left to
+    whatever the ambient environment resolves to.
+    """
+    endpoint, api_key, _ = nams_credentials
+    return NamsConfig(
+        endpoint=endpoint,
+        api_key=SecretStr(api_key),
+        workspace_id=THROWAWAY_WORKSPACE_ID,
+        validate_on_connect=False,
+        max_retries=2,
+        retry_backoff_seconds=0.5,
+        timeout=20.0,
+    )
 
 
 @pytest_asyncio.fixture

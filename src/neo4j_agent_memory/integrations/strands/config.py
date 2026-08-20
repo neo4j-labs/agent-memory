@@ -182,9 +182,21 @@ def build_nams_settings(
     transport_mode: TransportMode = "auto",
     *,
     validate_on_connect: bool = False,
+    workspace_id: str | None = None,
 ) -> MemorySettings:
     """Build NAMS-backed MemorySettings (validate_on_connect off by default —
-    Strands drives short synchronous bursts; skipping the probe saves a round-trip)."""
+    Strands drives short synchronous bursts; skipping the probe saves a round-trip).
+
+    Args:
+        endpoint: NAMS base URL.
+        api_key: NAMS API key.
+        transport_mode: MCP / REST transport selection.
+        validate_on_connect: Whether to probe the service on connect.
+        workspace_id: Explicit NAMS workspace, transmitted as ``X-Workspace-Id``.
+            Left ``None``, ``MemorySettings`` falls back to ``MEMORY_WORKSPACE_ID``
+            from the environment — pass it when the caller must not inherit
+            whatever workspace the ambient environment names.
+    """
     from pydantic import SecretStr
 
     from neo4j_agent_memory import MemorySettings, NamsConfig
@@ -196,6 +208,7 @@ def build_nams_settings(
             api_key=SecretStr(api_key),
             validate_on_connect=validate_on_connect,
             transport_mode=transport_mode,
+            workspace_id=workspace_id,
         ),
     )
 

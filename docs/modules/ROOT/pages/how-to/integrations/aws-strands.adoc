@@ -197,9 +197,12 @@ attribute, not a dict key. Pass exactly one of `client` (a pre-connected
 
 | `user_id`
 | `None`
-| Scopes *writes* to one tenant (the `:User` edges on messages and
-  preferences) and gates the `get_user_preferences` tool. It does *not*
-  narrow `search()` — the long-term search APIs take no user filter.
+| Scopes *writes* to one tenant — on `bolt`, as a
+  `(:User)-[:HAS_CONVERSATION]->(:Conversation)` edge plus a denormalized
+  property; on NAMS, as a plain `userId` property on the conversation (no
+  `:User` node, no edge) that the conversation listing filters on. Also gates
+  the `get_user_preferences` tool. It does *not* narrow `search()` — the
+  long-term search APIs take no user filter.
 
 | `include_entities` / `include_preferences` / `include_facts`
 | `True`

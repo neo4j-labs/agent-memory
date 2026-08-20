@@ -127,7 +127,7 @@ protocol requires as store attributes):
 |---|---|---|
 | `client` \| `settings` | — | pre-connected `MemoryClient`, or settings the store builds one from |
 | `conversation_id` | minted in `initialize()` | write sink target |
-| `user_id` | `None` | scopes *writes* in multi-tenant mode, and gates the `get_user_preferences` tool. Reads are not narrowed — the long-term search APIs take no user filter |
+| `user_id` | `None` | scopes *writes* to one tenant — on bolt a `(:User)-[:HAS_CONVERSATION]->(:Conversation)` edge plus a denormalized property (`memory/short_term.py::_link_user_to_conversation`), on NAMS a plain `userId` property on the conversation, no node and no edge (`nams/short_term.py`) — and gates the `get_user_preferences` tool. Reads are not narrowed — the long-term search APIs take no user filter |
 | `include_entities` | `True` | search fan-out |
 | `include_preferences` | `True` | auto-gated off on NAMS |
 | `include_facts` | `True` | auto-gated off on NAMS |
