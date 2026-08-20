@@ -57,8 +57,35 @@ def _format_fact(fact: Fact) -> str:
     return f"[fact] {fact.subject} {fact.predicate} {fact.object}"
 
 
+def _preference_search(
+    long_term: LongTermProtocol, user_id: str | None
+) -> Callable[..., Awaitable[list[Any]]]:
+    """The preference lookup that is safe for this store's tenancy.
+
+    ``search_preferences`` takes no user identifier and applies no ``:User``
+    filter, so on a user-scoped construct it can return another tenant's
+    preferences. ``get_preferences_for`` is the only user-scoped primitive on
+    ``LongTermProtocol``; it is a listing rather than a search, so a scoped
+    lookup trades query relevance for tenancy correctness and returns the
+    user's active preferences up to ``limit``.
+    """
+    if user_id is None:
+        return long_term.search_preferences
+
+    async def _scoped(query: str, *, limit: int, threshold: float) -> list[Any]:
+        preferences = await long_term.get_preferences_for(user_identifier=user_id, active_only=True)
+        return preferences[:limit]
+
+    return _scoped
+
+
 async def _retrieve_context(
-    long_term: LongTermProtocol, query: str, cfg: Neo4jRetrievalConfig, *, nams: bool
+    long_term: LongTermProtocol,
+    query: str,
+    cfg: Neo4jRetrievalConfig,
+    *,
+    nams: bool,
+    user_id: str | None = None,
 ) -> str:
     """Run the configured long-term searches concurrently and format the block.
 
@@ -73,7 +100,11 @@ async def _retrieve_context(
     # NAMS has no preference/fact search endpoints — skip rather than warn every turn.
     wanted: list[tuple[bool, Callable[..., Awaitable[list[Any]]], Callable[..., str]]] = [
         (cfg.include_entities, long_term.search_entities, _format_entity),
-        (cfg.include_preferences and not nams, long_term.search_preferences, _format_preference),
+        (
+            cfg.include_preferences and not nams,
+            _preference_search(long_term, user_id),
+            _format_preference,
+        ),
         (cfg.include_facts and not nams, long_term.search_facts, _format_fact),
     ]
     searches = [s(query, limit=cfg.top_k, threshold=cfg.min_score) for on, s, _ in wanted if on]
@@ -159,6 +190,7 @@ async def _retrieve_entries(
     include_preferences: bool,
     include_facts: bool,
     nams: bool,
+    user_id: str | None = None,
 ) -> list[_EntryRow]:
     """Sibling of ``_retrieve_context``: same fan-out, rows instead of a string.
 
@@ -182,7 +214,7 @@ async def _retrieve_entries(
         (
             "preference",
             include_preferences and not nams,
-            long_term.search_preferences,
+            _preference_search(long_term, user_id),
             _preference_row,
         ),
         ("fact", include_facts and not nams, long_term.search_facts, _fact_row),

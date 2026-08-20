@@ -205,6 +205,56 @@ class TestEventLoopRebinding:
         assert client.close_calls == 0
         assert client.connect_calls == 1
 
+    def test_a_borrowed_client_still_raises_after_aclose(self) -> None:
+        """``aclose()`` leaves a borrowed client connected, so the guard must hold.
+
+        Clearing the recorded loop here would send the next ``initialize()``
+        down the already-connected path, which records the new loop and lets
+        the driver raise its opaque error instead of this named one.
+        """
+        from strands._async import run_async
+
+        client = FakeMemoryClient()
+        store = _store(name="graph", client=client)
+
+        run_async(store.initialize)
+        run_async(store.aclose)
+
+        with pytest.raises(RuntimeError, match="different event loop"):
+            run_async(store.initialize)
+
+        assert client.close_calls == 0
+
+    def test_a_tool_call_goes_through_the_store_lifecycle(self) -> None:
+        """Tools must not bypass ``initialize()``.
+
+        With injection disabled a tool call can be the store's first
+        operation on a new loop; a tool holding the client directly would
+        drive a stale transport instead of taking the rebind path.
+        """
+        from strands._async import run_async
+
+        client = FakeMemoryClient()
+        store = _store(name="graph", client=client)
+        tool = next(t for t in store.get_tools() if t.tool_name.endswith("get_entity_graph"))
+
+        run_async(store.initialize)
+
+        use = {"toolUseId": "t1", "name": tool.tool_name, "input": {"entity_name": "Acme"}}
+        events: list[Any] = []
+
+        async def call() -> None:
+            async for event in tool.stream(use, {}):
+                events.append(event)
+
+        run_async(call)
+
+        # Strands turns a tool exception into an error result rather than
+        # propagating it, so assert on the result the agent would see.
+        result = events[-1]["tool_result"]
+        assert result["status"] == "error"
+        assert "different event loop" in result["content"][0]["text"]
+
     def test_the_same_loop_stays_idempotent(self) -> None:
         """Only a *changed* loop triggers the rebind path."""
         from strands._async import run_async
@@ -808,6 +858,109 @@ class TestAddMessages:
         real_signature.bind(None, call["session_id"], call["messages"], **call["kwargs"])
 
 
+class TestPreferenceTenancy:
+    """A user-scoped store must not recall another tenant's preferences.
+
+    ``search_preferences`` takes no user identifier and applies no ``:User``
+    filter, so using it on a scoped store injects whatever the vector index
+    ranks highest — including preferences belonging to somebody else.
+    ``get_preferences_for`` is the only user-scoped primitive available.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_scoped_store_recalls_only_its_own_users_preferences(self) -> None:
+        client = FakeMemoryClient()
+        await client.long_term.add_preference("ui", "alice: dark mode", user_identifier="alice")
+        await client.long_term.add_preference("ui", "bob: light mode", user_identifier="bob")
+
+        store = _store(
+            name="graph",
+            client=client,
+            user_id="alice",
+            include_entities=False,
+            include_facts=False,
+        )
+        await store.initialize()
+        entries = await store.search("theme")
+
+        assert [e.content for e in entries] == ["[preference] ui: alice: dark mode"]
+        assert client.long_term.preferences_for_calls == [
+            {"user_identifier": "alice", "active_only": True}
+        ]
+
+    @pytest.mark.asyncio
+    async def test_an_unscoped_preference_is_invisible_to_a_scoped_store(self) -> None:
+        """The leak, stated as a test: an unscoped write has no ``:User`` edge."""
+        from neo4j_agent_memory.memory.long_term import Preference
+
+        client = FakeMemoryClient()
+        # What search_preferences would have returned regardless of tenancy.
+        client.long_term.preferences = [Preference(category="ui", preference="somebody's theme")]
+
+        store = _store(
+            name="graph",
+            client=client,
+            user_id="alice",
+            include_entities=False,
+            include_facts=False,
+        )
+        await store.initialize()
+
+        assert await store.search("theme") == []
+
+    @pytest.mark.asyncio
+    async def test_an_unscoped_store_still_searches(self) -> None:
+        """Without a ``user_id`` there is no tenant to scope to, so search stands."""
+        from neo4j_agent_memory.memory.long_term import Preference
+
+        client = FakeMemoryClient()
+        client.long_term.preferences = [Preference(category="ui", preference="dark mode")]
+
+        store = _store(name="graph", client=client, include_entities=False, include_facts=False)
+        await store.initialize()
+        entries = await store.search("theme")
+
+        assert [e.content for e in entries] == ["[preference] ui: dark mode"]
+        assert client.long_term.preferences_for_calls == []
+
+
+class TestPartialBatchRetry:
+    """A batch that fails partway must not re-write the chunks that landed.
+
+    Strands rolls its high-water mark back and retries the whole batch when
+    ``add_messages`` raises, so the in-process ``_written`` set is what stops
+    an already-written chunk being written twice.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_chunk_that_landed_is_not_written_again_by_the_retry(self) -> None:
+        from strands.memory import AddMessagesContext
+
+        client = FakeMemoryClient()
+        store = _store(name="graph", client=client)
+        await store.initialize()
+
+        # 150 messages -> two chunks (_BULK_CHUNK == 100); the second fails.
+        messages = [{"role": "user", "content": [{"text": f"m{i}"}]} for i in range(150)]
+        context = AddMessagesContext(sequence_numbers=list(range(150)))
+        client.short_term.fail_bulk_from = 2
+
+        with pytest.raises(RuntimeError, match="bulk write failed"):
+            await store.add_messages(messages, context)
+
+        assert len(client.short_term.bulk_calls) == 2
+        first_chunk_texts = [m["content"] for m in client.short_term.bulk_calls[0]["messages"]]
+        assert first_chunk_texts == [f"m{i}" for i in range(100)]
+
+        # The retry: same batch, same sequence numbers, now succeeding.
+        client.short_term.fail_bulk_from = None
+        result = await store.add_messages(messages, context)
+
+        assert result == {"written": 50, "skipped": 100}
+        retried = [m["content"] for m in client.short_term.bulk_calls[2]["messages"]]
+        assert retried == [f"m{i}" for i in range(100, 150)]
+
+
 class TestWriteSinks:
     def test_declares_both_write_sinks(self) -> None:
         """Both sinks on one class: server-side extraction, `add` still available."""
@@ -1031,9 +1184,28 @@ class TestToolNamespacing:
     def test_a_name_needing_sanitising_still_yields_a_legal_prefix(self) -> None:
         store = _store(name="Team / Graph!", client=FakeMemoryClient())
 
-        names = {t.tool_name for t in store.get_tools()}
+        (name,) = {t.tool_name for t in store.get_tools()}
 
-        assert names == {"team_graph_get_entity_graph"}
+        assert name.startswith("team_graph_")
+        assert name.endswith("_get_entity_graph")
+        assert name.replace("_", "").isalnum()
+
+    def test_names_that_sanitise_alike_stay_distinct(self) -> None:
+        """Sanitisation is many-to-one; the resulting prefixes must not be.
+
+        ``ToolRegistry`` overwrites a duplicate ``@tool`` name silently, so
+        two stores whose names differ only in punctuation would clobber each
+        other's tools — the failure namespacing exists to prevent.
+        """
+        client = FakeMemoryClient()
+        alike = ["team/graph", "team graph", "Team_Graph", "team_graph"]
+
+        prefixes = [
+            {t.tool_name for t in _store(name=name, client=client).get_tools()} for name in alike
+        ]
+
+        flat = [name for names in prefixes for name in names]
+        assert len(flat) == len(set(flat))
 
 
 class TestPreferenceRoundTrip:

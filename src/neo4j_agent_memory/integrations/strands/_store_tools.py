@@ -13,6 +13,7 @@ is still using.
 
 from __future__ import annotations
 
+import hashlib
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
@@ -115,17 +116,29 @@ async def _user_preferences(
 
 
 def _tool_prefix(name: str) -> str:
-    """The store's name, reduced to something legal in a tool name.
+    """The store's name, reduced to something legal in a tool name, 1:1.
 
     Tool names are namespaced per store so they can coexist both with
     ``context_graph_tools``' identically-named tools and with a second
     store's (``dataclasses.replace(config, name="team")`` is the documented
     way to run personal / team / org stores side by side).
+
+    Sanitization alone is many-to-one — ``"team/graph"``, ``"team graph"`` and
+    ``"Team_Graph"`` all reduce to ``team_graph`` — and colliding prefixes
+    would silently overwrite each other in ``ToolRegistry``, the exact failure
+    namespacing exists to prevent. So a name that does not survive
+    sanitization unchanged carries a short digest of the original: names that
+    are already legal keep clean prefixes, and any two distinct names stay
+    distinct.
     """
     slug = "".join(char if char.isalnum() else "_" for char in name.lower()).strip("_")
     while "__" in slug:
         slug = slug.replace("__", "_")
-    return slug or "store"
+    base = slug or "store"
+    if base == name:
+        return base
+    digest = hashlib.blake2s(name.encode(), digest_size=3).hexdigest()
+    return f"{base}_{digest}"
 
 
 def build_store_tools(store: Neo4jMemoryStore) -> list[AgentTool]:
@@ -140,7 +153,6 @@ def build_store_tools(store: Neo4jMemoryStore) -> list[AgentTool]:
     """
     from strands import tool
 
-    client = store._client
     nams = store.is_nams
     prefix = _tool_prefix(store.name)
 
@@ -155,7 +167,13 @@ def build_store_tools(store: Neo4jMemoryStore) -> list[AgentTool]:
             depth: How many hops to traverse. Hosted backends traverse one hop
                 regardless.
         """
-        return await _entity_graph(client, entity_name, depth=max(1, min(depth, 3)), nams=nams)
+        # Through the store, never straight to the captured client: with
+        # injection disabled a tool call can be the store's first operation on
+        # a new event loop, and only initialize() rebinds an owned client.
+        await store.initialize()
+        return await _entity_graph(
+            store._client, entity_name, depth=max(1, min(depth, 3)), nams=nams
+        )
 
     # Annotated explicitly as AgentTool: @tool's overloads resolve this correctly
     # under mypy --strict and ty, but some IDEs' inference falls back to the
@@ -185,7 +203,8 @@ def build_store_tools(store: Neo4jMemoryStore) -> list[AgentTool]:
                 category: Optional category such as "food" or "ui".
                 limit: Maximum preferences to return.
             """
-            return await _user_preferences(client, user_id, category, limit=limit)
+            await store.initialize()
+            return await _user_preferences(store._client, user_id, category, limit=limit)
 
         get_user_preferences: AgentTool = tool(name=f"{prefix}_get_user_preferences")(
             _get_user_preferences

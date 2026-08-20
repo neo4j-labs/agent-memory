@@ -252,9 +252,13 @@ class Neo4jMemoryStore(MemoryStore):
         """
         loop = asyncio.get_running_loop()
 
-        if self._initialized:
-            if self._connected_loop is loop:
-                return
+        # Keyed on the recorded loop, not on ``_initialized``: ``aclose()``
+        # leaves a borrowed client connected on its original loop, so the guard
+        # has to survive an aclose/re-enter cycle. Were this ``if
+        # self._initialized``, that cycle would fall through to the
+        # already-connected branch, record the new loop and hand the caller the
+        # driver's opaque error instead of the named one below.
+        if self._connected_loop is not None and self._connected_loop is not loop:
             if not self._owns_client:
                 raise RuntimeError(
                     f"Neo4jMemoryStore '{self.name}': the MemoryClient passed as "
@@ -276,6 +280,8 @@ class Neo4jMemoryStore(MemoryStore):
                     error,
                 )
             await self._client.connect()
+        elif self._initialized:
+            return
         elif not self._client.is_connected:
             await self._client.connect()
 
@@ -290,6 +296,11 @@ class Neo4jMemoryStore(MemoryStore):
         ``_retrieve_entries``; a total failure here propagates so
         ``MemoryManager.search`` can log a dead store rather than see an
         empty, misleadingly-successful result.
+
+        With a ``user_id`` configured, preference recall is user-scoped (see
+        ``_preference_search``) — ``search_preferences`` has no user filter, so
+        an unscoped call here would inject another tenant's preferences into
+        this user's turn.
         """
         await self.initialize()
         limit = (options or {}).get("max_search_results")
@@ -307,6 +318,7 @@ class Neo4jMemoryStore(MemoryStore):
             include_preferences=self._include_preferences,
             include_facts=self._include_facts,
             nams=self.is_nams,
+            user_id=self.user_id,
         )
         return [MemoryEntry(content=row.content, metadata=row.metadata) for row in rows]
 
@@ -448,7 +460,13 @@ class Neo4jMemoryStore(MemoryStore):
                 extract_entities=True,
                 user_identifier=self.user_id,
             )
-        self._written.update(token for token in tokens if token is not None)
+            # Per chunk, not after the loop: Strands rolls its high-water mark
+            # back and retries the whole batch when this raises, so tokens
+            # banked only at the end would let an already-written chunk be
+            # written again by the retry.
+            self._written.update(
+                token for token in tokens[start : start + _BULK_CHUNK] if token is not None
+            )
         return {"written": len(payload), "skipped": skipped}
 
     def get_tools(self) -> list[AgentTool]:
@@ -486,7 +504,11 @@ class Neo4jMemoryStore(MemoryStore):
                     self.name,
                 )
         self._initialized = False
-        self._connected_loop = None
+        if self._owns_client:
+            self._connected_loop = None
+        # Borrowed clients keep their recorded loop: this store did not close
+        # the client, so it is still bound to that loop and re-entering the
+        # store from another one must still raise the named error.
 
     async def __aenter__(self) -> Neo4jMemoryStore:
         await self.initialize()

@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   loop changes (Strands' synchronous `Agent(...)` runs every call on a fresh
   loop); a client passed as `client=` is never closed or reconnected, and a
   loop change raises a named error instead of an opaque driver `RuntimeError`.
+  With a `user_id` set, preference recall is scoped to that user in both the
+  store and `Neo4jSessionManager` injection (`search_preferences` applies no
+  user filter, so an unscoped call could surface another tenant's
+  preferences).
   Tool names are prefixed with the store's `name` so they coexist with
   `context_graph_tools`' identically-named tools rather than silently
   replacing them in the agent's registry, and `max_search_results` caps the

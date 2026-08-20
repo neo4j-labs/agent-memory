@@ -46,7 +46,9 @@ def build_settings() -> MemorySettings:
 
 async def main() -> None:
     async with MemoryClient(build_settings()) as client:
-        await client.long_term.add_preference("ui", "Prefers dark mode")
+        # user_identifier: a store with a user_id recalls only that user's
+        # preferences, so an unscoped one would not show up below.
+        await client.long_term.add_preference("ui", "Prefers dark mode", user_identifier="alice")
         await client.long_term.add_entity("Acme Corp", "ORGANIZATION")
 
         store = Neo4jMemoryStore(

@@ -208,6 +208,9 @@ class FakeShortTerm:
         self.conversations: dict[str, Conversation] = {}
         self.add_message_calls: list[dict[str, Any]] = []
         self.bulk_calls: list[dict[str, Any]] = []
+        #: Raise from the Nth ``bulk_add_messages`` call onwards (1-based), to
+        #: exercise a batch that fails partway through its chunks.
+        self.fail_bulk_from: int | None = None
         self.deleted_message_ids: list[str] = []
         self.fail_next_add = False
         self.list_conversations_calls: list[dict[str, Any]] = []
@@ -274,6 +277,8 @@ class FakeShortTerm:
                 },
             }
         )
+        if self.fail_bulk_from is not None and len(self.bulk_calls) >= self.fail_bulk_from:
+            raise RuntimeError("bulk write failed")
         if session_id not in self.conversations:
             await self.create_conversation(session_id=session_id, user_identifier=user_identifier)
         stored = [Message(role=MessageRole(m["role"]), content=m["content"]) for m in messages]

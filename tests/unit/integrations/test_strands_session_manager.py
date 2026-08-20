@@ -823,6 +823,45 @@ class TestInitializeExtended:
             manager.close()
 
 
+class TestRetrievalInjectionTenancy:
+    """Injection must respect the manager's ``user_id``.
+
+    ``search_preferences`` has no ``:User`` filter, so a user-scoped session
+    that searches would fold another tenant's preferences into this user's
+    turn. Same defect and same fix as ``Neo4jMemoryStore.search``.
+    """
+
+    def test_a_scoped_manager_injects_only_its_own_users_preferences(self) -> None:
+        from neo4j_agent_memory.integrations.strands.session_manager import (
+            Neo4jRetrievalConfig,
+        )
+
+        manager, client = _make_manager(
+            user_id="alice",
+            retrieval_config=Neo4jRetrievalConfig(include_entities=False, include_facts=False),
+        )
+        # What an unscoped search would have surfaced.
+        client.long_term.preferences = [
+            SimpleNamespace(category="style", preference="somebody else's style")
+        ]
+        client.long_term.preferences_by_user["alice"] = [
+            SimpleNamespace(category="style", preference="concise answers")
+        ]
+        try:
+            manager.initialize(_fake_agent())
+            message = {"role": "user", "content": [{"text": "hi"}]}
+            manager._inject_context(message)
+            text = message["content"][0]["text"]
+
+            assert "[preference] style: concise answers" in text
+            assert "somebody else's style" not in text
+            assert client.long_term.preferences_for_calls == [
+                {"user_identifier": "alice", "active_only": True}
+            ]
+        finally:
+            manager.close()
+
+
 class TestRetrievalInjectionExtended:
     """Fix 4: idempotency guard fires BEFORE the retrieval call."""
 

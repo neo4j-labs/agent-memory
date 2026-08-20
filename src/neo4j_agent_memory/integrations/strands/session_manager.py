@@ -315,7 +315,13 @@ class Neo4jSessionManager(SessionManager):
             return  # no text block, or already injected (event re-fired)
         try:
             block = self._bridge.run(
-                _retrieve_context(self._client.long_term, query, cfg, nams=self._is_nams)
+                _retrieve_context(
+                    self._client.long_term,
+                    query,
+                    cfg,
+                    nams=self._is_nams,
+                    user_id=self._user_id,
+                )
             )
         except Exception as e:
             logger.warning(
