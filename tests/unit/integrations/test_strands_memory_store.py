@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 pytest.importorskip("strands", reason="strands-agents not installed")
@@ -9,30 +11,44 @@ pytest.importorskip("strands", reason="strands-agents not installed")
 from tests.unit.integrations.strands_fakes import FakeMemoryClient
 
 
+def _store(**kw: Any) -> Any:
+    """Build a Neo4jMemoryStore from loose kwargs via its real config dataclass.
+
+    Keeps the individual tests readable while still exercising the actual
+    ``Neo4jMemoryStoreConfig`` field names — ``Neo4jMemoryStoreConfig(**kw)``
+    is the real dataclass constructor, so a typo in a field name here is a
+    ``TypeError``, not a silently-ignored key.
+    """
+    from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore, Neo4jMemoryStoreConfig
+
+    return Neo4jMemoryStore(Neo4jMemoryStoreConfig(**kw))
+
+
 class TestConstruction:
     def test_requires_a_name(self) -> None:
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+        """``name`` must be non-empty; checked eagerly in
+        ``Neo4jMemoryStoreConfig.__post_init__``, before the store ever sees it."""
 
         with pytest.raises(ValueError, match="name"):
-            Neo4jMemoryStore(client=FakeMemoryClient())  # type: ignore[call-arg]
+            _store(name="", client=FakeMemoryClient())
 
     def test_requires_exactly_one_of_client_or_settings(self) -> None:
+        from pydantic import SecretStr
+
         from neo4j_agent_memory import MemorySettings
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+        from neo4j_agent_memory.config.settings import Neo4jConfig
 
         with pytest.raises(ValueError, match="exactly one"):
-            Neo4jMemoryStore(name="s")
+            _store(name="s")
         with pytest.raises(ValueError, match="exactly one"):
-            Neo4jMemoryStore(
+            _store(
                 name="s",
                 client=FakeMemoryClient(),
-                settings=MemorySettings(neo4j={"password": "p"}),
+                settings=MemorySettings(neo4j=Neo4jConfig(password=SecretStr("p"))),
             )
 
     def test_protocol_attribute_defaults(self) -> None:
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
-
-        store = Neo4jMemoryStore(name="graph", client=FakeMemoryClient())
+        store = _store(name="graph", client=FakeMemoryClient())
 
         assert store.name == "graph"
         assert store.writable is True
@@ -41,16 +57,44 @@ class TestConstruction:
         assert store.description is not None and "graph" in store.description.lower()
         assert store.graph_tools is True
 
+    def test_protocol_fields_are_all_assigned_onto_the_store(self) -> None:
+        """``MemoryStore``'s protocol requires name/description/max_search_results/
+        writable/extraction as instance attributes. A future rename of one of
+        these on ``Neo4jMemoryStoreConfig`` that forgot the matching
+        ``self.x = config.x`` line in ``__init__`` would silently drop a
+        protocol attribute — this pins all five down against the config."""
+        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore, Neo4jMemoryStoreConfig
+
+        config = Neo4jMemoryStoreConfig(
+            name="graph",
+            client=FakeMemoryClient(),
+            description="a custom description",
+            max_search_results=9,
+            writable=False,
+            extraction=True,
+        )
+        store = Neo4jMemoryStore(config)
+
+        assert store.name == config.name
+        assert store.description == config.description
+        assert store.max_search_results == config.max_search_results
+        assert store.writable == config.writable
+        assert store.extraction == config.extraction
+
     def test_settings_construction_owns_the_client(self) -> None:
         """Settings-constructed stores build and own a real MemoryClient.
 
         MemoryClient.__init__ is lazy (no connection, no embedder until
         .connect()), so this is cheap and does not touch the network.
         """
-        from neo4j_agent_memory import MemoryClient, MemorySettings
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+        from pydantic import SecretStr
 
-        store = Neo4jMemoryStore(name="graph", settings=MemorySettings(neo4j={"password": "p"}))
+        from neo4j_agent_memory import MemoryClient, MemorySettings
+        from neo4j_agent_memory.config.settings import Neo4jConfig
+
+        store = _store(
+            name="graph", settings=MemorySettings(neo4j=Neo4jConfig(password=SecretStr("p")))
+        )
 
         assert store._owns_client is True
         assert isinstance(store._client, MemoryClient)
@@ -59,10 +103,8 @@ class TestConstruction:
 class TestLifecycle:
     @pytest.mark.asyncio
     async def test_initialize_connects_an_owned_client_only(self) -> None:
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
-
         client = FakeMemoryClient()
-        store = Neo4jMemoryStore(name="graph", client=client)
+        store = _store(name="graph", client=client)
         await store.initialize()
 
         assert client.connect_calls == 1
@@ -71,10 +113,8 @@ class TestLifecycle:
 
     @pytest.mark.asyncio
     async def test_initialize_is_idempotent(self) -> None:
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
-
         client = FakeMemoryClient()
-        store = Neo4jMemoryStore(name="graph", client=client)
+        store = _store(name="graph", client=client)
         await store.initialize()
         await store.initialize()
 
@@ -85,10 +125,14 @@ class TestLifecycle:
         """Ownership must come from the constructor (settings=), not a monkey-patched flag."""
         from unittest.mock import AsyncMock
 
-        from neo4j_agent_memory import MemorySettings
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+        from pydantic import SecretStr
 
-        store = Neo4jMemoryStore(name="graph", settings=MemorySettings(neo4j={"password": "p"}))
+        from neo4j_agent_memory import MemorySettings
+        from neo4j_agent_memory.config.settings import Neo4jConfig
+
+        store = _store(
+            name="graph", settings=MemorySettings(neo4j=Neo4jConfig(password=SecretStr("p")))
+        )
         store._client.connect = AsyncMock()  # type: ignore[method-assign]
         store._client.close = AsyncMock()  # type: ignore[method-assign]
 
@@ -100,33 +144,53 @@ class TestLifecycle:
 
 class TestForNams:
     def test_builds_nams_settings_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+        from neo4j_agent_memory.integrations.strands import (
+            Neo4jMemoryStore,
+            Neo4jMemoryStoreConfig,
+        )
 
         monkeypatch.setenv("MEMORY_API_KEY", "test-key")
 
-        store = Neo4jMemoryStore.for_nams(name="graph")
+        store = Neo4jMemoryStore.for_nams(Neo4jMemoryStoreConfig(name="graph"))
 
         settings = store._client._settings
         assert settings.backend == "nams"
         assert settings.nams.validate_on_connect is False
 
     def test_raises_without_api_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
+        from neo4j_agent_memory.integrations.strands import (
+            Neo4jMemoryStore,
+            Neo4jMemoryStoreConfig,
+        )
 
         monkeypatch.delenv("MEMORY_API_KEY", raising=False)
 
         with pytest.raises(ValueError, match="api_key is required"):
-            Neo4jMemoryStore.for_nams(name="graph")
+            Neo4jMemoryStore.for_nams(Neo4jMemoryStoreConfig(name="graph"))
+
+    def test_does_not_mutate_the_callers_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``for_nams`` uses ``dataclasses.replace`` to inject ``settings`` into
+        a copy, not the caller's own config instance."""
+        from neo4j_agent_memory.integrations.strands import (
+            Neo4jMemoryStore,
+            Neo4jMemoryStoreConfig,
+        )
+
+        monkeypatch.setenv("MEMORY_API_KEY", "test-key")
+        original_config = Neo4jMemoryStoreConfig(name="graph")
+
+        Neo4jMemoryStore.for_nams(original_config)
+
+        assert original_config.settings is None
 
 
 class TestSinkResolution:
     @pytest.mark.asyncio
     async def test_creates_a_deterministically_named_sink(self) -> None:
         """Bolt keys conversations by session_id; the deterministic name is the whole contract."""
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
 
         client = FakeMemoryClient()
-        store = Neo4jMemoryStore(name="graph", client=client, user_id="alice")
+        store = _store(name="graph", client=client, user_id="alice")
         await store.initialize()
         key = await store._resolve_sink()
 
@@ -137,14 +201,13 @@ class TestSinkResolution:
     @pytest.mark.asyncio
     async def test_reuses_an_existing_sink_across_instances(self) -> None:
         """Bolt needs no round-trip for reuse: same name, same key, every time."""
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
 
         client = FakeMemoryClient()
-        first = Neo4jMemoryStore(name="graph", client=client)
+        first = _store(name="graph", client=client)
         await first.initialize()
         key_one = await first._resolve_sink()
 
-        second = Neo4jMemoryStore(name="graph", client=client)
+        second = _store(name="graph", client=client)
         await second.initialize()
         key_two = await second._resolve_sink()
 
@@ -155,14 +218,13 @@ class TestSinkResolution:
     @pytest.mark.asyncio
     async def test_reuses_the_nams_server_minted_id_by_metadata(self) -> None:
         """NAMS mints conversation ids, so reuse matches on metadata, not id."""
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
 
         client = FakeMemoryClient(nams_mode=True)
-        first = Neo4jMemoryStore(name="graph", client=client)
+        first = _store(name="graph", client=client)
         await first.initialize()
         key_one = await first._resolve_sink()
 
-        second = Neo4jMemoryStore(name="graph", client=client)
+        second = _store(name="graph", client=client)
         await second.initialize()
         key_two = await second._resolve_sink()
 
@@ -175,10 +237,9 @@ class TestSinkResolution:
     @pytest.mark.asyncio
     async def test_nams_scans_conversations_once(self) -> None:
         """Symmetric to the bolt no-scan case: NAMS needs exactly one list round-trip."""
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
 
         client = FakeMemoryClient(nams_mode=True)
-        store = Neo4jMemoryStore(name="graph", client=client)
+        store = _store(name="graph", client=client)
         await store.initialize()
         await store._resolve_sink()
 
@@ -186,10 +247,8 @@ class TestSinkResolution:
 
     @pytest.mark.asyncio
     async def test_explicit_conversation_id_is_used_verbatim(self) -> None:
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
-
         client = FakeMemoryClient()
-        store = Neo4jMemoryStore(name="graph", client=client, conversation_id="chat-42")
+        store = _store(name="graph", client=client, conversation_id="chat-42")
         await store.initialize()
 
         assert await store._resolve_sink() == "chat-42"
@@ -197,11 +256,9 @@ class TestSinkResolution:
 
     @pytest.mark.asyncio
     async def test_two_stores_with_different_names_get_different_sinks(self) -> None:
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
-
         client = FakeMemoryClient()
-        personal = Neo4jMemoryStore(name="personal", client=client)
-        team = Neo4jMemoryStore(name="team", client=client)
+        personal = _store(name="personal", client=client)
+        team = _store(name="team", client=client)
         await personal.initialize()
         await team.initialize()
 
@@ -210,10 +267,9 @@ class TestSinkResolution:
     @pytest.mark.asyncio
     async def test_bolt_does_not_scan_conversations(self) -> None:
         """On bolt the deterministic name is the key; a list scan would be wasted work."""
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
 
         client = FakeMemoryClient()
-        store = Neo4jMemoryStore(name="graph", client=client)
+        store = _store(name="graph", client=client)
         await store.initialize()
         await store._resolve_sink()
 
@@ -223,7 +279,6 @@ class TestSinkResolution:
 class TestSearch:
     @pytest.mark.asyncio
     async def test_returns_memory_entries_with_metadata(self) -> None:
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
         from neo4j_agent_memory.memory.long_term import Entity, Preference
 
         client = FakeMemoryClient()
@@ -232,7 +287,7 @@ class TestSearch:
         client.long_term.entities = [entity]
         client.long_term.preferences = [Preference(category="ui", preference="dark mode")]
 
-        store = Neo4jMemoryStore(name="graph", client=client)
+        store = _store(name="graph", client=client)
         await store.initialize()
         entries = await store.search("acme")
 
@@ -246,12 +301,8 @@ class TestSearch:
 
     @pytest.mark.asyncio
     async def test_limit_precedence_call_then_store_then_default(self) -> None:
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
-
         client = FakeMemoryClient()
-        store = Neo4jMemoryStore(
-            name="graph", client=client, include_preferences=False, include_facts=False
-        )
+        store = _store(name="graph", client=client, include_preferences=False, include_facts=False)
         await store.initialize()
 
         await store.search("q")
@@ -271,7 +322,6 @@ class TestSearch:
     @pytest.mark.asyncio
     async def test_kind_flags_are_honoured(self) -> None:
         """All three kinds have data; only the enabled one should ever be searched."""
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
         from neo4j_agent_memory.memory.long_term import Entity, Fact, Preference
 
         client = FakeMemoryClient()
@@ -279,7 +329,7 @@ class TestSearch:
         client.long_term.preferences = [Preference(category="ui", preference="dark mode")]
         client.long_term.facts = [Fact(subject="Acme", predicate="located_in", object="NYC")]
 
-        store = Neo4jMemoryStore(
+        store = _store(
             name="graph",
             client=client,
             include_entities=False,
@@ -299,14 +349,13 @@ class TestSearch:
 
     @pytest.mark.asyncio
     async def test_nams_returns_entities_only(self) -> None:
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
         from neo4j_agent_memory.memory.long_term import Entity, Preference
 
         client = FakeMemoryClient(nams_mode=True)
         client.long_term.entities = [Entity(name="Acme Corp", type="ORGANIZATION")]
         client.long_term.preferences = [Preference(category="ui", preference="dark mode")]
 
-        store = Neo4jMemoryStore(name="graph", client=client)
+        store = _store(name="graph", client=client)
         await store.initialize()
         entries = await store.search("q")
 
@@ -324,10 +373,9 @@ class TestSearch:
         genuinely calls list_conversations (and possibly create_conversation),
         so this is the only client mode that can catch that regression.
         """
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
 
         client = FakeMemoryClient(nams_mode=True)
-        store = Neo4jMemoryStore(name="graph", client=client)
+        store = _store(name="graph", client=client)
         await store.initialize()
         await store.search("q")
 
@@ -337,10 +385,9 @@ class TestSearch:
     @pytest.mark.asyncio
     async def test_search_initializes_without_a_prior_initialize_call(self) -> None:
         """Standalone use (no MemoryManager.init_agent) must still connect."""
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
 
         client = FakeMemoryClient()
-        store = Neo4jMemoryStore(name="graph", client=client)
+        store = _store(name="graph", client=client)
         await store.search("q")
 
         assert client.connect_calls == 1
@@ -349,10 +396,8 @@ class TestSearch:
 class TestAdd:
     @pytest.mark.asyncio
     async def test_default_writes_a_message_into_the_sink_with_extraction(self) -> None:
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
-
         client = FakeMemoryClient()
-        store = Neo4jMemoryStore(name="graph", client=client)
+        store = _store(name="graph", client=client)
         await store.initialize()
         result = await store.add("The user prefers dark mode")
 
@@ -364,10 +409,8 @@ class TestAdd:
 
     @pytest.mark.asyncio
     async def test_kind_preference_routes_to_add_preference(self) -> None:
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
-
         client = FakeMemoryClient()
-        store = Neo4jMemoryStore(name="graph", client=client)
+        store = _store(name="graph", client=client)
         await store.initialize()
         result = await store.add("dark mode", {"kind": "preference", "category": "ui"})
 
@@ -377,10 +420,8 @@ class TestAdd:
 
     @pytest.mark.asyncio
     async def test_kind_preference_without_category_defaults_to_memory(self) -> None:
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
-
         client = FakeMemoryClient()
-        store = Neo4jMemoryStore(name="graph", client=client)
+        store = _store(name="graph", client=client)
         await store.initialize()
         await store.add("dark mode", {"kind": "preference"})
 
@@ -388,10 +429,8 @@ class TestAdd:
 
     @pytest.mark.asyncio
     async def test_kind_fact_requires_a_triple(self) -> None:
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
-
         client = FakeMemoryClient()
-        store = Neo4jMemoryStore(name="graph", client=client)
+        store = _store(name="graph", client=client)
         await store.initialize()
 
         await store.add(
@@ -405,10 +444,8 @@ class TestAdd:
 
     @pytest.mark.asyncio
     async def test_kind_entity_routes_to_add_entity(self) -> None:
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
-
         client = FakeMemoryClient()
-        store = Neo4jMemoryStore(name="graph", client=client)
+        store = _store(name="graph", client=client)
         await store.initialize()
         await store.add("Acme Corp", {"kind": "entity", "type": "ORGANIZATION"})
 
@@ -417,10 +454,8 @@ class TestAdd:
 
     @pytest.mark.asyncio
     async def test_kind_entity_defaults_name_and_type(self) -> None:
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
-
         client = FakeMemoryClient()
-        store = Neo4jMemoryStore(name="graph", client=client)
+        store = _store(name="graph", client=client)
         await store.initialize()
         await store.add("Acme Corp", {"kind": "entity"})
 
@@ -433,10 +468,9 @@ class TestAdd:
         Without the isinstance narrowing in `_add_typed`, this raises trying
         to subscript a bare Entity as a tuple.
         """
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
 
         client = FakeMemoryClient(nams_mode=True)
-        store = Neo4jMemoryStore(name="graph", client=client)
+        store = _store(name="graph", client=client)
         await store.initialize()
         result = await store.add("Acme Corp", {"kind": "entity", "type": "ORGANIZATION"})
 
@@ -446,10 +480,8 @@ class TestAdd:
 
     @pytest.mark.asyncio
     async def test_unsupported_kind_on_nams_falls_back_to_the_sink(self, caplog) -> None:
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
-
         client = FakeMemoryClient(nams_mode=True)
-        store = Neo4jMemoryStore(name="graph", client=client)
+        store = _store(name="graph", client=client)
         await store.initialize()
         result = await store.add("dark mode", {"kind": "preference", "category": "ui"})
 
@@ -459,10 +491,8 @@ class TestAdd:
 
     @pytest.mark.asyncio
     async def test_unsupported_kind_warning_is_logged_once_per_store(self, caplog) -> None:
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
-
         client = FakeMemoryClient(nams_mode=True)
-        store = Neo4jMemoryStore(name="graph", client=client)
+        store = _store(name="graph", client=client)
         await store.initialize()
 
         with caplog.at_level("WARNING"):
@@ -475,9 +505,7 @@ class TestAdd:
 
     @pytest.mark.asyncio
     async def test_rejects_writes_when_not_writable(self) -> None:
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
-
-        store = Neo4jMemoryStore(name="graph", client=FakeMemoryClient(), writable=False)
+        store = _store(name="graph", client=FakeMemoryClient(), writable=False)
         await store.initialize()
 
         with pytest.raises(ValueError, match="not writable"):
@@ -485,9 +513,7 @@ class TestAdd:
 
     @pytest.mark.asyncio
     async def test_rejects_empty_content(self) -> None:
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
-
-        store = Neo4jMemoryStore(name="graph", client=FakeMemoryClient())
+        store = _store(name="graph", client=FakeMemoryClient())
         await store.initialize()
 
         with pytest.raises(ValueError, match="empty"):
@@ -499,10 +525,8 @@ class TestAddMessages:
     async def test_writes_the_batch_to_the_sink_with_extraction(self) -> None:
         from strands.memory import AddMessagesContext
 
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
-
         client = FakeMemoryClient()
-        store = Neo4jMemoryStore(name="graph", client=client)
+        store = _store(name="graph", client=client)
         await store.initialize()
 
         result = await store.add_messages(
@@ -524,10 +548,8 @@ class TestAddMessages:
         """Extraction writes are at-least-once; the same sequence numbers repeat."""
         from strands.memory import AddMessagesContext
 
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
-
         client = FakeMemoryClient()
-        store = Neo4jMemoryStore(name="graph", client=client)
+        store = _store(name="graph", client=client)
         await store.initialize()
         batch = [{"role": "user", "content": [{"text": "ok"}]}]
 
@@ -543,10 +565,8 @@ class TestAddMessages:
         """Dedupe keys on sequence number, not content — two 'ok's are two messages."""
         from strands.memory import AddMessagesContext
 
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
-
         client = FakeMemoryClient()
-        store = Neo4jMemoryStore(name="graph", client=client)
+        store = _store(name="graph", client=client)
         await store.initialize()
 
         result = await store.add_messages(
@@ -561,10 +581,8 @@ class TestAddMessages:
 
     @pytest.mark.asyncio
     async def test_without_sequence_numbers_everything_is_written(self) -> None:
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
-
         client = FakeMemoryClient()
-        store = Neo4jMemoryStore(name="graph", client=client)
+        store = _store(name="graph", client=client)
         await store.initialize()
         batch = [{"role": "user", "content": [{"text": "ok"}]}]
 
@@ -573,10 +591,8 @@ class TestAddMessages:
 
     @pytest.mark.asyncio
     async def test_messages_with_no_text_blocks_are_dropped(self) -> None:
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
-
         client = FakeMemoryClient()
-        store = Neo4jMemoryStore(name="graph", client=client)
+        store = _store(name="graph", client=client)
         await store.initialize()
 
         result = await store.add_messages(
@@ -589,10 +605,8 @@ class TestAddMessages:
 
     @pytest.mark.asyncio
     async def test_batches_larger_than_100_are_chunked(self) -> None:
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
-
         client = FakeMemoryClient()
-        store = Neo4jMemoryStore(name="graph", client=client)
+        store = _store(name="graph", client=client)
         await store.initialize()
 
         messages = [{"role": "user", "content": [{"text": f"m{i}"}]} for i in range(250)]
@@ -603,13 +617,46 @@ class TestAddMessages:
 
     @pytest.mark.asyncio
     async def test_rejects_writes_when_not_writable(self) -> None:
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
-
-        store = Neo4jMemoryStore(name="graph", client=FakeMemoryClient(), writable=False)
+        store = _store(name="graph", client=FakeMemoryClient(), writable=False)
         await store.initialize()
 
         with pytest.raises(ValueError, match="not writable"):
             await store.add_messages([{"role": "user", "content": [{"text": "x"}]}], None)
+
+    @pytest.mark.asyncio
+    async def test_bulk_kwargs_bind_against_the_real_bolt_signature(self) -> None:
+        """Regression guard for the ``user_identifier`` crash-on-bolt bug.
+
+        The bug: the store passed ``user_identifier`` to ``bulk_add_messages``
+        while the real ``ShortTermMemory.add_messages_batch`` had no such
+        parameter and no ``**kwargs`` catch-all, so bolt raised
+        ``TypeError: got an unexpected keyword argument 'user_identifier'``.
+        Fixed by adding the parameter to ``add_messages_batch`` itself (it now
+        enforces multi-tenancy and links the conversation, matching
+        ``add_message``), so the store keeps passing it.
+
+        ``FakeShortTerm.bulk_add_messages`` now mirrors the real, explicit
+        parameter list (no ``**kwargs`` catch-all either), so it can no longer
+        swallow a keyword the real backend would reject — this suite would
+        have failed with the bug in place, and stays a live tripwire against
+        any future kwarg the store sends that the real signature doesn't
+        accept. Binding against the actual method's ``inspect.signature`` is
+        the belt-and-suspenders check on top of that fidelity fix.
+        """
+        import inspect
+
+        from neo4j_agent_memory.memory.short_term import ShortTermMemory
+
+        client = FakeMemoryClient()
+        store = _store(name="graph", client=client, user_id="alice")
+        await store.initialize()
+        await store.add_messages([{"role": "user", "content": [{"text": "ok"}]}], None)
+
+        call = client.short_term.bulk_calls[-1]
+        real_signature = inspect.signature(ShortTermMemory.add_messages_batch)
+        # `self` is positional-only for bind() purposes here; its value is
+        # never inspected, only its presence in the parameter list matters.
+        real_signature.bind(None, call["session_id"], call["messages"], **call["kwargs"])
 
 
 class TestWriteSinks:
@@ -617,9 +664,7 @@ class TestWriteSinks:
         """Both sinks on one class: server-side extraction, `add` still available."""
         from strands.memory.types import _has_method, _has_write_sink
 
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
-
-        store = Neo4jMemoryStore(name="graph", client=FakeMemoryClient())
+        store = _store(name="graph", client=FakeMemoryClient())
 
         assert _has_method(store, "add") is True
         assert _has_method(store, "add_messages") is True
@@ -635,9 +680,7 @@ class TestWriteSinks:
             _resolve_extraction_config,
         )
 
-        from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore
-
-        store = Neo4jMemoryStore(name="graph", client=FakeMemoryClient(), extraction=True)
+        store = _store(name="graph", client=FakeMemoryClient(), extraction=True)
         resolved = _resolve_extraction_config(store.extraction, store)
 
         assert resolved is not None

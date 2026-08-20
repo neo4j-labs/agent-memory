@@ -9,16 +9,14 @@ from __future__ import annotations
 
 import logging
 import uuid
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
-
-from typing_extensions import Unpack
 
 try:
     from strands.memory import (
         AddMessagesContext,
         MemoryEntry,
         MemoryStore,
-        MemoryStoreConfig,
         SearchOptions,
     )
 except ImportError as import_error:  # pragma: no cover - exercised via package __init__
@@ -34,6 +32,7 @@ from neo4j_agent_memory.integrations.strands._retrieval import _retrieve_entries
 if TYPE_CHECKING:
     from types import TracebackType
 
+    from strands.memory import ExtractionConfig
     from strands.types.content import Message as StrandsMessage
 
     from neo4j_agent_memory import MemoryClient, MemorySettings
@@ -54,85 +53,118 @@ _BULK_CHUNK = 100
 __all__ = ["Neo4jMemoryStore", "Neo4jMemoryStoreConfig"]
 
 
-class Neo4jMemoryStoreConfig(MemoryStoreConfig, total=False):
+@dataclass
+class Neo4jMemoryStoreConfig:
     """Configuration for :class:`Neo4jMemoryStore`.
 
-    Extends Strands' ``MemoryStoreConfig`` (``name``, ``description``,
-    ``max_search_results``, ``writable``, ``extraction``) with the Neo4j
-    connection, scoping, and search knobs.
+    A plain dataclass, not a ``TypedDict``: every field is a checked
+    attribute (``config.user_id``, never ``config.get("user_id")``), so a
+    typo is a ``mypy --strict`` error rather than a silently-``None`` read.
+    Reuse one config across several stores — personal / team / org — with
+    ``dataclasses.replace(config, name="team")``.
+
+    ``name``, ``description``, ``max_search_results``, ``writable`` and
+    ``extraction`` are the fields ``MemoryStore``'s protocol requires the
+    store to expose as instance attributes; the rest are Neo4j connection,
+    scoping, and search knobs.
     """
 
-    client: MemoryClient
-    settings: MemorySettings
-    conversation_id: str
-    user_id: str
-    include_entities: bool
-    include_preferences: bool
-    include_facts: bool
-    min_score: float
-    graph_tools: bool
+    name: str
+    client: MemoryClient | None = None
+    settings: MemorySettings | None = None
+    description: str | None = None
+    max_search_results: int | None = None
+    writable: bool = True
+    extraction: ExtractionConfig | bool = False
+    conversation_id: str | None = None
+    user_id: str | None = None
+    include_entities: bool = True
+    include_preferences: bool = True
+    include_facts: bool = True
+    min_score: float = 0.2
+    graph_tools: bool = True
 
-
-class Neo4jMemoryStore(MemoryStore):
-    """Long-term memory recall and ingestion over a Neo4j context graph."""
-
-    def __init__(self, **store_config: Unpack[Neo4jMemoryStoreConfig]) -> None:
-        name = store_config.get("name")
-        if not name:
+    def __post_init__(self) -> None:
+        if not self.name:
             raise ValueError("Neo4jMemoryStore: 'name' is required and must be non-empty")
-
-        client = store_config.get("client")
-        settings = store_config.get("settings")
-        if (client is None) == (settings is None):
+        # Only the unambiguous mistake (both given) is checkable here. A
+        # config en route to `for_nams` legitimately has neither set yet —
+        # `for_nams` completes it with `settings` before construction — so
+        # "neither given" is checked in `Neo4jMemoryStore.__init__` instead,
+        # once we know no such completion step is coming.
+        if self.client is not None and self.settings is not None:
             raise ValueError(
                 "Neo4jMemoryStore: pass exactly one of 'client' (borrowed, left open) "
                 "or 'settings' (a client is constructed and owned by the store)"
             )
 
-        self.name = name
-        self.description = store_config.get(
-            "description", f"Neo4j context graph '{name}': entities, preferences and facts."
+
+class Neo4jMemoryStore(MemoryStore):
+    """Long-term memory recall and ingestion over a Neo4j context graph.
+
+    Example:
+        store = Neo4jMemoryStore(
+            Neo4jMemoryStoreConfig(
+                name="graph",
+                client=client,  # or settings=MemorySettings(...)
+                user_id="alice",
+            )
         )
-        self.max_search_results = store_config.get("max_search_results")
-        self.writable = store_config.get("writable", True)
-        self.extraction = store_config.get("extraction", False)
+    """
 
-        self.user_id = store_config.get("user_id")
-        self.graph_tools = store_config.get("graph_tools", True)
-        self._include_entities = store_config.get("include_entities", True)
-        self._include_preferences = store_config.get("include_preferences", True)
-        self._include_facts = store_config.get("include_facts", True)
-        self._min_score = store_config.get("min_score", 0.2)
+    def __init__(self, config: Neo4jMemoryStoreConfig) -> None:
+        if config.client is None and config.settings is None:
+            raise ValueError(
+                "Neo4jMemoryStore: pass exactly one of 'client' (borrowed, left open) "
+                "or 'settings' (a client is constructed and owned by the store)"
+            )
 
-        self._conversation_id = store_config.get("conversation_id")
-        self._sink_key: str | None = self._conversation_id
-        self._owns_client = client is None
+        # The five attributes MemoryStore's protocol requires the store to expose.
+        self.name = config.name
+        self.description = config.description or (
+            f"Neo4j context graph '{config.name}': entities, preferences and facts."
+        )
+        self.max_search_results = config.max_search_results
+        self.writable = config.writable
+        self.extraction = config.extraction
+
+        self.user_id = config.user_id
+        self.graph_tools = config.graph_tools
+        self._include_entities = config.include_entities
+        self._include_preferences = config.include_preferences
+        self._include_facts = config.include_facts
+        self._min_score = config.min_score
+
+        self._conversation_id = config.conversation_id
+        self._sink_key: str | None = config.conversation_id
+        self._owns_client = config.client is None
         self._run_id = uuid.uuid4().hex
         self._written: set[tuple[str, int]] = set()
         self._initialized = False
         self._warned_unsupported_kinds: set[str] = set()
 
-        if client is not None:
-            self._client: MemoryClient = client
+        if config.client is not None:
+            self._client: MemoryClient = config.client
         else:
             from neo4j_agent_memory import MemoryClient as _MemoryClient
 
-            assert settings is not None
-            self._client = _MemoryClient(settings)
+            assert config.settings is not None
+            self._client = _MemoryClient(config.settings)
 
     @classmethod
     def for_nams(
         cls,
+        config: Neo4jMemoryStoreConfig,
         *,
         endpoint: str | None = None,
         api_key: str | None = None,
         transport_mode: TransportMode = "auto",
-        **store_config: Unpack[Neo4jMemoryStoreConfig],
     ) -> Neo4jMemoryStore:
         """Construct a store against hosted NAMS.
 
         Reads ``MEMORY_API_KEY`` (and optionally ``MEMORY_ENDPOINT``) from the
-        environment when not passed explicitly.
+        environment when not passed explicitly. ``config`` is not mutated:
+        ``dataclasses.replace`` returns a copy with ``settings`` injected.
         """
         from neo4j_agent_memory.integrations.strands.config import (
             build_nams_settings,
@@ -140,12 +172,12 @@ class Neo4jMemoryStore(MemoryStore):
         )
 
         endpoint, api_key = resolve_nams_connection(endpoint, api_key)
-        store_config["settings"] = build_nams_settings(endpoint, api_key, transport_mode)
-        return cls(**store_config)
+        merged = replace(config, settings=build_nams_settings(endpoint, api_key, transport_mode))
+        return cls(merged)
 
     @property
     def is_nams(self) -> bool:
-        return bool(getattr(self._client, "is_nams", False))
+        return self._client.is_nams
 
     @property
     def _sink_name(self) -> str:
@@ -157,21 +189,20 @@ class Neo4jMemoryStore(MemoryStore):
 
         An explicit ``conversation_id`` is used verbatim. Otherwise: bolt keys
         conversations by ``session_id`` and ``add_message``/``add_messages_batch``
-        both auto-create the sink via ``_ensure_conversation`` on first write, so
-        the deterministic sink name *is* the whole contract — no backend call is
-        made here, and none is needed. Bolt's ``CREATE_CONVERSATION`` query also
-        has no metadata property, so tagging one is not possible even if we
-        called ``create_conversation`` eagerly. NAMS mints its own conversation
-        ids, so metadata is the only portable handle there — list and match
-        ``_STORE_KEY`` metadata, else create. Same split as
-        ``Neo4jSessionManager._aresolve_conversation``.
+        both auto-create the sink (and tenant-link it via ``user_identifier``)
+        via ``_ensure_conversation`` on first write, so the deterministic sink
+        name *is* the whole contract — no backend call is made here, and none
+        is needed. NAMS mints its own conversation ids, so metadata is the
+        only portable handle there — list and match ``_STORE_KEY`` metadata,
+        else create. Same split as ``Neo4jSessionManager._aresolve_conversation``.
         """
         if self._sink_key is not None:
             return self._sink_key
 
         if not self.is_nams:
-            self._sink_key = self._sink_name
-            return self._sink_key
+            sink_key = self._sink_name
+            self._sink_key = sink_key
+            return sink_key
 
         short_term = self._client.short_term
         conversations = await short_term.list_conversations(
@@ -179,22 +210,24 @@ class Neo4jMemoryStore(MemoryStore):
         )
         for conversation in conversations:
             if (conversation.metadata or {}).get(_STORE_KEY) == self._sink_name:
-                self._sink_key = str(conversation.id)
-                return self._sink_key
+                sink_key = str(conversation.id)
+                self._sink_key = sink_key
+                return sink_key
 
         created = await short_term.create_conversation(
             session_id=self._sink_name,
             metadata={_STORE_KEY: self._sink_name, "session_type": "MEMORY_STORE"},
             user_identifier=self.user_id,
         )
-        self._sink_key = str(created.id)
-        return self._sink_key
+        sink_key = str(created.id)
+        self._sink_key = sink_key
+        return sink_key
 
     async def initialize(self) -> None:
         """Connect the client if not already connected. Idempotent."""
         if self._initialized:
             return
-        if not getattr(self._client, "is_connected", False):
+        if not self._client.is_connected:
             await self._client.connect()
         self._initialized = True
 
@@ -273,11 +306,9 @@ class Neo4jMemoryStore(MemoryStore):
             preference = await long_term.add_preference(meta.get("category", "memory"), content)
             return {"kind": "preference", "id": str(preference.id)}
         if kind == "fact":
-            subject, predicate, obj = (
-                meta.get("subject"),
-                meta.get("predicate"),
-                meta.get("object"),
-            )
+            subject = meta.get("subject")
+            predicate = meta.get("predicate")
+            obj = meta.get("object")
             if not (subject and predicate and obj):
                 raise ValueError(
                     f"Neo4jMemoryStore '{self.name}': kind='fact' requires "

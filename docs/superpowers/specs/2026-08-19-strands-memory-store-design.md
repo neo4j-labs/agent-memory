@@ -73,22 +73,55 @@ gains a `MemoryEntry`-shaped sibling to `_retrieve_context`; `_messages.py` is r
 unchanged.
 
 Shape follows the vended stores (`strands.vended_memory_stores.bedrock_knowledge_base`,
-`test_memory_store`): subclass the Protocol, config as a `TypedDict`.
+`test_memory_store`) for subclassing the Protocol, but config is a plain
+`@dataclass`, not a `TypedDict`/`Unpack`: `MemoryStoreConfig` is never received
+by any Strands API (`MemoryManager.__init__` takes `stores: list[MemoryStore]`,
+i.e. instances) — the real contract, per `strands.memory.types`, is "a store
+exposes the `MemoryStoreConfig` fields as attributes." Inheriting the
+`TypedDict` bought nothing at runtime or at any boundary, while forcing
+unchecked `config.get(...)` reads internally (`total=False` rules out
+`config["..."]`). A dataclass gives `mypy --strict`-checked attribute access
+throughout, and `dataclasses.replace(config, name="team")` reuses one config
+across several stores (personal / team / org).
 
 ```python
+@dataclass
+class Neo4jMemoryStoreConfig:
+    name: str
+    client: MemoryClient | None = None
+    settings: MemorySettings | None = None
+    description: str | None = None
+    max_search_results: int | None = None
+    writable: bool = True
+    extraction: ExtractionConfig | bool = False
+    conversation_id: str | None = None
+    user_id: str | None = None
+    include_entities: bool = True
+    include_preferences: bool = True
+    include_facts: bool = True
+    min_score: float = 0.2
+    graph_tools: bool = True
+
+    def __post_init__(self) -> None: ...  # non-empty name; not both client and settings
+
+
 class Neo4jMemoryStore(MemoryStore):
-    def __init__(self, **store_config: Unpack[Neo4jMemoryStoreConfig]) -> None: ...
+    def __init__(self, config: Neo4jMemoryStoreConfig) -> None: ...  # assigns the five protocol fields onto self
 
     @classmethod
-    def for_nams(cls, **store_config: Unpack[Neo4jMemoryStoreConfig]) -> Neo4jMemoryStore: ...
+    def for_nams(cls, config: Neo4jMemoryStoreConfig, *, endpoint: str | None = None, api_key: str | None = None, transport_mode: TransportMode = "auto") -> Neo4jMemoryStore: ...
 ```
 
 `for_nams` mirrors `Neo4jSessionManager.for_nams`, reading `MEMORY_API_KEY` /
-`MEMORY_ENDPOINT` from the environment.
+`MEMORY_ENDPOINT` from the environment; it does not mutate the caller's
+`config` — `dataclasses.replace(config, settings=build_nams_settings(...))`
+returns a copy with `settings` injected and constructs from that.
 
 ### Config
 
-`Neo4jMemoryStoreConfig` extends `MemoryStoreConfig` with:
+`Neo4jMemoryStoreConfig`'s fields, beyond `name`/`description`/
+`max_search_results`/`writable`/`extraction` (the ones `MemoryStore`'s
+protocol requires as store attributes):
 
 | Field | Default | Purpose |
 |---|---|---|

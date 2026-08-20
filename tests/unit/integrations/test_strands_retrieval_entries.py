@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, cast
+
 import pytest
 
 pytest.importorskip("strands", reason="strands-agents not installed")
 
 from neo4j_agent_memory.memory.long_term import Entity, Fact, Preference
+
+if TYPE_CHECKING:
+    from neo4j_agent_memory.core.protocols import LongTermProtocol
 
 
 def _entity() -> Entity:
@@ -39,7 +44,7 @@ class TestRetrieveEntries:
         long_term.facts = [_fact()]
 
         rows = await _retrieve_entries(
-            long_term,
+            cast("LongTermProtocol", long_term),  # fake implements only the searched subset
             "acme",
             limit=10,
             min_score=0.2,
@@ -69,8 +74,13 @@ class TestRetrieveEntries:
         long_term.preferences = [Preference(category="ui", preference="dark mode")]
 
         rows = await _retrieve_entries(
-            long_term, "q", limit=10, min_score=0.2,
-            include_entities=True, include_preferences=True, include_facts=True,
+            cast("LongTermProtocol", long_term),  # fake implements only the searched subset
+            "q",
+            limit=10,
+            min_score=0.2,
+            include_entities=True,
+            include_preferences=True,
+            include_facts=True,
             nams=True,
         )
 
@@ -87,8 +97,13 @@ class TestRetrieveEntries:
         long_term.fail_preferences = True
 
         rows = await _retrieve_entries(
-            long_term, "q", limit=10, min_score=0.2,
-            include_entities=True, include_preferences=True, include_facts=False,
+            cast("LongTermProtocol", long_term),  # fake implements only the searched subset
+            "q",
+            limit=10,
+            min_score=0.2,
+            include_entities=True,
+            include_preferences=True,
+            include_facts=False,
             nams=False,
         )
 
@@ -103,11 +118,18 @@ class TestRetrieveEntries:
         long_term = FakeLongTerm()
         long_term.entities = [Entity(name="Acme Corp", type="ORGANIZATION")]  # no similarity
         long_term.preferences = [Preference(category="ui", preference="dark mode")]  # no similarity
-        long_term.facts = [Fact(subject="Ada", predicate="works_at", object="Acme")]  # no similarity
+        long_term.facts = [
+            Fact(subject="Ada", predicate="works_at", object="Acme")
+        ]  # no similarity
 
         rows = await _retrieve_entries(
-            long_term, "q", limit=10, min_score=0.2,
-            include_entities=True, include_preferences=True, include_facts=True,
+            cast("LongTermProtocol", long_term),  # fake implements only the searched subset
+            "q",
+            limit=10,
+            min_score=0.2,
+            include_entities=True,
+            include_preferences=True,
+            include_facts=True,
             nams=False,
         )
 
