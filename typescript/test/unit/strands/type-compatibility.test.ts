@@ -45,14 +45,13 @@ describe("Strands type compatibility", () => {
   });
 
   it("Neo4jMemoryStore satisfies MemoryStore", () => {
-    // Annotated as Neo4jMemoryStore, not MemoryStore: `search` lands in a
-    // later task. Switch this to `MemoryStore` once it does.
-    const store: Neo4jMemoryStore = new Neo4jMemoryStore({
+    const store: MemoryStore = new Neo4jMemoryStore({
       name: "graph",
       clientOptions: { apiKey: "k" },
     });
     expect(store.name).toBe("graph");
     expect(store.writable).toBe(true);
     expect(typeof store.initialize).toBe("function");
+    expect(typeof store.search).toBe("function");
   });
 });

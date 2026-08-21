@@ -288,3 +288,120 @@ describe("Neo4jMemoryStore sink resolution", () => {
     expect(calls.created).toHaveLength(2);
   });
 });
+
+describe("Neo4jMemoryStore.search", () => {
+  it("returns memory entries with metadata", async () => {
+    const { store } = makeStore();
+    const entries = await store.search("acme");
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!.content).toBe("[entity] Acme Corp (ORGANIZATION)");
+    expect(entries[0]!.metadata).toEqual({
+      kind: "entity",
+      id: "e1",
+      type: "ORGANIZATION",
+    });
+  });
+
+  it("prefers the canonical name and appends a description", async () => {
+    const { store } = makeStore({
+      clientOverrides: {
+        longTerm: {
+          async searchEntities() {
+            return [
+              {
+                id: "e2",
+                name: "acme",
+                canonicalName: "Acme Corporation",
+                type: "ORGANIZATION",
+                subtype: "COMPANY",
+                description: "A manufacturer",
+                createdAt: "",
+              },
+            ];
+          },
+        },
+      },
+    });
+
+    const entries = await store.search("acme");
+    expect(entries[0]!.content).toBe(
+      "[entity] Acme Corporation (ORGANIZATION:COMPANY) — A manufacturer",
+    );
+    expect(entries[0]!.metadata).toMatchObject({ type: "ORGANIZATION:COMPANY" });
+  });
+
+  it("omits a score, which NAMS does not return", async () => {
+    const { store } = makeStore();
+    const entries = await store.search("acme");
+    expect(entries[0]!.metadata).not.toHaveProperty("score");
+  });
+
+  it("applies limit precedence: per-call, then store, then 3", async () => {
+    const { store, calls } = makeStore();
+    await store.search("q");
+    expect(calls.searchEntities[0]!.options?.limit).toBe(3);
+
+    await store.search("q", { maxSearchResults: 2 });
+    expect(calls.searchEntities[1]!.options?.limit).toBe(2);
+
+    const withStoreLimit = makeStore({ maxSearchResults: 7 });
+    await withStoreLimit.store.search("q");
+    expect(withStoreLimit.calls.searchEntities[0]!.options?.limit).toBe(7);
+  });
+
+  it("returns nothing when entities are switched off", async () => {
+    const { store, calls } = makeStore({ includeEntities: false });
+    expect(await store.search("q")).toEqual([]);
+    expect(calls.searchEntities).toEqual([]);
+  });
+
+  it("does not mint a sink", async () => {
+    const { store, calls } = makeStore();
+    await store.search("q");
+    expect(calls.created).toEqual([]);
+    expect(calls.listConversations).toBe(0);
+  });
+
+  it("initializes without a prior initialize call", async () => {
+    const { store, calls } = makeStore();
+    await store.search("q");
+    expect(calls.connect).toBe(1);
+  });
+
+  it("propagates a search failure so the manager can log a dead store", async () => {
+    const { store } = makeStore({
+      clientOverrides: {
+        longTerm: {
+          async searchEntities() {
+            throw new Error("index offline");
+          },
+        },
+      },
+    });
+    await expect(store.search("q")).rejects.toThrow(/index offline/);
+  });
+});
+
+describe("MemoryManager integration", () => {
+  it("passes its own default limit down to the store", async () => {
+    // The manager resolves the limit itself and always passes it explicitly
+    // (memory-manager.js: options?.maxSearchResults ?? store.maxSearchResults ??
+    // DEFAULT_MAX_SEARCH_RESULTS). Pins that default at 3.
+    const { MemoryManager } = await import("@strands-agents/sdk");
+    const { store, calls } = makeStore();
+    const manager = new MemoryManager({ stores: [store] });
+
+    await manager.search("acme");
+    expect(calls.searchEntities[0]!.options?.limit).toBe(3);
+  });
+
+  it("tags each entry with the store name", async () => {
+    const { MemoryManager } = await import("@strands-agents/sdk");
+    const { store } = makeStore();
+    const manager = new MemoryManager({ stores: [store] });
+
+    const entries = await manager.search("acme");
+    expect(entries[0]!.storeName).toBe("graph");
+  });
+});

@@ -10,11 +10,14 @@
 
 import type {
   ExtractionConfig,
+  MemoryEntry,
+  MemoryStore,
   MemoryStoreConfig,
+  SearchOptions,
 } from "@strands-agents/sdk";
 
 import { MemoryClient } from "../../client.js";
-import type { MemoryClientOptions } from "../../types.js";
+import type { Entity, MemoryClientOptions } from "../../types.js";
 
 /** Conversation-metadata key marking a conversation as this store's write sink. */
 const STORE_METADATA_KEY = "strands_memory_store";
@@ -26,6 +29,12 @@ const UNSCOPED_SINK_USER_ID = "strands-memory-store";
 
 /** Conversations scanned when looking for an existing sink. */
 const SINK_SCAN_LIMIT = 1000;
+
+/** Strands' own per-store default when neither caller nor store sets a limit
+ *  (mirrors DEFAULT_MAX_SEARCH_RESULTS in the SDK's memory-manager, which is
+ *  not exported from the package root). The manager always resolves the limit
+ *  before calling a store, so this only applies to a direct `search()` call. */
+const DEFAULT_MAX_SEARCH_RESULTS = 3;
 
 export interface Neo4jMemoryStoreOptions
   extends Pick<
@@ -48,10 +57,7 @@ export interface Neo4jMemoryStoreOptions
   graphTools?: boolean;
 }
 
-// `implements MemoryStore` is added once `search` lands (a following task) —
-// `MemoryStore.search` is a required member, so declaring it early fails
-// `tsc --noEmit` before this store can actually satisfy the interface.
-export class Neo4jMemoryStore {
+export class Neo4jMemoryStore implements MemoryStore {
   // The five members MemoryStore requires a store to expose as attributes.
   readonly name: string;
   readonly description: string;
@@ -145,6 +151,24 @@ export class Neo4jMemoryStore {
   }
 
   /**
+   * Search long-term memory. No sink resolution: reads do not need one.
+   *
+   * Entities only — `search_preferences` and `search_facts` have no REST route
+   * (transport/rest.ts:172-174). Limit precedence: per-call option, then
+   * `maxSearchResults`, then Strands' default. A failure propagates: the
+   * manager fans out with `Promise.allSettled` and logs a dead store, which is
+   * more useful than a misleadingly-successful empty result.
+   */
+  async search(query: string, options?: SearchOptions): Promise<MemoryEntry[]> {
+    if (!this.includeEntities) return [];
+    await this.initialize();
+    const limit =
+      options?.maxSearchResults ?? this.maxSearchResults ?? DEFAULT_MAX_SEARCH_RESULTS;
+    const entities = await this.client.longTerm.searchEntities(query, { limit });
+    return entities.map(toMemoryEntry);
+  }
+
+  /**
    * Close the client only when the store constructed it. Resets the connected
    * flag either way, so re-entering the store reconnects rather than
    * short-circuiting on a stale flag.
@@ -186,6 +210,22 @@ export class Neo4jMemoryStore {
     this.sinkKey = created.id;
     return this.sinkKey;
   }
+}
+
+function entityType(entity: Entity): string {
+  return entity.subtype ? `${entity.type}:${entity.subtype}` : entity.type;
+}
+
+function toMemoryEntry(entity: Entity): MemoryEntry {
+  const type = entityType(entity);
+  const name = entity.canonicalName ?? entity.name;
+  const suffix = entity.description ? ` — ${entity.description}` : "";
+  return {
+    content: `[entity] ${name} (${type})${suffix}`,
+    // No `score`: NAMS returns no similarity on entity search, and defaulting
+    // one to 0 would misrepresent an unscored hit as a bad match.
+    metadata: { kind: "entity", id: entity.id, type },
+  };
 }
 
 function readEnv(name: string): string | undefined {
