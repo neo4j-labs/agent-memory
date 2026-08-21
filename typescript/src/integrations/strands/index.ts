@@ -18,4 +18,5 @@ export { connectMemoryToAgent, type ConnectMemoryToAgentResult } from "./connect
 export {
   Neo4jMemoryStore,
   type Neo4jMemoryStoreOptions,
+  type Neo4jMemoryAddResult,
 } from "./memory-store.js";

@@ -10,6 +10,7 @@
 
 import type {
   ExtractionConfig,
+  JSONValue,
   MemoryEntry,
   MemoryStore,
   MemoryStoreConfig,
@@ -17,6 +18,7 @@ import type {
 } from "@strands-agents/sdk";
 
 import { MemoryClient } from "../../client.js";
+import { NotSupportedError } from "../../errors.js";
 import type { Entity, MemoryClientOptions } from "../../types.js";
 
 /** Conversation-metadata key marking a conversation as this store's write sink. */
@@ -55,6 +57,11 @@ export interface Neo4jMemoryStoreOptions
   includeEntities?: boolean;
   /** Expose the store's graph tool from `getTools()`. Defaults to `true`. */
   graphTools?: boolean;
+}
+
+export interface Neo4jMemoryAddResult {
+  kind: "message" | "entity" | "preference" | "fact";
+  id: string;
 }
 
 export class Neo4jMemoryStore implements MemoryStore {
@@ -169,6 +176,97 @@ export class Neo4jMemoryStore implements MemoryStore {
   }
 
   /**
+   * Add one piece of content.
+   *
+   * Default sink: a message in the store's conversation, which NAMS extracts
+   * server-side — the one path available on every backend. `metadata.kind` opts
+   * into a typed write; where the backend has no endpoint for that kind the
+   * write falls back to the sink, so a memory is never silently dropped.
+   *
+   * Extraction writes are at-least-once, so this tolerates duplicates.
+   */
+  async add(
+    content: string,
+    metadata?: Record<string, JSONValue>,
+  ): Promise<Neo4jMemoryAddResult> {
+    this.assertWritable("add");
+    if (!content.trim()) {
+      throw new Error(`Neo4jMemoryStore '${this.name}': content must not be empty`);
+    }
+    await this.initialize();
+
+    const meta = metadata ?? {};
+    const kind = typeof meta.kind === "string" ? meta.kind : undefined;
+    if (kind === "entity" || kind === "preference" || kind === "fact") {
+      try {
+        return await this.addTyped(kind, content, meta);
+      } catch (error) {
+        if (!(error instanceof NotSupportedError)) throw error;
+        if (!this.warnedUnsupportedKinds.has(kind)) {
+          this.warnedUnsupportedKinds.add(kind);
+          console.warn(
+            `Neo4jMemoryStore '${this.name}': ${kind} writes are unsupported on this ` +
+              `backend (${error.message}); falling back to the message sink. Logged ` +
+              `once per store — further ${kind} writes fall back silently.`,
+          );
+        }
+      }
+    }
+    return this.addToSink(content);
+  }
+
+  private async addTyped(
+    kind: "entity" | "preference" | "fact",
+    content: string,
+    meta: Record<string, JSONValue>,
+  ): Promise<Neo4jMemoryAddResult> {
+    const longTerm = this.client.longTerm;
+    if (kind === "entity") {
+      const entity = await longTerm.addEntity(
+        asString(meta.name) ?? content,
+        asString(meta.type) ?? "OBJECT",
+      );
+      return { kind, id: entity.id };
+    }
+    if (kind === "preference") {
+      const preference = await longTerm.addPreference(
+        asString(meta.category) ?? "memory",
+        content,
+      );
+      return { kind, id: preference.id };
+    }
+    const subject = asString(meta.subject);
+    const predicate = asString(meta.predicate);
+    const object = asString(meta.object);
+    if (!subject || !predicate || !object) {
+      // Validated before the call, so a malformed triple is a caller error
+      // rather than a backend gap — it must not be swallowed by the sink
+      // fallback.
+      throw new Error(
+        `Neo4jMemoryStore '${this.name}': kind='fact' requires subject, ` +
+          `predicate and object in metadata`,
+      );
+    }
+    const fact = await longTerm.addFact(subject, predicate, object);
+    return { kind, id: fact.id };
+  }
+
+  private async addToSink(content: string): Promise<Neo4jMemoryAddResult> {
+    const sink = await this.resolveSink();
+    const message = await this.client.shortTerm.addMessage(sink, "user", content);
+    return { kind: "message", id: message.id };
+  }
+
+  protected assertWritable(method: string): void {
+    if (!this.writable) {
+      throw new Error(
+        `Neo4jMemoryStore '${this.name}': store is not writable. ` +
+          `Set writable: true to enable ${method}().`,
+      );
+    }
+  }
+
+  /**
    * Close the client only when the store constructed it. Resets the connected
    * flag either way, so re-entering the store reconnects rather than
    * short-circuiting on a stale flag.
@@ -210,6 +308,10 @@ export class Neo4jMemoryStore implements MemoryStore {
     this.sinkKey = created.id;
     return this.sinkKey;
   }
+}
+
+function asString(value: JSONValue | undefined): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function entityType(entity: Entity): string {

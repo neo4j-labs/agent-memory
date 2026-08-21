@@ -7,6 +7,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { MemoryClient } from "../../../src/client.js";
 import { Neo4jMemoryStore } from "../../../src/integrations/strands/index.js";
+import { NotSupportedError } from "../../../src/errors.js";
 
 /** Records every client call the store makes, and lets a test override any of them. */
 export function makeClient(overrides: Record<string, unknown> = {}) {
@@ -380,5 +381,115 @@ describe("Neo4jMemoryStore.search", () => {
       },
     });
     await expect(store.search("q")).rejects.toThrow(/index offline/);
+  });
+});
+
+describe("Neo4jMemoryStore.add", () => {
+  it("writes a message into the sink by default", async () => {
+    const { store, calls } = makeStore();
+    const result = await store.add("prefers dark mode");
+
+    expect(calls.addMessage).toHaveLength(1);
+    expect(calls.addMessage[0]).toMatchObject({
+      role: "user",
+      content: "prefers dark mode",
+    });
+    expect(result).toEqual({ kind: "message", id: "m1" });
+  });
+
+  it("routes kind=entity to addEntity", async () => {
+    const { store, calls } = makeStore();
+    const result = await store.add("Acme Corp", {
+      kind: "entity",
+      name: "Acme Corp",
+      type: "ORGANIZATION",
+    });
+
+    expect(calls.addEntity).toEqual([{ name: "Acme Corp", entityType: "ORGANIZATION" }]);
+    expect(calls.addMessage).toEqual([]);
+    expect(result).toEqual({ kind: "entity", id: "ent-1" });
+  });
+
+  it("defaults an entity's name and type", async () => {
+    const { store, calls } = makeStore();
+    await store.add("Acme Corp", { kind: "entity" });
+    expect(calls.addEntity).toEqual([{ name: "Acme Corp", entityType: "OBJECT" }]);
+  });
+
+  it("requires a full triple for kind=fact", async () => {
+    const { store } = makeStore();
+    await expect(
+      store.add("acme makes widgets", { kind: "fact", subject: "Acme" }),
+    ).rejects.toThrow(/subject, predicate and object/);
+  });
+
+  it("falls back to the sink when a kind is unsupported on this backend", async () => {
+    const { store, calls } = makeStore({
+      clientOverrides: {
+        longTerm: {
+          async addPreference() {
+            throw new NotSupportedError("add_preference has no REST equivalent");
+          },
+        },
+      },
+    });
+
+    const result = await store.add("dark mode", { kind: "preference", category: "ui" });
+    expect(result).toMatchObject({ kind: "message" });
+    expect(calls.addMessage).toHaveLength(1);
+  });
+
+  it("warns once per store for an unsupported kind", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { store } = makeStore({
+        clientOverrides: {
+          longTerm: {
+            async addPreference() {
+              throw new NotSupportedError("unsupported");
+            },
+          },
+        },
+      });
+      await store.add("a", { kind: "preference" });
+      await store.add("b", { kind: "preference" });
+
+      const hits = warn.mock.calls.filter((call) => String(call[0]).includes("preference"));
+      expect(hits).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("lets a non-NotSupportedError failure propagate", async () => {
+    const { store } = makeStore({
+      clientOverrides: {
+        longTerm: {
+          async addPreference() {
+            throw new Error("service unavailable");
+          },
+        },
+      },
+    });
+    await expect(store.add("dark mode", { kind: "preference" })).rejects.toThrow(
+      /service unavailable/,
+    );
+  });
+
+  it("ignores an unknown kind and writes to the sink", async () => {
+    const { store, calls } = makeStore();
+    const result = await store.add("something", { kind: "sonnet" });
+    expect(result).toMatchObject({ kind: "message" });
+    expect(calls.addMessage).toHaveLength(1);
+  });
+
+  it("refuses writes when not writable", async () => {
+    const { store } = makeStore({ writable: false });
+    await expect(store.add("x")).rejects.toThrow(/not writable/);
+  });
+
+  it("refuses empty content", async () => {
+    const { store } = makeStore();
+    await expect(store.add("   ")).rejects.toThrow(/empty/);
   });
 });
