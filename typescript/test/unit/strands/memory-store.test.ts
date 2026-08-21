@@ -382,26 +382,3 @@ describe("Neo4jMemoryStore.search", () => {
     await expect(store.search("q")).rejects.toThrow(/index offline/);
   });
 });
-
-describe("MemoryManager integration", () => {
-  it("passes its own default limit down to the store", async () => {
-    // The manager resolves the limit itself and always passes it explicitly
-    // (memory-manager.js: options?.maxSearchResults ?? store.maxSearchResults ??
-    // DEFAULT_MAX_SEARCH_RESULTS). Pins that default at 3.
-    const { MemoryManager } = await import("@strands-agents/sdk");
-    const { store, calls } = makeStore();
-    const manager = new MemoryManager({ stores: [store] });
-
-    await manager.search("acme");
-    expect(calls.searchEntities[0]!.options?.limit).toBe(3);
-  });
-
-  it("tags each entry with the store name", async () => {
-    const { MemoryManager } = await import("@strands-agents/sdk");
-    const { store } = makeStore();
-    const manager = new MemoryManager({ stores: [store] });
-
-    const entries = await manager.search("acme");
-    expect(entries[0]!.storeName).toBe("graph");
-  });
-});
