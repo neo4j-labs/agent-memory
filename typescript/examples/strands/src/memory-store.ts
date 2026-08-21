@@ -15,10 +15,11 @@ import type { ContentBlock } from "@strands-agents/sdk";
 import { MemoryClient } from "@neo4j-labs/agent-memory";
 import { Neo4jMemoryStore } from "@neo4j-labs/agent-memory/integrations/strands";
 
-// The local example and the file-linked client each resolve their own
-// `@strands-agents/sdk` instance during validation, so TypeScript treats the
-// nominal classes (ExtractionTrigger, MemoryStore) as distinct because they
-// carry private fields. See src/index.ts for the same workaround.
+// The example has its own node_modules, so it and the file-linked client each
+// resolve a separate copy of `@strands-agents/sdk`. Two copies means two
+// declarations of the same types (ExtractionTrigger, MemoryStore), which
+// TypeScript will not treat as interchangeable. See src/index.ts for the same
+// workaround.
 type StoreOptions = ConstructorParameters<typeof Neo4jMemoryStore>[0];
 type ManagerConfig = ConstructorParameters<typeof MemoryManager>[0];
 
@@ -47,9 +48,17 @@ async function main() {
   const first = await agent.invoke("Remember that I work at Acme Corp on the payments team.");
   process.stdout.write(`${flattenText(first.lastMessage.content)}\n\n`);
 
-  // Flush before exit: extraction runs in the background, so the last turn
-  // may still be unsaved when the agent responds.
+  // flush() awaits the write; NAMS then extracts entities in a background
+  // pipeline, so the write returns before they are searchable. Without the
+  // second await the recall below races that pipeline and normally loses.
   await agent.memoryManager?.flush();
+  const extracted = await memory.longTerm.waitForExtraction({
+    expectedNames: ["Acme Corp"],
+    timeoutMs: 60_000,
+  });
+  if (!extracted) {
+    process.stdout.write("Extraction has not caught up yet — recall may come back empty.\n\n");
+  }
 
   const second = await agent.invoke("Where do I work?");
   process.stdout.write(`${flattenText(second.lastMessage.content)}\n`);
