@@ -9,6 +9,12 @@ appear in minor versions with a callout in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **`Neo4jMemoryStore`** (`@neo4j-labs/agent-memory/integrations/strands`) — a
+  Strands `MemoryStore` for long-term recall inside the agent loop. Hand it to
+  `MemoryManager({ stores: [...] })`. Entities-only on NAMS.
+
 ### Changed
 
 - `@strands-agents/sdk` devDependency raised to `^1.13.0` (TS memory landed in 1.6.0).

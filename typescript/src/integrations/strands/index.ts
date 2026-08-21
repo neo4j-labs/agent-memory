@@ -15,3 +15,7 @@ export {
 } from "./conversation-manager.js";
 export { registerReasoningHooks, type ReasoningHooksOptions } from "./reasoning-hooks.js";
 export { connectMemoryToAgent, type ConnectMemoryToAgentResult } from "./connect.js";
+export {
+  Neo4jMemoryStore,
+  type Neo4jMemoryStoreOptions,
+} from "./memory-store.js";
