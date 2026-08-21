@@ -277,6 +277,74 @@ def _register_core_tools(mcp: FastMCP) -> None:
         )
         return json.dumps(result, default=str)
 
+    @mcp.tool(annotations=READ_ANNOTATIONS)
+    async def memory_health(ctx: Context) -> str:
+        """Check knowledge graph health and integrity.
+
+        Returns node counts, relationship counts, and integrity metrics
+        including orphaned facts/preferences that have no ABOUT links.
+        Use this to verify the graph is correctly connected.
+        """
+        client = get_client(ctx)
+
+        try:
+            records = await client.graph.execute_read(
+                """
+                OPTIONAL MATCH (entity:Entity)
+                WITH count(entity) AS entities
+                OPTIONAL MATCH (fact:Fact)
+                WITH entities, count(fact) AS facts
+                OPTIONAL MATCH (pref:Preference)
+                WITH entities, facts, count(pref) AS preferences
+                OPTIONAL MATCH (msg:Message)
+                WITH entities, facts, preferences, count(msg) AS messages
+                OPTIONAL MATCH (trace:ReasoningTrace)
+                WITH entities, facts, preferences, messages, count(trace) AS traces
+                OPTIONAL MATCH ()-[about:ABOUT]->()
+                WITH entities, facts, preferences, messages, traces,
+                     count(about) AS about_rels
+                OPTIONAL MATCH (of:Fact) WHERE NOT (of)-[:ABOUT]->()
+                WITH entities, facts, preferences, messages, traces,
+                     about_rels, count(of) AS orphaned_facts
+                OPTIONAL MATCH (op:Preference) WHERE NOT (op)-[:ABOUT]->()
+                WITH entities, facts, preferences, messages, traces,
+                     about_rels, orphaned_facts, count(op) AS orphaned_prefs
+                OPTIONAL MATCH (ne:Entity) WHERE ne.embedding IS NULL
+                RETURN entities, facts, preferences, messages, traces,
+                       about_rels, orphaned_facts, orphaned_prefs,
+                       count(ne) AS no_embedding
+                """,
+                {},
+            )
+
+            if not records:
+                return json.dumps({"error": "empty result"})
+
+            r = records[0]
+            return json.dumps(
+                {
+                    "nodes": {
+                        "entities": r["entities"],
+                        "facts": r["facts"],
+                        "preferences": r["preferences"],
+                        "messages": r["messages"],
+                        "traces": r["traces"],
+                    },
+                    "relationships": {
+                        "ABOUT": r["about_rels"],
+                    },
+                    "integrity": {
+                        "orphaned_facts": r["orphaned_facts"],
+                        "orphaned_preferences": r["orphaned_prefs"],
+                        "entities_without_embedding": r["no_embedding"],
+                    },
+                },
+                default=str,
+            )
+        except Exception as e:
+            logger.error(f"Error in memory_health: {e}")
+            return json.dumps({"error": str(e)})
+
 
 # ── Extended Profile (9 additional tools, 15 total) ──────────────────
 
