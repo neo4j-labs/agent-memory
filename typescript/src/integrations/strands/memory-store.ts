@@ -9,17 +9,20 @@
  */
 
 import type {
+  AddMessagesContext,
   ExtractionConfig,
   JSONValue,
   MemoryEntry,
   MemoryStore,
   MemoryStoreConfig,
+  MessageData,
   SearchOptions,
 } from "@strands-agents/sdk";
 
 import { MemoryClient } from "../../client.js";
 import { NotSupportedError } from "../../errors.js";
-import type { Entity, MemoryClientOptions } from "../../types.js";
+import type { BulkMessageInput, Entity, MemoryClientOptions, MessageRole } from "../../types.js";
+import { strandsMessageToText } from "./messages.js";
 
 /** Conversation-metadata key marking a conversation as this store's write sink. */
 const STORE_METADATA_KEY = "strands_memory_store";
@@ -37,6 +40,10 @@ const SINK_SCAN_LIMIT = 1000;
  *  not exported from the package root). The manager always resolves the limit
  *  before calling a store, so this only applies to a direct `search()` call. */
 const DEFAULT_MAX_SEARCH_RESULTS = 3;
+
+/** bulkAddMessages rejects more than 100 messages per call
+ *  (src/short-term/index.ts:283-285). */
+const BULK_CHUNK = 100;
 
 export interface Neo4jMemoryStoreOptions
   extends Pick<
@@ -62,6 +69,11 @@ export interface Neo4jMemoryStoreOptions
 export interface Neo4jMemoryAddResult {
   kind: "message" | "entity" | "preference" | "fact";
   id: string;
+}
+
+export interface Neo4jMemoryAddMessagesResult {
+  written: number;
+  skipped: number;
 }
 
 export class Neo4jMemoryStore implements MemoryStore {
@@ -264,6 +276,64 @@ export class Neo4jMemoryStore implements MemoryStore {
           `Set writable: true to enable ${method}().`,
       );
     }
+  }
+
+  /**
+   * Ingest a batch of conversation turns into the sink conversation. NAMS
+   * extracts them server-side, so no model call happens here.
+   *
+   * Extraction writes are at-least-once and `sequenceNumbers` repeat on a
+   * retry, so a `(runId, sequenceNumber)` set skips turns this instance already
+   * wrote. In-process only: sequence numbers belong to the extraction
+   * coordinator, which is created per `initAgent`, so there is nothing durable
+   * to key on. One consequence, documented: handing the same store instance to
+   * a second Agent restarts the numbering and its first turns are skipped.
+   */
+  async addMessages(
+    messages: MessageData[],
+    context?: AddMessagesContext,
+  ): Promise<Neo4jMemoryAddMessagesResult> {
+    this.assertWritable("addMessages");
+    await this.initialize();
+
+    const sequenceNumbers = context?.sequenceNumbers ?? [];
+    const payload: BulkMessageInput[] = [];
+    const tokens: Array<string | undefined> = [];
+    let skipped = 0;
+
+    messages.forEach((message, index) => {
+      const text = strandsMessageToText(message);
+      if (!text.trim()) {
+        skipped += 1;
+        return;
+      }
+      let token: string | undefined;
+      const sequenceNumber = sequenceNumbers[index];
+      if (sequenceNumber !== undefined) {
+        token = `${this.runId}:${sequenceNumber}`;
+        if (this.written.has(token)) {
+          skipped += 1;
+          return;
+        }
+      }
+      payload.push({ role: (message.role ?? "user") as MessageRole, content: text });
+      tokens.push(token);
+    });
+
+    if (payload.length === 0) return { written: 0, skipped };
+
+    const sink = await this.resolveSink();
+    for (let start = 0; start < payload.length; start += BULK_CHUNK) {
+      const end = start + BULK_CHUNK;
+      await this.client.shortTerm.bulkAddMessages(sink, payload.slice(start, end));
+      // Banked per chunk, not after the loop: Strands rolls its high-water mark
+      // back and retries the whole batch when this throws, so tokens banked
+      // only at the end would let an already-written chunk be written twice.
+      for (const token of tokens.slice(start, end)) {
+        if (token !== undefined) this.written.add(token);
+      }
+    }
+    return { written: payload.length, skipped };
   }
 
   /**

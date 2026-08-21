@@ -19,4 +19,5 @@ export {
   Neo4jMemoryStore,
   type Neo4jMemoryStoreOptions,
   type Neo4jMemoryAddResult,
+  type Neo4jMemoryAddMessagesResult,
 } from "./memory-store.js";

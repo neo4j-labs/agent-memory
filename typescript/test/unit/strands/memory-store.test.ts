@@ -493,3 +493,142 @@ describe("Neo4jMemoryStore.add", () => {
     await expect(store.add("   ")).rejects.toThrow(/empty/);
   });
 });
+
+describe("Neo4jMemoryStore.addMessages", () => {
+  const turn = (text: string, role = "user") => ({ role, content: [{ text }] });
+
+  it("writes the batch to the sink", async () => {
+    const { store, calls } = makeStore();
+    const result = await store.addMessages(
+      [turn("I prefer dark mode"), turn("Noted", "assistant")] as never,
+      { sequenceNumbers: [0, 1] },
+    );
+
+    expect(result).toEqual({ written: 2, skipped: 0 });
+    expect(calls.bulk).toHaveLength(1);
+    expect(calls.bulk[0]!.messages).toEqual([
+      { role: "user", content: "I prefer dark mode" },
+      { role: "assistant", content: "Noted" },
+    ]);
+  });
+
+  it("does not write a retried batch twice", async () => {
+    const { store, calls } = makeStore();
+    const batch = [turn("ok")] as never;
+
+    expect(await store.addMessages(batch, { sequenceNumbers: [0] })).toEqual({
+      written: 1,
+      skipped: 0,
+    });
+    expect(await store.addMessages(batch, { sequenceNumbers: [0] })).toEqual({
+      written: 0,
+      skipped: 1,
+    });
+    expect(calls.bulk).toHaveLength(1);
+  });
+
+  it("keeps identical text carrying distinct sequence numbers", async () => {
+    const { store, calls } = makeStore();
+    await store.addMessages([turn("ok")] as never, { sequenceNumbers: [0] });
+    await store.addMessages([turn("ok")] as never, { sequenceNumbers: [1] });
+    expect(calls.bulk).toHaveLength(2);
+  });
+
+  it("writes everything when no sequence numbers arrive", async () => {
+    const { store, calls } = makeStore();
+    await store.addMessages([turn("ok")] as never);
+    await store.addMessages([turn("ok")] as never);
+    expect(calls.bulk).toHaveLength(2);
+  });
+
+  it("drops messages with no text", async () => {
+    const { store, calls } = makeStore();
+    const result = await store.addMessages(
+      [{ role: "assistant", content: [{ toolUse: { name: "x", input: {} } }] }] as never,
+      { sequenceNumbers: [0] },
+    );
+
+    expect(result).toEqual({ written: 0, skipped: 1 });
+    expect(calls.bulk).toEqual([]);
+    expect(calls.created).toEqual([]);
+  });
+
+  it("chunks batches larger than 100", async () => {
+    const { store, calls } = makeStore();
+    const messages = Array.from({ length: 250 }, (_, i) => turn(`m${i}`)) as never;
+
+    expect(await store.addMessages(messages)).toEqual({ written: 250, skipped: 0 });
+    expect(calls.bulk.map((c) => c.messages.length)).toEqual([100, 100, 50]);
+  });
+
+  it("does not re-send a chunk that landed before a later chunk failed", async () => {
+    let call = 0;
+    const { store, calls } = makeStore({
+      clientOverrides: {
+        shortTerm: {
+          async listConversations() {
+            return [];
+          },
+          async createConversation() {
+            return { id: "c1" };
+          },
+          async bulkAddMessages(sink: string, messages: Array<{ role: string; content: string }>) {
+            call += 1;
+            if (call === 2) throw new Error("transient");
+            return messages.map((_, index) => ({ id: `m${index}` }));
+          },
+        },
+      },
+    });
+    const messages = Array.from({ length: 150 }, (_, i) => turn(`m${i}`)) as never;
+    const sequenceNumbers = Array.from({ length: 150 }, (_, i) => i);
+
+    await expect(store.addMessages(messages, { sequenceNumbers })).rejects.toThrow(
+      /transient/,
+    );
+    // Strands rolls its high-water mark back and retries the whole batch, so
+    // the first 100 must already be banked as written.
+    const retry = await store.addMessages(messages, { sequenceNumbers });
+    expect(retry).toEqual({ written: 50, skipped: 100 });
+    void calls;
+  });
+
+  it("refuses writes when not writable", async () => {
+    const { store } = makeStore({ writable: false });
+    await expect(store.addMessages([turn("x")] as never)).rejects.toThrow(/not writable/);
+  });
+
+  it("reuses one sink across instances", async () => {
+    const { client, calls } = makeClient();
+    const batch = [turn("ok")] as never;
+    await new Neo4jMemoryStore({ name: "graph", client }).addMessages(batch);
+    await new Neo4jMemoryStore({ name: "graph", client }).addMessages(batch);
+    expect(calls.created).toHaveLength(1);
+  });
+});
+
+// Deferred from Task 5: MemoryManager's constructor rejects a `writable` store
+// implementing neither sink, and the store defaults to writable. Both sinks
+// exist as of this task, so a real manager can finally be constructed.
+describe("MemoryManager integration", () => {
+  it("passes its own default limit down to the store", async () => {
+    // The manager resolves the limit itself and always passes it explicitly
+    // (memory-manager.js: options?.maxSearchResults ?? store.maxSearchResults ??
+    // DEFAULT_MAX_SEARCH_RESULTS). Pins that default at 3.
+    const { MemoryManager } = await import("@strands-agents/sdk");
+    const { store, calls } = makeStore();
+    const manager = new MemoryManager({ stores: [store] });
+
+    await manager.search("acme");
+    expect(calls.searchEntities[0]!.options?.limit).toBe(3);
+  });
+
+  it("tags each entry with the store name", async () => {
+    const { MemoryManager } = await import("@strands-agents/sdk");
+    const { store } = makeStore();
+    const manager = new MemoryManager({ stores: [store] });
+
+    const entries = await manager.search("acme");
+    expect(entries[0]!.storeName).toBe("graph");
+  });
+});
