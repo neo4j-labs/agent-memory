@@ -1174,7 +1174,7 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
                     entity_id = str(uuid4())
                     entity_subtype = getattr(entity, "subtype", None)
                     create_query = build_create_entity_query(entity.type, entity_subtype)
-                    await self._client.execute_write(
+                    rows = await self._client.execute_write(
                         create_query,
                         {
                             "id": entity_id,
@@ -1189,6 +1189,8 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
                             "location": None,  # Required for LOCATION entities
                         },
                     )
+                    # link to the entity's real id, not the pre-generated uuid
+                    entity_id = rows[0]["e"]["id"]
 
                     # Store mapping for relation linking
                     entity_name_to_id[entity.name.lower().strip()] = entity_id
@@ -1357,7 +1359,7 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
             metadata_payload = (
                 json.dumps({"extracted_by": extracted_by}) if extracted_by is not None else None
             )
-            await self._client.execute_write(
+            rows = await self._client.execute_write(
                 create_query,
                 {
                     "id": entity_id,
@@ -1372,6 +1374,8 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
                     "location": None,  # Required for LOCATION entities
                 },
             )
+            # link to the entity's real id, not the pre-generated uuid
+            entity_id = rows[0]["e"]["id"]
 
             # Store mapping for relation linking
             entity_name_to_id[entity.name.lower().strip()] = entity_id
