@@ -776,4 +776,18 @@ describe("store tool namespacing", () => {
       "graph_get_entity_graph",
     );
   });
+
+  it("keeps two over-long legal names distinct", () => {
+    // Truncation is many-to-one just as sanitisation is: without a digest,
+    // these two share their first 47 characters and ToolRegistry.add would
+    // throw on the duplicate.
+    const a = makeStore({ name: "a".repeat(60) }).store.getTools()[0]!.name;
+    const b = makeStore({ name: "a".repeat(61) }).store.getTools()[0]!.name;
+
+    expect(a).not.toBe(b);
+    for (const name of [a, b]) {
+      expect(name.length).toBeLessThanOrEqual(64);
+      expect(name).toMatch(/^[a-zA-Z0-9_-]+$/);
+    }
+  });
 });

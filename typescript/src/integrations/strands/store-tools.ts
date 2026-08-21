@@ -41,11 +41,14 @@ const ENTITY_GRAPH_DESCRIPTION =
  *
  * Names are namespaced per store so two stores can coexist on one manager.
  * TS's `ToolRegistry.add` *throws* on a duplicate name, so a collision breaks
- * agent construction outright. Sanitisation alone is many-to-one — `team/graph`,
- * `team graph` and `Team_Graph` all reduce to `team_graph` — so a name that does
- * not survive sanitisation unchanged carries a short digest of the original:
- * already-legal names keep clean prefixes, and any two distinct names stay
- * distinct.
+ * agent construction outright.
+ *
+ * Two things here are many-to-one, and either one can collide: sanitisation
+ * (`team/graph`, `team graph` and `Team_Graph` all reduce to `team_graph`) and
+ * truncation to fit the registry's 64-character limit. So a prefix that is not
+ * a faithful, whole rendering of the name carries a short digest of the
+ * original. A name that is already legal *and* already fits keeps a clean
+ * prefix; any two distinct names stay distinct either way.
  */
 export function toolPrefix(name: string, reserved: number): string {
   const slug = name
@@ -54,7 +57,10 @@ export function toolPrefix(name: string, reserved: number): string {
     .replace(/_+/g, "_")
     .replace(/^_|_$/g, "");
   const base = slug || "store";
-  const digest = base === name ? "" : `_${shortDigest(name)}`;
+  if (base === name && base.length <= MAX_TOOL_NAME_LENGTH - reserved) {
+    return base;
+  }
+  const digest = `_${shortDigest(name)}`;
   const room = MAX_TOOL_NAME_LENGTH - reserved - digest.length;
   return `${base.slice(0, Math.max(1, room))}${digest}`;
 }
