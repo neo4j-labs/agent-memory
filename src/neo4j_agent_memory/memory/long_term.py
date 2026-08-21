@@ -980,6 +980,27 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
 
         return relationship
 
+    async def delete_fact(self, fact_id: str) -> bool:
+        """Delete a fact and its relationships by ID."""
+        results = await self._client.execute_write(
+            queries.DELETE_FACT, {"id": fact_id}
+        )
+        return bool(results)
+
+    async def delete_preference(self, preference_id: str) -> bool:
+        """Delete a preference and its relationships by ID."""
+        results = await self._client.execute_write(
+            queries.DELETE_PREFERENCE, {"id": preference_id}
+        )
+        return bool(results)
+
+    async def delete_entity(self, entity_id: str) -> bool:
+        """Delete an entity and its relationships by ID."""
+        results = await self._client.execute_write(
+            queries.DELETE_ENTITY, {"id": entity_id}
+        )
+        return bool(results)
+
     async def get_entity_by_name(self, name: str) -> Entity | None:
         """
         Get an entity by name.
