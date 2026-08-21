@@ -17,6 +17,7 @@ import type {
 } from "@strands-agents/sdk";
 
 import type { MemoryClient } from "../../client.js";
+import { assertNoDoubleExtraction } from "./coexistence.js";
 import type { StrandsIntegrationOptions } from "./internal.js";
 import { loadStrands } from "./internal.js";
 
@@ -72,6 +73,9 @@ export class Neo4jConversationManager {
   }
 
   async initAgent(agent: LocalAgent): Promise<void> {
+    // Before any hook is registered: a rejected configuration must fail agent
+    // construction, not half-wire it.
+    assertNoDoubleExtraction(agent);
     const inner = await this.ensureInner();
     inner.initAgent(agent);
 

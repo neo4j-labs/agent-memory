@@ -18,6 +18,9 @@ appear in minor versions with a callout in this file.
 ### Changed
 
 - `@strands-agents/sdk` devDependency raised to `^1.13.0` (TS memory landed in 1.6.0).
+- `Neo4jConversationManager` throws at `initAgent` when paired with a
+  `Neo4jMemoryStore` that has `extraction` enabled — both sides would ingest the
+  same turns.
 
 ## 0.4.0 — NAMS alignment
 
