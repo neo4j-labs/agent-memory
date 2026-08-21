@@ -9,6 +9,10 @@ appear in minor versions with a callout in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- `@strands-agents/sdk` devDependency raised to `^1.13.0` (TS memory landed in 1.6.0).
+
 ## 0.4.0 — NAMS alignment
 
 Adds workspace addressing, a first-class ontology surface

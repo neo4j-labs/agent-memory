@@ -9,7 +9,7 @@
   "dependencies": {
     "@neo4j-labs/agent-memory": "file:../..",
     "openai": "^6.7.0",
-    "@strands-agents/sdk": "^1.2.0",
+    "@strands-agents/sdk": "^1.13.0",
     "@ai-sdk/provider": "^3.0.0",
     "@opentelemetry/api": "^1.9.0",
     "@modelcontextprotocol/sdk": "^1.0.0"
