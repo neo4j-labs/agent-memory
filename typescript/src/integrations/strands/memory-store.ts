@@ -17,12 +17,14 @@ import type {
   MemoryStoreConfig,
   MessageData,
   SearchOptions,
+  Tool,
 } from "@strands-agents/sdk";
 
 import { MemoryClient } from "../../client.js";
 import { NotSupportedError } from "../../errors.js";
 import type { BulkMessageInput, Entity, MemoryClientOptions, MessageRole } from "../../types.js";
 import { strandsMessageToText } from "./messages.js";
+import { buildStoreTools } from "./store-tools.js";
 
 /** Conversation-metadata key marking a conversation as this store's write sink. */
 const STORE_METADATA_KEY = "strands_memory_store";
@@ -334,6 +336,16 @@ export class Neo4jMemoryStore implements MemoryStore {
       }
     }
     return { written: payload.length, skipped };
+  }
+
+  /**
+   * Graph-native tools registered alongside the manager's own. Never includes
+   * `search_memory` or `add_memory` — those belong to the `MemoryManager`.
+   * Synchronous by contract: the plugin registry calls this before `initAgent`.
+   */
+  getTools(): Tool[] {
+    if (!this.graphTools) return [];
+    return buildStoreTools(this);
   }
 
   /**

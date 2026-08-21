@@ -632,3 +632,148 @@ describe("MemoryManager integration", () => {
     expect(entries[0]!.storeName).toBe("graph");
   });
 });
+
+describe("Neo4jMemoryStore.getTools", () => {
+  async function runTool(tool: { stream: (context: never) => AsyncGenerator<unknown, unknown> }) {
+    const generator = tool.stream({
+      toolUse: { name: "t", toolUseId: "u1", input: { entityName: "Acme Corp" } },
+    } as never);
+    let next = await generator.next();
+    while (!next.done) next = await generator.next();
+    return next.value as { status: string; content: Array<{ json?: unknown }> };
+  }
+
+  it("exposes exactly one graph tool, prefixed with the store name", () => {
+    const { store } = makeStore();
+    const tools = store.getTools();
+    expect(tools.map((t) => t.name)).toEqual(["graph_get_entity_graph"]);
+    expect(tools[0]!.toolSpec.name).toBe("graph_get_entity_graph");
+    expect(tools[0]!.description.length).toBeGreaterThan(0);
+  });
+
+  it("omits the preferences tool, which NAMS has no endpoint for", () => {
+    const { store } = makeStore({ userId: "alice" });
+    expect(store.getTools().map((t) => t.name)).toEqual(["graph_get_entity_graph"]);
+  });
+
+  it("exposes nothing when graphTools is false", () => {
+    const { store } = makeStore({ graphTools: false });
+    expect(store.getTools()).toEqual([]);
+  });
+
+  it("is synchronous, because the plugin registry calls it before initAgent", () => {
+    const { store } = makeStore();
+    // PluginRegistry._addAndInit does `const tools = plugin.getTools?.() ?? []`
+    // then `if (tools.length > 0)`. A promise has no length and the tools would
+    // be dropped without a word.
+    expect(Array.isArray(store.getTools())).toBe(true);
+  });
+
+  it("resolves the entity by name, then expands one hop", async () => {
+    const { store, calls } = makeStore({
+      clientOverrides: {
+        longTerm: {
+          async searchEntities() {
+            return [{ id: "e1", name: "Acme Corp", type: "ORGANIZATION", createdAt: "" }];
+          },
+          async expandGraph(nodeId: string) {
+            calls.expandGraph.push(nodeId);
+            return {
+              nodes: [{ id: "n2", labels: ["Entity"], properties: { name: "Ada" } }],
+              edges: [{ id: "r1", source: "e1", target: "n2", type: "KNOWS" }],
+            };
+          },
+        },
+      },
+    });
+
+    const result = await runTool(store.getTools()[0] as never);
+    expect(result.status).toBe("success");
+    expect(calls.expandGraph).toEqual(["e1"]);
+    expect(result.content[0]!.json).toEqual({
+      center: "Acme Corp",
+      depth: 1,
+      nodes: [{ id: "n2", name: "Ada", labels: ["Entity"] }],
+      edges: [{ from: "e1", relationship: "KNOWS", to: "n2" }],
+    });
+  });
+
+  it("reports an unknown entity instead of throwing", async () => {
+    const { store } = makeStore({
+      clientOverrides: {
+        longTerm: {
+          async searchEntities() {
+            return [];
+          },
+        },
+      },
+    });
+
+    const result = await runTool(store.getTools()[0] as never);
+    expect(result.content[0]!.json).toEqual({ error: "entity not found: Acme Corp" });
+  });
+
+  it("caps nodes and edges at 50", async () => {
+    const wide = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({ id: `n${i}`, properties: { name: `e${i}` } }));
+    const { store } = makeStore({
+      clientOverrides: {
+        longTerm: {
+          async searchEntities() {
+            return [{ id: "e1", name: "Acme Corp", type: "ORGANIZATION", createdAt: "" }];
+          },
+          async expandGraph() {
+            return {
+              nodes: wide(80),
+              edges: Array.from({ length: 80 }, (_, i) => ({ source: "e1", target: `n${i}`, type: "R" })),
+            };
+          },
+        },
+      },
+    });
+
+    const result = await runTool(store.getTools()[0] as never);
+    const json = result.content[0]!.json as { nodes: unknown[]; edges: unknown[] };
+    expect(json.nodes).toHaveLength(50);
+    expect(json.edges).toHaveLength(50);
+  });
+
+  it("initializes the store before touching the client", async () => {
+    const { store, calls } = makeStore();
+    await runTool(store.getTools()[0] as never);
+    expect(calls.connect).toBe(1);
+  });
+});
+
+describe("store tool namespacing", () => {
+  it("gives two stores on one manager distinct tool names", async () => {
+    const { MemoryManager } = await import("@strands-agents/sdk");
+    const personal = makeStore({ name: "personal" }).store;
+    const team = makeStore({ name: "team" }).store;
+    const manager = new MemoryManager({ stores: [personal, team] });
+
+    const names = manager.getTools().map((t) => t.name);
+    expect(names).toContain("personal_get_entity_graph");
+    expect(names).toContain("team_get_entity_graph");
+  });
+
+  it("keeps a legal prefix for a name needing sanitising", () => {
+    const { store } = makeStore({ name: "Team Graph/EU" });
+    const name = store.getTools()[0]!.name;
+    expect(name).toMatch(/^[a-zA-Z0-9_-]+$/);
+    expect(name.length).toBeLessThanOrEqual(64);
+    expect(name.endsWith("_get_entity_graph")).toBe(true);
+  });
+
+  it("keeps names that sanitise alike distinct", () => {
+    const a = makeStore({ name: "team/graph" }).store.getTools()[0]!.name;
+    const b = makeStore({ name: "team graph" }).store.getTools()[0]!.name;
+    expect(a).not.toBe(b);
+  });
+
+  it("keeps an already-legal name digest-free", () => {
+    expect(makeStore({ name: "graph" }).store.getTools()[0]!.name).toBe(
+      "graph_get_entity_graph",
+    );
+  });
+});
