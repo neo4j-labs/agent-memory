@@ -114,10 +114,11 @@ async function entityGraphPayload(
   store: Neo4jMemoryStore,
   entityName: string,
 ): Promise<JSONValue> {
-  // Through the store, never straight to a captured client: with injection
-  // disabled a tool call can be the store's first operation.
-  await store.initialize();
   if (!entityName) return { error: "entityName is required" };
+  // Through the store, never straight to a captured client: with injection
+  // disabled a tool call can be the store's first operation. After validation,
+  // so a malformed call does not open a connection for nothing.
+  await store.initialize();
 
   const matches = await store.client.longTerm.searchEntities(entityName, { limit: 1 });
   const centre = matches[0];
@@ -127,9 +128,14 @@ async function entityGraphPayload(
   // resolved through entity search first (get_entity_by_name has no REST
   // route) and the reported depth is always 1.
   const expansion = await store.client.longTerm.expandGraph(centre.id);
+  // Flagged only when the cap actually dropped something: the model cannot
+  // otherwise tell a small neighbourhood from a truncated one.
+  const truncated =
+    expansion.nodes.length > MAX_ELEMENTS || expansion.edges.length > MAX_ELEMENTS;
   return {
     center: centre.canonicalName ?? centre.name,
     depth: 1,
+    ...(truncated && { truncated: true }),
     nodes: expansion.nodes.slice(0, MAX_ELEMENTS).map((node) => ({
       id: String(node.id),
       name: String((node.properties ?? {}).name ?? ""),

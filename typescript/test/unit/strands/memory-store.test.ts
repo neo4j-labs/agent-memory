@@ -280,6 +280,65 @@ describe("Neo4jMemoryStore sink resolution", () => {
     expect(calls.created).toEqual([]);
   });
 
+  it("creates one sink when two writes race", async () => {
+    // Strands runs tool calls concurrently and a programmatic add can overlap a
+    // background extraction save, so resolveSink memoizes its in-flight promise.
+    // Without that, both callers scan, both miss, and both create.
+    const { probe, calls } = makeProbe();
+    expect(await Promise.all([probe.sink(), probe.sink()])).toEqual(["c1", "c1"]);
+    expect(calls.created).toHaveLength(1);
+    expect(calls.listConversations).toBe(1);
+  });
+
+  it("retries after a failed resolution instead of caching the failure", async () => {
+    let attempt = 0;
+    const { client } = makeClient({
+      shortTerm: {
+        async listConversations() {
+          attempt += 1;
+          if (attempt === 1) throw new Error("scan offline");
+          return [];
+        },
+      },
+    });
+    const probe = new ProbeStore({ name: "graph", client } as never);
+
+    await expect(probe.sink()).rejects.toThrow(/scan offline/);
+    expect(await probe.sink()).toBe("c1");
+  });
+
+  it("scans under the userId the create path records, unscoped included", async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const { client } = makeClient({
+      shortTerm: {
+        async listConversations(options: Record<string, unknown>) {
+          seen.push(options);
+          return [];
+        },
+      },
+    });
+    await new ProbeStore({ name: "graph", client } as never).sink();
+    expect(seen[0]).toMatchObject({ userId: "strands-memory-store" });
+  });
+
+  it("finds a sink whose metadata key came back camelCased", async () => {
+    // The transport's snake/camel conversions only round-trip if the service
+    // echoes the key verbatim; reads accept either spelling so discovery cannot
+    // silently fail and mint a second sink.
+    const { client, calls } = makeClient({
+      shortTerm: {
+        async listConversations() {
+          return [
+            { id: "existing", metadata: { strandsMemoryStore: "strands-memory-store/_/graph" } },
+          ];
+        },
+      },
+    });
+    const probe = new ProbeStore({ name: "graph", client } as never);
+    expect(await probe.sink()).toBe("existing");
+    expect(calls.created).toEqual([]);
+  });
+
   it("gives two differently-named stores different sinks", async () => {
     const { client, calls } = makeClient();
     const personal = await new ProbeStore({ name: "personal", client } as never).sink();
@@ -512,19 +571,58 @@ describe("Neo4jMemoryStore.addMessages", () => {
     ]);
   });
 
-  it("does not write a retried batch twice", async () => {
+  it("writes a second agent run's turns after a clean save", async () => {
+    // Sequence numbers reset to 0 each agent run, and the coordinator's mark is
+    // per store (extraction/coordinator.js), so only that store's own failure
+    // makes it resend numbers. Repeating them after a clean return therefore
+    // means a new run — re-mint the generation rather than skipping its turns.
     const { store, calls } = makeStore();
+    const batch = [turn("first"), turn("second", "assistant")] as never;
+
+    expect(await store.addMessages(batch, { sequenceNumbers: [0, 1] })).toEqual({
+      written: 2,
+      skipped: 0,
+    });
+    expect(await store.addMessages(batch, { sequenceNumbers: [0, 1] })).toEqual({
+      written: 2,
+      skipped: 0,
+    });
+    expect(calls.bulk).toHaveLength(2);
+  });
+
+  it("writes a wholly-failed batch exactly once when it is retried", async () => {
+    // Nothing was banked, so the retry must write — and must not be mistaken
+    // for a new run, which would clear tokens banked before the failure.
+    let call = 0;
+    const landed: string[] = [];
+    const { store } = makeStore({
+      clientOverrides: {
+        shortTerm: {
+          async listConversations() {
+            return [];
+          },
+          async createConversation() {
+            return { id: "c1" };
+          },
+          async bulkAddMessages(_sink: string, messages: Array<{ content: string }>) {
+            call += 1;
+            if (call === 1) throw new Error("transient");
+            for (const message of messages) landed.push(message.content);
+            return messages.map((_, index) => ({ id: `m${index}` }));
+          },
+        },
+      },
+    });
     const batch = [turn("ok")] as never;
 
+    await expect(store.addMessages(batch, { sequenceNumbers: [0] })).rejects.toThrow(
+      /transient/,
+    );
     expect(await store.addMessages(batch, { sequenceNumbers: [0] })).toEqual({
       written: 1,
       skipped: 0,
     });
-    expect(await store.addMessages(batch, { sequenceNumbers: [0] })).toEqual({
-      written: 0,
-      skipped: 1,
-    });
-    expect(calls.bulk).toHaveLength(1);
+    expect(landed).toEqual(["ok"]);
   });
 
   it("keeps identical text carrying distinct sequence numbers", async () => {
@@ -733,15 +831,35 @@ describe("Neo4jMemoryStore.getTools", () => {
     });
 
     const result = await runTool(store.getTools()[0] as never);
-    const json = result.content[0]!.json as { nodes: unknown[]; edges: unknown[] };
+    const json = result.content[0]!.json as {
+      nodes: unknown[];
+      edges: unknown[];
+      truncated?: boolean;
+    };
     expect(json.nodes).toHaveLength(50);
     expect(json.edges).toHaveLength(50);
+    // Without this the model cannot tell a small neighbourhood from a cut-off
+    // one. Absent when nothing was dropped — see the one-hop test above.
+    expect(json.truncated).toBe(true);
   });
 
   it("initializes the store before touching the client", async () => {
     const { store, calls } = makeStore();
     await runTool(store.getTools()[0] as never);
     expect(calls.connect).toBe(1);
+  });
+
+  it("rejects a missing entityName without opening a connection", async () => {
+    const { store, calls } = makeStore();
+    const generator = (store.getTools()[0] as never as {
+      stream: (context: never) => AsyncGenerator<unknown, unknown>;
+    }).stream({ toolUse: { name: "t", toolUseId: "u1", input: {} } } as never);
+    let next = await generator.next();
+    while (!next.done) next = await generator.next();
+    const result = next.value as { content: Array<{ json?: unknown }> };
+
+    expect(result.content[0]!.json).toEqual({ error: "entityName is required" });
+    expect(calls.connect).toBe(0);
   });
 });
 

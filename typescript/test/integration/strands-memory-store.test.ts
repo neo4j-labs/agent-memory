@@ -9,6 +9,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
 import { MemoryClient } from "../../src/client.js";
+import { AuthenticationError } from "../../src/errors.js";
 import { Neo4jMemoryStore } from "../../src/integrations/strands/index.js";
 
 const ENDPOINT = "https://memory.test/v1";
@@ -168,6 +169,6 @@ describe("Neo4jMemoryStore over REST", () => {
         HttpResponse.json({ detail: "invalid key" }, { status: 401 }),
       ),
     );
-    await expect(newStore().search("acme")).rejects.toThrow();
+    await expect(newStore().search("acme")).rejects.toThrow(AuthenticationError);
   });
 });

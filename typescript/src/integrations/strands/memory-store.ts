@@ -22,12 +22,20 @@ import type {
 
 import { MemoryClient } from "../../client.js";
 import { NotSupportedError } from "../../errors.js";
-import type { BulkMessageInput, Entity, MemoryClientOptions, MessageRole } from "../../types.js";
+import type { BulkMessageInput, Entity, MemoryClientOptions } from "../../types.js";
 import { strandsMessageToText } from "./messages.js";
 import { buildStoreTools } from "./store-tools.js";
 
-/** Conversation-metadata key marking a conversation as this store's write sink. */
+/** Conversation-metadata key marking a conversation as this store's write sink.
+ *  Written in snake_case. */
 const STORE_METADATA_KEY = "strands_memory_store";
+
+/** The same key camelCased. `RestTransport` deep-camelCases request bodies and
+ *  deep-snake_cases responses (transport/rest.ts), so the round trip only closes
+ *  if the service echoes the key it was sent and the response passes through that
+ *  converter. Reads accept either spelling: were the match to fail, every store
+ *  instance in every process would create another sink and scatter ingestion. */
+const STORE_METADATA_KEY_CAMEL = "strandsMemoryStore";
 
 /** `userId` recorded on a sink conversation when the store is not tenant-scoped.
  *  `createConversation` requires one (src/types.ts:445-448); the sink is still
@@ -96,12 +104,19 @@ export class Neo4jMemoryStore implements MemoryStore {
   protected readonly includeEntities: boolean;
   protected readonly ownsClient: boolean;
 
-  /** Names the coordinator generation for the addMessages dedupe key. See
-   *  `addMessages` for why a bare sequence number is not enough. */
-  protected readonly runId: string = newRunId();
+  /** Names the coordinator generation for the addMessages dedupe key. Re-minted
+   *  when a new agent run restarts the numbering. See `addMessages` for why a
+   *  bare sequence number is not enough. */
+  protected runId: string = newRunId();
   protected readonly written = new Set<string>();
   protected readonly warnedUnsupportedKinds = new Set<string>();
   protected sinkKey: string | undefined;
+  /** Highest sequence number actually banked in the current generation. */
+  private highestSequence = -1;
+  /** Whether the previous `addMessages` call threw. Separates a retry (same
+   *  numbers, previous call threw) from a new run (numbers restarted). */
+  private lastAddFailed = false;
+  private sinkPromise: Promise<string> | undefined;
   private connected = false;
 
   constructor(options: Neo4jMemoryStoreOptions) {
@@ -285,11 +300,13 @@ export class Neo4jMemoryStore implements MemoryStore {
    * extracts them server-side, so no model call happens here.
    *
    * Extraction writes are at-least-once and `sequenceNumbers` repeat on a
-   * retry, so a `(runId, sequenceNumber)` set skips turns this instance already
-   * wrote. In-process only: sequence numbers belong to the extraction
-   * coordinator, which is created per `initAgent`, so there is nothing durable
-   * to key on. One consequence, documented: handing the same store instance to
-   * a second Agent restarts the numbering and its first turns are skipped.
+   * retry, so a `(runId, sequenceNumber)` set skips turns already written. The
+   * numbers reset to 0 each agent run (memory/types.d.ts, `sequenceNumbers`),
+   * so `runId` names the generation and is re-minted whenever a reset is
+   * detected — see `startNewGenerationOnRunReset`.
+   *
+   * In-process only: the bookkeeping does not survive a restart, so a process
+   * that dies mid-retry can leave duplicate messages in the sink.
    */
   async addMessages(
     messages: MessageData[],
@@ -299,8 +316,10 @@ export class Neo4jMemoryStore implements MemoryStore {
     await this.initialize();
 
     const sequenceNumbers = context?.sequenceNumbers ?? [];
+    this.startNewGenerationOnRunReset(sequenceNumbers);
+
     const payload: BulkMessageInput[] = [];
-    const tokens: Array<string | undefined> = [];
+    const stamps: Array<{ token: string; sequenceNumber: number } | undefined> = [];
     let skipped = 0;
 
     messages.forEach((message, index) => {
@@ -309,33 +328,69 @@ export class Neo4jMemoryStore implements MemoryStore {
         skipped += 1;
         return;
       }
-      let token: string | undefined;
+      let stamp: { token: string; sequenceNumber: number } | undefined;
       const sequenceNumber = sequenceNumbers[index];
       if (sequenceNumber !== undefined) {
-        token = `${this.runId}:${sequenceNumber}`;
+        const token = `${this.runId}:${sequenceNumber}`;
         if (this.written.has(token)) {
           skipped += 1;
           return;
         }
+        stamp = { token, sequenceNumber };
       }
-      payload.push({ role: (message.role ?? "user") as MessageRole, content: text });
-      tokens.push(token);
+      payload.push({ role: message.role, content: text });
+      stamps.push(stamp);
     });
 
     if (payload.length === 0) return { written: 0, skipped };
 
     const sink = await this.resolveSink();
-    for (let start = 0; start < payload.length; start += BULK_CHUNK) {
-      const end = start + BULK_CHUNK;
-      await this.client.shortTerm.bulkAddMessages(sink, payload.slice(start, end));
-      // Banked per chunk, not after the loop: Strands rolls its high-water mark
-      // back and retries the whole batch when this throws, so tokens banked
-      // only at the end would let an already-written chunk be written twice.
-      for (const token of tokens.slice(start, end)) {
-        if (token !== undefined) this.written.add(token);
+    try {
+      for (let start = 0; start < payload.length; start += BULK_CHUNK) {
+        const end = start + BULK_CHUNK;
+        await this.client.shortTerm.bulkAddMessages(sink, payload.slice(start, end));
+        // Banked per chunk, not after the loop: Strands rolls its high-water mark
+        // back and retries the whole batch when this throws, so tokens banked
+        // only at the end would let an already-written chunk be written twice.
+        for (const stamp of stamps.slice(start, end)) {
+          if (stamp === undefined) continue;
+          this.written.add(stamp.token);
+          this.highestSequence = Math.max(this.highestSequence, stamp.sequenceNumber);
+        }
       }
+    } catch (error) {
+      // Rethrown: the manager's coordinator needs the failure to roll its
+      // high-water mark back and retry. The flag makes that retry recognisable.
+      this.lastAddFailed = true;
+      throw error;
     }
+    this.lastAddFailed = false;
     return { written: payload.length, skipped };
+  }
+
+  /**
+   * Re-mint `runId` and drop the banked tokens when the numbering restarts.
+   *
+   * A `MemoryManager` builds a fresh `ExtractionCoordinator` per `initAgent`
+   * with its counter at 0, so one store instance shared across agent runs sees
+   * the same numbers again. Restarted numbering alone is not enough to conclude
+   * a new run, though: a retried batch repeats its numbers too, and clearing on
+   * a retry would duplicate the batch instead of skipping it. A failed batch
+   * throws out of `addMessages`, so the reset only fires when the previous call
+   * returned cleanly.
+   */
+  private startNewGenerationOnRunReset(sequenceNumbers: readonly number[]): void {
+    if (this.lastAddFailed || sequenceNumbers.length === 0) return;
+    // Looped rather than Math.min(...numbers): a large buffered batch would
+    // spread into more arguments than a call frame can hold.
+    let lowest = Number.POSITIVE_INFINITY;
+    for (const sequenceNumber of sequenceNumbers) {
+      if (sequenceNumber < lowest) lowest = sequenceNumber;
+    }
+    if (lowest > this.highestSequence) return;
+    this.runId = newRunId();
+    this.written.clear();
+    this.highestSequence = -1;
   }
 
   /**
@@ -349,9 +404,10 @@ export class Neo4jMemoryStore implements MemoryStore {
   }
 
   /**
-   * Close the client only when the store constructed it. Resets the connected
-   * flag either way, so re-entering the store reconnects rather than
-   * short-circuiting on a stale flag.
+   * Close the client only when the store constructed it. Clears the connected
+   * flag either way so a later `initialize()` goes back through `connect()`,
+   * which is idempotent — `LazyConnectTransport` keeps its resolved promise, so
+   * this is bookkeeping, not a reconnect.
    */
   async close(): Promise<void> {
     if (this.ownsClient) {
@@ -368,23 +424,46 @@ export class Neo4jMemoryStore implements MemoryStore {
    * store's deterministic sink name under `STORE_METADATA_KEY`, else create one
    * carrying it. Metadata is accepted at creation and not settable afterwards.
    * The resolved id is cached, so the scan happens at most once per instance.
+   *
+   * The in-flight promise is memoized too, and assigned before the first await:
+   * Strands runs tool calls concurrently and a programmatic `MemoryManager.add`
+   * can overlap a background extraction save, so two callers can arrive here at
+   * once and each would otherwise scan, miss, and create. A rejection clears the
+   * memo so a failed resolution does not poison every later write. Same shape as
+   * `LazyConnectTransport.connect` (client.ts:180-188).
    */
   protected async resolveSink(): Promise<string> {
     if (this.sinkKey !== undefined) return this.sinkKey;
+    if (!this.sinkPromise) {
+      this.sinkPromise = this.findOrCreateSink().catch((error: unknown) => {
+        this.sinkPromise = undefined;
+        throw error;
+      });
+    }
+    return this.sinkPromise;
+  }
 
+  private async findOrCreateSink(): Promise<string> {
+    // Scanned under the same userId the create path records, so the page holds
+    // only this store family's sinks — which is what keeps SINK_SCAN_LIMIT safe.
+    const userId = this.userId ?? UNSCOPED_SINK_USER_ID;
     const existing = await this.client.shortTerm.listConversations({
       limit: SINK_SCAN_LIMIT,
-      ...(this.userId !== undefined && { userId: this.userId }),
+      userId,
     });
     for (const conversation of existing) {
-      if ((conversation.metadata ?? {})[STORE_METADATA_KEY] === this.sinkName) {
+      const metadata = conversation.metadata ?? {};
+      if (
+        metadata[STORE_METADATA_KEY] === this.sinkName ||
+        metadata[STORE_METADATA_KEY_CAMEL] === this.sinkName
+      ) {
         this.sinkKey = conversation.id;
         return this.sinkKey;
       }
     }
 
     const created = await this.client.shortTerm.createConversation({
-      userId: this.userId ?? UNSCOPED_SINK_USER_ID,
+      userId,
       metadata: { [STORE_METADATA_KEY]: this.sinkName, sessionType: "MEMORY_STORE" },
     });
     this.sinkKey = created.id;

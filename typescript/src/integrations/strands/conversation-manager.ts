@@ -73,8 +73,8 @@ export class Neo4jConversationManager {
   }
 
   async initAgent(agent: LocalAgent): Promise<void> {
-    // Before any hook is registered: a rejected configuration must fail agent
-    // construction, not half-wire it.
+    // Before any hook is registered: a rejected configuration must throw at
+    // `initAgent`, not half-wire it.
     assertNoDoubleExtraction(agent);
     const inner = await this.ensureInner();
     inner.initAgent(agent);
