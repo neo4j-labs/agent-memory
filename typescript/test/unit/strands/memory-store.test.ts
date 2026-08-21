@@ -214,3 +214,77 @@ describe("Neo4jMemoryStore.forNams", () => {
     expect(Object.keys(options)).toEqual(["name"]);
   });
 });
+
+/** Exposes the protected sink resolver so it can be tested before add() exists. */
+class ProbeStore extends Neo4jMemoryStore {
+  sink(): Promise<string> {
+    return this.resolveSink();
+  }
+}
+
+function makeProbe(options: Record<string, unknown> = {}) {
+  const { client, calls } = makeClient();
+  return { probe: new ProbeStore({ name: "graph", client, ...options } as never), calls, client };
+}
+
+describe("Neo4jMemoryStore sink resolution", () => {
+  it("creates a sink tagged with its deterministic name", async () => {
+    const { probe, calls } = makeProbe();
+    expect(await probe.sink()).toBe("c1");
+
+    expect(calls.created).toHaveLength(1);
+    expect(calls.created[0]!.metadata).toMatchObject({
+      strands_memory_store: "strands-memory-store/_/graph",
+      sessionType: "MEMORY_STORE",
+    });
+  });
+
+  it("records the configured userId on the sink", async () => {
+    const { probe, calls } = makeProbe({ userId: "alice" });
+    await probe.sink();
+
+    expect(calls.created[0]!.userId).toBe("alice");
+    expect(calls.created[0]!.metadata).toMatchObject({
+      strands_memory_store: "strands-memory-store/alice/graph",
+    });
+  });
+
+  it("labels an unscoped sink rather than inventing a tenant", async () => {
+    const { probe, calls } = makeProbe();
+    await probe.sink();
+    expect(calls.created[0]!.userId).toBe("strands-memory-store");
+  });
+
+  it("reuses an existing sink across store instances", async () => {
+    const { client, calls } = makeClient();
+    const first = await new ProbeStore({ name: "graph", client } as never).sink();
+    const second = await new ProbeStore({ name: "graph", client } as never).sink();
+
+    expect([first, second]).toEqual(["c1", "c1"]);
+    expect(calls.created).toHaveLength(1);
+  });
+
+  it("scans conversations once per store instance", async () => {
+    const { probe, calls } = makeProbe();
+    await probe.sink();
+    await probe.sink();
+    expect(calls.listConversations).toBe(1);
+  });
+
+  it("uses an explicit conversationId verbatim and never scans", async () => {
+    const { probe, calls } = makeProbe({ conversationId: "conv-42" });
+    expect(await probe.sink()).toBe("conv-42");
+
+    expect(calls.listConversations).toBe(0);
+    expect(calls.created).toEqual([]);
+  });
+
+  it("gives two differently-named stores different sinks", async () => {
+    const { client, calls } = makeClient();
+    const personal = await new ProbeStore({ name: "personal", client } as never).sink();
+    const team = await new ProbeStore({ name: "team", client } as never).sink();
+
+    expect([personal, team]).toEqual(["c1", "c2"]);
+    expect(calls.created).toHaveLength(2);
+  });
+});

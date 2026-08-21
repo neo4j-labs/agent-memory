@@ -16,17 +16,16 @@ import type {
 import { MemoryClient } from "../../client.js";
 import type { MemoryClientOptions } from "../../types.js";
 
-/** Conversation-metadata key marking a conversation as this store's write sink.
- *  Exported (rather than kept module-private) because nothing reads it yet in
- *  this task — the sink resolver lands in a later task — and an unread,
- *  unexported top-level `const` fails `noUnusedLocals`. */
-export const STORE_METADATA_KEY = "strands_memory_store";
+/** Conversation-metadata key marking a conversation as this store's write sink. */
+const STORE_METADATA_KEY = "strands_memory_store";
 
 /** `userId` recorded on a sink conversation when the store is not tenant-scoped.
  *  `createConversation` requires one (src/types.ts:445-448); the sink is still
- *  found by its metadata, so this value is a label, not an identity. Exported
- *  for the same `noUnusedLocals` reason as {@link STORE_METADATA_KEY}. */
-export const UNSCOPED_SINK_USER_ID = "strands-memory-store";
+ *  found by its metadata, so this value is a label, not an identity. */
+const UNSCOPED_SINK_USER_ID = "strands-memory-store";
+
+/** Conversations scanned when looking for an existing sink. */
+const SINK_SCAN_LIMIT = 1000;
 
 export interface Neo4jMemoryStoreOptions
   extends Pick<
@@ -155,6 +154,37 @@ export class Neo4jMemoryStore {
       await this.client.close();
     }
     this.connected = false;
+  }
+
+  /**
+   * Resolve the conversation writes go to, creating the sink on first use.
+   *
+   * NAMS mints its own conversation ids and drops a client-supplied session id,
+   * so the only portable handle is conversation metadata: list, match this
+   * store's deterministic sink name under `STORE_METADATA_KEY`, else create one
+   * carrying it. Metadata is accepted at creation and not settable afterwards.
+   * The resolved id is cached, so the scan happens at most once per instance.
+   */
+  protected async resolveSink(): Promise<string> {
+    if (this.sinkKey !== undefined) return this.sinkKey;
+
+    const existing = await this.client.shortTerm.listConversations({
+      limit: SINK_SCAN_LIMIT,
+      ...(this.userId !== undefined && { userId: this.userId }),
+    });
+    for (const conversation of existing) {
+      if ((conversation.metadata ?? {})[STORE_METADATA_KEY] === this.sinkName) {
+        this.sinkKey = conversation.id;
+        return this.sinkKey;
+      }
+    }
+
+    const created = await this.client.shortTerm.createConversation({
+      userId: this.userId ?? UNSCOPED_SINK_USER_ID,
+      metadata: { [STORE_METADATA_KEY]: this.sinkName, sessionType: "MEMORY_STORE" },
+    });
+    this.sinkKey = created.id;
+    return this.sinkKey;
   }
 }
 
