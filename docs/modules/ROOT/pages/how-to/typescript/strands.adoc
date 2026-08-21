@@ -55,9 +55,12 @@ const agent = new Agent({
 ----
 
 `extraction` is off by default and `MemoryManager`'s `add_memory` tool is
-opt-in, so a store left at both defaults recalls but never writes.
-`Neo4jMemoryStore.forNams({ name: "graph" })` is the form that builds and
-owns its own client from the environment.
+opt-in, so a store left at both defaults recalls but never writes. Three ways
+to get memories in: set `extraction` on the store, pair it with
+`Neo4jSessionStorage` / `connectMemoryToAgent` (the recommended shape, below),
+or set `addToolConfig: true` on the manager.
+`Neo4jMemoryStore.forNams({ name: "graph" })` is the form that builds and owns
+its own client from the environment.
 
 == When to use this
 
@@ -97,8 +100,10 @@ graph.
 **`add(content, metadata)`** — `metadata.kind` routes the write:
 
 * `"entity"` → `longTerm.addEntity`
-* `"preference"` → `longTerm.addPreference`
-* `"fact"` → `longTerm.addFact` (requires `subject`/`predicate`/`object` in metadata)
+* `"preference"` → `longTerm.addPreference` — no REST route on hosted NAMS, so
+  this always falls back to the sink
+* `"fact"` → `longTerm.addFact` (requires `subject`/`predicate`/`object` in
+  metadata) — likewise unsupported on hosted NAMS, so it always falls back
 * anything else, or a kind the backend doesn't support → falls back to a
   message in the sink conversation, which NAMS extracts server-side. A memory
   is never silently dropped.
@@ -106,7 +111,9 @@ graph.
 **`addMessages(messages, context)`** — the extraction write path. Chunks
 into batches of 100 (`bulkAddMessages`'s limit) and dedupes retried batches
 using the manager's per-message sequence numbers, so a retried save doesn't
-double-write.
+double-write. The dedupe is **in-process**: the bookkeeping does not survive a
+restart, so a process that dies mid-retry can leave duplicate messages in the
+sink conversation.
 
 **`getTools()`** — one tool, `<store-name>_get_entity_graph`, when
 `graphTools` is `true`.
