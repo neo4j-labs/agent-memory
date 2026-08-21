@@ -211,6 +211,20 @@ describe("RestTransport — error handling", () => {
     await client.close();
   });
 
+  it("returns NotFoundError on 404", async () => {
+    server.use(
+      http.get(`${ENDPOINT}/entities/:id`, () =>
+        HttpResponse.json({ error: "entity not found" }, { status: 404 }),
+      ),
+    );
+
+    const client = newClient();
+    await expect(
+      client.longTerm.getEntity("ent-00000000-0000-0000-0000-000000000000"),
+    ).rejects.toBeInstanceOf(NotFoundError);
+    await client.close();
+  });
+
   it("legacy bridge-only methods throw NotSupportedError", async () => {
     const client = newClient();
     await expect(
