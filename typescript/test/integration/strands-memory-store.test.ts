@@ -128,6 +128,38 @@ describe("Neo4jMemoryStore over REST", () => {
     }
   });
 
+  it("a second store instance finds the existing sink instead of creating another", async () => {
+    const created: unknown[] = [];
+    let conversations: Array<Record<string, unknown>> = [];
+
+    server.use(
+      http.get(`${ENDPOINT}/conversations`, () => HttpResponse.json({ conversations })),
+      http.post(`${ENDPOINT}/conversations`, async ({ request }) => {
+        const body = (await request.json()) as { metadata?: Record<string, unknown> };
+        created.push(body);
+        const conversation = { id: "conv-1", metadata: body.metadata };
+        conversations = [conversation];
+        return HttpResponse.json(conversation);
+      }),
+      http.post(`${ENDPOINT}/conversations/conv-1/messages/bulk`, async ({ request }) => {
+        const body = (await request.json()) as { messages: unknown[] };
+        return HttpResponse.json({ messages: body.messages.map((_, i) => ({ id: `m${i}` })) });
+      }),
+    );
+
+    const batch = [{ role: "user", content: [{ text: "ok" }] }] as never;
+    await newStore().addMessages(batch);
+    // A fresh instance holds no cached sink id, so it has to find the first
+    // store's sink by its metadata. That only works because the transport's
+    // request-side snake->camel and response-side camel->snake conversions are
+    // symmetric over nested metadata keys: the key goes out as
+    // `strandsMemoryStore` and comes back as `strands_memory_store`. The unit
+    // fakes echo metadata verbatim and cannot catch an asymmetry here.
+    await newStore().addMessages(batch);
+
+    expect(created).toHaveLength(1);
+  });
+
   it("propagates an auth failure out of search", async () => {
     server.use(
       // initialize() connects first, which health-checks via GET /conversations.
