@@ -165,6 +165,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `reference/authentication.adoc`, and the Python↔TS parity note in
 > `reference/typescript-api.adoc`, to reflect the new SDK surface.
 
+### Fixed
+
+- **A bare hosted NAMS endpoint no longer falls back to the bridge protocol
+  (#129).** `NamsConfig(endpoint="https://memory.neo4jlabs.com")` — the base
+  URL as printed in the docs, without the `/v1` suffix — was auto-detected as
+  the TCK bridge protocol, so the SDK spoke the wrong wire format to the
+  REST-only hosted service and failed silently. The endpoint is now normalized
+  to `https://memory.neo4jlabs.com/v1` when it targets the hosted host and
+  carries no `/v<N>` segment, via both `NamsConfig` and the `MEMORY_ENDPOINT`
+  env alias. Version-less on-prem and `localhost` endpoints are untouched and
+  keep their bridge behavior.
+
 ## [0.5.0] - 2026-05-30
 
 The NAMS-alignment release. Adds workspace addressing, a first-class
