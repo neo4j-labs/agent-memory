@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "tsx src/index.ts"
+    "start": "tsx src/index.ts",
+    "start:memory-store": "tsx src/memory-store.ts"
   },
   "dependencies": {
     "@neo4j-labs/agent-memory": "file:../..",

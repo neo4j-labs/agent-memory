@@ -12,8 +12,12 @@ manager with opt-in retrieval injection, plus agent-callable memory tools).
 ====
 
 The `@neo4j-labs/agent-memory/integrations/strands` subpath plugs into
-all three of Strands' orthogonal extension surfaces:
+all four of Strands' orthogonal extension surfaces:
 
+* **`MemoryStore`** — long-term recall injected into the agent loop.
+  `MemoryManager` searches the graph before each model call and folds the
+  hits into the turn. The preferred way to give a Strands agent memory —
+  see Quick Start below.
 * **`SnapshotStorage`** — session state persists to a NAMS conversation
   automatically. Real conversation messages land as `Message` graph
   nodes; non-message snapshot state (Strands' `data` minus messages,
@@ -27,18 +31,118 @@ all three of Strands' orthogonal extension surfaces:
   so every agent turn becomes a queryable `ReasoningStep` with tool calls
   attached.
 
+In Strands' own vocabulary: the session storage restores sessions, the
+memory store feeds the agent loop.
+
 A runnable example lives at
 link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/strands[`clients/typescript/examples/strands`].
+
+== Quick Start
+
+[source,typescript]
+----
+import { Agent, MemoryManager } from "@strands-agents/sdk";
+import { MemoryClient } from "@neo4j-labs/agent-memory";
+import { Neo4jMemoryStore } from "@neo4j-labs/agent-memory/integrations/strands";
+
+const memory = new MemoryClient();               // reads MEMORY_API_KEY
+const store = new Neo4jMemoryStore({ name: "graph", client: memory, userId: "user-123" });
+
+const agent = new Agent({
+  model,
+  memoryManager: new MemoryManager({ stores: [store] }),
+});
+----
+
+`extraction` is off by default and `MemoryManager`'s `add_memory` tool is
+opt-in, so a store left at both defaults recalls but never writes.
+`Neo4jMemoryStore.forNams({ name: "graph" })` is the form that builds and
+owns its own client from the environment.
 
 == When to use this
 
 You want any of:
 
+* Long-term entity recall injected into every model call, with no manual
+  retrieval step
 * Agent state that survives process restarts AND is queryable as a graph
 * Reflections/observations injected into the model context automatically
 * A full reasoning trace of every agent turn, browseable later via
   `client.reasoning.getTraceByConversation(id)`
 * Cross-agent memory sharing through the same conversation
+
+== Memory store
+
+`Neo4jMemoryStore` implements Strands' `MemoryStore` over a NAMS context
+graph.
+
+[options="header"]
+|===
+| Option | Meaning
+| `name` | Required. Identifies the store to `MemoryManager` (search/add tool targeting).
+| `client` / `clientOptions` | Exactly one. `client` borrows a live `MemoryClient` (left open on `close()`); `clientOptions` builds and owns one.
+| `description` | Shown in tool descriptions. Defaults to a generic "entities extracted from conversations" line.
+| `maxSearchResults` | Default result cap when a caller doesn't pass a per-call limit.
+| `writable` | Defaults to `true`.
+| `extraction` | `boolean \| ExtractionConfig`. Defaults to `false` (recall-only).
+| `conversationId` | Explicit write sink. Omit to use a deterministic, name-derived sink conversation.
+| `userId` | Scopes writes and the sink name to one tenant. Reads are not narrowed — `searchEntities` takes no user filter.
+| `includeEntities` | Defaults to `true`. `false` makes the store a write-only sink.
+| `graphTools` | Defaults to `true`. Exposes the store's `get_entity_graph` tool from `getTools()`.
+|===
+
+**`search(query, options)`** — entities only. Returns each hit as a
+`MemoryEntry` with no `score` (NAMS returns no similarity for entity search).
+
+**`add(content, metadata)`** — `metadata.kind` routes the write:
+
+* `"entity"` → `longTerm.addEntity`
+* `"preference"` → `longTerm.addPreference`
+* `"fact"` → `longTerm.addFact` (requires `subject`/`predicate`/`object` in metadata)
+* anything else, or a kind the backend doesn't support → falls back to a
+  message in the sink conversation, which NAMS extracts server-side. A memory
+  is never silently dropped.
+
+**`addMessages(messages, context)`** — the extraction write path. Chunks
+into batches of 100 (`bulkAddMessages`'s limit) and dedupes retried batches
+using the manager's per-message sequence numbers, so a retried save doesn't
+double-write.
+
+**`getTools()`** — one tool, `<store-name>_get_entity_graph`, when
+`graphTools` is `true`.
+
+Recall is **entities-only**: the hosted service exposes `search_entities`
+but no `search_preferences` or `search_facts` route, so `includePreferences`
+and `includeFacts` are absent from the options type — a compile error if you
+reach for them, not a silently ignored flag. `get_entity_graph` traverses
+one hop via `longTerm.expandGraph`, not a configurable depth, for the same
+reason: no multi-hop traversal endpoint.
+
+=== Pairing with session persistence
+
+The recommended shape: `Neo4jSessionStorage` (or `Neo4jConversationManager`)
+persists and restores the transcript, and the `Neo4jMemoryStore` recalls —
+with its own `extraction` left off. Both read and write through the same
+`MemoryClient`.
+
+`Neo4jConversationManager.initAgent` throws if it's paired with a
+`Neo4jMemoryStore` that has `extraction` enabled: the hosted service already
+extracts every message write server-side, so a store that also extracts
+would ingest the same turns twice. Set `extraction: false` on the store (the
+recommended fix — the session integration keeps persisting the transcript),
+or drop the Neo4j session integration and let the store own ingestion. There
+is no equivalent guard when `Neo4jSessionStorage` is used on its own,
+without `Neo4jConversationManager` — storage never receives an agent, so
+there is nowhere to attach one.
+
+Unlike the Python guide, there is no double-injection warning here.
+`Neo4jConversationManager` injects reflections and observations from
+`getContext()`; `MemoryManager` injects entity recall from the store.
+Different tiers, no duplicated query, so running both together is supported
+and additive rather than a misconfiguration. If you want only one block in
+the prompt, turn the other off: `injection: false` on `MemoryManager`, or
+`includeReflections`/`includeObservations: false` on
+`Neo4jConversationManager`.
 
 == One-line wiring with `connectMemoryToAgent`
 
@@ -173,6 +277,9 @@ We test against `@strands-agents/sdk@^1.2.0`. Strands' v1 API is stable
 under semver — the integration should track v1 minor releases without
 adjustment. We will not break the integration API across minor releases
 of `@neo4j-labs/agent-memory` without a CHANGELOG callout.
+
+`Neo4jMemoryStore` needs `@strands-agents/sdk >= 1.6.0`, the release that
+introduced `MemoryManager`/`MemoryStore`. We test it against `1.13.0`.
 
 == See also
 

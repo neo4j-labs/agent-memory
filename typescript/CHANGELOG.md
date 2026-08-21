@@ -13,7 +13,9 @@ appear in minor versions with a callout in this file.
 
 - **`Neo4jMemoryStore`** (`@neo4j-labs/agent-memory/integrations/strands`) — a
   Strands `MemoryStore` for long-term recall inside the agent loop. Hand it to
-  `MemoryManager({ stores: [...] })`. Entities-only on NAMS.
+  `MemoryManager({ stores: [...] })`. Recall is entities-only, and its
+  `get_entity_graph` tool traverses one hop, because the hosted service exposes
+  no preference/fact search and no multi-hop traversal.
 
 ### Changed
 
