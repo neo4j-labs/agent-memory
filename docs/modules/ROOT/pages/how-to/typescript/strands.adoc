@@ -56,9 +56,12 @@ const agent = new Agent({
 
 `extraction` is off by default and `MemoryManager`'s `add_memory` tool is
 opt-in, so a store left at both defaults recalls but never writes. Three ways
-to get memories in: set `extraction` on the store, pair it with
-`Neo4jSessionStorage` / `connectMemoryToAgent` (the recommended shape, below),
-or set `addToolConfig: true` on the manager.
+to get memories in:
+
+1. set `extraction` on the store,
+2. pair it with `Neo4jSessionStorage` / `connectMemoryToAgent` (the recommended shape, below), or
+3. set `addToolConfig: true` on the manager
+
 `Neo4jMemoryStore.forNams({ name: "graph" })` is the form that builds and owns
 its own client from the environment.
 
@@ -286,7 +289,7 @@ adjustment. We will not break the integration API across minor releases
 of `@neo4j-labs/agent-memory` without a CHANGELOG callout.
 
 `Neo4jMemoryStore` needs `@strands-agents/sdk >= 1.6.0`, the release that
-introduced `MemoryManager`/`MemoryStore`. We test it against `1.13.0`.
+introduced `MemoryManager`/`MemoryStore`.
 
 == See also
 
