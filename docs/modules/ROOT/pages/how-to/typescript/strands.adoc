@@ -92,8 +92,8 @@ graph.
 | `writable` | Defaults to `true`.
 | `extraction` | `boolean \| ExtractionConfig`. Defaults to `false` (recall-only).
 | `conversationId` | Explicit write sink. Omit to use a deterministic, name-derived sink conversation.
-| `userId` | Scopes writes and the sink name to one tenant. Reads are not narrowed — `searchEntities` takes no user filter.
-| `includeEntities` | Defaults to `true`. `false` makes the store a write-only sink.
+| `userId` | Scopes the *sink conversation*: it names the sink, is recorded on it, and filters the scan that finds it. Nothing else is narrowed — `searchEntities` takes no user filter, and `add({ kind: "entity" })` reaches the workspace-wide `addEntity`. Not tenant isolation.
+| `includeEntities` | Defaults to `true`. `false` turns off automatic recall only; set `graphTools: false` as well to stop the model reading the graph through the tool.
 | `graphTools` | Defaults to `true`. Exposes the store's `get_entity_graph` tool from `getTools()`.
 |===
 
@@ -119,7 +119,26 @@ restart, so a process that dies mid-retry can leave duplicate messages in the
 sink conversation.
 
 **`getTools()`** — one tool, `<store-name>_get_entity_graph`, when
-`graphTools` is `true`.
+`graphTools` is `true`. Its neighbourhood is capped at 50 nodes and 50 edges,
+with edges filtered to the nodes that survived the cap; a trimmed result carries
+`truncated: true`.
+
+=== Sink discovery, and where it gives out
+
+Writes go to one sink conversation per `userId`/`name` pair, found by a
+metadata tag so restarts reuse it rather than accumulating orphans. Two limits
+come from the hosted API rather than from this integration:
+
+* **The scan reads one page of 1000 conversations.** `listConversations` exposes
+  no cursor, so a `userId` with more than that many conversations can push its
+  own sink out of view, and the store creates a second one. Pass an explicit
+  `conversationId` to pin the sink if you expect that volume.
+* **Scan-then-create is not atomic.** There is no create-if-absent endpoint, so
+  two processes starting simultaneously against the same `userId`/`name` can each
+  create a sink. Within one process concurrent writes are safe — resolution is
+  memoised on the first call. Ingestion split across two sinks still converges
+  in the graph, since entity resolution runs on the extracted entities, not on
+  the conversation.
 
 Recall is **entities-only**: the hosted service exposes `search_entities`
 but no `search_preferences` or `search_facts` route, so `includePreferences`

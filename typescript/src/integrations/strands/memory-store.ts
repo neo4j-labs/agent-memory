@@ -66,11 +66,14 @@ export interface Neo4jMemoryStoreOptions
   clientOptions?: MemoryClientOptions;
   /** Explicit write target. Omit to use a deterministic sink conversation. */
   conversationId?: string;
-  /** Scopes writes and the sink name to one tenant. Reads are not narrowed:
-   *  `searchEntities` takes no user filter. */
+  /** Scopes the sink conversation: it names the sink and is recorded on it, and
+   *  it filters the scan that finds it. Nothing else is narrowed — `searchEntities`
+   *  takes no user filter, and a typed `add({ kind: "entity" })` reaches
+   *  `addEntity`, which is workspace-wide. Not tenant isolation. */
   userId?: string;
-  /** Include entities in `search()`. Defaults to `true`; `false` makes the
-   *  store a write-only sink. */
+  /** Include entities in `search()`. Defaults to `true`; `false` turns off
+   *  automatic recall only — `getTools()` still exposes the graph tool unless
+   *  `graphTools: false` is set too, so the model can still read. */
   includeEntities?: boolean;
   /** Expose the store's graph tool from `getTools()`. Defaults to `true`. */
   graphTools?: boolean;

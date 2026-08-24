@@ -128,23 +128,37 @@ async function entityGraphPayload(
   // resolved through entity search first (get_entity_by_name has no REST
   // route) and the reported depth is always 1.
   const expansion = await store.client.longTerm.expandGraph(centre.id);
-  // Flagged only when the cap actually dropped something: the model cannot
-  // otherwise tell a small neighbourhood from a truncated one.
+
+  const nodes = expansion.nodes.slice(0, MAX_ELEMENTS).map((node) => ({
+    id: String(node.id),
+    name: String((node.properties ?? {}).name ?? ""),
+    ...(node.labels ? { labels: node.labels } : {}),
+  }));
+
+  // Edges are capped too, then filtered to the nodes that survived. Capping the
+  // two lists independently can leave an edge pointing at a node that was cut,
+  // which reads to the model as a neighbour it cannot see. The centre is always
+  // a valid endpoint even though it is not itself in `nodes`.
+  const reachable = new Set([String(centre.id), ...nodes.map((node) => node.id)]);
+  const edges = expansion.edges
+    .slice(0, MAX_ELEMENTS)
+    .map((edge) => ({
+      from: String(edge.source ?? ""),
+      relationship: String(edge.type ?? ""),
+      to: String(edge.target ?? ""),
+    }))
+    .filter((edge) => reachable.has(edge.from) && reachable.has(edge.to));
+
+  // Flagged whenever anything was dropped — by the cap or by the filter above.
+  // The model cannot otherwise tell a small neighbourhood from a trimmed one.
   const truncated =
-    expansion.nodes.length > MAX_ELEMENTS || expansion.edges.length > MAX_ELEMENTS;
+    expansion.nodes.length > nodes.length || expansion.edges.length > edges.length;
+
   return {
     center: centre.canonicalName ?? centre.name,
     depth: 1,
     ...(truncated && { truncated: true }),
-    nodes: expansion.nodes.slice(0, MAX_ELEMENTS).map((node) => ({
-      id: String(node.id),
-      name: String((node.properties ?? {}).name ?? ""),
-      ...(node.labels ? { labels: node.labels } : {}),
-    })),
-    edges: expansion.edges.slice(0, MAX_ELEMENTS).map((edge) => ({
-      from: String(edge.source ?? ""),
-      relationship: String(edge.type ?? ""),
-      to: String(edge.target ?? ""),
-    })),
+    nodes,
+    edges,
   };
 }

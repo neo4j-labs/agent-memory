@@ -811,6 +811,52 @@ describe("Neo4jMemoryStore.getTools", () => {
     expect(result.content[0]!.json).toEqual({ error: "entity not found: Acme Corp" });
   });
 
+  it("drops edges whose endpoints did not survive the cap", async () => {
+    // The two lists are capped independently, so an edge can point at a node
+    // that was cut. The model would read that as a neighbour it cannot see.
+    const { store } = makeStore({
+      clientOverrides: {
+        longTerm: {
+          async searchEntities() {
+            return [{ id: "centre", name: "Acme Corp", type: "ORGANIZATION", createdAt: "" }];
+          },
+          async expandGraph() {
+            return {
+              // 60 nodes: n0..n49 survive the cap, n50..n59 are cut.
+              nodes: Array.from({ length: 60 }, (_, i) => ({
+                id: `n${i}`,
+                properties: { name: `e${i}` },
+              })),
+              edges: [
+                { source: "centre", target: "n0", type: "KEPT_IN_RANGE" },
+                { source: "centre", target: "n55", type: "DANGLING" },
+                { source: "n60", target: "n61", type: "BOTH_MISSING" },
+              ],
+            };
+          },
+        },
+      },
+    });
+
+    const result = await runTool(store.getTools()[0] as never);
+    const json = result.content[0]!.json as {
+      nodes: Array<{ id: string }>;
+      edges: Array<{ from: string; relationship: string; to: string }>;
+      truncated?: boolean;
+    };
+
+    expect(json.nodes).toHaveLength(50);
+    expect(json.edges.map((e) => e.relationship)).toEqual(["KEPT_IN_RANGE"]);
+    // The centre counts as reachable even though it is not listed in `nodes`.
+    expect(json.edges[0]).toMatchObject({ from: "centre", to: "n0" });
+    expect(json.truncated).toBe(true);
+    const ids = new Set(json.nodes.map((n) => n.id));
+    for (const edge of json.edges) {
+      expect(ids.has(edge.from) || edge.from === "centre").toBe(true);
+      expect(ids.has(edge.to) || edge.to === "centre").toBe(true);
+    }
+  });
+
   it("caps nodes and edges at 50", async () => {
     const wide = (n: number) =>
       Array.from({ length: n }, (_, i) => ({ id: `n${i}`, properties: { name: `e${i}` } }));
