@@ -24,6 +24,13 @@ appear in minor versions with a callout in this file.
   `Neo4jMemoryStore` that has `extraction` enabled — both sides would ingest the
   same turns.
 
+### Fixed
+
+- **`longTerm.expandGraph(...)` over REST.** Its payload was nested under a
+  literal `body` key, so the hosted service rejected every call with
+  `nodeId is required`. The method has been unusable against `/v1` since it
+  landed.
+
 ## 0.4.0 — NAMS alignment
 
 Adds workspace addressing, a first-class ontology surface
