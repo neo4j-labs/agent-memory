@@ -64,7 +64,20 @@ const agent = new Agent({ name: "scout", memory });
 
 == Strands Agents (TypeScript)
 
-`connectMemoryToAgent` returns the `sessionManager` and
+`Neo4jMemoryStore` is a Strands `MemoryStore`: hand it to `MemoryManager`
+and long-term entity recall is injected into the agent loop before every
+model call — the preferred way to give a Strands agent memory.
+
+[source,ts]
+----
+import { Agent, MemoryManager } from "@strands-agents/sdk";
+import { Neo4jMemoryStore } from "@neo4j-labs/agent-memory/integrations/strands";
+
+const store = new Neo4jMemoryStore({ name: "graph", client, userId: "alice" });
+const agent = new Agent({ model, memoryManager: new MemoryManager({ stores: [store] }) });
+----
+
+Separately, `connectMemoryToAgent` returns the `sessionManager` and
 `conversationManager` for a Strands `Agent` — session state persists to a
 NAMS conversation, three-tier context is injected on every model call, and
 reasoning hooks capture each turn.

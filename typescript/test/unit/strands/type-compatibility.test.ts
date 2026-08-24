@@ -9,10 +9,12 @@ import { describe, it, expect } from "vitest";
 import type {
   SnapshotStorage,
   ConversationManager,
+  MemoryStore,
 } from "@strands-agents/sdk";
 import {
   Neo4jConversationManager,
   Neo4jSessionStorage,
+  Neo4jMemoryStore,
 } from "../../../src/integrations/strands/index.js";
 import { MemoryClient } from "../../../src/client.js";
 
@@ -40,5 +42,16 @@ describe("Strands type compatibility", () => {
     expect(ducktyped.name).toBe("neo4j:context-injection");
     expect(typeof ducktyped.reduce).toBe("function");
     expect(typeof ducktyped.initAgent).toBe("function");
+  });
+
+  it("Neo4jMemoryStore satisfies MemoryStore", () => {
+    const store: MemoryStore = new Neo4jMemoryStore({
+      name: "graph",
+      clientOptions: { apiKey: "k" },
+    });
+    expect(store.name).toBe("graph");
+    expect(store.writable).toBe(true);
+    expect(typeof store.initialize).toBe("function");
+    expect(typeof store.search).toBe("function");
   });
 });
