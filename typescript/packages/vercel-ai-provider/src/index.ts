@@ -1,7 +1,7 @@
 /**
  * Neo4j Agent Memory (NAMS) — unified entry point.
  *
- * Three integration modes backed by the same @neo4j-labs/agent-memory client:
+ * Four integration modes backed by the same @neo4j-labs/agent-memory client:
  * - Provider   — `createNamsProvider(...)`: a registrable ProviderV4; memory is
  *                retrieved + persisted automatically on every call
  * - Middleware — `createNams(...).wrap(model, scope)`: decorate an existing
@@ -9,6 +9,10 @@
  * - Tools      — `createNams(...).tools(scope)`: the model calls query_memory /
  *                store_memory itself; `.toolsWithMcp(scope, mcp)` optionally
  *                merges tools from an MCP server into the same tool set
+ * - Hooks      — `createNams(...).hooks(scope?)`: runtime-controlled session
+ *                memory; `loadSession()` restores the transcript before each
+ *                generation and `onFinish()` persists every turn exactly once,
+ *                regardless of what the LLM decides
  *
  * @example
  * ```ts
@@ -36,6 +40,11 @@ export type {
   FinishedTurn, UnstoredTurn,
 } from './vercel-ai-provider-tools';
 export { createNamsProvider } from './vercel-ai-provider';
+export { createNamsHooks } from './vercel-ai-provider-hooks';
+export type {
+  NamsHooks, NamsHooksOptions, LoadSessionOptions, OnFinishScope,
+  NamsOnFinishEvent, NamsOnFinishCallback,
+} from './vercel-ai-provider-hooks';
 
 import type { LanguageModel } from 'ai';
 import type { LanguageModelV4 } from '@ai-sdk/provider';
@@ -43,14 +52,22 @@ import type { NamsConfig, NamsScope } from './vercel-ai-provider-client';
 import type { NamsMemoryConfig } from './vercel-ai-provider-middleware';
 import type { GraphExtractorOptions } from './vercel-ai-provider-extract';
 import type { McpConfig } from './vercel-ai-provider-tools';
+import { resolveLogger } from './vercel-ai-provider-client';
 import { createNamsMemory } from './vercel-ai-provider-middleware';
 import { createNamsMemoryTools, createNamsTools } from './vercel-ai-provider-tools';
+import { createNamsHooks } from './vercel-ai-provider-hooks';
 
-/** The three NAMS integration modes. */
-export type NamsMode = 'provider' | 'middleware' | 'tools';
+/** The four NAMS integration modes. */
+export type NamsMode = 'provider' | 'middleware' | 'tools' | 'hooks';
 
 export interface NamsFactoryConfig extends NamsConfig {
+  /**
+   * Tools mode only. Builds an entity graph from each `store_memory` fact /
+   * preference / pattern write, which NAMS does not extract itself. One extra
+   * model call per stored memory. Other modes ignore it and log a warning.
+   */
   extractionModel?: LanguageModel;
+  /** Tunes the extractor built from `extractionModel` (e.g. override the self-referential guard). */
   extractionOptions?: GraphExtractorOptions;
   maxMemories?: number;
   persistInteractions?: boolean;
@@ -70,13 +87,22 @@ export function createNams(config: NamsFactoryConfig) {
     endpoint: config.endpoint,
     workspaceId: config.workspaceId,
     logger: config.logger,
-    extractionModel: config.extractionModel,
-    extractionOptions: config.extractionOptions,
     maxMemories: config.maxMemories,
     persistInteractions: config.persistInteractions,
   };
 
   const memory = createNamsMemory(providerConfig);
+
+  // extractionModel applies to tools mode only — say so instead of no-opping.
+  let extractionScopeWarned = false;
+  const warnExtractionIgnored = (mode: string): void => {
+    if (extractionScopeWarned || !config.extractionModel) return;
+    extractionScopeWarned = true;
+    resolveLogger(config).warn(
+      `extractionModel is ignored in ${mode} mode — NAMS extracts persisted ` +
+      `turns server-side. It applies to .tools()/.toolsWithMcp() only.`,
+    );
+  };
 
   return {
     /**
@@ -85,6 +111,7 @@ export function createNams(config: NamsFactoryConfig) {
      * Pass the returned model directly to ToolLoopAgent / generateText.
      */
     wrap(model: LanguageModelV4, scope: NamsScope): LanguageModelV4 {
+      warnExtractionIgnored('middleware');
       return memory.wrap(model, scope);
     },
 
@@ -120,6 +147,26 @@ export function createNams(config: NamsFactoryConfig) {
         conversationId: scope.conversationId,
         extractionModel: config.extractionModel,
         mcp: mcpConfig,
+      });
+    },
+
+    /**
+     * Hooks mode — runtime-controlled (deterministic) session memory.
+     * Returns { loadSession, onFinish }: call `loadSession()` in `prepareCall`
+     * (or before generateText/streamText) to restore the transcript, and pass
+     * `onFinish()` as the finish callback to persist every user, assistant,
+     * and tool turn exactly once per generation — no tool calls, no LLM
+     * discretion. Scope is optional here; it can also be supplied per call or
+     * via `runtimeContext` (see `createNamsHooks`). Combine with `.tools()`
+     * if long-term memory should stay model-driven on the same agent.
+     */
+    hooks(scope?: Partial<NamsScope>) {
+      warnExtractionIgnored('hooks');
+      const { extractionModel: _m, extractionOptions: _o, ...hooksConfig } = config;
+      return createNamsHooks({
+        ...hooksConfig,
+        userId: scope?.userId,
+        conversationId: scope?.conversationId,
       });
     },
   };
