@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -17,6 +18,8 @@ from neo4j_agent_memory.core.memory import BaseMemory, MemoryEntry
 from neo4j_agent_memory.core.protocols import LongTermProtocol
 from neo4j_agent_memory.graph import queries
 from neo4j_agent_memory.graph.query_builder import build_create_entity_query
+
+logger = logging.getLogger(__name__)
 
 # =============================================================================
 # DEDUPLICATION CONFIGURATION
@@ -560,6 +563,74 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
             )
 
         return entity, dedup_result
+
+    async def generate_entity_embeddings_batch(
+        self,
+        *,
+        batch_size: int = 128,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> dict[str, int]:
+        """Generate embeddings for entities that don't have them.
+
+        Entity analogue of ShortTermMemory.generate_embeddings_batch(). Useful after bulk
+        extraction with generate_embeddings=False, or to repair graphs created before entity
+        embedding was wired into the extraction path. Idempotent: only touches entities whose
+        embedding IS NULL. Embeds the entity name (matching add_entity).
+
+        Returns:
+            {"embedded": int, "failed": int, "remaining": int}
+        """
+        if self._embedder is None:
+            return {"embedded": 0, "failed": 0, "remaining": 0}
+
+        total_rows = await self._client.execute_read(queries.COUNT_ENTITIES_WITHOUT_EMBEDDINGS, {})
+        total = total_rows[0]["count"] if total_rows else 0
+        embedded = 0
+        failed = 0
+
+        while True:
+            rows = await self._client.execute_read(
+                queries.GET_ENTITIES_WITHOUT_EMBEDDINGS, {"skip": 0, "limit": batch_size}
+            )
+            if not rows:
+                break
+            progressed = False
+            # Batch-embed the names in this page.
+            names = [r["name"] for r in rows if r.get("name")]
+            try:
+                vectors = await self._embedder.embed_batch(names)
+                name_to_vec = dict(zip(names, vectors))
+            except Exception:  # noqa: BLE001 — degrade to per-name below
+                name_to_vec = {}
+            for r in rows:
+                name = r.get("name")
+                vec = name_to_vec.get(name)
+                if vec is None and name:
+                    try:
+                        vec = await self._embedder.embed(name)
+                    except Exception:  # noqa: BLE001
+                        failed += 1
+                        logger.warning("entity embedding failed for id=%s", r.get("id"))
+                        continue
+                if vec is None:
+                    failed += 1
+                    continue
+                await self._client.execute_write(
+                    queries.UPDATE_ENTITY_EMBEDDING, {"id": r["id"], "embedding": vec}
+                )
+                embedded += 1
+                progressed = True
+                if on_progress:
+                    on_progress(embedded, total)
+            if not progressed:
+                # Every row in this page failed — avoid an infinite loop.
+                break
+
+        remaining_rows = await self._client.execute_read(
+            queries.COUNT_ENTITIES_WITHOUT_EMBEDDINGS, {}
+        )
+        remaining = remaining_rows[0]["count"] if remaining_rows else 0
+        return {"embedded": embedded, "failed": failed, "remaining": remaining}
 
     async def add_preference(
         self,
