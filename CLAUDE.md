@@ -2422,3 +2422,11 @@ When adding or modifying documentation:
 - **Navigation**: `docs/modules/ROOT/nav.adoc` (single source, hand-maintained)
 - **Output**: Static HTML in `docs/build/site/`
 - **Deployment**: Vercel (`docs/vercel.json`, `outputDirectory: build/site`; auto-deploys on push to main)
+
+<!-- OPENWIKI:START -->
+
+## OpenWiki
+
+See [AGENTS.md](AGENTS.md) for OpenWiki agent instructions.
+
+<!-- OPENWIKI:END -->
