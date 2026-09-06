@@ -61,10 +61,16 @@ class TestSetEntityFeedback:
     async def test_calls_long_term_method(self, mock_client):
         tools = nams_memory_tools(mock_client)
         set_feedback = next(t for t in tools if t.__name__ == "set_entity_feedback")
-        result = await set_feedback(entity_id="e1", feedback="positive", user_identifier="alice")
+        result = await set_feedback(entity_id="e1", feedback="positive")
         mock_client.long_term.set_entity_feedback.assert_awaited_once_with("e1", "positive")
         assert "positive" in result
         assert "e1" in result
+
+    async def test_rejects_ignored_user_identifier(self, mock_client):
+        tools = nams_memory_tools(mock_client)
+        set_feedback = next(t for t in tools if t.__name__ == "set_entity_feedback")
+        with pytest.raises(TypeError):
+            await set_feedback(entity_id="e1", feedback="positive", user_identifier="alice")
 
 
 class TestGetEntityHistory:
@@ -77,9 +83,10 @@ class TestGetEntityHistory:
         )
         tools = nams_memory_tools(mock_client)
         get_history = next(t for t in tools if t.__name__ == "get_entity_history")
-        result = await get_history("e1", limit=10)
+        result = await get_history("e1", limit=1)
         assert "c1" in result
         assert "mentions=5" in result
+        assert "c2" not in result
 
     async def test_empty_history(self, mock_client):
         mock_client.long_term.get_entity_history = AsyncMock(return_value=[])
@@ -87,6 +94,22 @@ class TestGetEntityHistory:
         get_history = next(t for t in tools if t.__name__ == "get_entity_history")
         result = await get_history("e1")
         assert "No history" in result
+
+    @pytest.mark.parametrize("limit", [0, -1])
+    async def test_non_positive_limit_returns_no_history(self, mock_client, limit):
+        mock_client.long_term.get_entity_history = AsyncMock(
+            return_value=[
+                {"conversation_id": "c1", "mention_count": 5},
+                {"conversation_id": "c2", "mention_count": 1},
+            ]
+        )
+        tools = nams_memory_tools(mock_client)
+        get_history = next(t for t in tools if t.__name__ == "get_entity_history")
+
+        result = await get_history("e1", limit=limit)
+
+        assert result == "No history for this entity."
+        mock_client.long_term.get_entity_history.assert_awaited_once_with("e1")
 
 
 class TestGetEntityProvenance:

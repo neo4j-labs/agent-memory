@@ -816,7 +816,6 @@ def _register_platinum_tools(mcp: FastMCP) -> None:
         ctx: Context,
         entity_id: str,
         feedback: str,
-        user_identifier: str | None = None,
     ) -> str:
         """Record user feedback on an entity (NAMS Platinum).
 
@@ -829,7 +828,6 @@ def _register_platinum_tools(mcp: FastMCP) -> None:
                 memory_search).
             feedback: Free-form feedback — convention is "positive" or
                 "negative".
-            user_identifier: Optional per-user scoping (multi-tenant).
         """
         client = get_client(ctx)
         try:
@@ -861,7 +859,8 @@ def _register_platinum_tools(mcp: FastMCP) -> None:
         client = get_client(ctx)
         try:
             history = await client.long_term.get_entity_history(entity_id)
-            return json.dumps({"entity_id": entity_id, "history": history}, default=str)
+            bounded_history = history[: max(limit, 0)]
+            return json.dumps({"entity_id": entity_id, "history": bounded_history}, default=str)
         except Exception as e:
             logger.error(f"Error in memory_get_entity_history: {e}")
             return json.dumps({"error": str(e)})
@@ -907,7 +906,10 @@ def _register_platinum_tools(mcp: FastMCP) -> None:
         client = get_client(ctx)
         try:
             reflections = await client.short_term.get_reflections(session_id)
-            return json.dumps({"session_id": session_id, "reflections": reflections}, default=str)
+            bounded_reflections = reflections[: max(limit, 0)]
+            return json.dumps(
+                {"session_id": session_id, "reflections": bounded_reflections}, default=str
+            )
         except Exception as e:
             logger.error(f"Error in memory_get_reflections: {e}")
             return json.dumps({"error": str(e)})

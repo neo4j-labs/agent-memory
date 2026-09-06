@@ -272,6 +272,25 @@ class TestToolDescriptions:
             assert "min_score" in params
             assert "include_relationships" in params
 
+    def test_nams_feedback_tool_does_not_expose_ignored_user_id(
+        self, mock_strands: MagicMock
+    ) -> None:
+        """NAMS feedback is not scoped by the ignored user_id argument."""
+        with patch.dict("sys.modules", {"strands": mock_strands}):
+            from neo4j_agent_memory.integrations.strands.tools import (
+                _nams_set_entity_feedback_tool,
+            )
+
+            tool = _nams_set_entity_feedback_tool(
+                endpoint="https://memory.test/v1",
+                api_key="test-key",
+                transport_mode="rest",
+            )
+
+            import inspect
+
+            assert list(inspect.signature(tool).parameters) == ["entity_id", "feedback"]
+
     def test_get_entity_graph_tool_signature(self, mock_strands: MagicMock) -> None:
         """Test get_entity_graph tool has correct parameters."""
         with patch.dict("sys.modules", {"strands": mock_strands}):
