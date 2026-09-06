@@ -1,5 +1,6 @@
 """Unit tests for relation storage in short-term memory."""
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -379,3 +380,145 @@ class TestCypherQueries:
         assert "MERGE (source)-[r:RELATED_TO]->(target)" in query
         assert "relation_type" in query
         assert "confidence" in query
+
+
+class _FailingEmbedder:
+    """Embedder whose ``embed`` and ``embed_batch`` always raise."""
+
+    dimensions = 3
+
+    def __init__(self, error: Exception | None = None) -> None:
+        self._error = error or RuntimeError("simulated embed failure")
+
+    async def embed(self, text: str) -> list[float]:
+        raise self._error
+
+    async def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        raise self._error
+
+
+class _SucceedingEmbedder:
+    """Embedder that returns a deterministic vector for happy-path checks."""
+
+    dimensions = 3
+
+    def __init__(self, vector: list[float] | None = None) -> None:
+        self._vector = vector or [0.1, 0.2, 0.3]
+
+    async def embed(self, text: str) -> list[float]:
+        return list(self._vector)
+
+    async def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        return [list(self._vector) for _ in texts]
+
+
+class TestEmbeddingResilience:
+    """Message writes and entity extraction must survive embedding failures.
+
+    Regression coverage for bug #104: an ``embed()`` failure on oversize input
+    was aborting the whole write path and silently dropping the message and its
+    extracted entities.
+    """
+
+    @pytest.fixture
+    def mock_client(self) -> MagicMock:
+        client = MagicMock()
+        client.execute_write = AsyncMock(return_value=[])
+        client.execute_read = AsyncMock(return_value=[])
+        return client
+
+    def _find_create_message_call(self, mock_client: MagicMock) -> Any:
+        from neo4j_agent_memory.graph import queries
+
+        for call in mock_client.execute_write.call_args_list:
+            args = call[0]
+            if args and args[0] == queries.CREATE_MESSAGE:
+                return call
+        raise AssertionError("CREATE_MESSAGE was never called")
+
+    def _find_batch_create_call(self, mock_client: MagicMock) -> Any:
+        from neo4j_agent_memory.graph import queries
+
+        for call in mock_client.execute_write.call_args_list:
+            args = call[0]
+            if args and args[0] == queries.CREATE_MESSAGES_BATCH:
+                return call
+        raise AssertionError("CREATE_MESSAGES_BATCH was never called")
+
+    @pytest.mark.asyncio
+    async def test_add_message_survives_embed_failure(self, mock_client: MagicMock) -> None:
+        """``embed()`` raising must not abort the message write or entity extraction."""
+        entities = [ExtractedEntity(name="Alice", type="PERSON", confidence=0.9)]
+        extractor = MockExtractorWithRelations(entities, [])
+        memory = ShortTermMemory(
+            mock_client,
+            embedder=_FailingEmbedder(),
+            extractor=extractor,
+        )
+
+        message = await memory.add_message(
+            "session-fail",
+            MessageRole.USER,
+            "Alice said hello",
+            extract_entities=True,
+            extract_relations=False,
+        )
+
+        assert message.embedding is None
+        create_call = self._find_create_message_call(mock_client)
+        params = create_call[0][1]
+        assert params["embedding"] is None
+        assert params["content"] == "Alice said hello"
+
+        entity_calls = [
+            call
+            for call in mock_client.execute_write.call_args_list
+            if len(call[0]) > 1 and "name" in str(call[0][1]) and "Alice" in str(call[0][1])
+        ]
+        assert entity_calls, "entity extraction must still run when embedding fails"
+
+    @pytest.mark.asyncio
+    async def test_add_message_happy_path_stores_embedding(self, mock_client: MagicMock) -> None:
+        """Regression: when the embedder succeeds, the vector must flow through."""
+        vector = [0.4, 0.5, 0.6]
+        memory = ShortTermMemory(mock_client, embedder=_SucceedingEmbedder(vector))
+
+        message = await memory.add_message(
+            "session-ok",
+            MessageRole.USER,
+            "hi",
+            extract_entities=False,
+        )
+
+        assert message.embedding == vector
+        params = self._find_create_message_call(mock_client)[0][1]
+        assert params["embedding"] == vector
+
+    @pytest.mark.asyncio
+    async def test_add_messages_batch_survives_embed_batch_failure(
+        self, mock_client: MagicMock
+    ) -> None:
+        """``embed_batch()`` raising must not abort the batch insert."""
+        memory = ShortTermMemory(mock_client, embedder=_FailingEmbedder())
+
+        messages = [
+            {"role": "user", "content": "first"},
+            {"role": "assistant", "content": "second"},
+            {"role": "user", "content": "third"},
+        ]
+
+        created = await memory.add_messages_batch(
+            "session-batch-fail",
+            messages,
+            extract_entities=False,
+        )
+
+        assert len(created) == 3
+        assert all(m.embedding is None for m in created)
+
+        batch_call = self._find_batch_create_call(mock_client)
+        params = batch_call[0][1]
+        stored = params["messages"]
+        assert len(stored) == 3
+        assert all(row["embedding"] is None for row in stored)
+        assert [row["content"] for row in stored] == ["first", "second", "third"]
