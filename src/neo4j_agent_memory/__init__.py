@@ -100,6 +100,7 @@ from neo4j_agent_memory.core.exceptions import (
     ExtractionError,
     MemoryError,
     NotConnectedError,
+    NotFoundError,
     NotSupportedError,
     RateLimitError,
     ResolutionError,
@@ -318,6 +319,7 @@ __all__ = [
     # NAMS exceptions (v0.4)
     "TransportError",
     "AuthenticationError",
+    "NotFoundError",
     "NotSupportedError",
     "RateLimitError",
     "ValidationError",

@@ -167,11 +167,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a sufficiently similar name responds `{id, resolution: "merged", merged_into,
   confidence}` with no `name`/`type`, which previously failed Pydantic `Entity`
   parsing. The client now follows up with `GET /entities/{id}` and returns the
-  canonical merged-into entity (falling back to the request's name/type if that
-  read fails). Entity responses with explicit `null` fields (NAMS projects
-  unset node properties as JSON `null` — e.g. `confidence` on a manually
-  created entity) now fall back to model defaults instead of failing
-  validation.
+  canonical merged-into entity. Fallback is limited to 404 or empty/incomplete
+  canonical responses with a valid merge ID; authentication, rate-limit,
+  transport, and malformed-data errors propagate. HTTP 404 now raises the
+  exported `NotFoundError`, a `MemoryError` subclass. Merge details are preserved
+  in `metadata.nams_resolution`, including a `fallback` flag and the separate
+  `merge_confidence` score; fallback entity confidence uses the model default.
+  Null confidence and collection fields use meaningful defaults, while invalid
+  server IDs and explicit null/invalid creation timestamps fail validation.
 
 > **Docs note:** when this ships, flip the "REST-only / no SDK method" notes in
 > `reference/rest-api.adoc`, `reference/ontology-api.adoc`, and

@@ -9,15 +9,24 @@ relationship writes raise :class:`NotSupportedError`.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 
 import httpx
 import pytest
 import respx
+from pydantic import ValidationError as PydanticValidationError
 
-from neo4j_agent_memory.core.exceptions import NotSupportedError
+from neo4j_agent_memory.core.exceptions import (
+    AuthenticationError,
+    NotSupportedError,
+    RateLimitError,
+    TransportError,
+    ValidationError,
+)
 from neo4j_agent_memory.core.protocols import LongTermProtocol
 from neo4j_agent_memory.memory.long_term import Entity, Relationship
 from neo4j_agent_memory.nams import HttpTransport, NamsLongTermMemory, StaticApiKeyAuth
+from neo4j_agent_memory.nams.long_term import _normalize_entity
 
 
 @pytest.fixture
@@ -234,7 +243,13 @@ class TestAddEntity:
         assert str(entity.id) == SAMPLE_ENTITY["id"]
         assert entity.name == "Alice Smith"
         assert entity.type == "PERSON"
-        assert entity.confidence == 0.93
+        assert entity.confidence == 1.0
+        assert entity.metadata["nams_resolution"] == {
+            "resolution": "merged",
+            "merged_into": SAMPLE_ENTITY["id"],
+            "merge_confidence": 0.93,
+            "fallback": True,
+        }
 
     @respx.mock
     async def test_review_pending_resolution_parses(self, long_term):
@@ -269,6 +284,280 @@ class TestAddEntity:
         # NAMS accepts only name/type/description.
         for k in ("subtype", "aliases", "attributes", "confidence", "deduplicate", "geocode"):
             assert k not in body
+
+
+def _mock_merged_create(**overrides):
+    return respx.post("https://memory.test/v1/entities").respond(
+        200,
+        json={
+            "id": SAMPLE_ENTITY["id"],
+            "resolution": "merged",
+            "merged_into": SAMPLE_ENTITY["id"],
+            "confidence": 0.93,
+            **overrides,
+        },
+    )
+
+
+class TestMergedEntityResolution:
+    @pytest.mark.parametrize(
+        ("status", "error_type"),
+        [
+            (400, ValidationError),
+            (401, AuthenticationError),
+            (403, AuthenticationError),
+            (405, NotSupportedError),
+            (429, RateLimitError),
+            (500, TransportError),
+            (501, NotSupportedError),
+        ],
+    )
+    @respx.mock
+    async def test_canonical_read_errors_propagate(self, long_term, status, error_type):
+        _mock_merged_create()
+        route = respx.get(f"https://memory.test/v1/entities/{SAMPLE_ENTITY['id']}").respond(
+            status, json={"error": "canonical read failed"}, headers={"Retry-After": "0"}
+        )
+        with pytest.raises(error_type):
+            await long_term.add_entity("Alice Smith", "PERSON")
+        assert route.call_count == (3 if status in (429, 500) else 1)
+
+    @pytest.mark.parametrize("error_type", [httpx.ConnectError, httpx.ReadTimeout])
+    @respx.mock
+    async def test_canonical_network_errors_propagate(self, long_term, error_type):
+        _mock_merged_create()
+        route = respx.get(f"https://memory.test/v1/entities/{SAMPLE_ENTITY['id']}").mock(
+            side_effect=error_type("canonical read failed")
+        )
+        with pytest.raises(TransportError) as exc_info:
+            await long_term.add_entity("Alice Smith", "PERSON")
+        assert isinstance(exc_info.value.__cause__, error_type)
+        assert route.call_count == 3
+
+    @pytest.mark.parametrize("score", [0.93, 1.00001, -0.1, "unscaled", None])
+    @pytest.mark.parametrize("fallback", [False, True])
+    @respx.mock
+    async def test_score_and_metadata_are_separate_from_entity_confidence(
+        self, long_term, score, fallback
+    ):
+        _mock_merged_create(confidence=score)
+        route = respx.get(f"https://memory.test/v1/entities/{SAMPLE_ENTITY['id']}")
+        if fallback:
+            route.respond(404)
+        else:
+            route.respond(200, json={**SAMPLE_ENTITY, "metadata": {"source": "canonical"}})
+        entity = await long_term.add_entity("Alice Smith", "PERSON")
+        assert entity.confidence == (1.0 if fallback else SAMPLE_ENTITY["confidence"])
+        expected_resolution = {
+            "resolution": "merged",
+            "merged_into": SAMPLE_ENTITY["id"],
+            "fallback": fallback,
+        }
+        if score is not None:
+            expected_resolution["merge_confidence"] = score
+        assert entity.metadata["nams_resolution"] == expected_resolution
+        if not fallback:
+            assert entity.metadata["source"] == "canonical"
+
+    @respx.mock
+    async def test_absent_merge_score_stays_absent(self, long_term):
+        respx.post("https://memory.test/v1/entities").respond(
+            200, json={"id": SAMPLE_ENTITY["id"], "resolution": "merged"}
+        )
+        respx.get(f"https://memory.test/v1/entities/{SAMPLE_ENTITY['id']}").respond(
+            200, json=SAMPLE_ENTITY
+        )
+        entity = await long_term.add_entity("Alice Smith", "PERSON")
+        assert "merge_confidence" not in entity.metadata["nams_resolution"]
+
+    @pytest.mark.parametrize("target_key", ["merged_into", "mergedInto", "id"])
+    @respx.mock
+    async def test_merge_target_aliases(self, long_term, target_key):
+        respx.post("https://memory.test/v1/entities").respond(
+            200, json={target_key: SAMPLE_ENTITY["id"], "resolution": "merged"}
+        )
+        route = respx.get(f"https://memory.test/v1/entities/{SAMPLE_ENTITY['id']}").respond(
+            200, json=SAMPLE_ENTITY
+        )
+        entity = await long_term.add_entity("Alice Smith", "PERSON")
+        assert route.call_count == 1
+        assert str(entity.id) == SAMPLE_ENTITY["id"]
+
+    @pytest.mark.parametrize("missing_target", [None, "", " \t "])
+    @respx.mock
+    async def test_empty_merge_target_uses_valid_id(self, long_term, missing_target):
+        _mock_merged_create(merged_into=missing_target)
+        route = respx.get(f"https://memory.test/v1/entities/{SAMPLE_ENTITY['id']}").respond(
+            200, json=SAMPLE_ENTITY
+        )
+        entity = await long_term.add_entity("Alice Smith", "PERSON")
+        assert route.call_count == 1
+        assert str(entity.id) == SAMPLE_ENTITY["id"]
+
+    @pytest.mark.parametrize("fallback", [False, True])
+    @respx.mock
+    async def test_envelope_and_canonical_metadata_are_preserved(self, long_term, fallback):
+        _mock_merged_create(metadata={"request": "create", "source": "envelope"})
+        detail = {"metadata": {"source": "canonical"}}
+        if not fallback:
+            detail.update(SAMPLE_ENTITY)
+        respx.get(f"https://memory.test/v1/entities/{SAMPLE_ENTITY['id']}").respond(
+            200, json=detail
+        )
+        entity = await long_term.add_entity("Alice Smith", "PERSON")
+        assert entity.metadata["request"] == "create"
+        assert entity.metadata["source"] == "canonical"
+        assert entity.metadata["nams_resolution"]["fallback"] is fallback
+
+    @pytest.mark.parametrize(
+        "identity",
+        [
+            {},
+            {"id": None},
+            {"id": ""},
+            {"id": "bad-id"},
+            {"merged_into": []},
+            {"merged_into": [], "id": SAMPLE_ENTITY["id"]},
+            {"merged_into": False, "id": SAMPLE_ENTITY["id"]},
+            {"merged_into": 0, "id": SAMPLE_ENTITY["id"]},
+        ],
+    )
+    @respx.mock
+    async def test_invalid_merge_identity_fails_before_read(self, long_term, identity):
+        respx.post("https://memory.test/v1/entities").respond(
+            200, json={"resolution": "merged", **identity}
+        )
+        with pytest.raises(PydanticValidationError):
+            await long_term.add_entity("Alice Smith", "PERSON")
+        assert len(respx.calls) == 1
+
+    @pytest.mark.parametrize(
+        "detail",
+        [
+            None,
+            {},
+            {"name": None},
+            {"name": ""},
+            {"name": " \t "},
+            {"metadata": {"source": "partial"}},
+        ],
+    )
+    @respx.mock
+    async def test_incomplete_canonical_response_uses_marked_fallback(self, long_term, detail):
+        _mock_merged_create()
+        respx.get(f"https://memory.test/v1/entities/{SAMPLE_ENTITY['id']}").respond(
+            200, json=detail
+        )
+        before = datetime.now(timezone.utc)
+        entity = await long_term.add_entity("Alice Smith", "PERSON")
+        after = datetime.now(timezone.utc)
+        assert str(entity.id) == SAMPLE_ENTITY["id"]
+        assert entity.name == "Alice Smith"
+        assert entity.type == "PERSON"
+        assert entity.confidence == 1.0
+        assert before <= entity.created_at <= after
+        assert entity.created_at.utcoffset().total_seconds() == 0
+        assert entity.metadata["nams_resolution"]["fallback"] is True
+        if detail and detail.get("metadata"):
+            assert entity.metadata["source"] == "partial"
+
+    @pytest.mark.parametrize("status", [200, 204])
+    @respx.mock
+    async def test_empty_canonical_body_uses_marked_fallback(self, long_term, status):
+        _mock_merged_create()
+        respx.get(f"https://memory.test/v1/entities/{SAMPLE_ENTITY['id']}").respond(status)
+        entity = await long_term.add_entity("Alice Smith", "PERSON")
+        assert entity.name == "Alice Smith"
+        assert str(entity.id) == SAMPLE_ENTITY["id"]
+        assert entity.metadata["nams_resolution"]["fallback"] is True
+
+    @pytest.mark.parametrize("entity_type", ["", " \t "])
+    @respx.mock
+    async def test_blank_canonical_type_is_invalid(self, long_term, entity_type):
+        _mock_merged_create()
+        respx.get(f"https://memory.test/v1/entities/{SAMPLE_ENTITY['id']}").respond(
+            200, json={"type": entity_type}
+        )
+        with pytest.raises(ValidationError, match="type must not be blank"):
+            await long_term.add_entity("Alice Smith", "PERSON")
+
+    @pytest.mark.parametrize(
+        "detail",
+        [
+            [],
+            "not an entity",
+            {"name": 17},
+            {"id": None},
+            {"id": "bad-id"},
+            {"name": "Alice"},
+            {"createdAt": None},
+            {"createdAt": "bad-date"},
+            {"confidence": 1.1},
+            {"type": None},
+            {"aliases": "Alice"},
+            {"metadata": []},
+        ],
+    )
+    @respx.mock
+    async def test_malformed_canonical_fields_do_not_fall_back(self, long_term, detail):
+        _mock_merged_create()
+        respx.get(f"https://memory.test/v1/entities/{SAMPLE_ENTITY['id']}").respond(
+            200, json=detail
+        )
+        with pytest.raises(PydanticValidationError):
+            await long_term.add_entity("Alice Smith", "PERSON")
+
+    @pytest.mark.parametrize("name", ["Alice", None])
+    @respx.mock
+    async def test_canonical_identity_must_match_merge_target(self, long_term, name):
+        _mock_merged_create()
+        respx.get(f"https://memory.test/v1/entities/{SAMPLE_ENTITY['id']}").respond(
+            200, json={**SAMPLE_ENTITY, "name": name, "id": "00000000-0000-0000-0000-000000000002"}
+        )
+        with pytest.raises(ValidationError, match="does not match the merge target"):
+            await long_term.add_entity("Alice Smith", "PERSON")
+
+
+class TestNormalizeEntity:
+    def test_known_null_fields_use_defaults(self):
+        entity = Entity.model_validate(
+            _normalize_entity(
+                {
+                    **SAMPLE_ENTITY,
+                    "confidence": None,
+                    "aliases": None,
+                    "attributes": None,
+                    "metadata": None,
+                    "description": None,
+                    "updatedAt": None,
+                }
+            )
+        )
+        assert entity.confidence == 1.0
+        assert entity.aliases == []
+        assert entity.attributes == {}
+        assert entity.metadata == {}
+        assert entity.description is None
+        assert entity.updated_at is None
+        assert entity.created_at == datetime(2026, 5, 17, 12, tzinfo=timezone.utc)
+
+    @pytest.mark.parametrize(
+        "changes", [{"id": None}, {"id": "bad-id"}, {"createdAt": None}, {"createdAt": "bad-date"}]
+    )
+    def test_invalid_identity_and_timestamps_are_not_defaulted(self, changes):
+        with pytest.raises(PydanticValidationError):
+            Entity.model_validate(_normalize_entity({**SAMPLE_ENTITY, **changes}))
+
+    def test_missing_id_never_generates_a_uuid(self):
+        payload = {key: value for key, value in SAMPLE_ENTITY.items() if key != "id"}
+        with pytest.raises(PydanticValidationError):
+            Entity.model_validate(_normalize_entity(payload))
+
+    def test_missing_timestamp_keeps_existing_default_behavior(self):
+        payload = {key: value for key, value in SAMPLE_ENTITY.items() if key != "createdAt"}
+        before = datetime.now(timezone.utc)
+        entity = Entity.model_validate(_normalize_entity(payload))
+        assert before <= entity.created_at <= datetime.now(timezone.utc)
 
 
 class TestSearchEntities:

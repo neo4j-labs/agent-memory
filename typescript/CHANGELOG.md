@@ -17,12 +17,15 @@ appear in minor versions with a callout in this file.
   `{id, resolution: "merged", merged_into, confidence}` with no
   `name`/`type`, which previously flowed into an Entity with `undefined`
   name and type. The client now follows up with `GET /entities/{id}` and
-  returns the canonical merged-into entity (falling back to the request's
-  name/type if that read fails). Entity responses with explicit `null` fields
-  (NAMS projects unset node properties as JSON `null` — e.g. `confidence` on a
-  manually created entity) are now normalized to `undefined` so optional
-  Entity fields match their declared types at runtime. Mirrors the same fix
-  in the Python SDK.
+  returns the canonical merged-into entity. Fallback is limited to HTTP 404
+  or empty/incomplete canonical responses with a valid merge ID; other errors
+  propagate. Fallback entities use a lowercase hosted type and a client-generated
+  ISO creation timestamp. The additive optional `Entity.metadata` preserves
+  canonical metadata and exposes merge details in `nams_resolution`, including
+  a `fallback` flag and separate `merge_confidence`; merge scores no longer
+  populate entity confidence. Missing IDs and malformed canonical fields are
+  rejected before conversion. Optional null fields are normalized to `undefined`
+  on entities, inline relationship references, preferences, facts, and mentions.
 
 ## 0.4.0 — NAMS alignment
 
