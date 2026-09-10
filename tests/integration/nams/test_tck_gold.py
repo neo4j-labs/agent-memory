@@ -177,10 +177,11 @@ async def test_entity_visible_across_sessions(
     e = await nams_client.long_term.add_entity(entity_name, "PERSON")
     e = e[0] if isinstance(e, tuple) else e
 
-    # Query from session B context. NAMS search is async-indexed; poll.
+    # Query the returned canonical name: the create may have merged onto a
+    # prior run's entity. NAMS search is async-indexed; poll.
     found = None
     for _ in range(10):  # ~5s
-        found = await nams_client.long_term.get_entity_by_name(entity_name)
+        found = await nams_client.long_term.get_entity_by_name(e.name)
         if found is not None:
             break
         await asyncio.sleep(0.5)
@@ -191,4 +192,5 @@ async def test_entity_visible_across_sessions(
             "Cross-session visibility is verified by the write succeeding "
             f"with entity id {e.id} from session_a={session_a}."
         )
-    assert found.name == entity_name
+    assert found.name == e.name
+    assert found.id == e.id

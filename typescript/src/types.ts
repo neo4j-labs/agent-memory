@@ -117,6 +117,8 @@ export interface Entity {
   sourceStage?: string;
   /** Hosted service: relationships referenced by getEntity. */
   relationships?: EntityRelationshipRef[];
+  /** Entity metadata; hosted merge provenance is stored under `nams_resolution`. */
+  metadata?: Record<string, unknown>;
 }
 
 export interface EntityRelationshipRef {

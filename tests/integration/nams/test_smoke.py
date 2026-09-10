@@ -45,7 +45,13 @@ async def test_smoke_full_flow(nams_client: MemoryClient, nams_session: str) -> 
     entity_name = f"SmokeTest-{uuid.uuid4().hex[:8]}"
     entity = await nams_client.long_term.add_entity(entity_name, "PERSON")
     entity = entity[0] if isinstance(entity, tuple) else entity
-    assert entity.name == entity_name
+    assert entity.name.strip()
+    if entity.name != entity_name:
+        # Similar smoke-test names can merge across runs in the shared sandbox.
+        resolution = entity.metadata.get("nams_resolution", {})
+        assert resolution.get("resolution") == "merged"
+        assert resolution.get("merged_into") == str(entity.id)
+        assert resolution.get("fallback") is False
 
     # Reasoning: tied to the session.
     trace = await nams_client.reasoning.start_trace(nams_session, "smoke task")

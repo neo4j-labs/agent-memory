@@ -285,6 +285,10 @@ const ROUTES: Record<string, RestCall | "noop" | "unsupported"> = {
     method: "POST",
     path: "/graph/expand",
     hasBody: true,
+    // `longTerm.expandGraph` hands its payload over as a `body` object, so it
+    // must be sent verbatim. Without this the generic builder nests it under a
+    // literal `body` key and the service answers "nodeId is required".
+    snakeBody: true,
   },
   explain_step: {
     method: "GET",

@@ -25,6 +25,7 @@ import {
   decodeBlob,
   isSyntheticStrandsMessage,
 } from "./synthetic.js";
+import { strandsMessageToText, toStrandsMessage } from "./messages.js";
 
 interface StrandsStateBlob {
   /** snapshotId associated with this synthetic message. */
@@ -291,32 +292,6 @@ function mergeMessagesIntoSnapshot(
     ...blob,
     data: { ...(blob.data ?? {}), messages: messages as unknown as never },
   };
-}
-
-function strandsMessageToText(msg: StrandsMessage): string {
-  // Strands messages carry ContentBlock[]. Flatten plain-text blocks into a
-  // single string; non-text blocks (images, tool uses) are described by tag.
-  const blocks = (msg as unknown as { content: unknown[] }).content ?? [];
-  if (!Array.isArray(blocks)) return "";
-  const parts: string[] = [];
-  for (const b of blocks) {
-    if (b && typeof b === "object") {
-      const block = b as { text?: unknown; type?: string };
-      if (typeof block.text === "string") {
-        parts.push(block.text);
-      } else if (block.type) {
-        parts.push(`[${block.type}]`);
-      }
-    }
-  }
-  return parts.join("\n");
-}
-
-function toStrandsMessage(m: { role: string; content: string }): StrandsMessage {
-  return {
-    role: m.role as StrandsMessage["role"],
-    content: [{ text: m.content }] as unknown as StrandsMessage["content"],
-  } as StrandsMessage;
 }
 
 function sameStateBlob(a: StrandsStateBlob, b: StrandsStateBlob): boolean {

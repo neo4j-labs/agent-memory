@@ -373,6 +373,7 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         extract_relations: bool = True,
         on_progress: Callable[[int, int], None] | None = None,
         on_batch_complete: Callable[[int, list[Message]], None] | None = None,
+        user_identifier: str | None = None,
     ) -> list[Message]:
         """
         Bulk load messages with transaction batching for better performance.
@@ -398,6 +399,9 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
                               (only applies when extract_entities=True)
             on_progress: Callback for progress updates (completed_count, total_count)
             on_batch_complete: Callback after each batch completes (batch_num, batch_messages)
+            user_identifier: When provided, scopes the conversation to a
+                :User node via ``(:User)-[:HAS_CONVERSATION]->(:Conversation)``.
+                Required when ``MemorySettings.memory.multi_tenant=True``.
 
         Returns:
             List of created Message objects
@@ -405,8 +409,11 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         if not messages:
             return []
 
-        # Ensure conversation exists
-        conv_id = await self._ensure_conversation(session_id, None)
+        # Multi-tenant guardrail (same as add_message).
+        self._enforce_multi_tenant(user_identifier)
+
+        # Ensure conversation exists, tenant-linked when user_identifier is given.
+        conv_id = await self._ensure_conversation(session_id, None, user_identifier=user_identifier)
 
         total = len(messages)
         all_created: list[Message] = []
@@ -567,7 +574,7 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
 
         Thin ``ShortTermProtocol`` alias over :meth:`add_messages_batch`;
         extra keyword arguments (``batch_size``, ``generate_embeddings``,
-        ``extract_entities``, …) are forwarded.
+        ``extract_entities``, ``user_identifier``, …) are forwarded.
         """
         return await self.add_messages_batch(session_id, messages, **kwargs)
 
@@ -696,7 +703,7 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
                 describing the entities to MERGE on and link.
             user_identifier: When provided, scopes the conversation to a
                 :User node via ``(:User)-[:HAS_CONVERSATION]->(:Conversation)``.
-                Required when ``MemorySettings.multi_tenant=True``.
+                Required when ``MemorySettings.memory.multi_tenant=True``.
 
         Returns:
             The created message

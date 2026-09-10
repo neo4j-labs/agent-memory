@@ -9,7 +9,7 @@
     "src/integrations/strands/index.ts",
     "src/testing.ts"
   ],
-  "out": "docs-api",
+  "out": "../docs/modules/ROOT/attachments/api/typescript",
   "name": "@neo4j-labs/agent-memory",
   "includeVersion": true,
   "excludePrivate": true,

@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Strands MemoryStore** (`Neo4jMemoryStore`) — cross-session recall for Strands
+  agents via `MemoryManager(stores=[...])`: long-term search, plus writes that feed
+  server-side extraction. Entities only on NAMS. Needs `strands-agents>=1.44.0`.
+  `get_tools()` adds `{name}_get_entity_graph` (multi-hop bolt, 1-hop NAMS) and, bolt-only with a configured user_id, the user-scoped `{name}_get_user_preferences`.
+  A store built from `settings=` owns its client and rebinds it when the event
+  loop changes (Strands' synchronous `Agent(...)` runs every call on a fresh
+  loop); a client passed as `client=` is never closed or reconnected, and a
+  loop change raises a named error instead of an opaque driver `RuntimeError`.
+  With a `user_id` set, preference recall is scoped to that user in both the
+  store and `Neo4jSessionManager` injection (`search_preferences` applies no
+  user filter, so an unscoped call could surface another tenant's
+  preferences).
+  Tool names are prefixed with the store's `name` so they coexist with
+  `context_graph_tools`' identically-named tools rather than silently
+  replacing them in the agent's registry, and `max_search_results` caps the
+  *total* rows per `search()` — shared across entities, preferences and facts
+  so no kind is crowded out.
 - **Strands SessionManager** (`Neo4jSessionManager`) — automatic conversation
   persistence/restore for AWS Strands agents via `Agent(session_manager=...)`,
   backed by any `MemoryClient` (bolt or NAMS). Includes opt-in long-term
@@ -50,8 +67,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   they raised `AttributeError`). This lets `client.short_term` / `client.long_term`
   type-check without per-call-site `attr-defined` suppressions.
 
+### Fixed
+
+- **`add_messages_batch` now accepts `user_identifier`**, enforcing `multi_tenant`
+  and linking the conversation to its `:User`; previously the bulk path silently
+  wrote unscoped, unlinked conversations — so a bulk write that used to succeed
+  now raises `ValueError` when `multi_tenant=True` and `user_identifier` is omitted.
+
 ### Changed
 
+- `strands` extra requires `strands-agents>=1.44.0` (was `>=0.1.0`).
+- **`Neo4jSessionManager` now guards against a paired `Neo4jMemoryStore` duplicating its work**: raises if both would extract the same turns (always, on NAMS), warns once if both would inject context.
+- `ShortTermProtocol.bulk_add_messages` takes explicit keyword-only params
+  (`generate_embeddings`, `extract_entities`, `extract_relations`, `user_identifier`)
+  instead of `**kwargs`.
 - **`MemoryClient` is now generic over its backend memory types**
   (`MemoryClient[ST, LT, RT]`, PEP 696 defaults). `client.short_term` /
   `.long_term` / `.reasoning` return the base `ShortTermProtocol` /
@@ -159,6 +188,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Entity) else …`); only the annotation was too narrow. **Public-API typing change** — the
   parameter was renamed `entity` → `entity_id` (all in-tree callers pass it
   positionally); code using the `entity=` keyword must switch to `entity_id=`.
+
+### Fixed
+
+- **NAMS `add_entity` no longer raises `ValidationError` when the server
+  auto-merges the create onto an existing entity.** NAMS resolves-before-create:
+  a sufficiently similar name responds `{id, resolution: "merged", merged_into,
+  confidence}` with no `name`/`type`, which previously failed Pydantic `Entity`
+  parsing. The client now follows up with `GET /entities/{id}` and returns the
+  canonical merged-into entity. Fallback is limited to 404 or empty/incomplete
+  canonical responses with a valid merge ID; authentication, rate-limit,
+  transport, and malformed-data errors propagate. HTTP 404 now raises the
+  exported `NotFoundError`, a `MemoryError` subclass. Merge details are preserved
+  in `metadata.nams_resolution`, including a `fallback` flag and the separate
+  `merge_confidence` score; fallback entity confidence uses the model default.
+  Null confidence and collection fields use meaningful defaults, while invalid
+  server IDs and explicit null/invalid creation timestamps fail validation.
 
 > **Docs note:** when this ships, flip the "REST-only / no SDK method" notes in
 > `reference/rest-api.adoc`, `reference/ontology-api.adoc`, and

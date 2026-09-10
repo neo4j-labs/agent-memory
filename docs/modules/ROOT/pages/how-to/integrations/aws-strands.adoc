@@ -1,6 +1,6 @@
 = AWS Strands Agents Integration
 :description: Integrate Neo4j Agent Memory with AWS Strands Agents SDK
-:keywords: strands, aws, bedrock, neo4j, agent, tools, session manager
+:keywords: strands, aws, bedrock, neo4j, agent, tools, session manager, memory store
 
 [NOTE]
 ====
@@ -12,25 +12,31 @@ wires up different Strands surfaces (`SnapshotStorage`,
 ====
 
 This guide shows how to add Neo4j Context Graph memory to AWS Strands agents.
-The integration offers two complementary modes, usable independently or
+In Strands' own vocabulary: the session manager restores sessions, the
+memory store feeds the agent loop. Three constructs, usable independently or
 together on the same agent:
 
 [cols="1,2,2"]
 |===
-| Mode | What it does | Reach for it when
+| Construct | What it does | Reach for it when
+
+| *Memory store* (`MemoryStore`)
+| `Neo4jMemoryStore` on `MemoryManager(stores=[...])`: long-term recall
+  (entities, preferences, facts) injected into the agent loop, plus writes
+  that feed server-side extraction.
+| The preferred way to give an agent memory. Requires `strands-agents>=1.44.0`.
+
+| *Session manager* (push-based)
+| `Neo4jSessionManager` on `Agent(session_manager=...)`: every turn is
+  persisted automatically and history is restored on restart.
+| You want zero-effort transcript capture and continuity — nothing depends
+  on the model remembering to call a tool.
 
 | *Memory tools* (pull-based)
 | `@tool` functions the agent calls on its own judgment: search memories,
   explore the entity graph, store facts, read preferences.
-| You want the agent in explicit control — deep queries, on-demand recall,
-  storing extra-conversational facts.
-
-| *Session manager* (push-based)
-| `Neo4jSessionManager` on `Agent(session_manager=...)`: every turn is
-  persisted automatically, history is restored on restart, and (opt-in)
-  relevant long-term memories are injected into each user message.
-| You want zero-effort conversation capture and continuity — nothing depends
-  on the model remembering to call a tool.
+| Deep graph queries the store doesn't cover, or `strands-agents<1.44`
+  (no `MemoryStore`).
 |===
 
 [[_overview]]
@@ -40,9 +46,9 @@ image::diagrams/multi-agent-architecture-aws-neo4j.png[Multi-agent architecture 
 
 image::diagrams/shared-memory-data-flow-kyc-graph-credit.png[Shared memory data flow: KYC agent writes entities to Neo4j, Credit agent reads them — findings are immediately available across agents,width=540,align=left]
 
-Both modes write into the same knowledge graph, which is what enables the
-multi-agent "shared brain" shown above: what one agent learns, every other
-agent can retrieve (see <<_the_shared_brain_pattern>>).
+All three constructs write into the same knowledge graph, which is what
+enables the multi-agent "shared brain" shown above: what one agent learns,
+every other agent can retrieve (see <<_the_shared_brain_pattern>>).
 
 == Installation
 
@@ -53,79 +59,312 @@ pip install neo4j-agent-memory[aws,strands]
 
 == Quick Start
 
-This example combines both modes: the session manager captures and restores
-the conversation transparently, while the tools give the agent explicit
-memory operations.
+`Neo4jMemoryStore` is the preferred way to give a Strands agent memory —
+long-term recall injected straight into the agent loop:
 
 [source,python]
 ----
 from strands import Agent
+from strands.memory import ExtractionConfig, InvocationTrigger, MemoryManager
+
 from neo4j_agent_memory import MemorySettings
+from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore, Neo4jMemoryStoreConfig
+
+settings = MemorySettings(
+    neo4j={"uri": "neo4j+s://xxx.databases.neo4j.io", "password": "your-password"},
+)
+store = Neo4jMemoryStore(
+    Neo4jMemoryStoreConfig(
+        name="graph",
+        settings=settings,
+        user_id="user-123",
+        extraction=ExtractionConfig(trigger=InvocationTrigger()),
+    )
+)
+
+agent = Agent(
+    model="anthropic.claude-sonnet-4-20250514-v1:0",
+    memory_manager=MemoryManager(stores=[store]),
+)
+
+agent("Remember that I prefer Python over JavaScript")
+----
+
+`extraction` is off by default and `MemoryManager` disables its `add_memory`
+tool by default, so a store left at both defaults recalls but never writes.
+`InvocationTrigger()` extracts on every turn; bare `extraction=True` means
+every fifth. Writes go through `add_messages`, which the backend extracts
+server-side — no extra model call.
+
+Add `Neo4jSessionManager` for transcript persistence/restore (see
+<<_pairing_with_the_session_manager>>) and `context_graph_tools` for deep
+graph queries the store doesn't cover — all three are independent and
+combine on one agent:
+
+[source,python]
+----
 from neo4j_agent_memory.integrations.strands import (
-    Neo4jRetrievalConfig,
     Neo4jSessionManager,
     context_graph_tools,
 )
 
-# Pull-based tools — the agent decides when to search or store.
 tools = context_graph_tools(
     neo4j_uri="neo4j+s://xxx.databases.neo4j.io",
     neo4j_password="your-password",
     embedding_provider="bedrock",
 )
 
-# Push-based session manager — every turn persisted, history restored,
-# relevant memories injected into each user message (opt-in).
-manager = Neo4jSessionManager(
-    "support-42",
-    settings=MemorySettings(
-        neo4j={
-            "uri": "neo4j+s://xxx.databases.neo4j.io",
-            "password": "your-password",
-        },
-    ),
-    retrieval_config=Neo4jRetrievalConfig(),
+# The session manager owns extraction here, so this store is recall-only:
+# a second config with extraction left at its default — see the pairing rule.
+store = Neo4jMemoryStore(
+    Neo4jMemoryStoreConfig(name="graph", settings=settings, user_id="user-123")
 )
+manager = Neo4jSessionManager("support-42", settings=settings, extract_entities=True)
 
 agent = Agent(
     model="anthropic.claude-sonnet-4-20250514-v1:0",
     tools=tools,
     session_manager=manager,
+    memory_manager=MemoryManager(stores=[store]),
 )
-
-agent("Remember that I prefer Python over JavaScript")
 ----
 
-Using the hosted NAMS service instead of self-hosted Neo4j? Swap in the
-NAMS variants — both read `MEMORY_API_KEY` (and optionally
-`MEMORY_ENDPOINT`) from the environment:
+Using the hosted NAMS service instead of self-hosted Neo4j? `for_nams()` on
+the store and the session manager, and `nams_context_graph_tools()`, all
+read `MEMORY_API_KEY` (and optionally `MEMORY_ENDPOINT`) from the
+environment:
 
 [source,python]
 ----
 from neo4j_agent_memory.integrations.strands import (
-    Neo4jRetrievalConfig,
+    Neo4jMemoryStore,
+    Neo4jMemoryStoreConfig,
     Neo4jSessionManager,
     nams_context_graph_tools,
 )
 
-manager = Neo4jSessionManager.for_nams(
-    "support-42",
-    retrieval_config=Neo4jRetrievalConfig(),
-)
+store = Neo4jMemoryStore.for_nams(Neo4jMemoryStoreConfig(name="graph"))
+manager = Neo4jSessionManager.for_nams("support-42")
 tools = nams_context_graph_tools()
 ----
 
 [IMPORTANT]
 ====
-Do *not* share a `MemoryClient` between the tools and the session manager.
-The tools use their own cached clients with per-call open/close semantics;
-the session manager holds a persistent client on its own event-loop thread.
-Sharing one client would let a tool's teardown close the manager's transport
-mid-session. Two transports per process is correct and cheap.
+Do *not* share a `MemoryClient` between the tools factory, the session
+manager, and the store. Each holds its own client with different lifecycle
+semantics — sharing one risks a teardown closing another's transport
+mid-session. Multiple transports per process is correct and cheap.
 ====
 
-Each mode also works on its own — the next two sections cover them
-independently.
+Each construct also works on its own — the following sections cover the
+store, the tools, and the session manager independently.
+
+[[_memory_store]]
+== Memory Store
+
+`Neo4jMemoryStore` implements Strands' `MemoryStore` protocol. Hand it to
+`MemoryManager(stores=[...])` on `Agent(memory_manager=...)` and the manager
+searches it for context and routes `add_memory`/programmatic `add()` calls
+to it.
+
+=== Configuration
+
+`Neo4jMemoryStoreConfig` is a dataclass — every field is a checked
+attribute, not a dict key. Pass exactly one of `client` (a pre-connected
+`MemoryClient`, left open) or `settings` (the store builds and owns one).
+
+[cols="1,1,3"]
+|===
+| Field | Default | Purpose
+
+| `name`
+| _(required)_
+| Store name; also names the deterministic sink conversation.
+
+| `client` \| `settings`
+| —
+| Exactly one of a pre-connected `MemoryClient`, or `MemorySettings` to build one from.
+
+| `description`
+| auto
+| Shown to the model as the store's purpose.
+
+| `max_search_results`
+| `None`
+| Cap on the *total* rows one `search()` returns, shared across entities,
+  preferences and facts so no kind is crowded out. Falls back to the
+  manager's default (3) when unset.
+
+| `writable`
+| `True`
+| `False` disables `add()`/`add_messages()`.
+
+| `extraction`
+| `False`
+| Truthy enables store-side extraction. Leave `False` (recall-only) when paired with `Neo4jSessionManager` — see <<_pairing_with_the_session_manager>>.
+
+| `conversation_id`
+| minted
+| Explicit write-sink override; otherwise a deterministic name is minted in
+  `initialize()`. Do *not* point it at a chat conversation — see
+  <<_store_limitations>>.
+
+| `user_id`
+| `None`
+| Scopes *writes* to one tenant — on `bolt`, as a
+  `(:User)-[:HAS_CONVERSATION]->(:Conversation)` edge plus a denormalized
+  property; on NAMS, as a plain `userId` property on the conversation (no
+  `:User` node, no edge) that the conversation listing filters on. Also gates
+  the `get_user_preferences` tool, and scopes preference recall in `search()`
+  to that user — `search_preferences` applies no user filter, so a scoped
+  store lists the user's active preferences instead of searching all of them.
+  Entity and fact recall stay unscoped: no user-scoped primitive exists for
+  them.
+
+| `include_entities` / `include_preferences` / `include_facts`
+| `True`
+| Search fan-out. Preferences and facts are auto-gated off on NAMS (`NotSupportedError`).
+
+| `min_score`
+| `0.2`
+| Similarity floor. bolt only — NAMS ignores it.
+
+| `graph_tools`
+| `True`
+| Whether `get_tools()` returns anything.
+|===
+
+[source,python]
+----
+from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore, Neo4jMemoryStoreConfig
+
+store = Neo4jMemoryStore(
+    Neo4jMemoryStoreConfig(name="graph", client=client, user_id="user-123")
+)
+----
+
+=== search(), add(), add_messages()
+
+`search(query)` fans out over entities, preferences, and facts and returns
+`MemoryEntry` objects: `content` is a formatted line, `metadata` carries
+`kind` (`entity`/`preference`/`fact`), `id`, `type`, and — bolt only —
+`score`. **Entities only on NAMS**: `search_preferences`/`search_facts`
+raise `NotSupportedError` there, so those two kinds are dropped from the
+fan-out automatically.
+
+`add(content, metadata=None)` writes a message into the store's sink
+conversation with extraction on by default — the one write path every
+backend supports. Set `metadata["kind"]` to `"preference"`, `"fact"`, or
+`"entity"` to route to a typed write (`add_preference`/`add_fact`/`add_entity`)
+instead; a kind unsupported on the current backend (e.g. `"fact"` on NAMS)
+falls back to the default sink and logs a warning once per store.
+
+`add_messages(messages, context)` bulk-ingests a batch of conversation turns
+into the sink with extraction on — server-side on NAMS, inline on bolt —
+so no extra model call happens. This is what a `MemoryManager` with
+`extraction` truthy calls automatically.
+
+=== Graph tools
+
+`get_tools()` returns graph-native tools the manager itself can't provide,
+bound to the store's own client. Names are prefixed with the store's `name`
+so they coexist with the tools factory's (see <<_store_limitations>>) —
+a store named `graph` yields `graph_get_entity_graph`:
+
+[cols="1,1,1,3"]
+|===
+| Tool | bolt | NAMS | Notes
+
+| `{name}_get_entity_graph`
+| yes
+| yes
+| Configurable `depth` on bolt (`get_related_entities`); NAMS traverses one hop only (`expand_graph`, keyed by node id — the entity name is resolved via search first).
+
+| `{name}_get_user_preferences`
+| yes, if `user_id` set
+| omitted
+| Bolt-only, and only shipped when the store has a configured `user_id` (scopes the lookup to that tenant). NAMS has no preferences endpoint.
+|===
+
+[[_pairing_with_the_session_manager]]
+=== Pairing with the session manager
+
+The session manager restores sessions; the memory store feeds the agent
+loop — different jobs, and pairing both on one agent is supported and
+recommended:
+
+[cols="1,3"]
+|===
+| Shape | Behaviour
+
+| Store alone
+| Store owns extraction (`extraction=True` or an explicit extractor) — the textbook Strands split.
+
+| Store + session manager (recommended)
+| Store stays recall-only (`extraction=False`, the default); the session manager persists the transcript and extracts (bolt in place, NAMS server-side).
+
+| Store + session manager, with the store also extracting
+| Raises at construction — both would write and extract the same turns twice. Exception: bolt with the session manager's own `extract_entities=False` does not raise, since then only one side extracts — the store.
+|===
+
+Recommended configuration:
+
+[source,python]
+----
+Neo4jSessionManager(..., extract_entities=True)   # transcript + extraction
+Neo4jMemoryStore(Neo4jMemoryStoreConfig(name="graph"))  # recall only (extraction=False default)
+----
+
+If both extract, `Neo4jSessionManager` raises at agent construction:
+
+----
+Neo4jSessionManager and Neo4jMemoryStore 'graph' would write and extract the
+same turns twice. Set extraction=False on Neo4jMemoryStore (recall only,
+recommended), or extract_entities=False on Neo4jSessionManager (let the
+store own extraction).
+----
+
+Separately, `Neo4jSessionManager`'s own `Neo4jRetrievalConfig` and the
+manager's default injection both fold context into the last user message —
+pairing them injects memory twice. The session manager logs a warning
+(once) naming the fix; see <<_retrieval_injection>>.
+
+[[_store_limitations]]
+=== Limitations
+
+* **The sink conversation is separate from the readable chat history.**
+  Paired with `Neo4jSessionManager`, a turn the store ingests exists twice
+  in the graph: once in the restorable transcript, once in the store's
+  sink. The duplication is in `Message` nodes, not knowledge — entities
+  converge through resolution and dedupe.
+
+* **Retry dedupe is in-process only.** `AddMessagesContext.sequence_numbers`
+  reset every run, so the `(run_id, sequence_number)` set that skips
+  already-written turns cannot outlive the process. A restart in the middle
+  of a retried extraction batch can duplicate messages in the sink.
+
+* **Pointing `conversation_id` at the chat conversation is unsupported.**
+  It duplicates `Message` nodes *inside* the readable history, so restored
+  transcripts gain phantom turns. Not guarded — leave `conversation_id`
+  unset and let the store mint its own sink.
+
+* **Owned clients rebind across event loops; borrowed ones do not.**
+  Strands' synchronous `Agent(...)` runs each call on a fresh event loop,
+  and both Neo4j transports bind to the loop that opened them. A store built
+  from `settings=` owns its client and reconnects it when the loop changes
+  (one reconnect per invocation). A client passed as `client=` is never
+  closed or reconnected on your behalf: a loop change raises, naming both
+  remedies. Drive the agent from your own loop, or hand the store
+  `settings=`.
+
+* **Tool names are namespaced.** `get_tools()` prefixes each tool with the
+  store's `name` (`graph_get_entity_graph`), so the store's tools coexist
+  with `context_graph_tools`' identically-purposed `get_entity_graph` /
+  `get_user_preferences` — which take different arguments — instead of
+  silently replacing them in the agent's tool registry.
+
+See `examples/strands-memory-store/` for a runnable demo (`search()`,
+`add()`, `get_tools()`) that requires no LLM or API key.
 
 == Memory Tools (Pull-Based)
 
@@ -147,6 +386,13 @@ The integration provides four memory tools that agents can use:
 | `get_user_preferences`
 | Retrieve user preferences by category
 |===
+
+[NOTE]
+====
+`search_context` is superseded by `Neo4jMemoryStore` (<<_memory_store>>) for
+recall. The factory remains supported for deep graph work the store doesn't
+cover.
+====
 
 [TIP]
 ====
@@ -426,7 +672,18 @@ Alternatively, pass an already-constructed (but not yet connected)
 `MemoryClient` via `memory_client=`; see the loop-binding note under
 <<_limitations>>.
 
+[[_retrieval_injection]]
 === Retrieval Injection
+
+[NOTE]
+====
+For new code, `MemoryManager` injection (via `Neo4jMemoryStore`, see
+<<_memory_store>>) supersedes `Neo4jRetrievalConfig`. Both together inject
+memory twice; the session manager logs a warning when it detects the
+combination. `Neo4jRetrievalConfig` remains fully supported — it is the only
+injection path on `strands-agents<1.44` and configures its sources
+declaratively rather than through a store.
+====
 
 When a `Neo4jRetrievalConfig` is supplied, each user message triggers
 concurrent long-term searches (entities, preferences, and optionally facts).
