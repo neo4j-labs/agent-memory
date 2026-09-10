@@ -10,7 +10,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
 import { MemoryClient } from "../../src/client.js";
-import { AuthenticationError, NotSupportedError, TransportError } from "../../src/errors.js";
+import { AuthenticationError, ConnectionError, NotSupportedError, TransportError, ValidationError } from "../../src/errors.js";
 
 const ENDPOINT = "https://memory.test/v1";
 const API_KEY = "nams_test_key";
@@ -175,6 +175,111 @@ describe("RestTransport — long-term", () => {
 
     expect(graph.nodes).toHaveLength(1);
     expect(graph.edges).toHaveLength(1);
+  });
+});
+
+describe("RestTransport — merged entity creation", () => {
+  const entityId = "e1";
+  const mergedResponse = { id: entityId, resolution: "merged", mergedInto: entityId, confidence: 0.93 };
+
+  function mockMergedRead(response: () => Response) {
+    const created = vi.fn(() => HttpResponse.json(mergedResponse));
+    const fetched = vi.fn(response);
+    server.use(
+      http.post(`${ENDPOINT}/entities`, created),
+      http.get(`${ENDPOINT}/entities/${entityId}`, fetched),
+    );
+    return { created, fetched };
+  }
+
+  it("fetches and validates the camelCase canonical response without replacing entity confidence", async () => {
+    const calls = mockMergedRead(() => HttpResponse.json({
+      id: entityId, name: "Alice", type: "person", confidence: 0.5,
+      createdAt: "2026-09-10T12:00:00Z", updatedAt: null,
+      metadata: { source: "original", nested: { retained: null } },
+      relationships: [{ id: "r1", type: "KNOWS", targetId: "e2", targetName: null, properties: null }],
+    }));
+    const client = newClient();
+    const entity = await client.longTerm.addEntity("Alice Smith", "person");
+    await client.close();
+    expect(entity).toMatchObject({ id: entityId, name: "Alice", type: "person", confidence: 0.5 });
+    expect(entity.updatedAt).toBeUndefined();
+    expect(entity.relationships?.[0]?.targetName).toBeUndefined();
+    expect(entity.relationships?.[0]?.properties).toBeUndefined();
+    expect(entity.metadata).toEqual({
+      source: "original", nested: { retained: null },
+      nams_resolution: { resolution: "merged", merged_into: entityId, merge_confidence: 0.93, fallback: false },
+    });
+    expect(calls.created).toHaveBeenCalledTimes(1);
+    expect(calls.fetched).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back after the actual REST transport maps HTTP 404 to TransportError", async () => {
+    const calls = mockMergedRead(() => HttpResponse.json({ error: "not found" }, { status: 404 }));
+    const client = newClient();
+    const entity = await client.longTerm.addEntity("Alice Smith", "PERSON");
+    await client.close();
+    expect(entity).toMatchObject({ id: entityId, name: "Alice Smith", type: "person" });
+    expect(entity.confidence).toBeUndefined();
+    expect(Number.isFinite(Date.parse(entity.createdAt))).toBe(true);
+    expect(entity.metadata?.nams_resolution).toEqual({
+      resolution: "merged", merged_into: entityId, merge_confidence: 0.93, fallback: true,
+    });
+    expect(calls.created).toHaveBeenCalledTimes(1);
+    expect(calls.fetched).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["204", () => new HttpResponse(null, { status: 204 })],
+    ["empty 200", () => new HttpResponse(null, { status: 200 })],
+    ["null 200", () => HttpResponse.json(null)],
+    ["empty object", () => HttpResponse.json({})],
+    ["missing name", () => HttpResponse.json({ id: entityId, metadata: { retained: null } })],
+  ] as const)("falls back for a %s canonical response", async (_, response) => {
+    mockMergedRead(response);
+    const client = newClient();
+    const entity = await client.longTerm.addEntity("Alice Smith", "person");
+    await client.close();
+    expect(entity).toMatchObject({ id: entityId, name: "Alice Smith", type: "person" });
+    expect(entity.metadata?.nams_resolution).toHaveProperty("fallback", true);
+    if (_ === "missing name") expect(entity.metadata).toHaveProperty("retained", null);
+  });
+
+  it.each([401, 403, 429, 500, 503])("propagates HTTP %s from the canonical read with requestId", async (status) => {
+    mockMergedRead(() => HttpResponse.json({ error: "canonical read failed" }, {
+      status, headers: { "x-request-id": "canonical-request" },
+    }));
+    const client = newClient();
+    try {
+      await expect(client.longTerm.addEntity("Alice Smith", "person")).rejects.toMatchObject({
+        name: status === 401 || status === 403 ? "AuthenticationError" : "TransportError",
+        requestId: "canonical-request",
+        ...(status === 401 || status === 403 ? {} : { statusCode: status }),
+      });
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("propagates network failures from the canonical read", async () => {
+    mockMergedRead(() => HttpResponse.error());
+    const client = newClient();
+    await expect(client.longTerm.addEntity("Alice Smith", "person")).rejects.toBeInstanceOf(ConnectionError);
+    await client.close();
+  });
+
+  it("propagates invalid JSON from the canonical read", async () => {
+    mockMergedRead(() => new HttpResponse("{", { headers: { "Content-Type": "application/json" } }));
+    const client = newClient();
+    await expect(client.longTerm.addEntity("Alice Smith", "person")).rejects.toBeInstanceOf(SyntaxError);
+    await client.close();
+  });
+
+  it("rejects a populated malformed canonical payload", async () => {
+    mockMergedRead(() => HttpResponse.json({ id: entityId, name: "Alice", type: "person", createdAt: null }));
+    const client = newClient();
+    await expect(client.longTerm.addEntity("Alice Smith", "person")).rejects.toBeInstanceOf(ValidationError);
+    await client.close();
   });
 });
 

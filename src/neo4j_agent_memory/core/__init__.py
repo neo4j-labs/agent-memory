@@ -5,6 +5,7 @@ from neo4j_agent_memory.core.exceptions import (
     EmbeddingError,
     ExtractionError,
     MemoryError,
+    NotFoundError,
     ResolutionError,
     SchemaError,
 )
@@ -17,6 +18,7 @@ from neo4j_agent_memory.core.memory import (
 __all__ = [
     # Exceptions
     "MemoryError",
+    "NotFoundError",
     "ConnectionError",
     "SchemaError",
     "ExtractionError",

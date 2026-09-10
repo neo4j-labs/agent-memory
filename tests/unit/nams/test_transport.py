@@ -5,7 +5,7 @@ Covers:
 * Auto-protocol detection (REST vs bridge).
 * Auth header application.
 * Happy path: 200, 201, 204 (empty body).
-* Error mapping: 400→Validation, 401→Auth, 403→Auth, 404→MemoryError,
+* Error mapping: 400→Validation, 401→Auth, 403→Auth, 404→NotFoundError,
   405/501→NotSupportedError, 429→RateLimitError, 5xx→TransportError,
   network failures→TransportError.
 * Retry policy: 429 honors Retry-After, 5xx uses exponential backoff,
@@ -27,6 +27,7 @@ from neo4j_agent_memory.config.settings import NamsConfig
 from neo4j_agent_memory.core.exceptions import (
     AuthenticationError,
     MemoryError,
+    NotFoundError,
     NotSupportedError,
     RateLimitError,
     TransportError,
@@ -261,18 +262,19 @@ class TestErrorMapping:
                 )
 
     @respx.mock
-    async def test_404_raises_memory_error(self, nams_config, auth):
+    async def test_404_raises_not_found_error(self, nams_config, auth):
         respx.post("https://memory.test/v1/conversations/abc/messages").respond(
             404, json={"error": "session not found"}
         )
 
         async with HttpTransport.from_config(nams_config, auth=auth) as t:
-            with pytest.raises(MemoryError, match="not found"):
+            with pytest.raises(NotFoundError, match="not found") as exc_info:
                 await t.request(
                     ADD_MESSAGE_SPEC,
                     path_params={"session_id": "abc"},
                     json={"role": "user", "content": "hi"},
                 )
+            assert isinstance(exc_info.value, MemoryError)
 
     @respx.mock
     async def test_405_raises_not_supported(self, nams_config, auth):
