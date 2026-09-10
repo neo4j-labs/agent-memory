@@ -139,6 +139,26 @@ describe("RestTransport — long-term", () => {
     expect(entities[0]!.name).toBe("Alice");
   });
 
+  it("expandGraph posts nodeId at the top level of the body", async () => {
+    // Regression: the route lacked `snakeBody`, so `expandGraph`'s `body`
+    // object was nested under a literal `body` key and the live service
+    // answered "nodeId is required".
+    let observedBody: unknown = null;
+    server.use(
+      http.post(`${ENDPOINT}/graph/expand`, async ({ request }) => {
+        observedBody = await request.json();
+        return HttpResponse.json({ nodes: [], edges: [] });
+      }),
+    );
+
+    const client = newClient();
+    await client.longTerm.expandGraph("n1", ["n0"]);
+    await client.close();
+
+    expect(observedBody).toEqual({ nodeId: "n1", loadedIds: ["n0"] });
+    expect(observedBody).not.toHaveProperty("body");
+  });
+
   it("setEntityFeedback PUTs to /entities/{id}/feedback", async () => {
     let observedBody: unknown = null;
     server.use(

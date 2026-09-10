@@ -9,8 +9,27 @@ appear in minor versions with a callout in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **`Neo4jMemoryStore`** (`@neo4j-labs/agent-memory/integrations/strands`) — a
+  Strands `MemoryStore` for long-term recall inside the agent loop. Hand it to
+  `MemoryManager({ stores: [...] })`. Recall is entities-only, and its
+  `get_entity_graph` tool traverses one hop, because the hosted service exposes
+  no preference/fact search and no multi-hop traversal.
+
+### Changed
+
+- `@strands-agents/sdk` devDependency raised to `^1.13.0` (TS memory landed in 1.6.0).
+- `Neo4jConversationManager` throws at `initAgent` when paired with a
+  `Neo4jMemoryStore` that has `extraction` enabled — both sides would ingest the
+  same turns.
+
 ### Fixed
 
+- **`longTerm.expandGraph(...)` over REST.** Its payload was nested under a
+  literal `body` key, so the hosted service rejected every call with
+  `nodeId is required`. The method has been unusable against `/v1` since it
+  landed.
 - **`longTerm.addEntity` no longer returns a malformed Entity when the
   hosted service auto-merges the create onto an existing entity.** NAMS
   resolves-before-create: a sufficiently similar name responds

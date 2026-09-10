@@ -28,6 +28,16 @@ You'll see a three-turn dialogue. After the run completes, the script
 prints the conversation id — re-run with that id as `DEMO_USER_ID` to
 see context recall across script runs.
 
+## Memory store (`npm run start:memory-store`)
+
+`Neo4jMemoryStore` implements Strands' `MemoryStore`, so `MemoryManager`
+searches the graph before each model call and folds the hits into the turn.
+This is the preferred way to give a Strands agent memory.
+
+Recall is **entities-only**: the hosted service exposes entity search but no
+preference or fact search endpoint, so those knobs are absent from the options
+type rather than silently ignored. `get_entity_graph` traverses one hop.
+
 ## Using Amazon Bedrock instead of OpenAI
 
 Strands' first-class pairing is AWS Bedrock. To switch:
