@@ -59,6 +59,10 @@ try:
         BEDROCK_LLM_MODELS,
         StrandsConfig,
     )
+    from neo4j_agent_memory.integrations.strands.memory_store import (
+        Neo4jMemoryStore,
+        Neo4jMemoryStoreConfig,
+    )
     from neo4j_agent_memory.integrations.strands.session_manager import (
         Neo4jRetrievalConfig,
         Neo4jSessionManager,
@@ -79,6 +83,8 @@ try:
         "llm_provider_from_strands",
         "Neo4jSessionManager",
         "Neo4jRetrievalConfig",
+        "Neo4jMemoryStore",
+        "Neo4jMemoryStoreConfig",
     ]
 except ImportError:
     # strands-agents not installed

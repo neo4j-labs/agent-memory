@@ -184,7 +184,14 @@ def build_nams_settings(
     validate_on_connect: bool = False,
 ) -> MemorySettings:
     """Build NAMS-backed MemorySettings (validate_on_connect off by default —
-    Strands drives short synchronous bursts; skipping the probe saves a round-trip)."""
+    Strands drives short synchronous bursts; skipping the probe saves a round-trip).
+
+    Args:
+        endpoint: NAMS base URL.
+        api_key: NAMS API key.
+        transport_mode: MCP / REST transport selection.
+        validate_on_connect: Whether to probe the service on connect.
+    """
     from pydantic import SecretStr
 
     from neo4j_agent_memory import MemorySettings, NamsConfig

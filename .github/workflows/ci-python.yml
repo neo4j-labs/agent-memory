@@ -95,8 +95,13 @@ jobs:
       - name: Set up Python ${{ matrix.python-version }}
         run: uv python install ${{ matrix.python-version }}
 
+      # The `strands` extra is needed for the Strands integration's unit tests:
+      # tests/unit/integrations/test_strands_*.py all begin with
+      # `pytest.importorskip("strands")`, so without it they silently skip and
+      # this job reports green on code it never ran. Kept to that one extra --
+      # the rest of the suite is designed to run on the dev group alone.
       - name: Install dependencies
-        run: uv sync --group dev
+        run: uv sync --group dev --extra strands
 
       - name: Run unit tests
         run: uv run pytest tests/unit -v --cov=neo4j_agent_memory --cov-report=xml --cov-report=term-missing
