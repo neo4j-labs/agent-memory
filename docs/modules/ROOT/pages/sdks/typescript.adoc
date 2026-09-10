@@ -66,7 +66,7 @@ All five ship as subpath exports.
 * xref:how-to/typescript/observability.adoc[How-to: enable observability]
 * xref:how-to/typescript/handle-errors.adoc[How-to: handle errors]
 * xref:how-to/typescript/troubleshooting.adoc[Troubleshooting]
-* link:https://neo4j-labs.github.io/agent-memory/typescript/[Full API reference (TypeDoc)]
+* xref:reference/typescript-api.adoc[Full API reference] (with the link:{attachmentsdir}/api/typescript/index.html[TypeDoc-generated method-level reference])
 
 == Source and releases
 

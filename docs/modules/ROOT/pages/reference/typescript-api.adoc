@@ -22,14 +22,15 @@ xref:reference/authentication.adoc[Authentication]).
 
 [NOTE]
 ====
-**Full method-level reference** lives in the TypeDoc-generated site at
-link:https://neo4j-labs.github.io/agent-memory/typescript/[`neo4j-labs.github.io/agent-memory/typescript/`].
-That site has every parameter, every property, every overload. This page
+**Full method-level reference** is bundled with these docs as the
+TypeDoc-generated site at
+link:{attachmentsdir}/api/typescript/index.html[the TypeDoc API reference].
+It has every parameter, every property, every overload. This page
 is the **map** — what the SDK exposes and which TypeDoc symbol to open.
 
-The TypeDoc site is regenerated on every `typescript-v*` tag (see
-`.github/workflows/docs-typedoc.yml`) and on every push to `main` that
-touches `typescript/src/**`.
+The TypeDoc pages are regenerated into
+`docs/modules/ROOT/attachments/api/typescript/` on every push to `main`
+that touches `typescript/src/**` (see `.github/workflows/docs-typedoc.yml`).
 ====
 
 == Installation
@@ -113,7 +114,7 @@ An explicit `X-Workspace-Id` entry in `headers` overrides it.
 |—
 |===
 
-TypeDoc: link:https://neo4j-labs.github.io/agent-memory/typescript/classes/MemoryClient.html[`MemoryClient`] · link:https://neo4j-labs.github.io/agent-memory/typescript/interfaces/MemoryClientOptions.html[`MemoryClientOptions`]
+TypeDoc: link:{attachmentsdir}/api/typescript/classes/index.MemoryClient.html[`MemoryClient`] · link:{attachmentsdir}/api/typescript/interfaces/index.MemoryClientOptions.html[`MemoryClientOptions`]
 
 == `client.shortTerm` — short-term memory
 
@@ -170,7 +171,7 @@ Conversations, messages, three-tier context.
 
 **Hosted vs bridge**: methods marked _(hosted)_ require a NAMS REST endpoint (default). The bridge transport (for TCK conformance) raises `NotSupportedError` for these.
 
-TypeDoc: link:https://neo4j-labs.github.io/agent-memory/typescript/classes/ShortTermMemory.html[`ShortTermMemory`]
+TypeDoc: link:{attachmentsdir}/api/typescript/classes/index.ShortTermMemory.html[`ShortTermMemory`]
 
 == `client.longTerm` — long-term memory
 
@@ -236,7 +237,7 @@ Entities (POLE+O), preferences, facts, relationships.
 
 **Entity types**: hosted service uses lowercase strings — `"person"`, `"organization"`, `"location"`, `"concept"`, `"tool"`, `"custom"`. The bridge protocol uses POLE+O uppercase — `"PERSON"`, `"ORGANIZATION"`, `"LOCATION"`, `"EVENT"`, `"OBJECT"`. The SDK normalizes both directions.
 
-TypeDoc: link:https://neo4j-labs.github.io/agent-memory/typescript/classes/LongTermMemory.html[`LongTermMemory`]
+TypeDoc: link:{attachmentsdir}/api/typescript/classes/index.LongTermMemory.html[`LongTermMemory`]
 
 == `client.reasoning` — reasoning memory
 
@@ -290,7 +291,7 @@ Reasoning traces, steps, tool calls.
 
 **Status values for `ToolCall`**: `"pending"`, `"success"`, `"failure"`, `"error"`, `"timeout"`, `"cancelled"`.
 
-TypeDoc: link:https://neo4j-labs.github.io/agent-memory/typescript/classes/ReasoningMemory.html[`ReasoningMemory`]
+TypeDoc: link:{attachmentsdir}/api/typescript/classes/index.ReasoningMemory.html[`ReasoningMemory`]
 
 == `client.query` — read-only Cypher (hosted only)
 
@@ -302,7 +303,7 @@ TypeDoc: link:https://neo4j-labs.github.io/agent-memory/typescript/classes/Reaso
 |Run a **read-only** Cypher query against the NAMS-managed graph. Returns `{ columns, rows, stats? }`. Write queries are rejected server-side.
 |===
 
-TypeDoc: link:https://neo4j-labs.github.io/agent-memory/typescript/classes/QueryConsole.html[`QueryConsole`]
+TypeDoc: link:{attachmentsdir}/api/typescript/classes/index.QueryConsole.html[`QueryConsole`]
 
 == `client.auth` — API key + OAuth (hosted only)
 
@@ -329,7 +330,7 @@ TypeDoc: link:https://neo4j-labs.github.io/agent-memory/typescript/classes/Query
 |Exchange a refresh token for a fresh access token pair.
 |===
 
-TypeDoc: link:https://neo4j-labs.github.io/agent-memory/typescript/classes/AuthClient.html[`AuthClient`]
+TypeDoc: link:{attachmentsdir}/api/typescript/classes/index.AuthClient.html[`AuthClient`]
 
 == `client.ontology` — domain ontologies (hosted only)
 
@@ -433,7 +434,7 @@ try {
 }
 ----
 
-TypeDoc: link:https://neo4j-labs.github.io/agent-memory/typescript/classes/MemoryError.html[`MemoryError`] and subclasses
+TypeDoc: link:{attachmentsdir}/api/typescript/classes/index.MemoryError.html[`MemoryError`] and subclasses
 
 == Subpath exports
 
@@ -472,7 +473,7 @@ The package exposes six subpath exports beyond the root. Each is independently i
 |TCK conformance testing against a local bridge server. Production code should not import from here.
 |===
 
-TypeDoc: each subpath's exports are listed under the matching module in the link:https://neo4j-labs.github.io/agent-memory/typescript/[TypeDoc index].
+TypeDoc: each subpath's exports are listed under the matching module in the link:{attachmentsdir}/api/typescript/modules.html[TypeDoc module index].
 
 == Observability
 
@@ -523,5 +524,5 @@ link:https://github.com/neo4j-labs/agent-memory/blob/main/typescript/CHANGELOG.m
 * xref:sdks/typescript.adoc[TypeScript SDK landing page] — install + quickstart
 * xref:reference/rest-api.adoc[NAMS REST API] — the wire-level contract the SDK implements
 * xref:explanation/multi-agent-sharing.adoc[Cross-Agent Memory Sharing] — how this SDK interoperates with the Python SDK
-* link:https://neo4j-labs.github.io/agent-memory/typescript/[TypeDoc] — method-level reference
+* link:{attachmentsdir}/api/typescript/index.html[TypeDoc] — method-level reference
 * link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript[Source on GitHub] — `typescript/src/`
