@@ -221,7 +221,7 @@ These methods exist on `NamsLongTermMemory` / `NamsShortTermMemory` but not on t
 === Deduplication
 
 * **Bolt**: client-side deduplication runs on every `add_entity` (configurable via `DeduplicationConfig`). `add_entity` returns `(Entity, DeduplicationResult)` — the tuple carries info about whether a merge happened.
-* **NAMS**: dedup is server-side and opaque to the client. `add_entity` returns just `Entity`. Existing code that unpacks the tuple (`entity, dedup = await client.long_term.add_entity(...)`) **will break** on NAMS — the result isn't iterable as a 2-tuple. Migrate to:
+* **NAMS**: dedup is server-side. `add_entity` returns just `Entity`; auto-merge details are available in `entity.metadata["nams_resolution"]`. Existing code that unpacks the tuple (`entity, dedup = await client.long_term.add_entity(...)`) **will break** on NAMS — the result isn't iterable as a 2-tuple. Migrate to:
   +
   ```python
   result = await client.long_term.add_entity(...)
@@ -230,6 +230,12 @@ These methods exist on `NamsLongTermMemory` / `NamsShortTermMemory` but not on t
   else:
       entity = result  # NAMS
   ```
+
+For auto-merges, `nams_resolution` contains `merged_into`, the separate
+`merge_confidence` score when present, and a `fallback` flag. A fallback uses
+request/default-derived fields when the canonical read returns 404 or an
+incomplete response. See xref:reference/rest-api.adoc#auto-merged-entity-creates[Auto-merged entity creates]
+for the return and error behavior.
 
 === Embeddings and vector indexes
 

@@ -5,7 +5,7 @@
  * entity feedback, history, merge-by-id, graph view, and provenance.
  */
 
-import { ValidationError } from "../errors.js";
+import { TransportError, ValidationError } from "../errors.js";
 import type { Transport } from "../transport/index.js";
 import type {
   AddRelationshipOptions,
@@ -35,31 +35,45 @@ interface WireEntity {
   id: string;
   name: string;
   type: string;
-  subtype?: string;
-  description?: string;
-  embedding?: number[];
-  canonical_name?: string;
-  created_at?: string;
-  updated_at?: string;
-  confidence?: number;
-  source_stage?: string;
-  relationships?: WireEntityRelRef[];
+  subtype?: string | null;
+  description?: string | null;
+  embedding?: number[] | null;
+  canonical_name?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  confidence?: number | null;
+  source_stage?: string | null;
+  relationships?: WireEntityRelRef[] | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 interface WireEntityRelRef {
   id: string;
   type: string;
   target_id: string;
-  target_name?: string;
-  properties?: Record<string, unknown>;
+  target_name?: string | null;
+  properties?: Record<string, unknown> | null;
+}
+
+/**
+ * Hosted create response when NAMS resolves-before-create merges the new
+ * name onto an existing entity: `{id, resolution: "merged", merged_into,
+ * confidence}` — no name/type fields.
+ */
+interface WireMergedResolution {
+  id?: string;
+  resolution: string;
+  merged_into?: string;
+  confidence?: unknown;
+  metadata?: Record<string, unknown> | null;
 }
 
 interface WirePreference {
   id: string;
   category: string;
   preference: string;
-  context?: string;
-  embedding?: number[];
+  context?: string | null;
+  embedding?: number[] | null;
 }
 
 interface WireFact {
@@ -67,7 +81,7 @@ interface WireFact {
   subject: string;
   predicate: string;
   object: string;
-  embedding?: number[];
+  embedding?: number[] | null;
 }
 
 interface WireRelationship {
@@ -75,7 +89,7 @@ interface WireRelationship {
   source_id: string;
   target_id: string;
   relationship_type: string;
-  properties?: Record<string, unknown>;
+  properties?: Record<string, unknown> | null;
 }
 
 interface WireEntityHistory {
@@ -85,7 +99,7 @@ interface WireEntityHistory {
 
 interface WireMention {
   conversation_id: string;
-  message_id?: string;
+  message_id?: string | null;
   content: string;
   timestamp: string;
 }
@@ -108,20 +122,24 @@ interface WireGraph {
   edges?: WireGraphEdge[];
 }
 
+// NAMS projects unset node properties as JSON null (e.g. `confidence` on a
+// manually-created entity) — normalize those to undefined so Entity's
+// optional fields stay `T | undefined` at runtime, matching their types.
 function toEntity(w: WireEntity): Entity {
   return {
     id: w.id,
     name: w.name,
     type: w.type,
-    subtype: w.subtype,
-    description: w.description,
-    embedding: w.embedding,
-    canonicalName: w.canonical_name,
+    subtype: w.subtype ?? undefined,
+    description: w.description ?? undefined,
+    embedding: w.embedding ?? undefined,
+    canonicalName: w.canonical_name ?? undefined,
     createdAt: w.created_at ?? "",
-    updatedAt: w.updated_at,
-    confidence: w.confidence,
-    sourceStage: w.source_stage,
-    relationships: w.relationships?.map(toRelRef),
+    updatedAt: w.updated_at ?? undefined,
+    confidence: w.confidence ?? undefined,
+    sourceStage: w.source_stage ?? undefined,
+    relationships: w.relationships?.map(toRelRef) ?? undefined,
+    metadata: w.metadata ?? undefined,
   };
 }
 
@@ -130,8 +148,8 @@ function toRelRef(w: WireEntityRelRef): EntityRelationshipRef {
     id: w.id,
     type: w.type,
     targetId: w.target_id,
-    targetName: w.target_name,
-    properties: w.properties,
+    targetName: w.target_name ?? undefined,
+    properties: w.properties ?? undefined,
   };
 }
 
@@ -140,8 +158,8 @@ function toPreference(w: WirePreference): Preference {
     id: w.id,
     category: w.category,
     preference: w.preference,
-    context: w.context,
-    embedding: w.embedding,
+    context: w.context ?? undefined,
+    embedding: w.embedding ?? undefined,
   };
 }
 
@@ -151,7 +169,7 @@ function toFact(w: WireFact): Fact {
     subject: w.subject,
     predicate: w.predicate,
     object: w.object,
-    embedding: w.embedding,
+    embedding: w.embedding ?? undefined,
   };
 }
 
@@ -168,7 +186,7 @@ function toRelationship(w: WireRelationship): Relationship {
 function toMention(w: WireMention): EntityMention {
   return {
     conversationId: w.conversation_id,
-    messageId: w.message_id,
+    messageId: w.message_id ?? undefined,
     content: w.content,
     timestamp: w.timestamp,
   };
@@ -182,6 +200,84 @@ function toGraphEdge(w: WireGraphEdge): EntityGraphEdge {
   return { id: w.id, source: w.source, target: w.target, type: w.type };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isNonemptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isConfidence(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
+}
+
+function isIsoTimestamp(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const parts = /^(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.exec(value);
+  if (!parts || !Number.isFinite(Date.parse(value))) return false;
+  const year = Number(parts[1]);
+  const month = Number(parts[2]);
+  const day = Number(parts[3]);
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return month >= 1 && month <= 12 && day >= 1 && day <= days[month - 1]!;
+}
+
+function requireMergedField(valid: boolean, field: string): asserts valid {
+  if (!valid) throw new ValidationError(`Invalid merged entity response: ${field}`);
+}
+
+/** Validate populated fields before deciding whether an incomplete GET can fall back. */
+function mergedEntityDetail(detail: unknown, mergedId: string): WireEntity | undefined {
+  if (detail === undefined || detail === null) return undefined;
+  requireMergedField(isRecord(detail), "expected an entity object");
+  if ("id" in detail) {
+    requireMergedField(isNonemptyString(detail.id) && detail.id === mergedId, "canonical id");
+  }
+  if ("type" in detail) requireMergedField(isNonemptyString(detail.type), "type");
+  if (detail.name !== undefined && detail.name !== null) {
+    requireMergedField(typeof detail.name === "string", "name");
+  }
+  if ("created_at" in detail) {
+    requireMergedField(isIsoTimestamp(detail.created_at), "created_at");
+  }
+  if (detail.updated_at != null) {
+    requireMergedField(isIsoTimestamp(detail.updated_at), "updated_at");
+  }
+  for (const field of ["subtype", "description", "canonical_name", "source_stage"]) {
+    if (detail[field] != null) requireMergedField(typeof detail[field] === "string", field);
+  }
+  if (detail.confidence != null) requireMergedField(isConfidence(detail.confidence), "confidence");
+  if (detail.embedding != null) {
+    requireMergedField(
+      Array.isArray(detail.embedding) &&
+        detail.embedding.every((value) => typeof value === "number" && Number.isFinite(value)),
+      "embedding",
+    );
+  }
+  if (detail.metadata != null) requireMergedField(isRecord(detail.metadata), "metadata");
+  if (detail.relationships != null) {
+    requireMergedField(Array.isArray(detail.relationships), "relationships");
+    for (const ref of detail.relationships) {
+      requireMergedField(isRecord(ref), "relationship reference");
+      for (const field of ["id", "type", "target_id"]) {
+        requireMergedField(isNonemptyString(ref[field]), `relationship ${field}`);
+      }
+      if (ref.target_name != null) {
+        requireMergedField(typeof ref.target_name === "string", "relationship target_name");
+      }
+      if (ref.properties != null) {
+        requireMergedField(isRecord(ref.properties), "relationship properties");
+      }
+    }
+  }
+  if (!isNonemptyString(detail.name)) return undefined;
+  requireMergedField(isNonemptyString(detail.id), "missing canonical id");
+  requireMergedField(isNonemptyString(detail.type), "missing type");
+  return detail as unknown as WireEntity;
+}
+
 export class LongTermMemory {
   constructor(private readonly transport: Transport) {}
 
@@ -192,13 +288,67 @@ export class LongTermMemory {
     entityType: string,
     options?: { description?: string },
   ): Promise<Entity> {
-    const wire = await this.transport.request<WireEntity>("add_entity", {
+    const wire = await this.transport.request<WireEntity | WireMergedResolution>("add_entity", {
       name,
       entity_type: entityType,
       type: entityType,
       description: options?.description,
     });
-    return toEntity(wire);
+    // NAMS resolves-before-create: a sufficiently similar name merges onto an
+    // existing entity and the response carries no name/type — follow up with
+    // a GET for the canonical merged-into record.
+    if (wire && typeof wire === "object" && "resolution" in wire && wire.resolution === "merged") {
+      return this.resolveMergedEntity(wire, name, entityType);
+    }
+    return toEntity(wire as WireEntity);
+  }
+
+  /**
+   * Turn a `resolution: "merged"` create response into the canonical Entity.
+   *
+   * A 404 or an empty/missing-name canonical response falls back to request
+   * fields, provided the response includes a valid merge identifier. Other
+   * failures propagate. A fallback's createdAt is its local construction
+   * time; metadata.nams_resolution records whether fallback was necessary.
+   */
+  private async resolveMergedEntity(
+    wire: WireMergedResolution,
+    name: string,
+    entityType: string,
+  ): Promise<Entity> {
+    const mergedId = [wire.merged_into, wire.id].find(
+      (value) => value != null && !(typeof value === "string" && value.trim() === ""),
+    );
+    requireMergedField(isNonemptyString(mergedId), "missing merge identifier");
+    if (wire.metadata != null) requireMergedField(isRecord(wire.metadata), "metadata");
+
+    let detail: unknown;
+    try {
+      detail = await this.transport.request<unknown>("get_entity", { entity_id: mergedId });
+    } catch (error) {
+      if (!(error instanceof TransportError) || error.statusCode !== 404) throw error;
+    }
+    const canonical = mergedEntityDetail(detail, mergedId);
+    const canonicalMetadata = isRecord(detail) && isRecord(detail.metadata) ? detail.metadata : undefined;
+    const entity = canonical ?? {
+      id: mergedId,
+      name,
+      type: entityType.toLowerCase(),
+      created_at: new Date().toISOString(),
+    };
+    return toEntity({
+      ...entity,
+      metadata: {
+        ...wire.metadata,
+        ...canonicalMetadata,
+        nams_resolution: {
+          resolution: "merged",
+          merged_into: mergedId,
+          ...(wire.confidence == null ? {} : { merge_confidence: wire.confidence }),
+          fallback: canonical === undefined,
+        },
+      },
+    });
   }
 
   async addPreference(

@@ -73,6 +73,12 @@ class AuthenticationError(MemoryError):
     pass
 
 
+class NotFoundError(MemoryError):
+    """Raised when the NAMS backend cannot find a resource (HTTP 404)."""
+
+    pass
+
+
 class RateLimitError(MemoryError):
     """Raised when the NAMS backend rate-limits the client.
 

@@ -28,7 +28,7 @@ import httpx
 from neo4j_agent_memory.config.settings import NamsConfig
 from neo4j_agent_memory.core.exceptions import (
     AuthenticationError,
-    MemoryError,
+    NotFoundError,
     NotSupportedError,
     RateLimitError,
     TransportError,
@@ -356,7 +356,7 @@ class HttpTransport:
         if status in (401, 403):
             raise AuthenticationError(message)
         if status == 404:
-            raise MemoryError(message)
+            raise NotFoundError(message)
         if status in (405, 501):
             raise NotSupportedError(
                 backend="nams",

@@ -30,6 +30,21 @@ appear in minor versions with a callout in this file.
   literal `body` key, so the hosted service rejected every call with
   `nodeId is required`. The method has been unusable against `/v1` since it
   landed.
+- **`longTerm.addEntity` no longer returns a malformed Entity when the
+  hosted service auto-merges the create onto an existing entity.** NAMS
+  resolves-before-create: a sufficiently similar name responds
+  `{id, resolution: "merged", merged_into, confidence}` with no
+  `name`/`type`, which previously flowed into an Entity with `undefined`
+  name and type. The client now follows up with `GET /entities/{id}` and
+  returns the canonical merged-into entity. Fallback is limited to HTTP 404
+  or empty/incomplete canonical responses with a valid merge ID; other errors
+  propagate. Fallback entities use a lowercase hosted type and a client-generated
+  ISO creation timestamp. The additive optional `Entity.metadata` preserves
+  canonical metadata and exposes merge details in `nams_resolution`, including
+  a `fallback` flag and separate `merge_confidence`; merge scores no longer
+  populate entity confidence. Missing IDs and malformed canonical fields are
+  rejected before conversion. Optional null fields are normalized to `undefined`
+  on entities, inline relationship references, preferences, facts, and mentions.
 
 ## 0.4.0 — NAMS alignment
 
@@ -70,8 +85,9 @@ namespaced `typescript-v*` tags.
   and homepage fields point at the new location.
 - Documentation is now served from
   [neo4j.com/labs/agent-memory/](https://neo4j.com/labs/agent-memory/)
-  under the unified Antora site. TypeDoc API reference is published at
-  [neo4j-labs.github.io/agent-memory/typescript/](https://neo4j-labs.github.io/agent-memory/typescript/).
+  under the unified Antora site. TypeDoc API reference is bundled with that
+  site — see the
+  [TypeScript API reference](https://neo4j.com/labs/agent-memory/reference/typescript-api).
 - Release tags are now namespaced as `typescript-v*` (e.g.
   `typescript-v0.3.0`); the Python SDK uses `python-v*`.
 

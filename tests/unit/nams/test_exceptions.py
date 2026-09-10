@@ -1,9 +1,10 @@
 """Phase 1 unit tests: new exception classes for the NAMS backend.
 
-Covers the five new exceptions added in v0.4:
+Covers the HTTP/backend-specific exceptions:
 
 * ``TransportError`` (subclass of ``ConnectionError``)
 * ``AuthenticationError``
+* ``NotFoundError``
 * ``NotSupportedError`` — structured (backend, method, workaround)
 * ``RateLimitError`` — carries ``retry_after``
 * ``ValidationError`` — carries ``details``
@@ -17,6 +18,7 @@ from neo4j_agent_memory import (
     AuthenticationError,
     ConnectionError,
     MemoryError,
+    NotFoundError,
     NotSupportedError,
     RateLimitError,
     TransportError,
@@ -34,6 +36,14 @@ class TestExceptionHierarchy:
 
     def test_authentication_error_is_memory_error(self):
         assert issubclass(AuthenticationError, MemoryError)
+
+    def test_not_found_error_is_memory_error(self):
+        assert issubclass(NotFoundError, MemoryError)
+
+    def test_not_found_error_is_exported_from_core(self):
+        from neo4j_agent_memory.core import NotFoundError as CoreNotFoundError
+
+        assert CoreNotFoundError is NotFoundError
 
     def test_not_supported_error_is_memory_error(self):
         assert issubclass(NotSupportedError, MemoryError)

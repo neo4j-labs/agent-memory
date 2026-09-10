@@ -36,7 +36,14 @@ async def test_add_entity_returns_entity(nams_client: MemoryClient, unique_name:
     # NAMS may return Entity directly OR wrapped in a tuple — accept both.
     actual = entity[0] if isinstance(entity, tuple) else entity
     assert isinstance(actual, Entity)
-    assert actual.name == name
+    assert actual.name.strip()
+    if actual.name != name:
+        # Even UUID-suffixed names can resolve to a prior run's entity. A
+        # different name is valid only for a fetched canonical merge target.
+        resolution = actual.metadata.get("nams_resolution", {})
+        assert resolution.get("resolution") == "merged"
+        assert resolution.get("merged_into") == str(actual.id)
+        assert resolution.get("fallback") is False
     assert actual.type == "PERSON"
 
 
@@ -66,16 +73,18 @@ async def test_get_entity_by_name_found(nams_client: MemoryClient, unique_name: 
     impl calls ``POST /entities/search`` and filters for exact match. That
     search is vector-backed and indexed asynchronously — a freshly-written
     entity may not be returned by search for a brief window. We poll a
-    handful of times before giving up to absorb that lag.
+    handful of times before giving up to absorb that lag. If creation merges
+    onto an existing entity, look up its canonical name.
     """
     import asyncio
 
     name = unique_name("charlie")
-    await nams_client.long_term.add_entity(name, "PERSON")
+    entity = await nams_client.long_term.add_entity(name, "PERSON")
+    actual = entity[0] if isinstance(entity, tuple) else entity
 
     found = None
     for _ in range(10):  # ~5s total
-        found = await nams_client.long_term.get_entity_by_name(name)
+        found = await nams_client.long_term.get_entity_by_name(actual.name)
         if found is not None:
             break
         await asyncio.sleep(0.5)
@@ -85,7 +94,8 @@ async def test_get_entity_by_name_found(nams_client: MemoryClient, unique_name: 
             "NAMS search index appears to lag behind writes for "
             "get_entity_by_name; treating as eventual-consistency limitation."
         )
-    assert found.name == name
+    assert found.name == actual.name
+    assert found.id == actual.id
 
 
 @pytest.mark.asyncio
