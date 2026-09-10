@@ -32,10 +32,13 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from neo4j_agent_memory.core.exceptions import NotSupportedError
+from pydantic import TypeAdapter
+
+from neo4j_agent_memory.core.exceptions import NotFoundError, NotSupportedError, ValidationError
 from neo4j_agent_memory.memory.long_term import (
     Entity,
     Fact,
@@ -167,18 +170,17 @@ def _normalize_entity(payload: dict[str, Any] | None) -> dict[str, Any]:
     doesn't provide — we default them so Pydantic parsing succeeds.
     NAMS types come back lowercase; uppercase them so package-side
     consumers see the same type values they sent.
-    """
-    from datetime import datetime, timezone
 
+    Known nullable confidence/collection fields use model defaults. Identity
+    and explicit timestamps remain subject to validation; a missing server ID
+    must never invoke the model's UUID factory. Missing creation timestamps
+    retain the existing model-default behavior for compatibility.
+    """
     data = snakeize_keys(payload) if isinstance(payload, dict) else {}
-    if "created_at" not in data:
-        data["created_at"] = datetime.now(timezone.utc).isoformat()
-    if "metadata" not in data:
-        data["metadata"] = {}
-    if "aliases" not in data:
-        data["aliases"] = []
-    if "attributes" not in data:
-        data["attributes"] = {}
+    for field in ("confidence", "metadata", "aliases", "attributes"):
+        if data.get(field) is None:
+            data.pop(field, None)
+    data.setdefault("id", None)
     if isinstance(data.get("type"), str):
         data["type"] = data["type"].upper()
     return data
@@ -215,6 +217,15 @@ class NamsLongTermMemory:
         ``{name, type, description?}`` per spec. Bolt-only kwargs
         (``subtype``, ``aliases``, ``attributes``, ``confidence``,
         ``deduplicate``, ``geocode``, ``enrich``, etc.) are silently dropped.
+
+        NAMS resolves-before-create: when the name is close enough to an
+        existing entity, the server merges onto it and responds
+        ``{id, resolution: "merged", merged_into, confidence}`` — no
+        ``name``/``type``. We follow up with ``GET /entities/{id}`` and
+        return the canonical merged-into entity. A 404 or incomplete read
+        falls back to the request's name/type with an explicit local UTC
+        timestamp. Other read failures propagate. ``metadata.nams_resolution``
+        preserves the merge outcome and score and identifies fallback records.
         """
         et = entity_type or kwargs.get("type") or kwargs.get("label")
         if et is None:
@@ -227,7 +238,86 @@ class NamsLongTermMemory:
             }
         )
         payload = await self._transport.request(_SPEC_ADD_ENTITY, json=body)
+        if isinstance(payload, dict) and payload.get("resolution") == "merged":
+            payload = await self._resolve_merged_entity(payload, name=name, nams_type=body["type"])
         return payload_to_model(_normalize_entity(payload), Entity)
+
+    async def _resolve_merged_entity(
+        self,
+        payload: dict[str, Any],
+        *,
+        name: str,
+        nams_type: str,
+    ) -> dict[str, Any]:
+        """Turn a ``resolution: "merged"`` create response into entity fields.
+
+        A missing canonical record (404, empty body, or missing name) may use
+        request fields, but malformed populated fields and other read errors
+        remain visible. The merge score describes similarity, not the returned
+        entity's confidence, and is preserved separately in metadata.
+        """
+        raw_merged_id = None
+        for key in ("merged_into", "mergedInto", "id"):
+            value = payload.get(key)
+            if value is None or (isinstance(value, str) and not value.strip()):
+                continue
+            raw_merged_id = value
+            break
+        merged_id = TypeAdapter(UUID).validate_python(raw_merged_id)
+        envelope_metadata = snakeize_keys(
+            TypeAdapter(dict[str, Any]).validate_python(
+                {} if payload.get("metadata") is None else payload["metadata"]
+            )
+        )
+        try:
+            detail = await self._transport.request(
+                _SPEC_GET_ENTITY,
+                path_params={"entity_id": str(merged_id)},
+            )
+        except NotFoundError:
+            detail = None
+
+        data = (
+            {}
+            if detail is None
+            else snakeize_keys(TypeAdapter(dict[str, Any]).validate_python(detail))
+        )
+        canonical_name = data.get("name")
+        fallback = canonical_name is None or (
+            isinstance(canonical_name, str) and not canonical_name.strip()
+        )
+        if fallback:
+            # Validate fields that did arrive before building a fallback. Only
+            # absent identity/type and missing names can use request context.
+            candidate = {"id": str(merged_id), "type": nams_type, **data, "name": name}
+        else:
+            candidate = data
+        canonical = payload_to_model(_normalize_entity(candidate), Entity)
+        if canonical.id != merged_id:
+            raise ValidationError("NAMS canonical entity ID does not match the merge target")
+        if not canonical.type.strip():
+            raise ValidationError("NAMS canonical entity type must not be blank")
+
+        if fallback:
+            data = {
+                "id": str(merged_id),
+                "name": name,
+                "type": nams_type,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+        resolution: dict[str, Any] = {
+            "resolution": "merged",
+            "merged_into": str(merged_id),
+            "fallback": fallback,
+        }
+        if payload.get("confidence") is not None:
+            resolution["merge_confidence"] = payload["confidence"]
+        data["metadata"] = {
+            **envelope_metadata,
+            **canonical.metadata,
+            "nams_resolution": resolution,
+        }
+        return data
 
     async def add_preference(self, category: str, preference: str, **kwargs: Any) -> Preference:
         raise NotSupportedError(
