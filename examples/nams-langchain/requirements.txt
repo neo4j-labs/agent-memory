@@ -5,6 +5,6 @@ langchain>=1.0,<2
 langchain-core>=1.0,<2
 # Only needed for a real model turn; the script falls back to a scripted
 # offline chat model when OPENAI_API_KEY is unset.
-langchain-openai>=1.0,<2
+langchain-openai>=1.6.1,<2
 # Optional: loads this directory's .env.
 python-dotenv>=1.0,<2
