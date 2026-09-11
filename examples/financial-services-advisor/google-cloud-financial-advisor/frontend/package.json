@@ -19,7 +19,7 @@
     "react-dom": "^18.2.0",
     "react-icons": "^5.0.0",
     "react-router-dom": "^6.21.0",
-    "vis-network": "^9.1.9",
+    "vis-network": "^10.1.2",
     "@neo4j-nvl/base": "1.0.0",
     "@neo4j-nvl/react": "1.0.0"
   },
