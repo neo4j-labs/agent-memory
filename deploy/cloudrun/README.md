@@ -53,6 +53,34 @@ gcloud run services describe neo4j-memory-mcp \
     --format='value(status.url)'
 ```
 
+The MCP endpoint is `/mcp/` on that URL, e.g.
+`https://neo4j-memory-mcp-xxxx.run.app/mcp/`. Point your MCP client at that
+full path, not the bare service URL.
+
+### 5. Verify with an MCP client
+
+The `[mcp]` extra installs FastMCP 4, whose CLI can list the server's tools:
+
+```bash
+pip install "neo4j-agent-memory[mcp]"
+fastmcp list https://neo4j-memory-mcp-xxxx.run.app/mcp/ --prompts --resources
+```
+
+Expect the 16 extended-profile tools, three prompts, and the memory resources.
+
+## Transport
+
+The container runs the server on **Streamable HTTP**
+(`mcp serve --transport http`), the network transport in the current MCP
+specification.
+
+Earlier versions of this image used `--transport sse`, which served the legacy
+HTTP+SSE transport at `/sse` + `/messages`. That transport is deprecated in the
+MCP spec and in FastMCP 4, which this image now builds on. If you are upgrading,
+change client URLs from `/sse` to `/mcp/`. The `--transport sse` flag still
+starts a server, but it logs a deprecation warning and serves Streamable HTTP —
+so a stale client URL will fail rather than silently fall back.
+
 ## Manual Deployment
 
 If you prefer to deploy manually:

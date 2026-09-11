@@ -80,3 +80,11 @@ All five ship as subpath exports.
 See xref:sdks/python.adoc[Python SDK]. The two SDKs share the same memory
 model and back onto the same NAMS service. Mixed Python + TypeScript agents
 can read and write the same memory.
+
+== Runnable examples
+
+link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples[`typescript/examples/`] holds nine examples. Start
+with link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/nextjs-memory-chat[`nextjs-memory-chat/`] —
+the flagship full-stack demo: a Next.js 16 App Router assistant on hosted NAMS
+with a live entity-graph rail, an extraction-status badge and a reasoning-trace
+drawer. Every example is type-checked, tested and (where it builds) built in CI.

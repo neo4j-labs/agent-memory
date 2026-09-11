@@ -1,0 +1,274 @@
+= How to: build a Next.js chat app with a memory rail
+:toc: left
+:source-highlighter: rouge
+
+This guide builds a Next.js 16 App Router chat app whose whole memory — the
+transcript, the entity graph and the reasoning trail — lives in the hosted
+Neo4j Agent Memory Service. It is the task-oriented companion to the runnable
+example at
+link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/nextjs-memory-chat[`typescript/examples/nextjs-memory-chat`];
+clone that if you want the finished app, and read this for the four decisions
+that make it work.
+
+[NOTE]
+====
+`ai` 7 is ESM-only and requires Node.js 22 or newer, and so does this client.
+Next 16 uses Turbopack by default — a custom `webpack` config fails the build.
+====
+
+If all you need is the middleware wiring in one file, start at
+xref:how-to/typescript/vercel-ai.adoc[How to: integrate with the Vercel AI SDK]
+instead and come back when you want the UI.
+
+== What you need
+
+* Node.js 22+
+* A `MEMORY_API_KEY` from https://memory.neo4jlabs.com[memory.neo4jlabs.com]
+* An `OPENAI_API_KEY` (model id via `OPENAI_MODEL`, default `gpt-5-mini`)
+* Optionally a `MEMORY_WORKSPACE_ID` to scope the data to one workspace
+
+[source,bash]
+----
+npm install ai@^7 @ai-sdk/openai@^4 @ai-sdk/react@^4 \
+            @neo4j-labs/agent-memory \
+            @neo4j-nvl/react@^1.2 @neo4j-nvl/base@^1.2
+----
+
+== Decision 1: put the conversation id in the URL
+
+A conversation id is the only handle on a thread. Keep it in the route, not in
+React state or `localStorage`, and the URL becomes shareable, reloadable and
+resumable — because every message behind it is in NAMS, not in the browser.
+
+`app/page.tsx` mints one and redirects. `force-dynamic` keeps the page off the
+build-time prerender path, so `next build` succeeds on a machine with no API key:
+
+[source,typescript]
+----
+export const dynamic = "force-dynamic";
+
+export default async function Home() {
+  let conversationId: string | undefined;
+  try {
+    const conversation = await memoryClient().shortTerm.createConversation({
+      userId: userId(),
+    });
+    conversationId = conversation.id;
+  } catch (error) {
+    // redirect() signals by throwing, so it must stay outside this try.
+    return <SetupNotice message={String(error)} />;
+  }
+  redirect(`/c/${conversationId}`);
+}
+----
+
+In Next 16 `params` is a promise — the synchronous form was removed:
+
+[source,typescript]
+----
+export default async function ConversationPage({
+  params,
+}: {
+  params: Promise<{ conversationId: string }>;
+}) {
+  const { conversationId } = await params;
+  return <Workspace conversationId={conversationId} />;
+}
+----
+
+== Decision 2: send one turn, let memory supply the rest
+
+The route handler wraps the model once. Everything after `wrapLanguageModel` is
+plain AI SDK code:
+
+[source,typescript]
+----
+import { agentMemoryMiddleware } from "@neo4j-labs/agent-memory/middleware/vercel-ai";
+import { convertToModelMessages, streamText, wrapLanguageModel } from "ai";
+
+export async function POST(request: Request) {
+  const { messages, conversationId } = await request.json();
+
+  // Only the newest user turn. The history the model sees is injected by the
+  // middleware from NAMS, so the browser is not the source of truth.
+  const latest = messages.filter((m) => m.role === "user").slice(-1);
+
+  const model = wrapLanguageModel({
+    model: openai(process.env.OPENAI_MODEL ?? "gpt-5-mini"),
+    middleware: agentMemoryMiddleware(client, { conversationId, userId }),
+  });
+
+  const result = streamText({
+    model,
+    instructions,                                  // ai 7: `instructions`, not `system`
+    messages: await convertToModelMessages(latest),
+    onEnd: async ({ text }) => {                   // ai 7: `onEnd`, not `onFinish`
+      await client.reasoning.recordStep({
+        conversationId,
+        reasoning: `Answered using the injected context.`,
+        actionTaken: "generate_answer",
+        result: text.slice(0, 1_000),
+      });
+    },
+  });
+
+  return result.toUIMessageStreamResponse();
+}
+----
+
+Both sides of the turn are persisted by the middleware — the user's message in
+`transformParams`, the assistant's in `wrapStream` once the stream finishes. You
+write no `addMessage` call.
+
+On the client, `useChat` with `DefaultChatTransport` sends the conversation id in
+the request body:
+
+[source,typescript]
+----
+const { messages, sendMessage, status } = useChat({
+  id: conversationId,
+  transport: new DefaultChatTransport({
+    api: "/api/chat",
+    body: { conversationId },
+  }),
+});
+----
+
+To make the "reload and it is still there" claim true, hydrate the transcript
+once on mount from `shortTerm.getContext` rather than from client state.
+
+== Decision 3: expand the graph lazily, with `loadedIds`
+
+`longTerm.getEntityGraph()` gives the rail its first canvas.
+`longTerm.expandGraph(nodeId, loadedIds)` grows it: pass every id already on
+screen and the service answers with the delta only, so a double-click on a
+well-connected node does not re-send the subgraph the user is looking at.
+
+[source,typescript]
+----
+// POST /api/memory/graph
+const expanded = await client.longTerm.expandGraph(nodeId, loadedIds);
+----
+
+Own the accumulated graph in the component that issues the request — that is what
+keeps `loadedIds` honest — and union the delta in:
+
+[source,typescript]
+----
+function merge(current: GraphPayload, delta: GraphPayload): GraphPayload {
+  const nodes = new Map(current.nodes.map((n) => [n.id, n]));
+  for (const node of delta.nodes) if (!nodes.has(node.id)) nodes.set(node.id, node);
+  // ... same for edges
+  return { nodes: [...nodes.values()], edges: [...edges.values()] };
+}
+----
+
+`expandGraph` returns the viz-oriented shape (`{ id, labels, properties }` for
+nodes), so flatten `properties.name` / `properties.type` for your renderer.
+
+Neo4j's visualization library touches `window` at import time, so load it with
+`next/dynamic` and `ssr: false`:
+
+[source,typescript]
+----
+const InteractiveNvlWrapper = dynamic(
+  () => import("@neo4j-nvl/react").then((m) => m.InteractiveNvlWrapper),
+  { ssr: false },
+);
+----
+
+NVL reports clicks, not double-clicks; treat a second `onNodeClick` on the same
+node within ~350 ms as "expand".
+
+== Decision 4: wait for extraction instead of guessing
+
+NAMS returns from a write before the entities in that message are searchable —
+extraction runs in a background pipeline. Refetch the graph immediately after an
+answer and you render a canvas that is one turn behind.
+
+`longTerm.waitForExtraction` turns that race into an await. The predicate form is
+the one to reach for in a UI: "resolve when an entity I have not already got
+appears".
+
+[source,typescript]
+----
+const known = new Set(knownIds);
+const settled = await client.longTerm.waitForExtraction({
+  query,                       // the user's turn, as the probe
+  limit: 25,
+  timeoutMs: 20_000,
+  intervalMs: 1_500,
+  predicate: (entities) => entities.some((e) => !known.has(e.id)),
+});
+----
+
+It returns `false` on timeout rather than throwing, so a quiet turn that produced
+no new entities degrades to "nothing new" instead of an error. Order the rail's
+refresh as *context → wait for extraction → refetch graph*, and surface the middle
+step as a badge so the reader can see the window open and close.
+
+[TIP]
+====
+Prefer `predicate` or `expectedNames` over `minResults`. NAMS entity search is
+nearest-neighbour, so a `minResults` threshold is satisfied almost immediately on
+a non-empty workspace and proves nothing about *this* turn.
+====
+
+== Reading the reasoning trail back
+
+Because the route recorded a step per turn, `reasoning.getTraceByConversation`
+gives you an audit drawer for free:
+
+[source,typescript]
+----
+const trace = await client.reasoning.getTraceByConversation(conversationId);
+// trace.steps: [{ id, reasoning, actionTaken, result, createdAt }, …]
+----
+
+== Testing it without an API key
+
+Put each route's behaviour in a `(deps, Request) => Response` function and keep
+the route file a thin wrapper. Then the handlers can be driven in Vitest with the
+real `MemoryClient` over a mocked network
+(link:https://mswjs.io[msw]) and the AI SDK's own `MockLanguageModelV4` from
+`ai/test`:
+
+[source,typescript]
+----
+import { MockLanguageModelV4 } from "ai/test";
+
+const client = new MemoryClient({ endpoint: "http://nams.test/v1", apiKey: "nams_test" });
+const response = await handleChat({ client, model: mockModel(), userId }, request);
+await response.text();                       // drain the stream
+expect(state.rolesOf(conversationId)).toEqual(["user", "assistant"]);
+----
+
+Mocking the network rather than the SDK means a wrong URL, verb or body shape
+fails the suite. Answer 501 for any endpoint you have not implemented so that a
+new call fails loudly instead of passing silently.
+
+== Deploying
+
+[source,bash]
+----
+npx vercel deploy
+----
+
+Set `MEMORY_API_KEY`, `OPENAI_API_KEY` and optionally `MEMORY_WORKSPACE_ID` as
+project environment variables. There is no database to provision. The route
+handlers use only `fetch`, `Request` and `Response`, so they are edge-deployable —
+pass `apiKey` to `MemoryClient` explicitly, because on edge runtimes
+`process.env` is only populated inside the request scope. See
+xref:how-to/typescript/edge-runtime.adoc[How to: deploy to edge runtimes].
+
+== See also
+
+* xref:how-to/typescript/vercel-ai.adoc[How to: integrate with the Vercel AI SDK] — the middleware on its own
+* xref:tutorials/conversation-memory-typescript.adoc[Tutorial: conversation memory in TypeScript]
+* xref:sdks/typescript.adoc[TypeScript SDK]
+
+== Compatibility
+
+Verified against `@neo4j-labs/agent-memory` 0.6.0-dev (in-tree), `next` 16.3.4,
+`react` 19.3.0, `ai` 7.0.97, `@ai-sdk/openai` 4.0.65, `@ai-sdk/react` 4.0.100,
+`@chakra-ui/react` 3.37.0, `@neo4j-nvl/react` 1.2.1, Node.js 22 — 2026-09-10.

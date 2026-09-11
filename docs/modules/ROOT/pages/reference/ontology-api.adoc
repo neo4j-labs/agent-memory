@@ -138,3 +138,11 @@ xref:reference/nams-limits.adoc[NAMS Limits & Behavior]).
 `personal-knowledge`, `product-management`, `real-estate`, `retail-ecommerce`,
 `scientific-research`, `software-engineering`, `trip-planning`,
 `vacation-industry`, `wildlife-management`.
+
+== Runnable examples
+
+* link:https://github.com/neo4j-labs/agent-memory/tree/main/examples/ontology-lifecycle[`examples/ontology-lifecycle/`] — Python:
+  `import_`, `activate`, `diff`, `migrate` and `get_migration` polling, with a
+  `query.cypher` read-back.
+* link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/ontology-lifecycle[`typescript/examples/ontology-lifecycle/`] —
+  the same lifecycle through `OntologyClient`.

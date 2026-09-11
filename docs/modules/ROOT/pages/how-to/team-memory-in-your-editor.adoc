@@ -1,0 +1,241 @@
+= Team Memory in Your Editor
+:page-product: agent-memory
+:toclevels: 2
+:icons: font
+:source-highlighter: highlight.js
+
+include::partial$backend-both.adoc[]
+
+How to give Claude Code, Claude Desktop and Cursor a *shared* memory graph, so
+one person's session can recall what another person's session recorded — with no
+agent code.
+
+[.lead]
+Every editor here is an MCP *client*. You point it at one of two MCP servers —
+the hosted NAMS server, or the self-hosted `neo4j-agent-memory mcp serve` — and
+the memory tools appear. The only code involved provisions per-developer keys,
+seeds the workspace, and diagnoses the wiring.
+
+[TIP]
+====
+**Runnable example:**
+link:https://github.com/neo4j-labs/agent-memory/tree/main/examples/claude-code-team-memory[`examples/claude-code-team-memory/`]
+ships the config files, the three scripts, and a `WALKTHROUGH.md` that proves
+persistence across quitting the editor.
+====
+
+== Pick a server
+
+The two servers are not the same tool surface. Decide once:
+
+[cols="1,2,2",options="header"]
+|===
+| | Hosted NAMS MCP server | Self-hosted `mcp serve`
+
+| URL / command
+| `+https://mcp.memory.neo4jlabs.com/mcp+`
+| `neo4j-agent-memory mcp serve` (stdio or Streamable HTTP)
+
+| Backend
+| Your NAMS workspace
+| Your own Neo4j, or NAMS with `--backend nams`
+
+| Auth
+| OAuth 2.0 + PKCE, or a `nams_…` Bearer key
+| `NEO4J_PASSWORD`, or `MEMORY_API_KEY` for `--backend nams`
+
+| Tools
+| **47**, scope-gated — `tools/list` returns only what the principal's scopes permit
+| **6** with `--profile core`, **16** with `--profile extended`
+
+| Operate
+| Nothing to run
+| One local process per developer
+|===
+
+Use the hosted server unless you need memory to stay inside a boundary it cannot
+reach. Details: xref:reference/nams-mcp.adoc[Hosted NAMS MCP Server] and
+xref:reference/mcp-tools.adoc[MCP Tools].
+
+== Step 1: one key per developer
+
+A single key shared by four laptops cannot be revoked for one of them, and the
+audit trail says "the team". Mint one each with `client.auth` (NAMS only; on bolt
+the accessor is a `NotSupportedError` sentinel):
+
+[source,python]
+----
+from neo4j_agent_memory import NamsSettings, connect
+
+client = await connect(NamsSettings())          # reads MEMORY_API_KEY
+
+key = await client.auth.create_api_key("alice-laptop", scopes=["memory:read", "memory:write"])
+print(key.key)                                   # plaintext, returned exactly once
+
+for existing in await client.auth.list_api_keys("ws_123"):
+    print(existing.id, existing.label, existing.created_at)   # metadata only
+
+rotated = await client.auth.rotate_api_key(key.id)   # mints a replacement, revokes the old
+await client.auth.revoke_api_key(old_key_id)         # effective on the next request
+----
+
+[IMPORTANT]
+====
+`create_api_key()` does not send a `category`, and NAMS defaults an
+un-categorised create to an **admin** key — account-wide, all scopes, not bound
+to a workspace. The per-developer editor credential you want is a *workspace*
+key: data-plane scopes only, permanently bound to one workspace, unable to mint
+more keys. Create it from the dashboard, or `POST /v1/auth/api-keys` with
+`category: "workspace"`. See xref:reference/authentication.adoc[Authentication &
+API Keys].
+====
+
+Key management itself requires an admin key or a user token, and keys are
+owner-private: only their creator can list, reveal, rotate or revoke them. Static
+keys expire roughly 90 days after creation.
+
+== Step 2: seed what the editors should already know
+
+An empty workspace answers nothing on day one. Write the team's decisions as a
+conversation and let server-side extraction build the entity graph:
+
+[source,python]
+----
+conversation = await client.short_term.create_conversation("team-decisions")
+conversation_id = str(conversation.id)
+
+await client.short_term.bulk_add_messages(conversation_id, DECISIONS)   # ≤100 per call
+
+# NAMS extracts in a background pipeline: a read straight after the write can
+# legitimately come back empty. Await the pipeline instead of sleeping.
+status = await client.short_term.get_extraction_status(conversation_id)
+settled = await client.long_term.wait_for_extraction(
+    session_id=conversation_id,
+    expected_names=["Alice Nakamura", "Atlas"],
+    timeout=60.0,
+)
+entities = await client.long_term.search_entities("architecture decision", limit=10)
+----
+
+Prefer `expected_names` over `min_results`: NAMS entity search is
+nearest-neighbour and returns top-k whether or not anything actually matched.
+
+[NOTE]
+====
+`add_preference` and `add_fact` raise `NotSupportedError` on NAMS — there is no
+preferences or facts endpoint. Carry that information in entity descriptions, or
+point the self-hosted server at your own Neo4j, where the `memory_add_preference`
+and `memory_add_fact` tools work. See
+xref:explanation/backends.adoc#capability-matrix[the capability matrix].
+====
+
+== Step 3: wire the editors
+
+=== Claude Code — `.mcp.json` at the project root
+
+Project scope, so it is committed and every teammate gets it. `${VAR}` and
+`${VAR:-default}` are expanded from the environment, so no secret lands in git.
+
+[source,json]
+----
+{
+  "mcpServers": {
+    "team-memory": {
+      "type": "http",
+      "url": "https://mcp.memory.neo4jlabs.com/mcp"
+    },
+    "team-memory-self-hosted": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["--from", "neo4j-agent-memory[mcp]", "neo4j-agent-memory",
+               "mcp", "serve", "--transport", "stdio",
+               "--profile", "core", "--session-strategy", "per_day"],
+      "env": {
+        "NEO4J_URI": "${NEO4J_URI:-bolt://localhost:7687}",
+        "NEO4J_PASSWORD": "${NEO4J_PASSWORD}",
+        "MCP_USER_ID": "${USER}"
+      }
+    }
+  }
+}
+----
+
+The hosted entry carries no credential: the host runs the OAuth ceremony,
+including a workspace-selector step.
+
+=== Claude Desktop — `claude_desktop_config.json`
+
+Desktop speaks stdio, so a remote server goes through the `mcp-remote` shim:
+
+[source,json]
+----
+{
+  "mcpServers": {
+    "team-memory": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "https://mcp.memory.neo4jlabs.com/mcp"]
+    }
+  }
+}
+----
+
+Desktop does not inherit your shell environment and does not expand `${VAR}`, so
+values for a self-hosted entry go in the file — keep it out of git, or install the
+`.mcpb` bundle instead (`deploy/mcpb/manifest.json`; the example's
+`bundle/build.sh` packages it), which makes Desktop prompt for `NEO4J_PASSWORD`
+rather than storing it in JSON.
+
+=== Cursor — `.cursor/mcp.json`
+
+Same `mcpServers` shape. If your build does not expand `${VAR}`, paste the key
+into the `Authorization` header and keep the file untracked.
+
+== Step 4: diagnose before you debug
+
+`examples/claude-code-team-memory/doctor.py` runs five checks in
+failure-frequency order: key present and well-shaped, config files parse and name
+a real command or URL (and contain no pasted key), the tool surface each server
+will expose, endpoint reachability with the workspace header, and whether
+extraction has settled for the seeded conversation.
+
+[source,bash]
+----
+uv run python doctor.py --configs-only    # offline: no key, no network
+uv run python doctor.py                   # + live NAMS checks
+----
+
+Rather than hard-coding the tool counts, it registers each profile on a throwaway
+`FastMCP` instance with the library's own registrar and lists what came back — so
+the "6 and 16" claim in this page cannot drift away from the code. Read
+`check_tool_surface()` in `doctor.py` for the dozen lines that do it.
+
+== Choosing a profile
+
+[cols="1,3",options="header"]
+|===
+| Profile | Use it when
+
+| `core` (6)
+| Day-to-day coding. The full read/write cycle — search, context, store message,
+add entity/preference/fact — and nothing else competing for context window.
+
+| `extended` (16)
+| Investigating memory itself: `graph_query` for ad-hoc read-only Cypher, the
+reasoning-trace trio, `memory_export_graph`, session browsing.
+
+| Hosted NAMS (47)
+| Ontology editing, entity review, Skills, workspace administration. Scopes —
+not a flag — decide what a given key sees.
+|===
+
+`--session-strategy per_day` gives the self-hosted server one session id per user
+per day (`"{user_id}-YYYY-MM-DD"`), so a day's work is one recallable thread
+instead of a new one per editor restart. Set `MCP_USER_ID` to distinguish people.
+
+== See also
+
+* xref:reference/nams-mcp.adoc[Hosted NAMS MCP Server] — the 47-tool surface, OAuth endpoints, the two hostnames.
+* xref:reference/mcp-tools.adoc[MCP Tools] — every self-hosted tool, resource and prompt.
+* xref:tutorials/mcp-server.adoc[Connect Claude Desktop to Your Knowledge Graph] — the self-hosted path end to end.
+* xref:reference/authentication.adoc[Authentication & API Keys] — workspace vs admin keys.
+* xref:how-to/use-nams.adoc[Use NAMS] — configuring the hosted backend from code.

@@ -446,3 +446,12 @@ except NotConnectedError as e:
 * xref:how-to/entity-extraction.adoc[Configure entity extraction]
 * xref:explanation/poleo-model.adoc[Understand the POLE+O data model]
 * xref:reference/configuration.adoc[Explore all configuration options]
+
+== Runnable examples
+
+* link:https://github.com/neo4j-labs/agent-memory/tree/main/examples/hello-memory[`examples/hello-memory/`] — the smallest round
+  trip. One PEP 723 file, so `uv run examples/hello-memory/main.py` needs no
+  checkout and no virtualenv.
+* link:https://github.com/neo4j-labs/agent-memory/tree/main/examples/basic_usage.py[`examples/basic_usage.py`] — the guided tour
+  across all three memory types.
+* link:https://github.com/neo4j-labs/agent-memory/tree/main/examples[`examples/`] — the full gallery, with a chooser table.

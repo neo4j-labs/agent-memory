@@ -1,4 +1,4 @@
-.PHONY: help install install-all install-dev lint format typecheck ty test test-unit test-integration test-integration-mcp test-e2e test-all test-docker test-ci test-no-docker test-quick test-file test-match test-aws test-nams-unit test-nams-integration test-nams-staging test-nams-sandbox test-nams-local test-nams coverage coverage-all coverage-ci coverage-mcp test-examples test-examples-quick test-examples-no-neo4j test-docs test-docs-syntax test-docs-build test-docs-links neo4j-start neo4j-stop neo4j-logs clean build publish docs docs-diagrams-list docs-diagrams-status docs-diagrams-missing docs-diagrams-manifest docs-diagrams-add-refs docs-diagrams-generate example-basic example-resolution example-langchain example-pydantic examples chat-agent-install chat-agent-backend chat-agent-frontend chat-agent ts-install ts-build ts-test ts-test-unit ts-test-integration ts-lint ts-docs ts-conformance ts-pack ts-clean ts-test-examples
+.PHONY: help install install-all install-dev lint lint-fix format format-check typecheck ty check test test-unit test-integration test-integration-mcp test-e2e test-all test-docker test-ci test-no-docker test-quick test-file test-match test-aws test-nams-unit test-nams-integration test-nams-staging test-nams-sandbox test-nams-local test-nams coverage coverage-all coverage-ci coverage-mcp test-examples test-examples-quick test-examples-no-neo4j test-examples-docker test-examples-ci test-docs test-docs-syntax test-docs-build test-docs-links test-docs-integration neo4j-start neo4j-stop neo4j-restart neo4j-logs neo4j-status neo4j-wait neo4j-wait-quiet neo4j-clean neo4j-shell clean build publish publish-test docs docs-install docs-serve docs-watch docs-clean docs-diagrams-list docs-diagrams-status docs-diagrams-missing docs-diagrams-manifest docs-diagrams-add-refs docs-diagrams-generate pre-commit ci ci-no-docker shell watch dev example-hello example-basic example-resolution example-enrichment example-langchain example-pydantic example-no-llm example-domain-schemas example-existing-graph example-buffered-writes example-audit-trail example-eval-harness example-strands-session-manager example-strands-memory-store example-nams-quickstart example-ontology-lifecycle example-team-memory-doctor example-team-memory-seed examples examples-with-keys chat-agent-install chat-agent-backend chat-agent-frontend chat-agent chat-agent-backend-with-neo4j ts-install ts-build ts-test ts-test-unit ts-test-integration ts-lint ts-docs ts-conformance ts-pack ts-clean ts-test-examples
 
 # Default target
 help:
@@ -41,12 +41,43 @@ help:
 	@echo "  make test-docs-build       Run documentation build pipeline tests"
 	@echo "  make test-docs-links       Run internal link validation tests"
 	@echo ""
-	@echo "Examples:"
-	@echo "  make example-basic    Run basic usage example"
-	@echo "  make example-resolution Run entity resolution example"
-	@echo "  make example-langchain Run LangChain integration example"
-	@echo "  make example-pydantic Run Pydantic AI integration example"
-	@echo "  make examples         Run all examples"
+	@echo "Examples (key-free):"
+	@echo "  make example-hello        Smallest round trip (PEP 723, one file)"
+	@echo "  make example-basic        Guided tour of the whole API surface"
+	@echo "  make example-resolution   Entity resolution strategies (no Neo4j)"
+	@echo "  make example-no-llm       Fully local: llm=None + local embedder"
+	@echo "  make example-domain-schemas  GLiNER domain-schema runner"
+	@echo "  make example-existing-graph  Adopt a pre-existing Neo4j graph"
+	@echo "  make example-buffered-writes Non-blocking writes + back-pressure"
+	@echo "  make example-audit-trail     :TOUCHED reasoning audit edges"
+	@echo "  make example-eval-harness    Labelled memory-quality regression cases"
+	@echo "  make example-strands-session-manager  Strands SessionManager"
+	@echo "  make example-strands-memory-store     Strands MemoryStore"
+	@echo "  make example-langchain    LangChain 1.x agent (keyless)"
+	@echo "  make example-pydantic     PydanticAI 2.x agent (keyless)"
+	@echo "  make example-team-memory-doctor  Validate the editor MCP configs offline"
+	@echo "  make examples             Run every key-free example"
+	@echo ""
+	@echo "Examples (need credentials):"
+	@echo "  make example-enrichment        Wikipedia/Diffbot enrichment"
+	@echo "  make example-nams-quickstart   Hosted NAMS quickstart (MEMORY_API_KEY)"
+	@echo "  make example-ontology-lifecycle Hosted ontology lifecycle (MEMORY_API_KEY)"
+	@echo "  make example-team-memory-seed  Seed the shared workspace (MEMORY_API_KEY)"
+	@echo "  make examples-with-keys        Run all credential-requiring examples"
+	@echo ""
+	@echo "TypeScript SDK (typescript/):"
+	@echo "  make ts-install       Install TS dependencies (npm ci)"
+	@echo "  make ts-build         Build the TS package"
+	@echo "  make ts-test          Run all TS tests"
+	@echo "  make ts-lint          Lint the TS code (tsc --noEmit + eslint)"
+	@echo "  make ts-test-examples Type-check and test every TS example"
+	@echo "  make ts-conformance   Start the TCK bridge conformance server"
+	@echo ""
+	@echo "NAMS (hosted backend):"
+	@echo "  make test-nams-unit        NAMS unit tests (respx, no Docker)"
+	@echo "  make test-nams-integration NAMS integration tests"
+	@echo "  make test-nams-staging     NAMS integration against staging"
+	@echo "  make test-nams-sandbox     NAMS integration against sandbox"
 	@echo ""
 	@echo "Full-Stack Chat Agent:"
 	@echo "  make chat-agent-install  Install chat agent dependencies (backend + frontend)"
@@ -97,25 +128,59 @@ install-dev:
 # Code Quality
 # =============================================================================
 
+# Ruff covers the whole examples tree (xc-F04). One narrow carve-out:
+# TODO(#144): the AWS FSA Lambda shim imports `src.main`, which ruff's isort
+# sorts into the first-party block; drop this once that file grows a
+# `# isort: skip` or the backend is made a real package.
+RUFF_PATHS := src tests examples
+RUFF_EXTEND_IGNORES := \
+	--extend-per-file-ignores 'examples/financial-services-advisor/aws-financial-services-advisor/backend/handler.py:I001'
+
+# Example entrypoints in hyphenated directories. mypy cannot take more than one
+# `main.py` per invocation ("Duplicate module named main"), so these are looped
+# one file at a time; ty accepts them all at once.
+EXAMPLE_MAIN_FILES := \
+	examples/audit-trail/main.py \
+	examples/buffered-writes/main.py \
+	examples/eval-harness/main.py \
+	examples/hello-memory/main.py \
+	examples/nams-fastapi/main.py \
+	examples/nams-langchain/main.py \
+	examples/nams-quickstart/main.py \
+	examples/no_llm/main.py \
+	examples/ontology-lifecycle/main.py \
+	examples/strands-memory-store/main.py \
+	examples/strands-session-manager/main.py
+
+# ty-only surface. buffered-writes/main.py is excluded because ty rejects its
+# `write_mode: str` parameter against `Literal["sync", "buffered"]`.
+# TODO: narrow that annotation in examples/buffered-writes/main.py and fold the
+# file back in (it already passes mypy).
+TY_EXAMPLE_FILES := $(filter-out examples/buffered-writes/main.py,$(EXAMPLE_MAIN_FILES))
+
 lint:
-	uv run ruff check src tests
+	uv run ruff check $(RUFF_PATHS) $(RUFF_EXTEND_IGNORES)
 
 lint-fix:
-	uv run ruff check --fix src tests
+	uv run ruff check --fix $(RUFF_PATHS) $(RUFF_EXTEND_IGNORES)
 
 format:
-	uv run ruff format src tests
+	uv run ruff format $(RUFF_PATHS)
 
 format-check:
-	uv run ruff format --check src tests
+	uv run ruff format --check $(RUFF_PATHS)
 
 typecheck:
 	uv run mypy src benchmarks examples/*.py
+	@for f in $(EXAMPLE_MAIN_FILES); do \
+		echo "mypy $$f"; \
+		uv run mypy $$f || exit 1; \
+	done
 
 # Second, independent type checker (Astral's ty). Blocking in CI alongside
 # mypy. Run with the integration extras: `uv sync --all-extras --group dev`.
 ty:
-	uv run ty check src benchmarks examples/*.py
+	uv run ty check src benchmarks examples/*.py $(TY_EXAMPLE_FILES)
 
 check: lint format-check typecheck ty
 	@echo "All code quality checks passed!"
@@ -249,10 +314,10 @@ test-examples-quick:
 	@echo "Running quick example validation tests..."
 	uv run pytest tests/examples -v -m "not requires_neo4j and not slow" --timeout=30
 
-# Run example tests that don't require Neo4j
-test-examples-no-neo4j:
-	@echo "Running example tests that don't need Neo4j..."
-	uv run pytest tests/examples/test_entity_resolution.py tests/examples/test_full_stack_apps.py -v --timeout=60
+# Deprecated alias kept for muscle memory: there is one quick-suite definition
+# (the marker expression above), shared with ci-python.yml's example-tests-quick
+# job and asserted by tests/examples/test_examples_registry.py.
+test-examples-no-neo4j: test-examples-quick
 
 # Run example tests with docker-compose Neo4j (alternative to testcontainers)
 test-examples-docker: neo4j-start neo4j-wait
@@ -483,74 +548,158 @@ dev: format lint test-unit
 # Examples
 # =============================================================================
 
-# Check if NEO4J_URI is set in environment or examples/.env
-# If not set, we'll start Docker; otherwise use the configured Neo4j
-define check_neo4j_env
-	@if [ -f examples/.env ]; then \
-		. examples/.env 2>/dev/null; \
-	fi; \
+# Run one example script against Neo4j.
+#
+#   $(call run_example,<path to script>[,<extra args>])
+#
+# `set -a` exports everything examples/.env defines so the values actually
+# reach the `uv run` child process (the old `. examples/.env` set shell
+# variables only). When NEO4J_URI is still unset afterwards, start the
+# throwaway docker-compose Neo4j and use its password.
+define run_example
+	@set -a; \
+	if [ -f examples/.env ]; then . examples/.env 2>/dev/null || true; fi; \
+	set +a; \
 	if [ -z "$$NEO4J_URI" ]; then \
 		echo "NEO4J_URI not set, starting Docker Neo4j..."; \
 		$(MAKE) neo4j-start neo4j-wait-quiet; \
-		export NEO4J_PASSWORD=test-password; \
+		NEO4J_PASSWORD=test-password uv run python $(1) $(2); \
 	else \
 		echo "Using configured Neo4j at $$NEO4J_URI"; \
+		uv run python $(1) $(2); \
 	fi
 endef
 
-# Basic usage example (requires Neo4j and OpenAI API key or sentence-transformers)
+# --- Standalone scripts ------------------------------------------------------
+
+# The smallest round trip. PEP 723 header, so uv builds its own environment.
+example-hello:
+	@echo "Running hello-memory example..."
+	$(call run_example,examples/hello-memory/main.py)
+
+# Guided tour of the whole API surface (no API key needed — falls back to a
+# local sentence-transformers embedder).
 example-basic:
 	@echo "Running basic usage example..."
-	@if [ -f examples/.env ]; then \
-		. examples/.env 2>/dev/null || true; \
-	fi; \
-	if [ -z "$$NEO4J_URI" ]; then \
-		echo "NEO4J_URI not set, starting Docker Neo4j..."; \
-		$(MAKE) neo4j-start neo4j-wait-quiet; \
-		NEO4J_PASSWORD=test-password uv run python examples/basic_usage.py; \
-	else \
-		echo "Using configured Neo4j at $$NEO4J_URI"; \
-		uv run python examples/basic_usage.py; \
-	fi
+	$(call run_example,examples/basic_usage.py)
 
-# Entity resolution example (no external dependencies required)
+# Entity resolution example (no Neo4j, no external dependencies required)
 example-resolution:
 	@echo "Running entity resolution example..."
 	uv run python examples/entity_resolution.py
 
-# LangChain integration example (requires Neo4j and OpenAI API key)
+# Entity enrichment from Wikipedia (no API key; Diffbot section needs one)
+example-enrichment:
+	@echo "Running enrichment example..."
+	$(call run_example,examples/enrichment_example.py)
+
+# LangChain integration example (runs keyless on a scripted model)
 example-langchain:
 	@echo "Running LangChain integration example..."
-	@if [ -f examples/.env ]; then \
-		. examples/.env 2>/dev/null || true; \
-	fi; \
-	if [ -z "$$NEO4J_URI" ]; then \
-		echo "NEO4J_URI not set, starting Docker Neo4j..."; \
-		$(MAKE) neo4j-start neo4j-wait-quiet; \
-		NEO4J_PASSWORD=test-password uv run python examples/langchain_agent.py; \
-	else \
-		echo "Using configured Neo4j at $$NEO4J_URI"; \
-		uv run python examples/langchain_agent.py; \
-	fi
+	$(call run_example,examples/langchain_agent.py)
 
-# Pydantic AI integration example (requires Neo4j and OpenAI API key)
+# Pydantic AI integration example (runs keyless on TestModel)
 example-pydantic:
 	@echo "Running Pydantic AI integration example..."
-	@if [ -f examples/.env ]; then \
-		. examples/.env 2>/dev/null || true; \
-	fi; \
-	if [ -z "$$NEO4J_URI" ]; then \
-		echo "NEO4J_URI not set, starting Docker Neo4j..."; \
-		$(MAKE) neo4j-start neo4j-wait-quiet; \
-		NEO4J_PASSWORD=test-password uv run python examples/pydantic_ai_agent.py; \
-	else \
-		echo "Using configured Neo4j at $$NEO4J_URI"; \
-		uv run python examples/pydantic_ai_agent.py; \
-	fi
+	$(call run_example,examples/pydantic_ai_agent.py)
 
-# Run all examples
-examples: example-resolution example-basic example-langchain example-pydantic
-	@echo "All examples completed!"
+# --- Directory examples ------------------------------------------------------
+
+example-no-llm:
+	@echo "Running the no-LLM example..."
+	$(call run_example,examples/no_llm/main.py)
+
+example-domain-schemas:
+	@echo "Running the domain-schemas runner (POLE+O schema)..."
+	uv run python examples/domain-schemas/run.py --schema poleo
+
+# seed.py is idempotent; pass --reset (plus EXISTING_GRAPH_ALLOW_RESET=1) by
+# hand when you want the seed labels wiped first.
+example-existing-graph:
+	@echo "Running the existing-graph example (seed, adopt, write, retrieve)..."
+	$(call run_example,examples/existing-graph/seed.py)
+	$(call run_example,examples/existing-graph/adopt.py)
+	$(call run_example,examples/existing-graph/memory_io.py)
+	$(call run_example,examples/existing-graph/retrieve.py)
+
+example-buffered-writes:
+	@echo "Running the buffered-writes example..."
+	$(call run_example,examples/buffered-writes/main.py)
+
+example-audit-trail:
+	@echo "Running the audit-trail example..."
+	$(call run_example,examples/audit-trail/main.py)
+
+example-eval-harness:
+	@echo "Running the eval-harness example..."
+	$(call run_example,examples/eval-harness/main.py)
+
+example-strands-session-manager:
+	@echo "Running the Strands session-manager example..."
+	$(call run_example,examples/strands-session-manager/main.py)
+
+example-strands-memory-store:
+	@echo "Running the Strands memory-store example..."
+	$(call run_example,examples/strands-memory-store/main.py)
+
+# --- Hosted backend (NAMS) ---------------------------------------------------
+# These need MEMORY_API_KEY and make live HTTP calls; they are deliberately
+# outside the `examples` aggregate.
+
+example-nams-quickstart:
+	@echo "Running the NAMS quickstart (needs MEMORY_API_KEY)..."
+	@set -a; \
+	if [ -f examples/.env ]; then . examples/.env 2>/dev/null || true; fi; \
+	set +a; \
+	uv run python examples/nams-quickstart/main.py
+
+example-ontology-lifecycle:
+	@echo "Running the NAMS ontology lifecycle (needs MEMORY_API_KEY)..."
+	@set -a; \
+	if [ -f examples/.env ]; then . examples/.env 2>/dev/null || true; fi; \
+	set +a; \
+	uv run python examples/ontology-lifecycle/main.py
+
+# Validate the editor MCP configs with no key, no network and no database.
+example-team-memory-doctor:
+	@echo "Checking the team-memory editor configs (offline)..."
+	cd examples/claude-code-team-memory && uv run python doctor.py --configs-only
+
+# Seed the shared workspace (needs MEMORY_API_KEY).
+example-team-memory-seed:
+	@echo "Seeding the team-memory workspace (needs MEMORY_API_KEY)..."
+	@set -a; \
+	if [ -f examples/.env ]; then . examples/.env 2>/dev/null || true; fi; \
+	set +a; \
+	cd examples/claude-code-team-memory && uv run python seed_workspace.py
+
+# --- Aggregates --------------------------------------------------------------
+
+# Every example that runs end to end with no API key. `make examples` must stay
+# key-free so it works on a clean checkout.
+RUNNABLE_EXAMPLES := \
+	example-resolution \
+	example-hello \
+	example-basic \
+	example-no-llm \
+	example-domain-schemas \
+	example-existing-graph \
+	example-buffered-writes \
+	example-audit-trail \
+	example-eval-harness \
+	example-strands-session-manager \
+	example-strands-memory-store \
+	example-langchain \
+	example-pydantic \
+	example-team-memory-doctor
+
+examples: $(RUNNABLE_EXAMPLES)
+	@echo "All key-free examples completed!"
+
+# Examples that need credentials (OpenAI for the enrichment Diffbot section,
+# MEMORY_API_KEY for the hosted ones).
+examples-with-keys: example-enrichment example-nams-quickstart example-ontology-lifecycle
+	@echo "All credential-requiring examples completed!"
 
 # =============================================================================
 # Full-Stack Chat Agent
@@ -569,9 +718,12 @@ chat-agent-install:
 	@echo "Next steps:"
 	@echo "  1. Copy .env.example to .env in both backend and frontend directories"
 	@echo "  2. Add your OPENAI_API_KEY to backend/.env"
-	@echo "  3. Start Neo4j: make neo4j-start"
-	@echo "  4. Run backend: make chat-agent-backend"
-	@echo "  5. Run frontend: make chat-agent-frontend (in another terminal)"
+	@echo "  3. Start this example's Neo4j (its compose file and .env agree on the"
+	@echo "     password; the repo-level 'make neo4j-start' uses a different one):"
+	@echo "       cd $(CHAT_AGENT_DIR) && docker compose up -d"
+	@echo "  4. Seed the news graph: cd $(CHAT_AGENT_DIR)/backend && uv run python scripts/load_news_sample.py"
+	@echo "  5. Run backend: make chat-agent-backend"
+	@echo "  6. Run frontend: make chat-agent-frontend (in another terminal)"
 
 # Run the chat agent backend server
 chat-agent-backend:
@@ -604,7 +756,8 @@ chat-agent:
 	@echo "Prerequisites:"
 	@echo "  1. Install dependencies: make chat-agent-install"
 	@echo "  2. Configure .env files in backend/ and frontend/"
-	@echo "  3. Start Neo4j: make neo4j-start (or use your own instance)"
+	@echo "  3. Start Neo4j: cd $(CHAT_AGENT_DIR) && docker compose up -d (or use your own instance)"
+	@echo "  4. Seed the news graph: cd $(CHAT_AGENT_DIR)/backend && uv run python scripts/load_news_sample.py"
 	@echo ""
 	@echo "Then open http://localhost:3000 in your browser."
 
@@ -661,13 +814,26 @@ ts-pack:
 ts-clean:
 	rm -rf $(TS_DIR)/dist $(TS_DIR)/docs-api $(TS_DIR)/.tsbuildinfo
 
-# Type-check every TS example against the freshly built SDK. Catches
+# Type-check and test every TS example against the freshly built SDK. Catches
 # API drift between examples and the SDK without needing API keys.
-# Mirrors the ci-typescript.yml type-check-examples matrix.
+# Mirrors the ci-typescript.yml type-check-examples matrix. Every directory
+# under typescript/examples/ is iterated, so a new example is covered the
+# moment it lands (no list to keep in step).
+#
+# `npm ci` where a lockfile is committed, `npm install` otherwise — see the
+# lockfile policy in typescript/examples/README.md.
 ts-test-examples:
 	cd $(TS_DIR) && npm ci && npm run build
-	@for ex in langchain mastra mcp strands vercel-ai; do \
-		echo "=== Type-checking $$ex ==="; \
-		(cd $(TS_DIR)/examples/$$ex && npm install --no-package-lock && npx tsc --noEmit) || exit 1; \
+	@for dir in $(TS_DIR)/examples/*/; do \
+		ex=$$(basename $$dir); \
+		[ -f "$$dir/package.json" ] || continue; \
+		echo "=== $$ex ==="; \
+		if [ -f "$$dir/package-lock.json" ]; then \
+			(cd $$dir && npm ci) || exit 1; \
+		else \
+			(cd $$dir && npm install --no-package-lock) || exit 1; \
+		fi; \
+		(cd $$dir && npx tsc --noEmit) || exit 1; \
+		(cd $$dir && npm test --if-present) || exit 1; \
 	done
-	@echo "All TS examples type-check cleanly."
+	@echo "All TS examples type-check and test cleanly."

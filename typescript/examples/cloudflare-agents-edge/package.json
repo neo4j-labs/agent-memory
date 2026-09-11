@@ -1,0 +1,30 @@
+{
+  "name": "agent-memory-example-cloudflare-agents-edge",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "wrangler dev",
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "deploy": "wrangler deploy",
+    "types": "wrangler types",
+    "lint": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "^4.0",
+    "@neo4j-labs/agent-memory": "file:../..",
+    "ai": "^7.0"
+  },
+  "devDependencies": {
+    "@ai-sdk/provider": "^4.0",
+    "@cloudflare/vitest-pool-workers": "^0.22.0",
+    "@cloudflare/workers-types": "^5.20260911.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0",
+    "wrangler": "^4.131.0"
+  }
+}

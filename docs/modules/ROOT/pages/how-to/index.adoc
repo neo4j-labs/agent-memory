@@ -130,7 +130,8 @@ Connect neo4j-agent-memory to popular agent frameworks for persistent, shared co
 
 == TypeScript SDK (`@neo4j-labs/agent-memory`)
 
-The TypeScript SDK targets the hosted NAMS service. It runs on Node 20+, Bun, Deno, Cloudflare Workers, and Vercel Edge.
+The TypeScript SDK targets the hosted NAMS service. It runs on Node 22+, Bun, Deno, Cloudflare Workers, and Vercel Edge.
+Every guide below has a runnable counterpart in https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples[`typescript/examples/`].
 
 [cols="1,2", options="header"]
 |===
@@ -144,6 +145,9 @@ The TypeScript SDK targets the hosted NAMS service. It runs on Node 20+, Bun, De
 
 | xref:how-to/typescript/vercel-ai.adoc[Vercel AI SDK Middleware]
 | Three-tier context injection + automatic persistence as a `LanguageModelV1Middleware`.
+
+| xref:how-to/typescript/nextjs-memory-chat.adoc[Next.js Memory Chat]
+| The flagship full-stack demo: a Next.js 16 App Router assistant with a live entity-graph rail, an extraction-status badge, and a reasoning-trace drawer.
 
 | xref:how-to/typescript/mcp.adoc[MCP Tools]
 | Wire the standard 12-tool memory surface into Claude Desktop, Cursor, or any MCP-aware client.

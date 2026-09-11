@@ -1,0 +1,42 @@
+{
+  // Cloudflare Workers configuration. `wrangler.jsonc` (not .toml) is the
+  // current default format — JSONC, so comments are allowed.
+  // Reference: https://developers.cloudflare.com/workers/wrangler/configuration/
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "agent-memory-edge",
+  "main": "src/index.ts",
+
+  // Pinned deliberately, and pinned *older* than today: the `workerd` build
+  // bundled with `@cloudflare/vitest-pool-workers` refuses a compatibility date
+  // it does not know yet, and `npm test` runs the Worker inside that build. Any
+  // date the test runtime accepts is also accepted in production.
+  "compatibility_date": "2026-08-01",
+
+  // No `nodejs_compat` flag — and that is the point of this example. The SDK
+  // uses `fetch` and nothing else, so the bundle needs no Node shim. If a
+  // `node:` import ever creeps into the dependency graph, `npm run build` fails
+  // here rather than in production.
+  "compatibility_flags": [],
+
+  "observability": {
+    "enabled": true
+  },
+
+  // Plaintext configuration. Safe to commit — none of these are credentials.
+  "vars": {
+    "OPENAI_MODEL": "gpt-5-mini",
+    "DEMO_USER_ID": "edge-demo-user"
+    // "MEMORY_ENDPOINT": "https://nams.internal.example.com/v1"  // private deployments only
+  }
+
+  // Secrets are NOT declared here — values in `wrangler.jsonc` are committed
+  // plaintext. Each is set out-of-band and arrives on the same `env` object:
+  //
+  //   npx wrangler secret put MEMORY_API_KEY       # nams_… from memory.neo4jlabs.com
+  //   npx wrangler secret put OPENAI_API_KEY
+  //   npx wrangler secret put MEMORY_WORKSPACE_ID  # optional, multi-workspace keys only
+  //
+  // For `wrangler dev` they come from `.dev.vars` instead — copy
+  // `.dev.vars.example` and fill it in. `.dev.vars` is gitignored.
+  // The typed shape of all six bindings lives in `src/env.ts`.
+}

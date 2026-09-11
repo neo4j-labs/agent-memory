@@ -32,6 +32,16 @@ on:
       - 'codecov.yml'
       - '.github/workflows/ci-python.yml'
 
+# Least privilege by default; widen per job if one ever needs to write.
+permissions:
+  contents: read
+
+# A new push to a PR branch supersedes the run in flight. Worth having on a
+# workflow that spins up a Neo4j service in four separate jobs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -47,11 +57,19 @@ jobs:
       - name: Install dependencies
         run: uv sync --group dev
 
+      # `examples` is in scope (xc-F04): 155 tracked example .py files used to be
+      # neither linted nor formatted. One narrow carve-out, mirrored in the
+      # Makefile's RUFF_EXTEND_IGNORES:
+      # TODO(#144): the AWS FSA Lambda shim imports `src.main`, which ruff's
+      # isort sorts into the first-party block. Drop the ignore once that file
+      # carries an `# isort: skip` or the backend becomes a real package.
       - name: Run ruff check
-        run: uv run ruff check src tests
+        run: |
+          uv run ruff check src tests examples \
+            --extend-per-file-ignores 'examples/financial-services-advisor/aws-financial-services-advisor/backend/handler.py:I001'
 
       - name: Run ruff format check
-        run: uv run ruff format --check src tests
+        run: uv run ruff format --check src tests examples
 
   type-check:
     runs-on: ubuntu-latest
@@ -71,15 +89,31 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-extras --group dev
 
-      # Checked surface: src, benchmarks, and the top-level examples/*.py demos.
-      # Both checkers are blocking and the surface is kept at zero errors.
-      # mypy is the source of truth; ty is the second, independent checker
-      # (its complementary rules must also pass).
+      # Checked surface: src, benchmarks, the top-level examples/*.py demos and
+      # every examples/<dir>/main.py entrypoint. Both checkers are blocking and
+      # the surface is kept at zero errors. mypy is the source of truth; ty is
+      # the second, independent checker (its complementary rules must also pass).
+      # Kept in step with `make typecheck` / `make ty`.
       - name: Run mypy
-        run: uv run mypy src benchmarks examples/*.py
+        # mypy refuses more than one `main.py` per invocation ("Duplicate module
+        # named main") and the example directories are hyphenated, so they
+        # cannot be packages — one invocation per file.
+        run: |
+          uv run mypy src benchmarks examples/*.py
+          for f in examples/*/main.py; do
+            echo "mypy $f"
+            uv run mypy "$f"
+          done
 
       - name: Run ty
-        run: uv run ty check src benchmarks examples/*.py
+        # ty takes them all at once. examples/buffered-writes/main.py is excluded
+        # because ty rejects its `write_mode: str` parameter against
+        # Literal["sync", "buffered"].
+        # TODO: narrow that annotation and drop the filter (it passes mypy).
+        run: |
+          files=$(ls examples/*/main.py | grep -v '^examples/buffered-writes/main.py$')
+          # shellcheck disable=SC2086
+          uv run ty check src benchmarks examples/*.py $files
 
   test:
     runs-on: ubuntu-latest
@@ -425,25 +459,153 @@ jobs:
           restore-keys: |
             hf-cache-${{ runner.os }}-
 
+      # One marker-driven definition of the quick suite (xc-F01), shared with
+      # `make test-examples-quick` and documented in examples/README.md. The
+      # hand-maintained file list this replaced had drifted out of step with
+      # tests/examples/ five times; tests/examples/test_examples_registry.py now
+      # fails if a test module has no quick-selectable test, so a new example
+      # cannot silently skip this job.
       - name: Run quick example validation
         run: |
-          uv run pytest \
-            tests/examples/test_entity_resolution.py \
-            tests/examples/test_full_stack_apps.py \
-            tests/examples/test_google_cloud_financial_advisor.py \
-            tests/examples/test_google_cloud_integration.py \
-            tests/examples/test_google_adk_demo.py \
-            tests/examples/test_microsoft_agent_example.py \
-            tests/examples/test_crewai_example.py \
-            tests/examples/test_llamaindex_example.py \
-            tests/examples/test_aws_financial_advisor.py \
-            tests/examples/test_domain_schemas.py \
-            tests/examples/test_no_llm_example.py \
-            tests/examples/test_enrichment_example.py \
-            tests/examples/test_no_phantom_methods.py \
+          uv run pytest tests/examples \
+            -m "not requires_neo4j and not slow" \
             -v \
             --tb=short \
             --timeout=60
+
+      # The lennys backend has its own pyproject and test suite; the offline
+      # subset needs no Neo4j and no keys.
+      - name: Run lennys-memory backend tests (offline subset)
+        working-directory: examples/lennys-memory/backend
+        run: |
+          uv sync
+          uv run pytest tests -m "not integration" -q --timeout=120
+
+      # Same shape for the GCP financial-services backend.
+      - name: Run google-cloud-financial-advisor backend tests
+        working-directory: examples/financial-services-advisor/google-cloud-financial-advisor/backend
+        run: |
+          uv sync
+          uv run ruff check src tests
+          uv run pytest -q --timeout=120
+
+      # Examples must use the public API: `client.query.cypher` for reads,
+      # `client.graph.execute_write` for writes. `client._client` and the
+      # internal Cypher-constant module are reach-throughs that break on any
+      # refactor. Prose mentions (inside ``backticks``) are allowed, and the
+      # examples' own test suites are exempt.
+      # TODO: examples/lennys-memory/backend/tests/test_integration.py:240 still
+      # reaches through; drop the /tests/ exemption once it is fixed.
+      - name: Guard against private-API reach-through in examples
+        run: |
+          hits=$(grep -rn --include='*.py' \
+            -e '\._client\.execute_' \
+            -e 'from neo4j_agent_memory\.graph\.queries' \
+            examples/ | grep -v '/tests/' | grep -v '``' || true)
+          if [ -n "$hits" ]; then
+            echo "$hits"
+            echo "::error::examples must use client.query / client.graph, not private internals"
+            exit 1
+          fi
+
+  # GitHub's workflow-level `paths:` filter is all-or-nothing, so this job
+  # narrows it per-job: the frontend matrix below is skipped on a Python-only
+  # pull request. On pushes to main it always runs. Plain git, no third-party
+  # action.
+  changed-paths:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      frontend: ${{ steps.detect.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect example frontend / infrastructure changes
+        id: detect
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "frontend=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git fetch --no-tags origin "$BASE_REF"
+          if git diff --name-only "origin/$BASE_REF...HEAD" \
+               | grep -Eq '^examples/.*/(frontend|infrastructure)/'; then
+            echo "frontend=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "frontend=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # Install and build every example frontend plus the CDK app (xc-F08). None of
+  # these was ever installed, linted or built by CI, so a frontend that no
+  # longer compiles used to ship silently behind 38 `exists()` assertions.
+  #
+  # The TypeScript flagship (typescript/examples/nextjs-memory-chat) is built by
+  # the `type-check-examples` job in ci-typescript.yml instead — its sources live
+  # under typescript/**, which this workflow deliberately does not watch.
+  frontend-build:
+    name: Build example frontend (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    needs: changed-paths
+    if: needs.changed-paths.outputs.frontend == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: full-stack-chat-agent
+            dir: examples/full-stack-chat-agent/frontend
+          - name: lennys-memory
+            dir: examples/lennys-memory/frontend
+          - name: aws-financial-services-advisor
+            dir: examples/financial-services-advisor/aws-financial-services-advisor/frontend
+          - name: google-cloud-financial-advisor
+            dir: examples/financial-services-advisor/google-cloud-financial-advisor/frontend
+          - name: microsoft-agent-retail-assistant
+            dir: examples/microsoft_agent_retail_assistant/frontend
+          - name: aws-fsa-infrastructure
+            dir: examples/financial-services-advisor/aws-financial-services-advisor/infrastructure
+            build: synth
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # `npm ci` needs a tracked lockfile. Not every example has one (the
+      # microsoft frontend does not), so fall back to `npm install` rather than
+      # failing the matrix entry.
+      - name: Install dependencies
+        working-directory: ${{ matrix.dir }}
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            echo "::notice::no package-lock.json in ${{ matrix.dir }} — using npm install"
+            npm install
+          fi
+
+      - name: Type-check
+        working-directory: ${{ matrix.dir }}
+        run: |
+          npm run type-check --if-present
+          npm run typecheck --if-present
+
+      - name: Lint
+        working-directory: ${{ matrix.dir }}
+        run: npm run lint --if-present
+
+      - name: Test
+        working-directory: ${{ matrix.dir }}
+        run: npm test --if-present
+
+      - name: Build
+        working-directory: ${{ matrix.dir }}
+        run: npm run ${{ matrix.build || 'build' }}
 
   # Documentation tests - validates code snippets and internal links
   docs-tests:
@@ -460,7 +622,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Install Python dependencies
         run: uv sync --group dev
