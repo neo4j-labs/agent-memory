@@ -212,7 +212,7 @@ export async function main(options: RunOptions = {}): Promise<RunResult> {
     });
 
     const threads = await client.shortTerm.listConversations({ userId: resourceId });
-    log(`NAMS lists ${threads.length} thread(s) for ${resourceId}`);
+    log(`NAMS lists ${threads.length} thread(s) for configured resource`);
 
     if (cleanup) {
       await memory.deleteThread(thread.id);
