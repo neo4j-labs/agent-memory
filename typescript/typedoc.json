@@ -4,6 +4,7 @@
     "src/index.ts",
     "src/middleware/vercel-ai.ts",
     "src/mcp/index.ts",
+    "src/mcp/register.ts",
     "src/integrations/langchain.ts",
     "src/integrations/mastra.ts",
     "src/integrations/strands/index.ts",

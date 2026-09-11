@@ -1,14 +1,21 @@
 /**
- * Unit tests — the 12-tool MCP surface.
+ * Unit tests — the 12-tool self-hosted MCP surface.
+ *
+ * This is the subset a self-hosted server exposes, not the hosted NAMS MCP
+ * server's surface (larger and scope-gated — see `reference/nams-mcp.adoc`).
  */
 
 import { describe, it, expect } from "vitest";
-import { createMemoryTools } from "../../src/mcp/index.js";
+import {
+  createMemoryTools,
+  memoryToolAnnotations,
+  READ_ONLY_MEMORY_TOOLS,
+} from "../../src/mcp/index.js";
 
 describe("createMemoryTools", () => {
   const tools = createMemoryTools();
 
-  it("returns exactly 12 tools matching memory.neo4jlabs.com/mcp", () => {
+  it("returns exactly 12 tools", () => {
     expect(tools).toHaveLength(12);
   });
 
@@ -18,7 +25,7 @@ describe("createMemoryTools", () => {
     }
   });
 
-  it("includes all 12 standard tools", () => {
+  it("includes all 12 tools", () => {
     const names = tools.map((t) => t.name).sort();
     expect(names).toEqual(
       [
@@ -43,5 +50,28 @@ describe("createMemoryTools", () => {
       expect(t.inputSchema.type).toBe("object");
       expect(t.inputSchema.properties).toBeDefined();
     }
+  });
+
+  it("annotates reads as read-only and idempotent, writes as neither", () => {
+    for (const t of tools) {
+      const readOnly = READ_ONLY_MEMORY_TOOLS.has(t.name);
+      expect(t.annotations).toEqual({
+        readOnlyHint: readOnly,
+        idempotentHint: readOnly,
+        destructiveHint: false,
+      });
+      expect(t.annotations).toEqual(memoryToolAnnotations(t.name));
+    }
+  });
+
+  it("marks no tool destructive", () => {
+    expect(tools.every((t) => t.annotations.destructiveHint === false)).toBe(true);
+  });
+
+  it("treats every get_/search_/explain_ tool as read-only", () => {
+    const reads = tools
+      .filter((t) => /^memory_(get|search|explain)_/.test(t.name))
+      .map((t) => t.name);
+    expect(reads.sort()).toEqual([...READ_ONLY_MEMORY_TOOLS].sort());
   });
 });

@@ -41,6 +41,13 @@ export async function connectMemoryToAgent(
   options: StrandsIntegrationOptions,
 ): Promise<ConnectMemoryToAgentResult> {
   const strands = await loadStrands();
+  // `{ snapshot: SnapshotStorage }` is the snapshot-shaped storage form.
+  // Strands 1.16+ marks it deprecated in favour of a unified `Storage`
+  // (`write`/`read`/`delete`/`list` over opaque `Uint8Array` keys) — which we
+  // deliberately do not use: NAMS stores a conversation as graph nodes, and a
+  // byte-blob backend would reduce it to an opaque value with no entity
+  // extraction, search or graph traversal. `SessionManagerConfig.storage`
+  // still accepts this form; see `Neo4jSessionStorage` for the mapping.
   const sessionManager = new strands.SessionManager({
     sessionId: options.conversationId,
     storage: { snapshot: new Neo4jSessionStorage(memory) },
@@ -57,8 +64,17 @@ export async function connectMemoryToAgent(
     });
   };
 
+  // Strands' `ConversationManager` declares a `protected` member, which makes
+  // structural assignment from a non-derived class impossible — and we cannot
+  // derive from it, because the base class arrives through a dynamic import.
+  // Asserting the *public* surface first means a rename or reshape of `name` /
+  // `reduce` / `initAgent` still fails compilation, instead of being swallowed
+  // by the cast below.
+  const publicSurface: Pick<StrandsConversationManager, "name" | "reduce" | "initAgent"> =
+    baseManager;
+
   return {
     sessionManager,
-    conversationManager: baseManager as unknown as StrandsConversationManager,
+    conversationManager: publicSurface as unknown as StrandsConversationManager,
   };
 }

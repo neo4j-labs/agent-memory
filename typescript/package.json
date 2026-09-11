@@ -23,6 +23,10 @@
       "import": "./dist/mcp/index.js",
       "types": "./dist/mcp/index.d.ts"
     },
+    "./mcp/register": {
+      "import": "./dist/mcp/register.js",
+      "types": "./dist/mcp/register.d.ts"
+    },
     "./integrations/langchain": {
       "import": "./dist/integrations/langchain.js",
       "types": "./dist/integrations/langchain.d.ts"
@@ -61,26 +65,57 @@
     "test:watch": "vitest",
     "test:tck": "RUN_TCK_BRIDGE=1 vitest run test/tck",
     "tck:bronze": "RUN_TCK_BRIDGE=1 vitest run test/tck --grep Bronze",
-    "lint": "tsc --noEmit",
+    "lint": "tsc --noEmit && tsc -p tsconfig.test.json",
     "docs:api": "typedoc",
     "conformance:server": "tsx conformance/server.ts",
     "prepublishOnly": "npm run build"
   },
   "devDependencies": {
-    "@ai-sdk/provider": "^3.0.10",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@ai-sdk/provider": "^4.0.10",
+    "@mastra/core": "^1.66.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@opentelemetry/api": "^1.9.1",
-    "@strands-agents/sdk": "^1.13.0",
-    "@types/node": "^20.0.0",
+    "@strands-agents/sdk": "^1.16.0",
+    "@types/node": "^22.0.0",
     "dotenv": "^17.4.2",
     "msw": "^2.14.3",
     "tsup": "^8.0.0",
     "tsx": "^4.0.0",
-    "typedoc": "^0.26.0",
-    "typescript": "^5.5.0",
-    "vitest": "^2.0.0"
+    "typedoc": "^0.28.0",
+    "typescript": "^5.9.0",
+    "vitest": "^5.0.0",
+    "zod": "^4.6.0"
+  },
+  "peerDependencies": {
+    "@ai-sdk/provider": ">=4.0.0 <5",
+    "@modelcontextprotocol/sdk": ">=1.30.0 <2",
+    "@opentelemetry/api": "^1.9.0",
+    "@strands-agents/sdk": ">=1.16.0 <2",
+    "zod": "^4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@ai-sdk/provider": {
+      "optional": true
+    },
+    "@modelcontextprotocol/sdk": {
+      "optional": true
+    },
+    "@opentelemetry/api": {
+      "optional": true
+    },
+    "@strands-agents/sdk": {
+      "optional": true
+    },
+    "zod": {
+      "optional": true
+    }
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
+  },
+  "overrides": {
+    "@strands-agents/sdk": {
+      "@ai-sdk/provider": "$@ai-sdk/provider"
+    }
   }
 }
