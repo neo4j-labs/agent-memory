@@ -3,7 +3,7 @@
  *
  * Speaks the bridge wire format (POST {endpoint}/{snake_case_method}) used by
  * conformance servers and the local reference adapter. Compatible with every
- * fetch-capable runtime (Node 20+, Bun, Deno, Workers, Edge).
+ * fetch-capable runtime (Node 22+, Bun, Deno, Workers, Edge).
  */
 
 import { AuthenticationError, ConnectionError, TransportError } from "../errors.js";

@@ -92,7 +92,7 @@ describe("double-extraction guard", () => {
 
 describe("private attribute coupling", () => {
   it("MemoryManager still keeps its stores where the guard reads them", async () => {
-    // Fails loudly if an SDK upgrade moves the field. Verified on 1.13.0:
+    // Fails loudly if an SDK upgrade moves the field. Verified on 1.17.0:
     // `this._config = config` in the constructor, and `_searchStores` is the
     // same array. Note the TS class has no `_stores` — Python's does.
     const { MemoryManager } = await import("@strands-agents/sdk");

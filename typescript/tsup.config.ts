@@ -5,6 +5,7 @@ export default defineConfig({
     index: "src/index.ts",
     "middleware/vercel-ai": "src/middleware/vercel-ai.ts",
     "mcp/index": "src/mcp/index.ts",
+    "mcp/register": "src/mcp/register.ts",
     "integrations/langchain": "src/integrations/langchain.ts",
     "integrations/mastra": "src/integrations/mastra.ts",
     "integrations/strands": "src/integrations/strands/index.ts",
@@ -24,5 +25,6 @@ export default defineConfig({
     "@opentelemetry/api",
     "@modelcontextprotocol/sdk",
     "@ai-sdk/provider",
+    "zod",
   ],
 });

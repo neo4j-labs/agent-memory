@@ -1,17 +1,27 @@
 /**
  * MCP (Model Context Protocol) tool definitions for neo4j-agent-memory.
  *
- * Mirrors the 12 tools exposed by the hosted MCP server at
- * `https://memory.neo4jlabs.com/mcp`. Use this to either:
+ * A 12-tool memory surface you can register on your own MCP server, plus a
+ * dispatcher that routes a tool call to a `MemoryClient`. Use it to:
  *
- *   - Register the same tool surface against your own MCP server, or
- *   - Programmatically dispatch tool calls to a `MemoryClient`.
+ *   - stand up a self-hosted MCP server that wraps, logs or filters memory
+ *     calls, or runs inside a boundary that cannot reach the hosted service, or
+ *   - programmatically dispatch tool calls to a `MemoryClient`.
  *
- * The 12 standard tools — `memory_create_conversation`, `memory_add_messages`,
- * `memory_get_context`, `memory_search_messages`, `memory_search_entities`,
- * `memory_get_entity`, `memory_add_entity`, `memory_get_entity_history`,
- * `memory_record_step`, `memory_record_tool_call`, `memory_get_trace`,
- * `memory_explain_decision`.
+ * This is **not** the hosted surface. The hosted NAMS MCP server at
+ * `mcp.memory.neo4jlabs.com` exposes a much larger, scope-gated surface
+ * (ontology, Skills, admin) and supports OAuth; see
+ * `reference/nams-mcp.adoc`. What follows is the 12-tool subset that maps
+ * one-to-one onto this client's methods:
+ * `memory_create_conversation`, `memory_add_messages`, `memory_get_context`,
+ * `memory_search_messages`, `memory_search_entities`, `memory_get_entity`,
+ * `memory_add_entity`, `memory_get_entity_history`, `memory_record_step`,
+ * `memory_record_tool_call`, `memory_get_trace`, `memory_explain_decision`.
+ *
+ * `inputSchema` here is plain JSON Schema, which is what the low-level
+ * `Server` + `ListToolsRequestSchema` API wants. For the high-level
+ * `McpServer.registerTool` API — which requires Zod — import
+ * {@link registerMemoryTools} from `@neo4j-labs/agent-memory/mcp/register`.
  *
  * @example
  * ```ts
@@ -23,7 +33,7 @@
  *   apiKey: process.env.MEMORY_API_KEY!,
  * });
  *
- * const tools = createMemoryTools();           // 12 standard tools
+ * const tools = createMemoryTools();           // 12 tool definitions
  * await handleMemoryToolCall(client, "memory_get_context", { conversation_id });
  * ```
  */
@@ -38,11 +48,49 @@ export interface McpToolDefinition {
     properties: Record<string, unknown>;
     required?: string[];
   };
+  /**
+   * MCP tool annotations — behavioural hints clients use to decide whether a
+   * call needs confirmation. Mirrors what the Python MCP server in this repo
+   * sets: reads are `readOnlyHint`/`idempotentHint`, writes are neither, and
+   * no memory tool is destructive.
+   */
+  annotations: McpToolAnnotations;
 }
 
-/** Build the 12-tool MCP surface that matches memory.neo4jlabs.com/mcp. */
+/** Behavioural hints attached to every tool in {@link createMemoryTools}. */
+export interface McpToolAnnotations {
+  readOnlyHint: boolean;
+  idempotentHint: boolean;
+  destructiveHint: false;
+}
+
+/**
+ * The tools that only read. Everything else in the 12-tool surface writes.
+ *
+ * Exported so a self-hosted server can apply the same split to tools it adds.
+ */
+export const READ_ONLY_MEMORY_TOOLS: ReadonlySet<string> = new Set([
+  "memory_get_context",
+  "memory_search_messages",
+  "memory_search_entities",
+  "memory_get_entity",
+  "memory_get_entity_history",
+  "memory_get_trace",
+  "memory_explain_decision",
+]);
+
+/** Annotations for one tool name, derived from {@link READ_ONLY_MEMORY_TOOLS}. */
+export function memoryToolAnnotations(name: string): McpToolAnnotations {
+  const readOnly = READ_ONLY_MEMORY_TOOLS.has(name);
+  return { readOnlyHint: readOnly, idempotentHint: readOnly, destructiveHint: false };
+}
+
+/**
+ * Build the 12-tool MCP surface, each entry carrying JSON Schema input and
+ * read/write annotations.
+ */
 export function createMemoryTools(): McpToolDefinition[] {
-  return [
+  return withAnnotations([
     // ---- Short-Term -----------------------------------------------------
     {
       name: "memory_create_conversation",
@@ -199,7 +247,14 @@ export function createMemoryTools(): McpToolDefinition[] {
         required: ["step_id"],
       },
     },
-  ];
+  ]);
+}
+
+/** Attach {@link memoryToolAnnotations} to each definition. */
+function withAnnotations(
+  defs: Array<Omit<McpToolDefinition, "annotations">>,
+): McpToolDefinition[] {
+  return defs.map((def) => ({ ...def, annotations: memoryToolAnnotations(def.name) }));
 }
 
 /**
@@ -317,7 +372,11 @@ export async function handleMemoryToolCall(
 }
 
 /**
- * v0.1 → v0.2 deprecated tool aliases. Will be removed in v0.3.
+ * v0.1 → v0.2 deprecated tool aliases, still resolved for older clients.
+ *
+ * Scheduled for removal in **v1.0** (the original "removed in v0.3" note
+ * lapsed — the aliases shipped through 0.4.x). Keep `mcp.adoc`'s tool table in
+ * step with this list.
  */
 const LEGACY_ALIASES: Record<string, string> = {
   "memory.addMessage": "memory_add_messages",
