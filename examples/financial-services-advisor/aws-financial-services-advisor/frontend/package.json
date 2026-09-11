@@ -19,7 +19,7 @@
     "@tanstack/react-query": "^5.17.0",
     "react-icons": "^5.0.0",
     "recharts": "^2.12.0",
-    "framer-motion": "^11.0.0",
+    "framer-motion": "^13.2.0",
     "@neo4j-nvl/base": "1.0.0",
     "@neo4j-nvl/react": "1.0.0"
   },
