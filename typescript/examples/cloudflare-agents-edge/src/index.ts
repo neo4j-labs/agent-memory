@@ -77,11 +77,10 @@ export default {
       }
       return new Response("Not found", { status: 404 });
     } catch (error) {
-      // Workers have no stderr you can tail after the fact, so the message has
-      // to carry the diagnosis. `wrangler tail` shows the console line.
-      const message = error instanceof Error ? error.message : String(error);
+      // The diagnosis goes to the console (`wrangler tail` shows it); the
+      // client gets a generic body so error text never leaks upstream details.
       console.error("request failed", error);
-      return new Response(JSON.stringify({ error: message }, null, 2), {
+      return new Response(JSON.stringify({ error: "request failed" }, null, 2), {
         status: 500,
         headers: { "Content-Type": "application/json" },
       });

@@ -329,20 +329,27 @@ describe("the Worker's fetch export", () => {
     expect(response.status).toBe(404);
   });
 
-  it("names the missing secret instead of failing as a NAMS 401", async () => {
-    const ctx = createExecutionContext();
-    const response = await worker.fetch(
-      new Request("https://worker.test/graph"),
-      env({ MEMORY_API_KEY: "" }),
-      ctx,
-    );
-    await waitOnExecutionContext(ctx);
+  it("names the missing secret in the log, not in the response body", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const ctx = createExecutionContext();
+      const response = await worker.fetch(
+        new Request("https://worker.test/graph"),
+        env({ MEMORY_API_KEY: "" }),
+        ctx,
+      );
+      await waitOnExecutionContext(ctx);
 
-    expect(response.status).toBe(500);
-    expect(await response.json()).toMatchObject({
-      error: expect.stringContaining("wrangler secret put MEMORY_API_KEY"),
-    });
-    expect(nams.calls).toHaveLength(0);
+      // The client sees a generic 500; the diagnosis (which secret to set)
+      // goes to the console, where `wrangler tail` shows it.
+      expect(response.status).toBe(500);
+      expect(await response.json()).toEqual({ error: "request failed" });
+      const logged = consoleError.mock.calls.map((call) => call.map(String).join(" ")).join("\n");
+      expect(logged).toContain("wrangler secret put MEMORY_API_KEY");
+      expect(nams.calls).toHaveLength(0);
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 });
 

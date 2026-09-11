@@ -105,7 +105,8 @@ async function main(): Promise<void> {
       userId: USER_ID,
       metadata: { source: "nextjs-memory-chat", seeded: true },
     });
-    console.log(`Created conversation ${conversation.id} for ${USER_ID}`);
+    // The user id comes from the environment (DEMO_USER_ID); it is not echoed.
+    console.log(`Created conversation ${conversation.id} for the demo user`);
 
     // One request for the whole transcript instead of 15 round-trips.
     const written = await client.shortTerm.bulkAddMessages(conversation.id, TRANSCRIPT);
