@@ -70,7 +70,7 @@
     "@types/node": "^20",
     "ai": "^7.0.42",
     "tsup": "^8.0.0",
-    "typescript": "^5.0.0",
+    "typescript": "^7.0.2",
     "vitest": "^2.0.0",
     "zod": "^4.4.3"
   }
