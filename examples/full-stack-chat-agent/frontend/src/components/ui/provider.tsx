@@ -1,14 +1,13 @@
 "use client";
 
-import { ChakraProvider, defaultSystem } from "@chakra-ui/react";
-import { ThemeProvider } from "next-themes";
+import { ChakraProvider } from "@chakra-ui/react";
+import { neo4jLabsSystem } from "@/theme";
+import { ColorModeProvider } from "./color-mode";
 
 export function Provider({ children }: { children: React.ReactNode }) {
   return (
-    <ChakraProvider value={defaultSystem}>
-      <ThemeProvider attribute="class" disableTransitionOnChange>
-        {children}
-      </ThemeProvider>
+    <ChakraProvider value={neo4jLabsSystem}>
+      <ColorModeProvider>{children}</ColorModeProvider>
     </ChakraProvider>
   );
 }

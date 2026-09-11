@@ -1,7 +1,9 @@
 {
   "app": "npx ts-node --prefer-ts-exts bin/app.ts",
   "watch": {
-    "include": ["**"],
+    "include": [
+      "**"
+    ],
     "exclude": [
       "README.md",
       "cdk*.json",
@@ -15,6 +17,7 @@
   "context": {
     "@aws-cdk/aws-apigateway:usagePlanKeyOrderInsensitiveId": true,
     "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
-    "@aws-cdk/aws-cloudfront:defaultSecurityPolicyTLSv1.2_2021": true
+    "@aws-cdk/aws-cloudfront:defaultSecurityPolicyTLSv1.2_2021": true,
+    "@aws-cdk/core:defaultCrossStackReferences": "strong"
   }
 }

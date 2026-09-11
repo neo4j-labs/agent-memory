@@ -20,7 +20,11 @@ async def verify_identity(
     *,
     neo4j_service: Neo4jDomainService,
 ) -> dict[str, Any]:
-    """Verify customer identity against available records."""
+    """Verify customer identity against available records.
+
+    Args:
+        customer_id: Customer identifier, e.g. CUST-001
+    """
     logger.info(f"Verifying identity for customer {customer_id}")
 
     customer = await neo4j_service.get_customer(customer_id)
@@ -71,7 +75,14 @@ async def check_documents(
     *,
     neo4j_service: Neo4jDomainService,
 ) -> dict[str, Any]:
-    """Check document status and validity for a customer."""
+    """Check document status and validity for a customer.
+
+    Args:
+        customer_id: Customer identifier, e.g. CUST-001
+        document_type: Restrict to one document type (passport, utility_bill,
+            certificate_of_incorporation, register_of_directors,
+            proof_of_address)
+    """
     logger.info(f"Checking documents for customer {customer_id}")
 
     customer = await neo4j_service.get_customer(customer_id)
@@ -128,7 +139,11 @@ async def assess_customer_risk(
     *,
     neo4j_service: Neo4jDomainService,
 ) -> dict[str, Any]:
-    """Assess overall KYC risk level for a customer."""
+    """Assess overall KYC risk level for a customer.
+
+    Args:
+        customer_id: Customer identifier, e.g. CUST-001
+    """
     logger.info(f"Assessing customer risk for {customer_id}")
 
     customer = await neo4j_service.get_customer(customer_id)
@@ -215,7 +230,12 @@ async def check_adverse_media(
     *,
     neo4j_service: Neo4jDomainService,
 ) -> dict[str, Any]:
-    """Screen customer for adverse media coverage."""
+    """Screen customer for adverse media coverage.
+
+    Args:
+        customer_id: Customer identifier, e.g. CUST-001
+        include_associates: Whether to screen connected parties too
+    """
     logger.info(f"Checking adverse media for customer {customer_id}")
 
     customer = await neo4j_service.get_customer(customer_id)

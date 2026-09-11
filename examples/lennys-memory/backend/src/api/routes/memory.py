@@ -1,11 +1,14 @@
 """Memory management API endpoints."""
 
+import logging
 from typing import Any
-from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query
 
+from neo4j_agent_memory import MemoryClient
+from neo4j_agent_memory.memory.long_term import Entity as LongTermEntity
 from neo4j_agent_memory.memory.long_term import Preference as LongTermPreference
+from src.agent.tools import PREFERENCE_CATEGORIES
 from src.api.schemas import (
     ConversationRef,
     Entity,
@@ -25,6 +28,7 @@ from src.api.schemas import (
 from src.memory.client import get_memory_client
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 # ============================================================================
@@ -78,10 +82,8 @@ async def list_traces(
             )
             for trace in traces
         ]
-    except Exception as e:
-        import traceback
-
-        traceback.print_exc()
+    except Exception:
+        logger.exception("Memory route failed")
         return []
 
 
@@ -243,10 +245,8 @@ async def get_memory_context(
     try:
         # Get recent messages from short-term memory
         if thread_id:
-            conversation = await memory.short_term.get_conversation(
-                session_id=thread_id,
-                limit=10,
-            )
+            # No ``limit=``: the Cypher LIMIT applies to the OLDEST messages.
+            conversation = await memory.short_term.get_conversation(session_id=thread_id)
             if conversation and conversation.messages:
                 for msg in conversation.messages[-10:]:
                     recent_messages.append(
@@ -262,25 +262,14 @@ async def get_memory_context(
         if query:
             pref_results = await memory.long_term.search_preferences(query, limit=10)
         else:
-            # Get all preferences when no query - use direct database query
-            try:
-                results = await memory._client.execute_read(
-                    "MATCH (p:Preference) RETURN p ORDER BY p.created_at DESC LIMIT 10"
+            # No query: enumerate the categories this app writes rather than
+            # running a vector search against the empty string.
+            pref_results = []
+            for pref_category in PREFERENCE_CATEGORIES:
+                pref_results.extend(
+                    await memory.long_term.get_preferences_by_category(pref_category, limit=10)
                 )
-                pref_results = []
-                for row in results:
-                    p = dict(row["p"])
-                    pref_results.append(
-                        LongTermPreference(
-                            id=UUID(p["id"]),
-                            category=p.get("category", "general"),
-                            preference=p.get("preference", ""),
-                            context=p.get("context"),
-                            confidence=p.get("confidence", 1.0),
-                        )
-                    )
-            except Exception:
-                pref_results = []
+            pref_results = sorted(pref_results, key=lambda p: p.created_at, reverse=True)[:10]
 
         for pref in pref_results:
             preferences.append(
@@ -310,9 +299,7 @@ async def get_memory_context(
             LIMIT 15
             """
             try:
-                entity_results = await memory._client.execute_read(
-                    entity_query, {"session_id": thread_id}
-                )
+                entity_results = await memory.query.cypher(entity_query, {"session_id": thread_id})
                 for row in entity_results:
                     ent = dict(row["e"])
                     entities.append(
@@ -372,30 +359,25 @@ async def list_preferences(
         return preferences
 
     try:
-        if category:
-            query = "MATCH (p:Preference {category: $category}) RETURN p ORDER BY p.created_at DESC LIMIT 50"
-            params = {"category": category}
-        else:
-            query = "MATCH (p:Preference) RETURN p ORDER BY p.created_at DESC LIMIT 50"
-            params = {}
+        categories = [category] if category else list(PREFERENCE_CATEGORIES)
+        stored: list[LongTermPreference] = []
+        for name in categories:
+            stored.extend(await memory.long_term.get_preferences_by_category(name, limit=50))
 
-        results = await memory._client.execute_read(query, params)
-
-        for row in results:
-            p = dict(row["p"])
+        for pref in sorted(stored, key=lambda p: p.created_at, reverse=True)[:50]:
             preferences.append(
                 Preference(
-                    id=p["id"],
-                    category=p.get("category", "general"),
-                    preference=p.get("preference", ""),
-                    context=p.get("context"),
-                    confidence=p.get("confidence", 1.0),
-                    created_at=None,
+                    id=str(pref.id),
+                    category=pref.category,
+                    preference=pref.preference,
+                    context=pref.context,
+                    confidence=pref.confidence,
+                    created_at=pref.created_at,
                 )
             )
 
     except Exception:
-        pass
+        logger.exception("Failed to list preferences")
 
     return preferences
 
@@ -433,7 +415,28 @@ async def add_preference(
 async def delete_preference(
     preference_id: str,
 ) -> dict:
-    """Delete a preference by ID."""
+    """Delete a preference by ID.
+
+    Deletes are bolt-only: the library has no ``delete_preference`` writer, so
+    this goes through ``client.graph.execute_write``. Prefer
+    ``long_term.supersede_preference(old_id, new_id)`` when the preference was
+    replaced rather than retracted -- that keeps the history queryable.
+    """
+    memory = get_memory_client()
+    if memory is None:
+        raise HTTPException(status_code=503, detail="Memory service unavailable")
+
+    rows = await memory.query.cypher(
+        "MATCH (p:Preference {id: $id}) RETURN p.id AS id",
+        {"id": preference_id},
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Preference not found")
+
+    await memory.graph.execute_write(
+        "MATCH (p:Preference {id: $id}) DETACH DELETE p",
+        {"id": preference_id},
+    )
     return {"status": "deleted", "preference_id": preference_id}
 
 
@@ -510,7 +513,7 @@ async def get_top_entities(
                e.image_url AS image_url,
                mentions
         """
-        results = await memory._client.execute_read(query, {"type": entity_type, "limit": limit})
+        results = await memory.query.cypher(query, {"type": entity_type, "limit": limit})
 
         return [
             {
@@ -525,10 +528,8 @@ async def get_top_entities(
             }
             for r in results
         ]
-    except Exception as e:
-        import traceback
-
-        traceback.print_exc()
+    except Exception:
+        logger.exception("Memory route failed")
         return []
 
 
@@ -560,7 +561,7 @@ async def get_entity_full_context(
         RETURN m.content AS content, m.metadata AS metadata, c.session_id AS session_id
         LIMIT 5
         """
-        mentions = await memory._client.execute_read(query, {"name": entity_name})
+        mentions = await memory.query.cypher(query, {"name": entity_name})
 
         import json as json_lib
 
@@ -633,7 +634,7 @@ async def get_related_entities(
         RETURN e2.id AS id, e2.name AS name, e2.type AS type, e2.subtype AS subtype,
                e2.enriched_description AS enriched_description, co_occurrences
         """
-        results = await memory._client.execute_read(query, {"name": entity_name, "limit": limit})
+        results = await memory.query.cypher(query, {"name": entity_name, "limit": limit})
 
         return [
             {
@@ -646,10 +647,8 @@ async def get_related_entities(
             }
             for r in results
         ]
-    except Exception as e:
-        import traceback
-
-        traceback.print_exc()
+    except Exception:
+        logger.exception("Memory route failed")
         return []
 
 
@@ -760,11 +759,8 @@ async def get_memory_graph(
 
         return MemoryGraph(nodes=nodes, relationships=relationships)
 
-    except Exception as e:
-        import traceback
-
-        print(f"Error fetching memory graph: {e}")
-        traceback.print_exc()
+    except Exception:
+        logger.exception("Error fetching memory graph")
         return MemoryGraph(nodes=[], relationships=[])
 
 
@@ -803,7 +799,7 @@ async def _get_conversation_graph(
     LIMIT $limit
     """
 
-    results = await memory._client.execute_read(
+    results = await memory.query.cypher(
         messages_query, {"session_ids": all_session_ids, "limit": limit}
     )
 
@@ -905,7 +901,7 @@ async def _get_conversation_graph(
     LIMIT $limit
     """
 
-    entity_results = await memory._client.execute_read(
+    entity_results = await memory.query.cypher(
         entities_query, {"session_ids": all_session_ids, "limit": limit}
     )
 
@@ -961,7 +957,7 @@ async def _get_conversation_graph(
     LIMIT $limit
     """
 
-    reasoning_results = await memory._client.execute_read(
+    reasoning_results = await memory.query.cypher(
         reasoning_query, {"session_id": session_id, "limit": limit}
     )
 
@@ -1161,12 +1157,32 @@ async def get_locations(
 
         return locations
 
-    except Exception as e:
-        import traceback
-
-        print(f"Error fetching locations: {e}")
-        traceback.print_exc()
+    except Exception:
+        logger.exception("Error fetching locations")
         return []
+
+
+async def resolve_coordinates(
+    memory: MemoryClient,
+    entity: LongTermEntity,
+) -> tuple[float, float] | None:
+    """Return ``(latitude, longitude)`` for a LOCATION entity, or None.
+
+    Entities created with ``add_entity(coordinates=...)`` carry the pair in
+    ``attributes["coordinates"]``; entities geocoded in bulk by
+    ``scripts/geocode_locations.py`` only have the Neo4j Point property
+    ``e.location``. ``get_location_coordinates()`` reads that property, so this
+    helper covers both shapes.
+    """
+    coords = entity.attributes.get("coordinates")
+    if isinstance(coords, dict):
+        lat, lon = coords.get("latitude"), coords.get("longitude")
+        if lat is not None and lon is not None:
+            return float(lat), float(lon)
+    point = await memory.long_term.get_location_coordinates(entity.id)
+    if point is None:
+        return None
+    return float(point[0]), float(point[1])
 
 
 @router.get("/locations/nearby", response_model=list[LocationEntity])
@@ -1208,40 +1224,33 @@ async def get_locations_nearby(
 
         locations = []
         for ent in entities:
-            # Get coordinates from entity
-            coords = ent.attributes.get("coordinates", {})
-            lat_val = coords.get("latitude") if isinstance(coords, dict) else None
-            lon_val = coords.get("longitude") if isinstance(coords, dict) else None
-
-            # Try location property if coordinates not in attributes
-            if lat_val is None or lon_val is None:
-                if hasattr(ent, "metadata") and ent.metadata:
-                    # Distance was added to metadata by search_locations_near
-                    pass
-
-            if lat_val is not None and lon_val is not None:
-                locations.append(
-                    LocationEntity(
-                        id=str(ent.id),
-                        name=ent.name,
-                        subtype=getattr(ent, "subtype", None),
-                        description=ent.description,
-                        enriched_description=ent.attributes.get("enriched_description"),
-                        wikipedia_url=ent.attributes.get("wikipedia_url"),
-                        latitude=float(lat_val),
-                        longitude=float(lon_val),
-                        conversations=[],
-                        distance_km=ent.metadata.get("distance_km") if ent.metadata else None,
-                    )
+            # Coordinates live on the Neo4j Point property ``e.location``, which
+            # the bulk geocoder writes; they are NOT mirrored into the entity's
+            # serialized metadata blob, so ``attributes["coordinates"]`` is empty
+            # for bulk-geocoded entities. Resolve them with the public accessor.
+            coords = await resolve_coordinates(memory, ent)
+            if coords is None:
+                continue
+            lat_val, lon_val = coords
+            locations.append(
+                LocationEntity(
+                    id=str(ent.id),
+                    name=ent.name,
+                    subtype=getattr(ent, "subtype", None),
+                    description=ent.description,
+                    enriched_description=ent.attributes.get("enriched_description"),
+                    wikipedia_url=ent.attributes.get("wikipedia_url"),
+                    latitude=lat_val,
+                    longitude=lon_val,
+                    conversations=[],
+                    distance_km=ent.metadata.get("distance_km") if ent.metadata else None,
                 )
+            )
 
         return locations
 
-    except Exception as e:
-        import traceback
-
-        print(f"Error fetching nearby locations: {e}")
-        traceback.print_exc()
+    except Exception:
+        logger.exception("Error fetching nearby locations")
         return []
 
 
@@ -1285,33 +1294,28 @@ async def get_locations_in_bounds(
 
         locations = []
         for ent in entities:
-            # Get coordinates from entity
-            coords = ent.attributes.get("coordinates", {})
-            lat_val = coords.get("latitude") if isinstance(coords, dict) else None
-            lon_val = coords.get("longitude") if isinstance(coords, dict) else None
-
-            if lat_val is not None and lon_val is not None:
-                locations.append(
-                    LocationEntity(
-                        id=str(ent.id),
-                        name=ent.name,
-                        subtype=getattr(ent, "subtype", None),
-                        description=ent.description,
-                        enriched_description=ent.attributes.get("enriched_description"),
-                        wikipedia_url=ent.attributes.get("wikipedia_url"),
-                        latitude=float(lat_val),
-                        longitude=float(lon_val),
-                        conversations=[],
-                    )
+            coords = await resolve_coordinates(memory, ent)
+            if coords is None:
+                continue
+            lat_val, lon_val = coords
+            locations.append(
+                LocationEntity(
+                    id=str(ent.id),
+                    name=ent.name,
+                    subtype=getattr(ent, "subtype", None),
+                    description=ent.description,
+                    enriched_description=ent.attributes.get("enriched_description"),
+                    wikipedia_url=ent.attributes.get("wikipedia_url"),
+                    latitude=lat_val,
+                    longitude=lon_val,
+                    conversations=[],
                 )
+            )
 
         return locations
 
-    except Exception as e:
-        import traceback
-
-        print(f"Error fetching locations in bounds: {e}")
-        traceback.print_exc()
+    except Exception:
+        logger.exception("Error fetching locations in bounds")
         return []
 
 
@@ -1361,8 +1365,8 @@ async def get_location_clusters(
         for country, locs in sorted(country_clusters.items(), key=lambda x: -len(x[1])):
             if not locs:
                 continue
-            center_lat = sum(l["latitude"] for l in locs) / len(locs)
-            center_lon = sum(l["longitude"] for l in locs) / len(locs)
+            center_lat = sum(loc["latitude"] for loc in locs) / len(locs)
+            center_lon = sum(loc["longitude"] for loc in locs) / len(locs)
             clusters.append(
                 {
                     "country": country,
@@ -1375,10 +1379,8 @@ async def get_location_clusters(
 
         return clusters
 
-    except Exception as e:
-        import traceback
-
-        traceback.print_exc()
+    except Exception:
+        logger.exception("Memory route failed")
         return []
 
 
@@ -1405,8 +1407,16 @@ async def get_shortest_path(
 
     try:
         # Find shortest path between two entities
+        if from_location_id == to_location_id:
+            raise HTTPException(
+                status_code=400,
+                detail="from_location_id and to_location_id must differ",
+            )
+
         query = """
         MATCH (from:Entity {id: $from_id}), (to:Entity {id: $to_id})
+        // Neo4j raises Neo.DatabaseError...ExecutionFailed when shortestPath's
+        // endpoints are the same node, hence the guard above.
         MATCH path = shortestPath((from)-[*..10]-(to))
         WITH path, nodes(path) AS pathNodes, relationships(path) AS pathRels
         RETURN [n IN pathNodes | {
@@ -1425,7 +1435,7 @@ async def get_shortest_path(
         length(path) AS hops
         """
 
-        results = await memory._client.execute_read(
+        results = await memory.query.cypher(
             query,
             {"from_id": from_location_id, "to_id": to_location_id},
         )
@@ -1442,10 +1452,7 @@ async def get_shortest_path(
         }
 
     except Exception as e:
-        import traceback
-
-        print(f"Error finding shortest path: {e}")
-        traceback.print_exc()
+        logger.exception("Error finding shortest path")
         return {"nodes": [], "relationships": [], "hops": 0, "found": False, "error": str(e)}
 
 
@@ -1480,7 +1487,7 @@ async def get_node_neighbors(
         RETURN n.id AS id, labels(n) AS labels, properties(n) AS props
         LIMIT 1
         """
-        source_results = await memory._client.execute_read(source_query, {"node_id": node_id})
+        source_results = await memory.query.cypher(source_query, {"node_id": node_id})
 
         nodes = []
         relationships = []
@@ -1535,7 +1542,7 @@ async def get_node_neighbors(
             LIMIT $limit
             """
 
-        neighbor_results = await memory._client.execute_read(
+        neighbor_results = await memory.query.cypher(
             neighbor_query, {"node_id": node_id, "limit": limit}
         )
 
@@ -1574,9 +1581,6 @@ async def get_node_neighbors(
 
         return MemoryGraph(nodes=nodes, relationships=relationships)
 
-    except Exception as e:
-        import traceback
-
-        print(f"Error fetching node neighbors: {e}")
-        traceback.print_exc()
+    except Exception:
+        logger.exception("Error fetching node neighbors")
         return MemoryGraph(nodes=[], relationships=[])

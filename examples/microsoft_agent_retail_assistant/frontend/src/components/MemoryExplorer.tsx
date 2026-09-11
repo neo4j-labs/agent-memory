@@ -1,177 +1,163 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
+  Badge,
   Box,
-  VStack,
+  Button,
+  Card,
   HStack,
   Heading,
-  Text,
-  Card,
-  Badge,
-  Button,
   Input,
-  Spinner,
   SimpleGrid,
+  Spinner,
   Tabs,
+  Text,
+  VStack,
 } from "@chakra-ui/react";
-import { getMemoryContext, getMemoryGraph, type GraphData } from "@/lib/api";
+import {
+  getMemoryContext,
+  getMemoryGraph,
+  type GraphData,
+  type MemoryContext,
+} from "@/lib/api";
+import { toVizGraph } from "@/lib/graph";
+import { useAsyncData } from "@/lib/useAsyncData";
+import { MemoryGraph } from "./MemoryGraph";
 
 interface MemoryExplorerProps {
   sessionId: string;
 }
 
+type ExplorerTab = "context" | "graph";
+
 export function MemoryExplorer({ sessionId }: MemoryExplorerProps) {
-  const [activeTab, setActiveTab] = useState("context");
-  const [context, setContext] = useState<{
-    short_term: Array<{
-      id: string;
-      role: string;
-      content: string;
-      timestamp?: string;
-    }>;
-    long_term: {
-      entities: Array<{
-        id: string;
-        name: string;
-        type: string;
-        description?: string;
-      }>;
-      preferences: Array<{
-        id: string;
-        category: string;
-        preference: string;
-      }>;
-    };
-    reasoning: Array<{
-      id: string;
-      task: string;
-      outcome: string;
-      steps: number;
-    }>;
-  } | null>(null);
-  const [graphData, setGraphData] = useState<GraphData | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<ExplorerTab>("context");
   const [query, setQuery] = useState("");
-
-  const loadContext = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      const data = await getMemoryContext(sessionId, query || undefined);
-      setContext(data);
-    } catch (error) {
-      console.error("Failed to load context:", error);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [sessionId, query]);
-
-  const loadGraph = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      const data = await getMemoryGraph(sessionId);
-      setGraphData(data);
-    } catch (error) {
-      console.error("Failed to load graph:", error);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [sessionId]);
-
-  useEffect(() => {
-    if (activeTab === "context") {
-      loadContext();
-    } else {
-      loadGraph();
-    }
-  }, [activeTab, loadContext, loadGraph]);
+  /** When set, the graph shows this entity's neighbourhood instead of the
+      whole session (the backend's `center_entity` branch). */
+  const [centerEntity, setCenterEntity] = useState<string | null>(null);
 
   return (
     <Box>
-      <HStack justify="space-between" mb={6}>
+      <HStack justify="space-between" mb={6} flexWrap="wrap" gap={3}>
         <Heading size="lg">Memory Explorer</Heading>
-        <HStack>
-          <Input
-            placeholder="Search query..."
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            width="200px"
-            size="sm"
-          />
-          <Button
-            size="sm"
-            colorPalette="teal"
-            onClick={activeTab === "context" ? loadContext : loadGraph}
-            disabled={isLoading}
-          >
-            Refresh
-          </Button>
-        </HStack>
+        <Input
+          placeholder="Search query (also matches reasoning traces)..."
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          maxW="320px"
+          size="sm"
+          bg="bg.panel"
+        />
       </HStack>
 
       <Tabs.Root
         value={activeTab}
-        onValueChange={(e) => setActiveTab(e.value)}
-        mb={6}
+        onValueChange={(e) => setActiveTab(e.value as ExplorerTab)}
+        colorPalette="teal"
+        lazyMount
       >
-        <Tabs.List>
+        <Tabs.List mb={6}>
           <Tabs.Trigger value="context">Memory Context</Tabs.Trigger>
           <Tabs.Trigger value="graph">Knowledge Graph</Tabs.Trigger>
         </Tabs.List>
-      </Tabs.Root>
 
-      {isLoading ? (
-        <Box textAlign="center" py={10}>
-          <Spinner size="lg" color="teal.500" />
-          <Text mt={4} color="gray.500">
-            Loading memory data...
-          </Text>
-        </Box>
-      ) : activeTab === "context" ? (
-        <ContextView context={context} />
-      ) : (
-        <GraphView data={graphData} />
-      )}
+        {/* Panels live inside the root so the triggers get their
+            `aria-controls` targets, tabpanel roles and focus management —
+            and each panel owns the request that fills it. */}
+        <Tabs.Content value="context">
+          <ContextPanel sessionId={sessionId} query={query} />
+        </Tabs.Content>
+
+        <Tabs.Content value="graph">
+          <GraphPanel
+            sessionId={sessionId}
+            centerEntity={centerEntity}
+            onSelectNode={setCenterEntity}
+            onClearCenter={() => setCenterEntity(null)}
+          />
+        </Tabs.Content>
+      </Tabs.Root>
     </Box>
   );
 }
 
-function ContextView({
-  context,
+function PanelStatus({
+  isLoading,
+  error,
+  onReload,
+  label,
 }: {
-  context: {
-    short_term: Array<{
-      id: string;
-      role: string;
-      content: string;
-      timestamp?: string;
-    }>;
-    long_term: {
-      entities: Array<{
-        id: string;
-        name: string;
-        type: string;
-        description?: string;
-      }>;
-      preferences: Array<{
-        id: string;
-        category: string;
-        preference: string;
-      }>;
-    };
-    reasoning: Array<{
-      id: string;
-      task: string;
-      outcome: string;
-      steps: number;
-    }>;
-  } | null;
+  isLoading: boolean;
+  error: string | null;
+  onReload: () => void;
+  label: string;
 }) {
+  return (
+    <HStack justify="space-between" mb={4} flexWrap="wrap" gap={2}>
+      <Text fontSize="sm" color={error ? "fg.error" : "fg.muted"}>
+        {error ?? label}
+      </Text>
+      <Button
+        size="xs"
+        variant="outline"
+        colorPalette="teal"
+        onClick={onReload}
+        loading={isLoading}
+      >
+        Refresh
+      </Button>
+    </HStack>
+  );
+}
+
+function Loading() {
+  return (
+    <Box textAlign="center" py={10}>
+      <Spinner size="lg" color="teal.solid" />
+      <Text mt={4} color="fg.muted">
+        Loading memory data...
+      </Text>
+    </Box>
+  );
+}
+
+function ContextPanel({
+  sessionId,
+  query,
+}: {
+  sessionId: string;
+  query: string;
+}) {
+  const load = useCallback(
+    () => getMemoryContext(sessionId, query || undefined),
+    [sessionId, query]
+  );
+  const { data, error, isLoading, reload } = useAsyncData(
+    `context|${sessionId}|${query}`,
+    load
+  );
+
+  return (
+    <Box>
+      <PanelStatus
+        isLoading={isLoading}
+        error={error}
+        onReload={reload}
+        label="All three memory layers, as the backend assembles them for the next prompt."
+      />
+      {isLoading && !data ? <Loading /> : <ContextView context={data} />}
+    </Box>
+  );
+}
+
+function ContextView({ context }: { context: MemoryContext | null }) {
   if (!context) {
     return (
       <Card.Root>
         <Card.Body>
-          <Text color="gray.500">No memory context available</Text>
+          <Text color="fg.muted">No memory context available</Text>
         </Card.Body>
       </Card.Root>
     );
@@ -180,13 +166,13 @@ function ContextView({
   return (
     <SimpleGrid columns={{ base: 1, lg: 3 }} gap={6}>
       {/* Short-term Memory */}
-      <Card.Root borderTopWidth="4px" borderTopColor="green.400">
+      <Card.Root borderTopWidth="4px" borderTopColor="green.solid">
         <Card.Header>
           <HStack>
             <Badge colorPalette="green" size="lg">
               Short-term
             </Badge>
-            <Text color="gray.500" fontSize="sm">
+            <Text color="fg.muted" fontSize="sm">
               ({context.short_term.length} messages)
             </Text>
           </HStack>
@@ -194,7 +180,7 @@ function ContextView({
         <Card.Body maxH="400px" overflowY="auto">
           <VStack align="stretch" gap={2}>
             {context.short_term.length === 0 ? (
-              <Text color="gray.400" fontSize="sm">
+              <Text color="fg.subtle" fontSize="sm">
                 No recent messages
               </Text>
             ) : (
@@ -202,17 +188,20 @@ function ContextView({
                 <Box
                   key={msg.id}
                   p={2}
-                  bg="gray.50"
+                  bg="bg.subtle"
                   borderRadius="md"
                   borderLeftWidth="3px"
                   borderLeftColor={
-                    msg.role === "user" ? "blue.400" : "green.400"
+                    msg.role === "user" ? "blue.solid" : "green.solid"
                   }
                 >
-                  <Badge size="sm" colorPalette={msg.role === "user" ? "blue" : "green"}>
+                  <Badge
+                    size="sm"
+                    colorPalette={msg.role === "user" ? "blue" : "green"}
+                  >
                     {msg.role}
                   </Badge>
-                  <Text fontSize="sm" mt={1} noOfLines={3}>
+                  <Text fontSize="sm" mt={1} lineClamp={3}>
                     {msg.content}
                   </Text>
                 </Box>
@@ -223,13 +212,13 @@ function ContextView({
       </Card.Root>
 
       {/* Long-term Memory */}
-      <Card.Root borderTopWidth="4px" borderTopColor="orange.400">
+      <Card.Root borderTopWidth="4px" borderTopColor="orange.solid">
         <Card.Header>
           <HStack>
             <Badge colorPalette="orange" size="lg">
               Long-term
             </Badge>
-            <Text color="gray.500" fontSize="sm">
+            <Text color="fg.muted" fontSize="sm">
               ({context.long_term.entities.length} entities,{" "}
               {context.long_term.preferences.length} preferences)
             </Text>
@@ -244,14 +233,21 @@ function ContextView({
               </Text>
               <VStack align="stretch" gap={1}>
                 {context.long_term.entities.length === 0 ? (
-                  <Text color="gray.400" fontSize="sm">
+                  <Text color="fg.subtle" fontSize="sm">
                     No entities yet
                   </Text>
                 ) : (
                   context.long_term.entities.slice(0, 10).map((entity) => (
-                    <HStack key={entity.id} p={1} bg="gray.50" borderRadius="sm">
+                    <HStack
+                      key={entity.id}
+                      p={1}
+                      bg="bg.subtle"
+                      borderRadius="sm"
+                    >
                       <Badge size="sm">{entity.type}</Badge>
-                      <Text fontSize="sm">{entity.name}</Text>
+                      <Text fontSize="sm" lineClamp={1}>
+                        {entity.name}
+                      </Text>
                     </HStack>
                   ))
                 )}
@@ -265,12 +261,17 @@ function ContextView({
               </Text>
               <VStack align="stretch" gap={1}>
                 {context.long_term.preferences.length === 0 ? (
-                  <Text color="gray.400" fontSize="sm">
+                  <Text color="fg.subtle" fontSize="sm">
                     No preferences yet
                   </Text>
                 ) : (
                   context.long_term.preferences.map((pref) => (
-                    <HStack key={pref.id} p={1} bg="gray.50" borderRadius="sm">
+                    <HStack
+                      key={pref.id}
+                      p={1}
+                      bg="bg.subtle"
+                      borderRadius="sm"
+                    >
                       <Badge size="sm" colorPalette="purple">
                         {pref.category}
                       </Badge>
@@ -285,13 +286,13 @@ function ContextView({
       </Card.Root>
 
       {/* Reasoning Memory */}
-      <Card.Root borderTopWidth="4px" borderTopColor="purple.400">
+      <Card.Root borderTopWidth="4px" borderTopColor="purple.solid">
         <Card.Header>
           <HStack>
             <Badge colorPalette="purple" size="lg">
               Reasoning
             </Badge>
-            <Text color="gray.500" fontSize="sm">
+            <Text color="fg.muted" fontSize="sm">
               ({context.reasoning.length} traces)
             </Text>
           </HStack>
@@ -299,30 +300,33 @@ function ContextView({
         <Card.Body maxH="400px" overflowY="auto">
           <VStack align="stretch" gap={2}>
             {context.reasoning.length === 0 ? (
-              <Text color="gray.400" fontSize="sm">
-                No reasoning traces yet
+              <Text color="fg.subtle" fontSize="sm">
+                No reasoning traces yet — traces are matched by similarity, so
+                type a search query above to pull the relevant ones.
               </Text>
             ) : (
               context.reasoning.map((trace) => (
                 <Box
                   key={trace.id}
                   p={2}
-                  bg="gray.50"
+                  bg="bg.subtle"
                   borderRadius="md"
                   borderLeftWidth="3px"
-                  borderLeftColor="purple.400"
+                  borderLeftColor="purple.solid"
                 >
-                  <Text fontSize="sm" fontWeight="medium" noOfLines={2}>
+                  <Text fontSize="sm" fontWeight="medium" lineClamp={2}>
                     {trace.task}
                   </Text>
                   <HStack mt={1}>
                     <Badge
                       size="sm"
-                      colorPalette={trace.outcome === "success" ? "green" : "red"}
+                      colorPalette={
+                        trace.outcome === "success" ? "green" : "red"
+                      }
                     >
                       {trace.outcome}
                     </Badge>
-                    <Text fontSize="xs" color="gray.500">
+                    <Text fontSize="xs" color="fg.muted">
                       {trace.steps} steps
                     </Text>
                   </HStack>
@@ -336,67 +340,126 @@ function ContextView({
   );
 }
 
-function GraphView({ data }: { data: GraphData | null }) {
-  const containerRef = useRef<HTMLDivElement>(null);
+function GraphPanel({
+  sessionId,
+  centerEntity,
+  onSelectNode,
+  onClearCenter,
+}: {
+  sessionId: string;
+  centerEntity: string | null;
+  onSelectNode: (name: string) => void;
+  onClearCenter: () => void;
+}) {
+  const load = useCallback(
+    () =>
+      getMemoryGraph(
+        sessionId,
+        centerEntity ?? undefined,
+        centerEntity ? 2 : undefined
+      ),
+    [sessionId, centerEntity]
+  );
+  const { data, error, isLoading, reload } = useAsyncData(
+    `graph|${sessionId}|${centerEntity ?? ""}`,
+    load
+  );
+
+  return (
+    <Box>
+      <PanelStatus
+        isLoading={isLoading}
+        error={error}
+        onReload={reload}
+        label={
+          centerEntity
+            ? `Two-hop neighbourhood of "${centerEntity}"`
+            : "Everything this session wrote to memory"
+        }
+      />
+      {isLoading && !data ? (
+        <Loading />
+      ) : (
+        <GraphView
+          data={data}
+          centerEntity={centerEntity}
+          onSelectNode={onSelectNode}
+          onClearCenter={onClearCenter}
+        />
+      )}
+    </Box>
+  );
+}
+
+function GraphView({
+  data,
+  centerEntity,
+  onSelectNode,
+  onClearCenter,
+}: {
+  data: GraphData | null;
+  centerEntity: string | null;
+  onSelectNode: (name: string) => void;
+  onClearCenter: () => void;
+}) {
+  // Counts come from the graph that is actually drawn: edges pointing at nodes
+  // the backend's per-type cap left out are dropped, so the stats and the
+  // picture agree. Memoised because the force simulation restarts whenever it
+  // is handed a new `graphData` object.
+  const graph = useMemo(
+    () => toVizGraph(data ?? { nodes: [], edges: [] }),
+    [data]
+  );
 
   if (!data || (data.nodes.length === 0 && data.edges.length === 0)) {
     return (
       <Card.Root>
         <Card.Body textAlign="center" py={10}>
-          <Text color="gray.500" mb={4}>
+          <Text color="fg.muted" mb={4}>
             No graph data available yet.
           </Text>
-          <Text color="gray.400" fontSize="sm">
+          <Text color="fg.subtle" fontSize="sm">
             Start a conversation to see entities and their relationships
             visualized here.
           </Text>
+          {centerEntity && (
+            <Button mt={4} size="sm" variant="outline" onClick={onClearCenter}>
+              Back to the session view
+            </Button>
+          )}
         </Card.Body>
       </Card.Root>
     );
   }
 
-  // Simple list-based visualization (force-graph would require dynamic import)
   const nodeTypes = [...new Set(data.nodes.map((n) => n.type))];
-  const typeColors: Record<string, string> = {
-    Entity: "teal",
-    Product: "blue",
-    Category: "green",
-    Brand: "purple",
-    Preference: "orange",
-    Message: "gray",
-  };
 
   return (
     <VStack align="stretch" gap={6}>
       {/* Stats */}
-      <HStack gap={4}>
-        <Card.Root flex={1}>
-          <Card.Body>
-            <Text fontSize="2xl" fontWeight="bold" color="teal.500">
-              {data.nodes.length}
-            </Text>
-            <Text color="gray.500">Nodes</Text>
-          </Card.Body>
-        </Card.Root>
-        <Card.Root flex={1}>
-          <Card.Body>
-            <Text fontSize="2xl" fontWeight="bold" color="purple.500">
-              {data.edges.length}
-            </Text>
-            <Text color="gray.500">Relationships</Text>
-          </Card.Body>
-        </Card.Root>
-        <Card.Root flex={1}>
-          <Card.Body>
-            <Text fontSize="2xl" fontWeight="bold" color="blue.500">
-              {nodeTypes.length}
-            </Text>
-            <Text color="gray.500">Node Types</Text>
-          </Card.Body>
-        </Card.Root>
-      </HStack>
+      <SimpleGrid columns={{ base: 1, sm: 3 }} gap={4}>
+        <StatCard label="Nodes" value={graph.nodes.length} tone="teal" />
+        <StatCard
+          label="Relationships"
+          value={graph.links.length}
+          tone="purple"
+        />
+        <StatCard label="Node types" value={nodeTypes.length} tone="blue" />
+      </SimpleGrid>
 
-      {/* Nodes by type */}
+      {/* Interactive graph */}
+      <Box>
+        {centerEntity && (
+          <HStack justify="flex-end" mb={2}>
+            <Button size="xs" variant="outline" onClick={onClearCenter}>
+              Back to the session view
+            </Button>
+          </HStack>
+        )}
+        <MemoryGraph graph={graph} onSelectNode={onSelectNode} />
+      </Box>
+
+      {/* Node inventory, per type */}
       <SimpleGrid columns={{ base: 1, md: 2, lg: 3 }} gap={4}>
         {nodeTypes.map((type) => {
           const nodesOfType = data.nodes.filter((n) => n.type === type);
@@ -404,10 +467,8 @@ function GraphView({ data }: { data: GraphData | null }) {
             <Card.Root key={type}>
               <Card.Header>
                 <HStack>
-                  <Badge colorPalette={typeColors[type] || "gray"}>
-                    {type}
-                  </Badge>
-                  <Text color="gray.500" fontSize="sm">
+                  <Badge>{type}</Badge>
+                  <Text color="fg.muted" fontSize="sm">
                     ({nodesOfType.length})
                   </Text>
                 </HStack>
@@ -415,12 +476,12 @@ function GraphView({ data }: { data: GraphData | null }) {
               <Card.Body maxH="200px" overflowY="auto">
                 <VStack align="stretch" gap={1}>
                   {nodesOfType.slice(0, 10).map((node) => (
-                    <Text key={node.id} fontSize="sm" noOfLines={1}>
+                    <Text key={node.id} fontSize="sm" lineClamp={1}>
                       {node.label}
                     </Text>
                   ))}
                   {nodesOfType.length > 10 && (
-                    <Text fontSize="sm" color="gray.400">
+                    <Text fontSize="sm" color="fg.subtle">
                       +{nodesOfType.length - 10} more
                     </Text>
                   )}
@@ -431,53 +492,42 @@ function GraphView({ data }: { data: GraphData | null }) {
         })}
       </SimpleGrid>
 
-      {/* Relationships */}
-      <Card.Root>
-        <Card.Header>
-          <Heading size="sm">Relationships</Heading>
-        </Card.Header>
-        <Card.Body maxH="300px" overflowY="auto">
-          <VStack align="stretch" gap={2}>
-            {data.edges.slice(0, 20).map((edge) => {
-              const sourceNode = data.nodes.find((n) => n.id === edge.source);
-              const targetNode = data.nodes.find((n) => n.id === edge.target);
-              return (
-                <HStack key={edge.id} p={2} bg="gray.50" borderRadius="md">
-                  <Text fontSize="sm" fontWeight="medium">
-                    {sourceNode?.label || edge.source}
-                  </Text>
-                  <Badge colorPalette="purple" size="sm">
-                    {edge.type}
-                  </Badge>
-                  <Text fontSize="sm" fontWeight="medium">
-                    {targetNode?.label || edge.target}
-                  </Text>
-                </HStack>
-              );
-            })}
-            {data.edges.length > 20 && (
-              <Text fontSize="sm" color="gray.400" textAlign="center">
-                +{data.edges.length - 20} more relationships
-              </Text>
-            )}
-          </VStack>
-        </Card.Body>
-      </Card.Root>
-
       {/* Info box */}
-      <Card.Root bg="teal.50">
+      <Card.Root bg="bg.subtle" borderColor="teal.muted">
         <Card.Body>
-          <Heading size="sm" color="teal.700" mb={2}>
-            About the Memory Graph
+          <Heading size="sm" mb={2}>
+            About the memory graph
           </Heading>
-          <Text color="teal.600" fontSize="sm">
-            This graph shows entities extracted from your conversation, their
-            types (products, brands, categories), and how they relate to each
-            other. The assistant uses this graph to provide contextual
-            recommendations and understand relationships between products.
+          <Text color="fg.muted" fontSize="sm">
+            One graph, three memory layers: the messages of this conversation
+            (short-term), the entities and preferences extracted from them
+            (long-term), and the reasoning trace recorded for each turn
+            (reasoning). Click any node to re-query the backend for its two-hop
+            neighbourhood.
           </Text>
         </Card.Body>
       </Card.Root>
     </VStack>
+  );
+}
+
+function StatCard({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone: string;
+}) {
+  return (
+    <Card.Root>
+      <Card.Body>
+        <Text fontSize="2xl" fontWeight="bold" color={`${tone}.fg`}>
+          {value}
+        </Text>
+        <Text color="fg.muted">{label}</Text>
+      </Card.Body>
+    </Card.Root>
   );
 }

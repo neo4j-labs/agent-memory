@@ -1,6 +1,6 @@
 # Makefile for Google Cloud Financial Advisor
 
-.PHONY: help install dev run run-backend run-frontend build start stop clean load-data deploy logs test lint format
+.PHONY: help install dev run run-backend run-frontend build start stop clean load-data deploy logs test lint format typecheck docker-requirements docker-build
 
 help:
 	@echo "Google Cloud Financial Advisor - Development Commands"
@@ -26,7 +26,9 @@ help:
 	@echo "  make format           - Format code (ruff)"
 	@echo ""
 	@echo "Build & Deploy:"
-	@echo "  make build            - Build Docker images"
+	@echo "  make docker-requirements - Re-export backend/requirements-docker.txt"
+	@echo "  make docker-build     - Build the backend image only"
+	@echo "  make build            - Build all Docker images (compose)"
 	@echo "  make deploy           - Deploy to Google Cloud Run"
 	@echo ""
 	@echo "Cleanup:"
@@ -68,7 +70,7 @@ run-frontend:
 dev: run
 
 start:
-	docker-compose up -d
+	docker compose up -d
 	@echo ""
 	@echo "Services started:"
 	@echo "  Frontend:  http://localhost:5173"
@@ -79,11 +81,13 @@ start:
 	@echo "Run 'make logs' to view logs"
 
 stop:
-	docker-compose down
+	docker compose down
 
 logs:
-	docker-compose logs -f
+	docker compose logs -f
 
+# The sample dataset is shared with the AWS sibling example and lives one
+# level up, at examples/financial-services-advisor/data/.
 load-data:
 	@echo "Loading sample data into Neo4j..."
 	cd backend && uv run python ../../data/load_sample_data.py
@@ -91,18 +95,29 @@ load-data:
 
 # Code Quality
 test:
-	cd backend && uv run pytest
+	cd backend && uv run pytest -q --timeout=120
 
 lint:
-	cd backend && uv run ruff check src/
+	cd backend && uv run ruff check src/ tests/
+	cd backend && uv run ruff format --check src/ tests/
 
 format:
-	cd backend && uv run ruff format src/
-	cd backend && uv run ruff check --fix src/
+	cd backend && uv run ruff format src/ tests/
+	cd backend && uv run ruff check --fix src/ tests/
 
 # Build
+# requirements-docker.txt is the locked dependency set exported without
+# [tool.uv.sources], so the image resolves neo4j-agent-memory from PyPI
+# instead of the editable path outside the Docker build context.
+docker-requirements:
+	cd backend && uv export --no-dev --no-emit-project --no-hashes --no-sources \
+		--format requirements.txt -o requirements-docker.txt
+
+docker-build: docker-requirements
+	docker build -t financial-advisor-backend ./backend
+
 build:
-	docker-compose build
+	docker compose build
 
 # Deploy to Google Cloud
 deploy:
@@ -115,6 +130,6 @@ setup-secrets:
 
 # Cleanup
 clean:
-	docker-compose down -v
+	docker compose down -v
 	rm -rf backend/.venv backend/__pycache__ backend/src/__pycache__
 	rm -rf frontend/node_modules frontend/dist

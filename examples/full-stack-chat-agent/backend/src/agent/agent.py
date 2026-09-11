@@ -1,6 +1,19 @@
-"""PydanticAI news chat agent definition."""
+"""PydanticAI news chat agent definition.
+
+Targets PydanticAI 2.x. The 2.x shapes used here:
+
+* ``@agent.instructions`` is the dynamic-prompt hook (``@agent.system_prompt``
+  is legacy), and ``ctx.prompt`` is this turn's user message — so the memory
+  context injected into the prompt is *relevant to the question asked* rather
+  than the result of an empty query.
+* The model is a provider-prefixed string from ``AGENT_MODEL``. ``openai:``
+  selects the Responses API; ``openai-chat:`` selects Chat Completions.
+* Streaming runs through ``agent.run_stream_events()`` (see
+  ``src/api/routes/chat.py``), not ``run_stream``.
+"""
 
 import json
+import logging
 import os
 from functools import lru_cache
 from typing import Any
@@ -22,12 +35,14 @@ from src.agent.tools import (
 )
 from src.config import get_settings
 
-SYSTEM_PROMPT = """You are a helpful news research assistant with access to a comprehensive news database.
+logger = logging.getLogger(__name__)
+
+INSTRUCTIONS = """You are a helpful news research assistant with access to a comprehensive news database.
 
 You help users find, analyze, and understand news articles. You can:
 - Search for news by keywords or semantic similarity
 - Filter news by topic, location, or date range
-- Explore the database schema and run custom queries
+- Explore the database schema and run custom read-only Cypher queries
 - Provide summaries and insights about news trends
 
 When answering questions:
@@ -40,29 +55,39 @@ Be conversational and helpful. If you're unsure about something, say so and offe
 """
 
 
+def _as_json(result: Any) -> str:
+    """Serialize a tool result to JSON (tools return str to avoid schema churn)."""
+    return json.dumps(result, default=str)
+
+
 @lru_cache
 def get_news_agent() -> Agent[AgentDeps, str]:
     """Create and return the news agent (cached)."""
-    # Ensure OpenAI API key is set in environment for pydantic-ai
     settings = get_settings()
+    # pydantic-ai reads OPENAI_API_KEY from the environment.
     if settings.openai_api_key.get_secret_value():
         os.environ["OPENAI_API_KEY"] = settings.openai_api_key.get_secret_value()
 
-    agent = Agent(
-        "openai:gpt-4o",
+    agent: Agent[AgentDeps, str] = Agent(
+        settings.agent_model,
         deps_type=AgentDeps,
-        system_prompt=SYSTEM_PROMPT,  # Use static prompt
+        output_type=str,
+        instructions=INSTRUCTIONS,
     )
 
-    # Add dynamic memory context via decorator
-    @agent.system_prompt
+    @agent.instructions
     async def add_memory_context(ctx: RunContext[AgentDeps]) -> str:
-        """Add memory context to system prompt."""
-        if ctx.deps.memory_enabled and ctx.deps.client is not None:
-            try:
-                memory_context = await ctx.deps.get_context(query="")
-                if memory_context:
-                    return f"""
+        """Inject memory context relevant to *this* turn's question."""
+        if not (ctx.deps.memory_enabled and ctx.deps.client is not None):
+            return ""
+        try:
+            memory_context = await ctx.deps.get_context(str(ctx.prompt or ""))
+        except Exception as e:
+            logger.warning("Could not load memory context: %s", e)
+            return ""
+        if not memory_context:
+            return ""
+        return f"""
 ## Your Memory Context
 
 The following information is from your memory about this conversation and user:
@@ -71,11 +96,9 @@ The following information is from your memory about this conversation and user:
 
 Use this context to personalize your responses and maintain continuity across conversations.
 """
-            except Exception:
-                pass
-        return ""
 
-    # Register all tools - return str (JSON) to avoid serialization issues
+    # Tools return JSON strings rather than structured objects to keep the
+    # tool-result shape stable for the frontend's tool-call cards.
     @agent.tool
     async def tool_search_news(
         ctx: RunContext[AgentDeps],
@@ -91,8 +114,7 @@ Use this context to personalize your responses and maintain continuity across co
         Returns:
             JSON string with list of matching articles.
         """
-        result = await search_news(ctx, query, limit)
-        return json.dumps(result, default=str)
+        return _as_json(await search_news(ctx, query, limit))
 
     @agent.tool
     async def tool_vector_search_news(
@@ -109,8 +131,7 @@ Use this context to personalize your responses and maintain continuity across co
         Returns:
             JSON string with list of similar articles.
         """
-        result = await vector_search_news(ctx, query, limit)
-        return json.dumps(result, default=str)
+        return _as_json(await vector_search_news(ctx, query, limit))
 
     @agent.tool
     async def tool_get_recent_news(
@@ -127,8 +148,7 @@ Use this context to personalize your responses and maintain continuity across co
         Returns:
             JSON string with list of recent articles.
         """
-        result = await get_recent_news(ctx, limit, days)
-        return json.dumps(result, default=str)
+        return _as_json(await get_recent_news(ctx, limit, days))
 
     @agent.tool
     async def tool_get_news_by_topic(
@@ -145,8 +165,7 @@ Use this context to personalize your responses and maintain continuity across co
         Returns:
             JSON string with list of articles matching the topic.
         """
-        result = await get_news_by_topic(ctx, topic, limit)
-        return json.dumps(result, default=str)
+        return _as_json(await get_news_by_topic(ctx, topic, limit))
 
     @agent.tool
     async def tool_get_topics(ctx: RunContext[AgentDeps]) -> str:
@@ -155,8 +174,7 @@ Use this context to personalize your responses and maintain continuity across co
         Returns:
             JSON string with list of topics and article counts.
         """
-        result = await get_topics(ctx)
-        return json.dumps(result, default=str)
+        return _as_json(await get_topics(ctx))
 
     @agent.tool
     async def tool_search_news_by_location(
@@ -173,8 +191,7 @@ Use this context to personalize your responses and maintain continuity across co
         Returns:
             JSON string with list of articles related to the location.
         """
-        result = await search_news_by_location(ctx, location, limit)
-        return json.dumps(result, default=str)
+        return _as_json(await search_news_by_location(ctx, location, limit))
 
     @agent.tool
     async def tool_search_news_by_date_range(
@@ -193,8 +210,7 @@ Use this context to personalize your responses and maintain continuity across co
         Returns:
             JSON string with list of articles in the date range.
         """
-        result = await search_news_by_date_range(ctx, start_date, end_date, limit)
-        return json.dumps(result, default=str)
+        return _as_json(await search_news_by_date_range(ctx, start_date, end_date, limit))
 
     @agent.tool
     async def tool_search_news_multi_topic(
@@ -213,8 +229,7 @@ Use this context to personalize your responses and maintain continuity across co
         Returns:
             JSON string with list of articles matching any of the topics.
         """
-        result = await search_news_multi_topic(ctx, topics, limit)
-        return json.dumps(result, default=str)
+        return _as_json(await search_news_multi_topic(ctx, topics, limit))
 
     @agent.tool
     async def tool_get_database_schema(ctx: RunContext[AgentDeps]) -> str:
@@ -223,8 +238,7 @@ Use this context to personalize your responses and maintain continuity across co
         Returns:
             JSON string describing the database schema.
         """
-        result = await get_database_schema(ctx)
-        return json.dumps(result, default=str)
+        return _as_json(await get_database_schema(ctx))
 
     @agent.tool
     async def tool_execute_cypher(
@@ -239,13 +253,11 @@ Use this context to personalize your responses and maintain continuity across co
         Returns:
             JSON string with query results.
         """
-        result = await execute_cypher(ctx, query)
-        return json.dumps(result, default=str)
+        return _as_json(await execute_cypher(ctx, query))
 
     return agent
 
 
-# For backwards compatibility
 def news_agent() -> Agent[AgentDeps, str]:
-    """Get the news agent instance."""
+    """Get the news agent instance (backwards-compatible alias)."""
     return get_news_agent()

@@ -1,187 +1,408 @@
-import { useEffect, useState, useCallback, useRef } from 'react'
-import { Box, Heading, Text, Spinner, Flex, Badge, HStack } from '@chakra-ui/react'
-import { InteractiveNvlWrapper } from '@neo4j-nvl/react'
-import type { Node, Relationship } from '@neo4j-nvl/base'
-import { LuNetwork, LuRefreshCw } from 'react-icons/lu'
-const API_BASE = '/api'
+import { useCallback, useMemo, useRef, useState, type ComponentRef } from "react";
+import {
+  Badge,
+  Box,
+  Button,
+  Flex,
+  HStack,
+  Heading,
+  Code,
+  Spinner,
+  Switch,
+  Text,
+  VStack,
+} from "@chakra-ui/react";
+import { useQuery } from "@tanstack/react-query";
+import { InteractiveNvlWrapper } from "@neo4j-nvl/react";
+import type { Node, Relationship } from "@neo4j-nvl/base";
+import { LuNetwork, LuRefreshCw, LuWrench, LuX } from "react-icons/lu";
+import {
+  getEntityAuditTrail,
+  getGraphNeighbors,
+  getMemoryGraph,
+  type GraphPayload,
+} from "../../lib/api";
+import {
+  categorizeNode,
+  countCategories,
+  filterGraph,
+  nodeColor,
+  NODE_COLORS,
+  type GraphCategory,
+} from "../../lib/graph";
+import { useChatSession } from "../../lib/session";
 
-const NODE_COLORS: Record<string, string> = {
-  Customer: '#68BDF6',
-  Organization: '#FB95AF',
-  Transaction: '#FFD86E',
-  Alert: '#FF6B6B',
-  SanctionedEntity: '#E74C3C',
-  PEP: '#9B59B6',
-  Document: '#A5D6A7',
-  Investigation: '#F39C12',
-  Entity: '#DE9BF9',
-  Person: '#68BDF6',
-  PEPRelative: '#BB8FCE',
-  SanctionAlias: '#E6B0AA',
-}
+const CATEGORY_LABELS: Array<{
+  key: GraphCategory;
+  label: string;
+  hint: string;
+  colorPalette: string;
+}> = [
+  {
+    key: "domain",
+    label: "Domain",
+    hint: "Customers, transactions, alerts, sanctions — this app's own data",
+    colorPalette: "blue",
+  },
+  {
+    key: "shortTerm",
+    label: "Short-term",
+    hint: "(:Conversation)-[:HAS_MESSAGE]->(:Message)",
+    colorPalette: "green",
+  },
+  {
+    key: "longTerm",
+    label: "Long-term",
+    hint: "(:Entity), (:Preference), (:Fact) extracted from conversations",
+    colorPalette: "purple",
+  },
+  {
+    key: "reasoning",
+    label: "Reasoning",
+    hint: "(:ReasoningTrace)-[:HAS_STEP]->(:ReasoningStep)-[:USES_TOOL]->(:ToolCall)",
+    colorPalette: "orange",
+  },
+];
 
-function getNodeColor(labels: string[]): string {
-  for (const label of labels) {
-    if (NODE_COLORS[label]) return NODE_COLORS[label]
-  }
-  return '#95A5A6'
-}
-
-interface GraphData {
-  nodes: Array<{
-    id: string
-    label: string
-    labels: string[]
-    properties: Record<string, unknown>
-  }>
-  relationships: Array<{
-    id: string
-    from: string
-    to: string
-    type: string
-  }>
-}
+const EMPTY_GRAPH: GraphPayload = { nodes: [], relationships: [] };
 
 export default function MemoryGraphView() {
-  const [graphData, setGraphData] = useState<GraphData | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const nvlRef = useRef<any>(null)
+  const { sessionId } = useChatSession();
+  const [scopeToSession, setScopeToSession] = useState(false);
+  const [enabled, setEnabled] = useState<Record<GraphCategory, boolean>>({
+    domain: true,
+    shortTerm: true,
+    longTerm: true,
+    reasoning: true,
+  });
+  // Nodes pulled in by double-click expansion, merged on top of the query data.
+  const [expansion, setExpansion] = useState<GraphPayload>(EMPTY_GRAPH);
+  // The entity whose reasoning audit trail is open in the side panel.
+  const [auditEntity, setAuditEntity] = useState<string | null>(null);
+  const nvlRef = useRef<ComponentRef<typeof InteractiveNvlWrapper>>(null);
 
-  const fetchGraph = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const res = await fetch(`${API_BASE}/graph/memory?limit=500`)
-      const data = await res.json()
-      setGraphData(data)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load graph')
-    } finally {
-      setLoading(false)
+  const scopedSession = scopeToSession ? (sessionId ?? undefined) : undefined;
+
+  const {
+    data,
+    error,
+    isPending,
+    isFetching,
+    refetch: refetchGraph,
+  } = useQuery({
+    queryKey: ["memory-graph", scopedSession ?? "all"],
+    queryFn: () => getMemoryGraph({ sessionId: scopedSession, limit: 500 }),
+  });
+
+  // "Which reasoning steps touched this entity, and via which tool?"
+  const auditQuery = useQuery({
+    queryKey: ["entity-audit", auditEntity],
+    queryFn: () => getEntityAuditTrail(auditEntity!),
+    enabled: !!auditEntity,
+    staleTime: Infinity,
+  });
+
+  const refresh = useCallback(() => {
+    setExpansion(EMPTY_GRAPH);
+    setAuditEntity(null);
+    void refetchGraph();
+  }, [refetchGraph]);
+
+  const merged = useMemo<GraphPayload>(() => {
+    const base = data ?? EMPTY_GRAPH;
+    if (expansion.nodes.length === 0 && expansion.relationships.length === 0) {
+      return base;
     }
-  }, [])
+    const ids = new Set(base.nodes.map((n) => n.id));
+    const relIds = new Set(base.relationships.map((r) => r.id));
+    return {
+      nodes: [...base.nodes, ...expansion.nodes.filter((n) => !ids.has(n.id))],
+      relationships: [
+        ...base.relationships,
+        ...expansion.relationships.filter((r) => !relIds.has(r.id)),
+      ],
+    };
+  }, [data, expansion]);
 
-  useEffect(() => {
-    fetchGraph()
-  }, [fetchGraph])
+  const counts = useMemo(() => countCategories(merged.nodes), [merged.nodes]);
+  const visible = useMemo(() => filterGraph(merged, enabled), [merged, enabled]);
 
-  const fetchNeighbors = useCallback(async (nodeId: string) => {
+  const expandNode = useCallback(async (nodeId: string) => {
     try {
-      const res = await fetch(`${API_BASE}/graph/neighbors/${encodeURIComponent(nodeId)}?depth=1&limit=20`)
-      const data = await res.json()
-      if (data.nodes && graphData) {
-        const existingIds = new Set(graphData.nodes.map(n => n.id))
-        const newNodes = (data.nodes as any[])
-          .filter((n: any) => !existingIds.has(n.id))
-          .map((n: any) => ({
+      const payload = await getGraphNeighbors(nodeId, { depth: 1, limit: 20 });
+      setExpansion((prev) => ({
+        nodes: [
+          ...prev.nodes,
+          ...payload.nodes.map((n) => ({
             id: n.id,
-            label: n.label || n.id,
-            labels: [n.type || 'Unknown'],
-            properties: n,
-          }))
-        const newEdges = (data.edges || []).map((e: any, i: number) => ({
-          id: `expanded-${nodeId}-${i}`,
-          from: e.from || nodeId,
-          to: e.to,
-          type: e.relationship || 'RELATED',
-        }))
-        setGraphData(prev => prev ? {
-          nodes: [...prev.nodes, ...newNodes],
-          relationships: [...prev.relationships, ...newEdges],
-        } : prev)
-      }
+            label: n.label ?? n.id,
+            labels: [n.type || "Unknown"],
+            properties: { ...n },
+          })),
+        ],
+        relationships: [
+          ...prev.relationships,
+          ...payload.edges.map((e, i) => ({
+            id: `expanded-${nodeId}-${i}`,
+            from: e.from || nodeId,
+            to: e.to,
+            type: e.relationship || "RELATED",
+          })),
+        ],
+      }));
     } catch {
-      // Silently fail on neighbor expansion
+      // Expansion is a convenience; keep the current view on failure.
     }
-  }, [graphData])
+  }, []);
 
-  if (loading) {
-    return (
-      <Flex h="calc(100vh - 48px)" align="center" justify="center">
-        <Spinner size="lg" />
-        <Text ml={3}>Loading graph...</Text>
-      </Flex>
-    )
-  }
+  const nvlNodes: Node[] = useMemo(
+    () =>
+      visible.nodes.map((n) => ({
+        id: n.id,
+        caption: n.label ?? n.id,
+        color: nodeColor(n.labels ?? []),
+        size: n.labels?.includes("Customer") ? 30 : 20,
+      })),
+    [visible.nodes],
+  );
 
-  if (error) {
-    return (
-      <Flex h="calc(100vh - 48px)" align="center" justify="center" direction="column">
-        <Text color="red.500">{error}</Text>
-        <Text fontSize="sm" color="gray.500" mt={2}>Make sure sample data is loaded (make load-data)</Text>
-      </Flex>
-    )
-  }
+  const nvlRels: Relationship[] = useMemo(
+    () =>
+      visible.relationships.map((r) => ({
+        id: r.id,
+        from: r.from,
+        to: r.to,
+        caption: r.type,
+      })),
+    [visible.relationships],
+  );
 
-  if (!graphData || graphData.nodes.length === 0) {
-    return (
-      <Flex h="calc(100vh - 48px)" align="center" justify="center" direction="column">
-        <LuNetwork size={48} color="gray" />
-        <Text mt={4} color="gray.500">No graph data. Run "make load-data" first.</Text>
-      </Flex>
-    )
-  }
+  const legendLabels = useMemo(() => {
+    const present = new Set<string>();
+    for (const node of visible.nodes) {
+      for (const label of node.labels ?? []) {
+        if (NODE_COLORS[label]) present.add(label);
+      }
+    }
+    return [...present].sort();
+  }, [visible.nodes]);
 
-  const nvlNodes: Node[] = graphData.nodes.map(n => ({
-    id: n.id,
-    caption: n.label || n.id,
-    color: getNodeColor(n.labels || []),
-    size: n.labels?.includes('Customer') ? 30 : 20,
-  }))
-
-  const nvlRels: Relationship[] = graphData.relationships
-    .filter(r => r.from && r.to)
-    .map(r => ({
-      id: r.id,
-      from: r.from,
-      to: r.to,
-      caption: r.type,
-    }))
+  const memoryNodeCount =
+    counts.shortTerm + counts.longTerm + counts.reasoning;
 
   return (
     <Box h="calc(100vh - 48px)">
-      <Flex direction="column" h="full">
-        <Flex justify="space-between" align="center" mb={2} px={2}>
+      <Flex direction="column" h="full" gap={2}>
+        <Flex justify="space-between" align="center" px={2} wrap="wrap" gap={2}>
           <HStack>
             <LuNetwork size={20} />
             <Heading size="md">Context Graph</Heading>
-            <Badge colorPalette="blue">{graphData.nodes.length} nodes</Badge>
-            <Badge colorPalette="gray">{graphData.relationships.length} relationships</Badge>
+            <Badge colorPalette="brand">{visible.nodes.length} nodes</Badge>
+            <Badge colorPalette="gray">
+              {visible.relationships.length} relationships
+            </Badge>
+            {isFetching && !isPending && <Spinner size="xs" />}
           </HStack>
-          <HStack>
-            <Text fontSize="xs" color="gray.500">Double-click a node to expand</Text>
-            <Box cursor="pointer" onClick={fetchGraph} title="Refresh">
-              <LuRefreshCw size={16} />
-            </Box>
+          <HStack gap={3}>
+            <Switch.Root
+              size="sm"
+              checked={scopeToSession}
+              onCheckedChange={(e) => {
+                setExpansion(EMPTY_GRAPH);
+                setScopeToSession(e.checked);
+              }}
+              disabled={!sessionId}
+            >
+              <Switch.HiddenInput />
+              <Switch.Control />
+              <Switch.Label>
+                {sessionId
+                  ? "This conversation only"
+                  : "This conversation only (start a chat first)"}
+              </Switch.Label>
+            </Switch.Root>
+            <Text fontSize="xs" color="fg.muted">
+              Click a memory entity for its audit trail · double-click to expand
+            </Text>
+            <Button size="xs" variant="outline" onClick={refresh}>
+              <LuRefreshCw size={14} /> Refresh
+            </Button>
           </HStack>
         </Flex>
 
-        <Flex mb={2} px={2} gap={2} flexWrap="wrap">
-          {Object.entries(NODE_COLORS).slice(0, 8).map(([label, color]) => (
-            <Badge key={label} size="sm" style={{ borderLeft: `3px solid ${color}` }} pl={2}>
-              {label}
-            </Badge>
+        {/* Memory-layer filters */}
+        <Flex px={2} gap={4} wrap="wrap" align="center">
+          {CATEGORY_LABELS.map((category) => (
+            <Switch.Root
+              key={category.key}
+              size="sm"
+              colorPalette={category.colorPalette}
+              checked={enabled[category.key]}
+              onCheckedChange={(e) =>
+                setEnabled((prev) => ({ ...prev, [category.key]: e.checked }))
+              }
+              title={category.hint}
+            >
+              <Switch.HiddenInput />
+              <Switch.Control />
+              <Switch.Label>
+                {category.label}{" "}
+                <Text as="span" color="fg.muted">
+                  ({counts[category.key]})
+                </Text>
+              </Switch.Label>
+            </Switch.Root>
           ))}
         </Flex>
 
-        <Box flex={1} border="1px solid" borderColor="gray.200" borderRadius="md" overflow="hidden">
-          <InteractiveNvlWrapper
-            ref={nvlRef}
-            nodes={nvlNodes}
-            rels={nvlRels}
-            nvlOptions={{
-              layout: 'force-directed',
-              relationshipThreshold: 0.55,
-            }}
-            nvlCallbacks={{
-              onNodeDoubleClick: (node: Node) => {
-                if (node.id) fetchNeighbors(node.id)
-              },
-            }}
-          />
-        </Box>
+        {legendLabels.length > 0 && (
+          <Flex px={2} gap={2} wrap="wrap">
+            {legendLabels.map((label) => (
+              <Badge
+                key={label}
+                size="sm"
+                style={{ borderLeft: `3px solid ${NODE_COLORS[label]}` }}
+                pl={2}
+              >
+                {label}
+              </Badge>
+            ))}
+          </Flex>
+        )}
+
+        {isPending ? (
+          <Flex flex={1} align="center" justify="center">
+            <Spinner size="lg" />
+            <Text ml={3}>Loading graph…</Text>
+          </Flex>
+        ) : error ? (
+          <Flex flex={1} align="center" justify="center" direction="column">
+            <Text color="red.500">
+              {error instanceof Error ? error.message : "Failed to load graph"}
+            </Text>
+            <Text fontSize="sm" color="fg.muted" mt={2}>
+              Is the backend running, and has sample data been loaded
+              (`make load-data`)?
+            </Text>
+          </Flex>
+        ) : visible.nodes.length === 0 ? (
+          <Flex flex={1} align="center" justify="center" direction="column">
+            <LuNetwork size={48} />
+            <Text mt={4} color="fg.muted">
+              No nodes for this scope. Load sample data with `make load-data`,
+              or turn a filter back on.
+            </Text>
+          </Flex>
+        ) : (
+          <Flex flex={1} gap={2} minH={0}>
+            <Box
+              flex={1}
+              border="1px solid"
+              borderColor="border.subtle"
+              borderRadius="md"
+              overflow="hidden"
+            >
+              <InteractiveNvlWrapper
+                ref={nvlRef}
+                nodes={nvlNodes}
+                rels={nvlRels}
+                nvlOptions={{
+                  layout: "forceDirected",
+                  relationshipThreshold: 0.55,
+                }}
+                mouseEventCallbacks={{
+                  // Single click on a long-term memory node opens its audit
+                  // trail; double click expands neighbours.
+                  onNodeClick: (node: Node) => {
+                    const hit = visible.nodes.find((n) => n.id === node.id);
+                    if (hit && categorizeNode(hit.labels ?? []) === "longTerm") {
+                      setAuditEntity(hit.label ?? hit.id);
+                    }
+                  },
+                  onNodeDoubleClick: (node: Node) => {
+                    if (node.id) void expandNode(node.id);
+                  },
+                  onZoom: true,
+                  onPan: true,
+                  onDrag: true,
+                }}
+              />
+            </Box>
+
+            {auditEntity && (
+              <Box
+                w="320px"
+                border="1px solid"
+                borderColor="border.subtle"
+                borderRadius="md"
+                p={3}
+                overflowY="auto"
+                bg="bg.panel"
+              >
+                <Flex justify="space-between" align="start" mb={2}>
+                  <Box>
+                    <Text fontSize="sm" fontWeight="semibold">
+                      {auditEntity}
+                    </Text>
+                    <Text fontSize="xs" color="fg.muted">
+                      Reasoning steps that touched this entity
+                    </Text>
+                  </Box>
+                  <Box
+                    as="button"
+                    aria-label="Close audit trail"
+                    color="fg.muted"
+                    onClick={() => setAuditEntity(null)}
+                  >
+                    <LuX size={14} />
+                  </Box>
+                </Flex>
+
+                {auditQuery.isPending ? (
+                  <Spinner size="sm" />
+                ) : auditQuery.data && auditQuery.data.total > 0 ? (
+                  <VStack align="stretch" gap={3}>
+                    {auditQuery.data.steps.map((step, i) => (
+                      <Box key={step.step_id ?? i}>
+                        <Text fontSize="xs" color="fg.muted" lineClamp={2}>
+                          {step.task ?? "(no task recorded)"}
+                        </Text>
+                        <Text fontSize="sm">
+                          {step.action ?? step.thought ?? "step"}
+                        </Text>
+                        {step.tools.length > 0 && (
+                          <Flex gap={1} mt={1} wrap="wrap" align="center">
+                            <LuWrench size={10} />
+                            {step.tools.map((tool) => (
+                              <Code key={tool} size="sm" variant="subtle">
+                                {tool}
+                              </Code>
+                            ))}
+                          </Flex>
+                        )}
+                      </Box>
+                    ))}
+                  </VStack>
+                ) : (
+                  <Text fontSize="xs" color="fg.muted">
+                    No <Code size="sm">TOUCHED</Code> edges for this entity yet.
+                    They are written when the agents record a tool call with{" "}
+                    <Code size="sm">touched_entities=</Code>.
+                  </Text>
+                )}
+              </Box>
+            )}
+          </Flex>
+        )}
+
+        {!isPending && !error && memoryNodeCount === 0 && (
+          <Text px={2} pb={1} fontSize="xs" color="fg.muted">
+            No memory nodes in this payload yet — run a chat turn in the AI
+            Financial Advisor, then refresh. Short-term, long-term and reasoning
+            nodes are written by neo4j-agent-memory as the agents work.
+          </Text>
+        )}
       </Flex>
     </Box>
-  )
+  );
 }

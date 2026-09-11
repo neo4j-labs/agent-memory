@@ -1,9 +1,16 @@
-version: '3.8'
+# Local stack for the Google Cloud Financial Advisor example.
+#
+#   docker compose up -d                          # neo4j + backend + frontend
+#   docker compose --profile load-data up data-loader   # load the sample data
+#
+# Gemini credentials come from your shell (or a .env file next to this file):
+# either GOOGLE_API_KEY (Google AI Studio) or GOOGLE_APPLICATION_CREDENTIALS +
+# GOOGLE_CLOUD_PROJECT (Vertex AI).
 
 services:
   # Neo4j database
   neo4j:
-    image: neo4j:5-community
+    image: neo4j:5.26-community
     container_name: financial-advisor-neo4j
     ports:
       - "7474:7474"  # Browser
@@ -34,17 +41,25 @@ services:
       - NEO4J_URI=bolt://neo4j:7687
       - NEO4J_USER=neo4j
       - NEO4J_PASSWORD=password
+      # Gemini via Google AI Studio (simplest local path)
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      # …or Vertex AI: mount ADC below and set the project
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials.json
       - GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT:-}
+      - GOOGLE_GENAI_USE_VERTEXAI=${GOOGLE_GENAI_USE_VERTEXAI:-}
       - VERTEX_AI_LOCATION=${VERTEX_AI_LOCATION:-us-central1}
       - VERTEX_AI_MODEL_ID=${VERTEX_AI_MODEL_ID:-gemini-2.5-flash}
-      - VERTEX_AI_EMBEDDING_MODEL=${VERTEX_AI_EMBEDDING_MODEL:-text-embedding-004}
+      - VERTEX_AI_EMBEDDING_MODEL=${VERTEX_AI_EMBEDDING_MODEL:-gemini-embedding-001}
+      - VERTEX_AI_EMBEDDING_DIMENSIONS=${VERTEX_AI_EMBEDDING_DIMENSIONS:-768}
+      - MEMORY_ENABLE_EXTRACTION=${MEMORY_ENABLE_EXTRACTION:-true}
+      - MEMORY_ENABLE_DEDUPLICATION=${MEMORY_ENABLE_DEDUPLICATION:-true}
       - LOG_LEVEL=INFO
       - CORS_ORIGINS=http://localhost:5173,http://localhost:3000
     depends_on:
       neo4j:
         condition: service_healthy
     volumes:
-      # Mount Google Cloud credentials for local development
+      # Application Default Credentials for the Vertex AI path
       - ${GOOGLE_APPLICATION_CREDENTIALS:-~/.config/gcloud/application_default_credentials.json}:/app/credentials.json:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
@@ -65,20 +80,21 @@ services:
     environment:
       - BACKEND_URL=http://backend:8080
 
-  # Data loader (run once)
+  # Data loader (run once). The sample dataset lives one level up and is
+  # shared with the AWS sibling example.
   data-loader:
-    image: python:3.11-slim
+    image: python:3.12-slim
     container_name: financial-advisor-data-loader
     working_dir: /app
     volumes:
-      - ./data:/app
+      - ../data:/app
     environment:
       - NEO4J_URI=bolt://neo4j:7687
       - NEO4J_USER=neo4j
       - NEO4J_PASSWORD=password
     command: >
       bash -c "
-        pip install neo4j &&
+        pip install 'neo4j>=6.3,<7' &&
         python load_sample_data.py
       "
     depends_on:

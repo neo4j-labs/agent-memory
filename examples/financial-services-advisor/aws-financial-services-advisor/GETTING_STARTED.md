@@ -10,7 +10,7 @@ Before starting, ensure you have:
 
 | Requirement | Version | Notes |
 |------------|---------|-------|
-| **Python** | 3.10+ | 3.11 or 3.12 recommended |
+| **Python** | 3.11+ | 3.10 is EOL as of 2026-10 |
 | **uv** | Latest | Python package manager ([install](https://docs.astral.sh/uv/getting-started/installation/)) |
 | **Node.js** | 18+ | For the frontend |
 | **npm** | 9+ | Comes with Node.js |
@@ -21,23 +21,32 @@ Before starting, ensure you have:
 
 You need access to these models in your AWS region (default `us-east-1`):
 
-- **LLM**: `anthropic.claude-sonnet-4-20250514-v1:0` (Claude Sonnet 4)
-- **Embeddings**: `amazon.titan-embed-text-v2:0` (Titan Embed V2)
+- **LLM**: `us.anthropic.claude-sonnet-4-6` — a cross-region *inference profile*, which is how current Claude models are invoked on Bedrock. The bare foundation-model id is rejected.
+- **Embeddings**: `amazon.titan-embed-text-v2:0` (Titan Embed V2, 1024 dimensions)
+
+Both defaults come from the library's `integrations.strands.bedrock_llm_model()` / `bedrock_embedding_model()` helpers, so they move with the library rather than with this README. Override either with `BEDROCK_MODEL_ID` / `BEDROCK_EMBEDDING_MODEL_ID`, and pick a different profile region with `BEDROCK_INFERENCE_PROFILE_PREFIX` (`us` | `eu` | `apac` | `global`).
 
 To enable Bedrock model access:
 
 1. Go to the [AWS Bedrock Console](https://console.aws.amazon.com/bedrock/)
 2. Navigate to **Model access** in the left sidebar
 3. Click **Manage model access**
-4. Enable **Anthropic > Claude Sonnet 4** and **Amazon > Titan Text Embeddings V2**
+4. Enable the current **Anthropic > Claude Sonnet** model and **Amazon > Titan Text Embeddings V2**
 5. Wait for access to be granted (usually immediate)
+
+Confirm what your account can actually invoke:
+
+```bash
+aws bedrock list-inference-profiles --region us-east-1 \
+  --query 'inferenceProfileSummaries[?contains(inferenceProfileId, `claude-sonnet`)].inferenceProfileId'
+```
 
 ---
 
 ## Step 1: Navigate to the Example
 
 ```bash
-cd neo4j-agent-memory/examples/aws-financial-services-advisor
+cd neo4j-agent-memory/examples/financial-services-advisor/aws-financial-services-advisor
 ```
 
 ---
@@ -97,14 +106,17 @@ AWS_PROFILE=default                             # or remove if using env vars
 # AWS_ACCESS_KEY_ID=                            # optional, if not using profile
 # AWS_SECRET_ACCESS_KEY=                        # optional, if not using profile
 
-# Amazon Bedrock Models (defaults are fine)
-BEDROCK_MODEL_ID=anthropic.claude-sonnet-4-20250514-v1:0
-BEDROCK_EMBEDDING_MODEL_ID=amazon.titan-embed-text-v2:0
+# Amazon Bedrock Models. Leave unset to take the library's current defaults.
+# BEDROCK_MODEL_ID=us.anthropic.claude-sonnet-4-6
+# BEDROCK_EMBEDDING_MODEL_ID=amazon.titan-embed-text-v2:0
 
 # Application Settings
 LOG_LEVEL=INFO
 CORS_ORIGINS=http://localhost:5173,http://localhost:3000
 DEBUG=false
+# Startup fails loudly when Neo4j is unreachable. Set to true only if you
+# genuinely want the API to come up without its database.
+ALLOW_DEGRADED_START=false
 ```
 
 The Cognito, S3, and feature flag settings in `.env.example` are optional and not required for local development.
@@ -119,7 +131,7 @@ The app needs valid AWS credentials to call Bedrock. Options:
 
 Verify your credentials work:
 ```bash
-aws bedrock list-foundation-models --region us-east-1 --query 'modelSummaries[?modelId==`anthropic.claude-sonnet-4-20250514-v1:0`].modelId'
+aws sts get-caller-identity
 ```
 
 ---
@@ -131,13 +143,14 @@ make install
 ```
 
 This runs:
-- `cd backend && uv sync` -- installs Python dependencies including `neo4j-agent-memory` (from local editable path)
-- `cd frontend && npm install` -- installs Node.js dependencies (including Framer Motion for agent animations)
+- `cd backend && uv sync --extra dev` -- installs Python dependencies including `neo4j-agent-memory` (from the local editable path, so library changes are picked up without a release)
+- `cd frontend && npm ci` -- installs Node.js dependencies
+- `cd infrastructure && npm ci` -- installs the CDK toolchain (only needed for deployment)
 
 If you don't have `make`, run the commands manually:
 ```bash
-cd backend && uv sync
-cd ../frontend && npm install
+cd backend && uv sync --extra dev
+cd ../frontend && npm ci
 cd ..
 ```
 
@@ -158,7 +171,25 @@ This creates:
 - **3 sanctions entries** and **3 PEP entries** with relatives
 - **3 pre-built alerts**: Structuring (CRITICAL), shell company network (HIGH), rapid movement (MEDIUM)
 
-> **Note**: The script clears existing data before loading. It reads credentials from `backend/.env`.
+The loader reads credentials from `backend/.env` (`NEO4J_USERNAME` and `NEO4J_USER` both work) and errors out rather than guessing a password.
+
+Every write is a `MERGE`, so **running it twice is a no-op** and it never touches anything it did not create — your conversations, entities and reasoning traces survive a reload. For a clean slate:
+
+```bash
+make load-data-reset     # deletes only the demo labels, then reloads
+```
+
+Transaction and document dates are generated relative to the load date, so the agents' 90-day AML windows always contain rows.
+
+### Optional: adopt the domain graph as long-term memory
+
+```bash
+make adopt-graph
+```
+
+This runs `client.schema.adopt_existing_graph(...)`, which attaches the library's `:Entity` super-label and `id`/`type`/`name` properties to the compliance nodes. After it, the customers and organizations *are* long-term memory entities: entity extraction on a chat turn links mentions to these nodes instead of MERGEing duplicates beside them. It is idempotent, and re-running reports "already adopted".
+
+`:Transaction` and `:Document` are deliberately left out — adoption sets `n.type` to the library entity type, and in this graph `type` already means `'cash_deposit'` / `'passport'`, which the AML and KYC tools match on. That is the general rule when adopting a graph you did not design for the library: rename any domain property called `id`, `type` or `name` first. See [Adopt an existing graph](https://neo4j.com/labs/agent-memory/how-to/adopt-existing-graph.html).
 
 ---
 
@@ -200,15 +231,15 @@ Expected output:
 ```json
 {
     "status": "healthy",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "components": {
         "neo4j": { "status": "healthy" },
-        "config": { "status": "healthy", "bedrock_model": "anthropic.claude-sonnet-4-20250514-v1:0" }
+        "config": { "status": "healthy", "bedrock_model": "us.anthropic.claude-sonnet-4-6" }
     }
 }
 ```
 
-If Neo4j shows `"not_initialized"`, check your `NEO4J_URI` and credentials in `backend/.env`.
+`/health` actually round-trips a `RETURN 1` to Neo4j and returns **503** when that fails, so it is safe to use as a readiness probe. If the database is unreachable the server normally refuses to start at all — look for `Could not connect to Neo4j at ...` in the startup logs.
 
 ### Verify sample data loaded:
 ```bash
@@ -331,30 +362,35 @@ Once running, explore the API at http://localhost:8000/docs. Key endpoints:
 
 ## Testing
 
-Run the unit test suite (113 tests, no Neo4j required):
+Run the suite (integration tests skip themselves when Neo4j is unreachable):
 
 ```bash
-cd backend && uv run python -m pytest tests/ -v -m "not integration"
+make test
 ```
 
-Run with coverage:
+With coverage:
 ```bash
-cd backend && uv run python -m pytest tests/ -v -m "not integration" --cov=src
+cd backend && uv run pytest tests/ -m "not integration" --cov=src
 ```
 
-Run integration tests (requires Neo4j with loaded sample data):
+The integration tests load the sample data and run the real Cypher. Point them at a throwaway database — they use `--reset`, which deletes the demo labels:
+
 ```bash
-cd backend && uv run python -m pytest tests/ -v
+cd backend && NEO4J_URI=bolt://localhost:7687 NEO4J_USERNAME=neo4j \
+  NEO4J_PASSWORD=your-password uv run pytest tests/ -m integration
 ```
 
-The test suite covers:
-- **Neo4jDomainService** -- all Cypher query methods (28 tests)
-- **Tool functions** -- all 16 agent tools with mocked Neo4j (27 tests)
-- **bind_tool utility** -- signature hiding, service injection (6 tests)
-- **Memory service** -- correct API usage, tuple unpacking, method signatures (8 tests)
-- **API endpoints** -- health, chat, streaming, traces (11 tests)
-- **Sample data validation** -- JSON structure, structuring patterns, shell indicators (27 tests)
-- **Integration** -- real Neo4j queries against loaded data (14 tests, requires Neo4j)
+They need no API key and no model download: a deterministic hash-based embedder stands in for Bedrock. Set `EMBEDDING_DIMENSIONS` if the target database's vector indexes are not 384-wide.
+
+What the suite covers:
+- **Neo4jDomainService** — every Cypher query method, mocked at the `MemoryClient` boundary
+- **Tool functions** — all 16 agent tools with a mocked domain service
+- **Tool registration** — that `bind_tool` produces something `ToolRegistry.process_tools` accepts. A signature assertion cannot catch the failure mode here: an unregistered tool is logged once and dropped, leaving a sub-agent with no tools
+- **Streaming event shape** — the `current_tool_use` / `toolResult` / `result` keys the SSE route maps, driven through a real `Agent` with a stub model
+- **Memory path** — one turn writes exactly two messages, a trace with `triggered_by_message_id`, and a `ToolCall` per tool use
+- **Audit trail** — `(:ReasoningStep)-[:TOUCHED]->(:Entity)` edges and the one-hop query over them
+- **Loader safety** — a `:Conversation` survives a reload, and a reload is idempotent
+- **Label namespace** — an extracted `:Entity:Organization` is never mistaken for a compliance organization
 
 ---
 
@@ -367,41 +403,67 @@ This example is architecturally equivalent to `examples/google-cloud-financial-a
 | **Agent framework** | AWS Strands Agents | Google ADK |
 | **LLM** | Bedrock (Claude Sonnet 4) | Gemini 2.5 Flash |
 | **Embeddings** | Titan Embed V2 | Vertex AI text-embedding-004 |
-| **SSE streaming** | Post-completion events | Real-time per-agent events |
-| **Frontend animations** | Framer Motion (expandable cards) | Framer Motion (richer animations) |
+| **Embeddings** | Titan Embed V2 (1024-d) | Vertex AI (768-d) |
+| **Deployment** | Lambda + API Gateway + CloudFront (CDK) | Cloud Run |
 
-The SSE streaming difference is a framework limitation: Strands' `agent(prompt)` is synchronous, while ADK's `Runner.run_async()` yields events as each sub-agent executes. Both produce the same investigation results.
+Both stream in real time. This example drives Strands with `Agent.stream_async()`, mapping `current_tool_use` events onto `tool_call`, tool-result messages onto `tool_result`, and text deltas onto `thinking`; the GCP twin iterates ADK's `Runner.run_async()`. Both produce the same investigation results.
+
+Note the embedding dimensions: the two apps cannot share one Neo4j database unless you keep them on the same embedder, because the memory vector indexes are sized from it. `MemoryClient.connect()` raises `EmbeddingDimensionMismatchError` rather than corrupting them.
 
 ---
 
 ## AWS Deployment (Advanced)
 
-> **Note**: The `infrastructure/` directory with CDK stacks is referenced in the Makefile but may require validation. Deployment will incur AWS costs.
+> Deployment incurs AWS costs: a NAT gateway, a CloudFront distribution, and a Lambda inside a VPC.
+
+Six CDK stacks: `network` (VPC + endpoints), `auth` (Cognito), `data` (S3 + the Neo4j credentials secret), `compute` (the Lambda), `api` (API Gateway + CloudFront), `monitoring` (dashboards and alarms).
+
+### Check it synthesizes first
+
+```bash
+make synth
+```
+
+`cdk synth` needs no AWS credentials, which makes it the cheapest check that the infrastructure still compiles. It is also what CI runs.
 
 ### Prerequisites
 
-- AWS CDK CLI: `npm install -g aws-cdk`
-- AWS account with permissions for Lambda, API Gateway, CloudFront, Cognito, S3, CloudWatch
+- AWS account with permissions for Lambda, API Gateway, CloudFront, Cognito, S3, Secrets Manager, CloudWatch
+- Docker running (the Lambda asset is bundled in a container)
 
 ### Steps
 
 ```bash
-# Build the frontend
+# Build the frontend — the api stack uploads ../frontend/dist to S3
 make build
 
-# Deploy (first time: bootstrap CDK)
-cd infrastructure
-npm install
-npx cdk bootstrap
-npx cdk deploy --all
+# First time only
+cd infrastructure && npm ci && npx cdk bootstrap
+
+# Deploy all six stacks
+make deploy
 ```
+
+Then put your real Neo4j credentials into the secret the data stack created (it starts with a placeholder URI):
+
+```bash
+aws secretsmanager put-secret-value \
+  --secret-id financial-services-advisor/neo4j-credentials \
+  --secret-string '{"uri":"neo4j+s://xxxx.databases.neo4j.io","username":"neo4j","password":"...","database":"neo4j"}'
+```
+
+The compute stack passes that secret's ARN to the function as `NEO4J_SECRET_ARN`, and `config.py` reads the connection details from it — the password never appears in the function's environment.
+
+### What the deployed API serves
+
+API Gateway fronts the Lambda with a single authorized `{proxy+}` resource, so every FastAPI route is reachable and the infrastructure cannot drift from the application. `/health` is unauthenticated so orchestrators can probe it.
+
+One caveat: REST API Gateway buffers responses and caps them at 29 seconds, so the deployed build should use the synchronous `POST /api/chat` rather than `/api/chat/stream`. For real streaming in production, move the function to a Lambda Function URL with `InvokeMode.RESPONSE_STREAM`.
 
 ### Tear down
 
 ```bash
 make destroy
-# or
-cd infrastructure && npx cdk destroy --all
 ```
 
 ---
@@ -414,7 +476,9 @@ cd infrastructure && npx cdk destroy --all
 - Check your AWS region matches `AWS_REGION` in `.env`
 - Verify credentials: `aws sts get-caller-identity`
 
-### "Could not initialize memory service"
+### Startup fails with "Could not connect to Neo4j at ..."
+
+This is intentional — the app refuses to start without its database rather than serving a green health check over 503s.
 
 - Check that `NEO4J_URI`, `NEO4J_USER`, and `NEO4J_PASSWORD` are correct in `backend/.env`
 - For Aura: ensure you use `neo4j+s://` (not `bolt://`)
@@ -423,7 +487,11 @@ cd infrastructure && npx cdk destroy --all
 
 ### "Neo4j service not available" on API calls
 
-The domain routes (customers, alerts, graph) require Neo4j. If the memory service failed to initialize at startup, these endpoints return 503. Check the backend startup logs for connection errors.
+You started with `ALLOW_DEGRADED_START=true` and the connection failed. Every domain route returns 503 in that mode. Check the backend startup logs for the connection error.
+
+### "Vector index dimension mismatch"
+
+The memory vector indexes in that database were created by a different embedder — most often the Google Cloud twin (768-d Vertex) or a local sentence-transformers model (384-d) against the same instance. Either use a separate database, or drop and recreate the indexes (which loses the existing embeddings). The error message lists every index and its width.
 
 ### "No module named 'neo4j_agent_memory'"
 
@@ -466,8 +534,8 @@ aws-financial-services-advisor/
 │   │   ├── main.py              # FastAPI app with lifespan, Neo4jDomainService init
 │   │   ├── config.py            # Pydantic settings (reads ../.env and .env)
 │   │   ├── agents/              # Strands agent definitions
-│   │   │   ├── supervisor.py    # Orchestrator with sub-agents and delegation tools
-│   │   │   └── prompts.py       # System prompts for all agents
+│   │   │   ├── supervisor.py    # Builds one agent per session; sub-agents + delegation tools
+│   │   │   └── prompts.py       # System prompts for the supervisor and all four specialists
 │   │   ├── tools/               # Neo4j-backed tool implementations
 │   │   │   ├── __init__.py      # bind_tool() utility
 │   │   │   ├── kyc_tools.py     # Identity verification, document checks
@@ -489,7 +557,12 @@ aws-financial-services-advisor/
 │   │       └── risk_service.py   # Risk scoring engine
 │   ├── handler.py               # AWS Lambda handler (Mangum)
 │   ├── pyproject.toml           # Python dependencies
-│   └── tests/                   # 113 tests (unit + validation + integration)
+│   └── tests/                   # 151 tests (unit + data validation + integration)
+├── infrastructure/              # Six AWS CDK stacks (TypeScript)
+│   ├── bin/app.ts               # Stack wiring
+│   └── lib/stacks/              # network, auth, data, compute, api, monitoring
+├── docs/diagrams/excalidraw/    # Editable diagram sources
+├── img/                         # Architecture diagram (PNG + .excalidraw source)
 ├── frontend/
 │   ├── src/
 │   │   ├── App.tsx              # Router and layout
@@ -506,7 +579,7 @@ aws-financial-services-advisor/
 │   │       ├── Dashboard/       # Customer dashboard, sidebar, alerts
 │   │       ├── Investigation/   # Investigation panel
 │   │       └── Graph/           # Graph visualization
-│   ├── package.json             # Dependencies (incl. framer-motion)
+│   ├── package.json             # Frontend dependencies
 │   └── vite.config.ts           # Vite config with API proxy
 ../data/                         # Shared sample data (sibling directory)
 │   ├── customers.json           # 3 customers (low/medium/high risk)
@@ -515,7 +588,7 @@ aws-financial-services-advisor/
 │   ├── sanctions.json           # 3 sanctioned entities
 │   ├── pep.json                 # 3 PEPs + 1 relative
 │   ├── alerts.json              # 3 compliance alerts
-│   └── load_sample_data.py      # Neo4j data loader script
+│   └── load_sample_data.py      # Idempotent Neo4j loader (+ the --adopt phase)
 ├── .env.example                 # Environment template
 ├── Makefile                     # Development commands
 └── README.md                    # Project overview

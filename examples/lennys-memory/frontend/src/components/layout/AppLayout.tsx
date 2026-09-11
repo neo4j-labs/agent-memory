@@ -153,10 +153,10 @@ export function AppLayout({
                 fontFamily="heading"
               >
                 <Text as="span" hideBelow="sm">
-                  Lenny's Memory
+                  Lenny&apos;s Memory
                 </Text>
                 <Text as="span" hideFrom="sm">
-                  Lenny's Memory
+                  Lenny&apos;s Memory
                 </Text>
               </Text>
               <Badge

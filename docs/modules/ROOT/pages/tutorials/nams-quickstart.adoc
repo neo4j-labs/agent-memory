@@ -6,10 +6,19 @@
 :icons: font
 :source-highlighter: highlight.js
 
-A hands-on, five-minute walkthrough: install, configure, store some memory, and retrieve it — using the hosted **Neo4j Agent Memory Service (NAMS)** backend.
+A hands-on, five-minute walkthrough: install, configure, store some memory, and read it back — using the hosted **Neo4j Agent Memory Service (NAMS)** backend.
 
 [.lead]
-By the end of this tutorial you'll have a Python script that stores messages, an entity, and a reasoning trace in the hosted NAMS service, and reads them back via portable Cypher. You won't run any database — NAMS handles that for you.
+By the end of this tutorial you'll have a Python script that stores a conversation, an entity, and a reasoning trace in the hosted service, waits for NAMS to finish extracting entities from your messages, and reads everything back — including portable Cypher. You won't run a database, configure embeddings, or supply an extraction model.
+
+[TIP]
+====
+This tutorial builds the same script as the runnable example
+https://github.com/neo4j-labs/agent-memory/tree/main/examples/nams-quickstart[`examples/nams-quickstart/`],
+which adds `.env` loading and is covered by an offline smoke test. Clone the repo
+and run `uv run python examples/nams-quickstart/main.py` if you'd rather read the
+finished script first.
+====
 
 == What you'll need
 
@@ -23,14 +32,14 @@ In a fresh virtualenv:
 
 [source,bash]
 ----
-uv pip install 'neo4j-agent-memory[nams]>=0.5.0'
+uv pip install 'neo4j-agent-memory[nams]>=0.5.0,<0.7'
 ----
 
 Or with `pip`:
 
 [source,bash]
 ----
-pip install 'neo4j-agent-memory[nams]>=0.5.0'
+pip install 'neo4j-agent-memory[nams]>=0.5.0,<0.7'
 ----
 
 == 2. Configure
@@ -42,68 +51,212 @@ Set your API key in the environment:
 export MEMORY_API_KEY=nams_xxxxxxxxxxxx  # your real key
 ----
 
-That's all the configuration needed. With `MEMORY_API_KEY` set, `MemoryClient()` automatically picks NAMS as the backend.
+That's all the configuration most keys need. Two optional variables exist:
 
-== 3. Write the script
+`MEMORY_ENDPOINT`:: Point at a private deployment instead of `+https://memory.neo4jlabs.com/v1+`.
+`MEMORY_WORKSPACE_ID`:: **Required by deployments that scope by header** (the development/staging service). It is sent as the `X-Workspace-Id` header; without it such an endpoint answers `403`. Leave it unset on production keys.
+
+With `MEMORY_API_KEY` set, `NamsSettings()` reads all three.
+
+== 3. Connect
 
 Create `quickstart.py`:
 
 [source,python]
 ----
 import asyncio
-from neo4j_agent_memory import MemoryClient
+
+from neo4j_agent_memory import NamsSettings, connect
+from neo4j_agent_memory.core.exceptions import (
+    AuthenticationError,
+    NotSupportedError,
+    RateLimitError,
+    TransportError,
+)
+
+CONVERSATION_NAME = "nams-quickstart-demo"
+
+TRANSCRIPT = [
+    {"role": "user", "content": "Hi, I'm Alice."},
+    {"role": "assistant", "content": "Nice to meet you, Alice!"},
+    {
+        "role": "user",
+        "content": "I love Italian food and dislike crowded restaurants.",
+    },
+]
 
 
 async def main() -> None:
-    async with MemoryClient() as client:
-        conversation = await client.short_term.create_conversation("tutorial-demo")
-        conversation_id = str(conversation.id)
-
-        # Short-term memory
-        await client.short_term.add_message(
-            conversation_id, "user", "Hi, I'm Alice."
-        )
-        await client.short_term.add_message(
-            conversation_id, "user", "I love Italian food."
-        )
-
-        # Long-term memory (entities are supported on NAMS; preferences are bolt-only)
-        entity = await client.long_term.add_entity(
-            "Alice", "PERSON", description="The user"
-        )
-        if isinstance(entity, tuple):
-            entity = entity[0]
-
-        # Reasoning memory
-        trace = await client.reasoning.start_trace(
-            conversation_id, "Recommend dinner"
-        )
-        step = await client.reasoning.add_step(
-            trace.id, thought="Alice likes Italian"
-        )
-        await client.reasoning.record_tool_call(
-            step.id,
-            tool_name="search",
-            arguments={"cuisine": "Italian"},
-            result=["Da Mario"],
-        )
-        await client.reasoning.complete_trace(
-            trace.id, outcome="Suggested Da Mario", success=True
-        )
-
-        # Read everything back
-        conv = await client.short_term.get_conversation(conversation_id)
-        traces = await client.reasoning.get_session_traces(conversation_id)
-
-        print(f"Messages: {len(conv.messages)}")
-        print(f"Entity stored: {entity.name}")
-        print(f"Traces: {[t.task for t in traces]}")
+    settings = NamsSettings()
+    client = await connect(settings)
+    print(f"Connected to {settings.nams.endpoint} (backend={client.backend})")
+    try:
+        ...  # steps 4-9 go here
+    finally:
+        await client.close()
 
 
 asyncio.run(main())
 ----
 
-== 4. Run it
+`NamsSettings` is the hosted twin of `BoltSettings`: no Neo4j URI, no embedding provider, no LLM. `connect()` returns a NAMS-typed client, so the hosted-only calls below are statically visible instead of needing a capability probe. It hands back an *already-connected* client rather than a context manager, so you own closing it — hence the `try`/`finally`. Every snippet below replaces the `...` placeholder, at that indentation.
+
+== 4. Short-term memory
+
+NAMS mints conversation ids server-side, so create the conversation first and use the id it returns everywhere else. `bulk_add_messages` sends the whole transcript in one round-trip (100 messages max per call):
+
+[source,python]
+----
+        conversation = await client.short_term.create_conversation(CONVERSATION_NAME)
+        conversation_id = str(conversation.id)
+        print(f"\nConversation: {conversation_id}")
+
+        stored = await client.short_term.bulk_add_messages(conversation_id, TRANSCRIPT)
+        print(f"Stored {len(stored)} messages in one request:")
+        for message in stored:
+            print(f"   {message.role.value:>9}: {message.content}")
+----
+
+== 5. Long-term memory — and asynchronous extraction
+
+Two things write to long-term memory here. One is your own `add_entity` call. The other is NAMS: it extracts entities from the messages you just stored, in a *background pipeline*.
+
+That pipeline is the one NAMS behaviour to internalise. A write returns before its entities are searchable, so a read immediately afterwards can legitimately come back empty. Don't sleep — await it:
+
+[source,python]
+----
+        entity = await client.long_term.add_entity(
+            "Alice",
+            "PERSON",
+            description="The user introducing themselves.",
+        )
+        print(f"\nWrote entity: {entity.display_name} ({entity.full_type})")
+
+        status = await client.short_term.get_extraction_status(conversation_id)
+        print(f"Extraction right after the write: {status.pending_count} message(s) pending")
+        settled = await client.long_term.wait_for_extraction(
+            session_id=conversation_id,
+            expected_names=["Alice"],
+            timeout=30.0,
+        )
+        extracted = await client.long_term.search_entities("Alice", limit=5)
+        print(f"Extraction settled: {settled}; searchable entities: {len(extracted)}")
+        for found in extracted:
+            print(f"   {found.display_name} ({found.full_type})")
+----
+
+`get_extraction_status(conversation_id)` is the authoritative rollup (`pending_count`, `is_complete`). `wait_for_extraction` polls it and then confirms the named entities are searchable; it returns `False` on timeout rather than raising, so you can branch instead of failing.
+
+NAMS also resolves before it creates: a near-duplicate name merges onto the existing entity, and the canonical one is what comes back.
+
+== 6. Server-assembled context and the graph
+
+The reason to use a hosted backend: the three-tier view (reflections over observations over recent messages) is built for you, and the graph around an entity is one call:
+
+[source,python]
+----
+        context = await client.short_term.get_context("Italian food", session_id=conversation_id)
+        observations = await client.short_term.get_observations(conversation_id)
+        reflections = await client.short_term.get_reflections(conversation_id)
+        print(
+            f"\nContext block: {len(context)} chars, "
+            f"{len(observations)} observation(s), {len(reflections)} reflection(s)"
+        )
+
+        if extracted:
+            neighborhood = await client.long_term.expand_graph(str(extracted[0].id))
+            print(
+                f"Neighborhood of {extracted[0].display_name}: "
+                f"{len(neighborhood['nodes'])} node(s), {len(neighborhood['edges'])} edge(s)"
+            )
+----
+
+== 7. Reasoning memory
+
+Record a trace with a step and a tool call, then read the steps back from the server so a silent write failure is visible:
+
+[source,python]
+----
+        trace = await client.reasoning.start_trace(
+            session_id=conversation_id,
+            task="Recommend a restaurant for Alice.",
+        )
+        step = await client.reasoning.add_step(
+            trace.id,
+            thought="Alice likes Italian and dislikes crowds.",
+            action="Look up quiet Italian places.",
+            observation="Found 3 candidates.",
+        )
+        await client.reasoning.record_tool_call(
+            step.id,
+            tool_name="restaurant_search",
+            arguments={"cuisine": "Italian", "noise_level": "quiet"},
+            result=["Da Mario", "Trattoria Bella", "Osteria del Sole"],
+        )
+        await client.reasoning.complete_trace(
+            trace.id, outcome="Suggested 3 restaurants.", success=True
+        )
+
+        traces = await client.reasoning.get_session_traces(conversation_id)
+        steps = traces[0].steps if traces else []
+        print(f"\nServer-side reasoning steps for this conversation: {len(steps)}")
+        for number, recorded in enumerate(steps, start=1):
+            print(f"   step {number}: {len(recorded.tool_calls)} tool call(s)")
+----
+
+[NOTE]
+====
+NAMS stores steps and tool calls per conversation and has no Trace entity, so
+`get_session_traces` re-assembles a single aggregate trace client-side with the
+literal task `"Aggregated session reasoning"`. Assert on the step count, not on
+`traces[0].task`.
+====
+
+== 8. The active ontology
+
+The ontology is the schema server-side extraction is validated against. It is a NAMS-only accessor:
+
+[source,python]
+----
+        try:
+            active = await client.ontology.get_active()
+        except NotSupportedError as exc:
+            print(f"\nNo active ontology bound for this workspace: {exc}")
+        else:
+            print(
+                f"\nActive ontology: {active.document.domain.name} "
+                f"(revision {active.revision}, {active.validation_mode}) — "
+                f"{len(active.document.entity_types)} entity type(s)"
+            )
+----
+
+See xref:tutorials/ontology-quickstart.adoc[Tutorial: Ontologies] for cloning, editing, and activating one.
+
+== 9. Portable read-only Cypher
+
+`client.query.cypher` works on both backends. Write keywords are rejected client-side (a `ValueError`) before any request is sent; the NAMS endpoint is read-only by contract. Catch the transport errors narrowly so a real failure isn't mislabelled as a missing feature:
+
+[source,python]
+----
+        try:
+            rows = await client.query.cypher(
+                "MATCH (e:Entity {name: $name}) RETURN e.name AS name LIMIT 1",
+                {"name": "Alice"},
+            )
+        except NotSupportedError as exc:
+            print(f"Cypher is not available on this deployment: {exc}")
+        except (AuthenticationError, RateLimitError, TransportError) as exc:
+            print(f"Cypher request failed: {exc}")
+            raise
+        else:
+            print(f"Cypher round-trip: {rows}")
+
+        print("\nDone. Your memory graph is at https://memory.neo4jlabs.com.")
+----
+
+That's the last of the `try` block — the `finally: await client.close()` and `asyncio.run(main())` from step 3 close the script.
+
+== 10. Run it
 
 [source,bash]
 ----
@@ -114,46 +267,50 @@ Expected output:
 
 [source,text]
 ----
-Messages: 2
-Entity stored: Alice
-Traces: ['Recommend dinner']
+Connected to https://memory.neo4jlabs.com/v1 (backend=nams)
+
+Conversation: 3f6b2c51-6d0e-4f0a-9a3a-2c1b8e0f7a11
+Stored 3 messages in one request:
+        user: Hi, I'm Alice.
+   assistant: Nice to meet you, Alice!
+        user: I love Italian food and dislike crowded restaurants.
+
+Wrote entity: Alice (PERSON)
+Extraction right after the write: 3 message(s) pending
+Extraction settled: True; searchable entities: 2
+   Alice (PERSON)
+   Italian food (OBJECT)
+
+Context block: 214 chars, 1 observation(s), 0 reflection(s)
+Neighborhood of Alice: 2 node(s), 1 edge(s)
+
+Server-side reasoning steps for this conversation: 1
+   step 1: 1 tool call(s)
+
+Active ontology: General (revision 1, permissive) — 5 entity type(s)
+Cypher round-trip: [{'name': 'Alice'}]
+
+Done. Your memory graph is at https://memory.neo4jlabs.com.
 ----
 
-== 5. Inspect with Cypher
-
-NAMS exposes a read-only Cypher endpoint via `client.query.cypher`. Add this snippet to the script:
-
-[source,python]
-----
-        # Portable read-only Cypher
-        rows = await client.query.cypher(
-            "MATCH (e:Entity {name: $name}) RETURN e.name AS name, e.type AS type",
-            {"name": "Alice"},
-        )
-        for row in rows:
-            print(row)
-----
-
-Run again. You should see:
-
-[source,text]
-----
-{'name': 'Alice', 'type': 'PERSON'}
-----
-
-The same Cypher query works on bolt too — `client.query.cypher` is backend-agnostic.
+Your counts will differ: extracted entities depend on what the server pulls out of the transcript, entity types on your active ontology, and observations and reflections accumulate over a conversation.
 
 == What just happened?
 
-* `MemoryClient()` with no arguments inspected the environment, saw `MEMORY_API_KEY`, and built a NAMS-backed client.
-* Every method call became an HTTPS POST/GET to `+https://memory.neo4jlabs.com/v1/...+`.
-* NAMS embedded your messages, deduplicated the entity, and stored the trace — all server-side.
+* `NamsSettings()` read `MEMORY_API_KEY` from the environment and selected the hosted backend; `connect()` returned a NAMS-typed client.
+* Every method call became an HTTPS request to `+https://memory.neo4jlabs.com/v1/...+`.
+* NAMS embedded your messages, extracted entities from them asynchronously, resolved your entity against what already existed, and stored the reasoning steps — all server-side.
 * `client.query.cypher` ran a read-only query against the hosted graph.
 
-You didn't touch Neo4j. You didn't configure embeddings. You didn't run schema setup. NAMS did all of that.
+You didn't touch Neo4j, configure embeddings, or run schema setup.
+
+== Which calls are portable?
+
+Steps 4, the entity write in 5, 7 and 9 are the backend-agnostic Protocol: swap `NamsSettings()` for `BoltSettings(neo4j=...)` and they run against your own Neo4j unchanged. `get_extraction_status`, `get_observations`, `get_reflections`, `expand_graph` and `client.ontology` are hosted-only. On bolt, extraction is synchronous (`wait_for_extraction` returns immediately) and `add_entity` returns `(entity, dedup_result)` rather than an entity.
 
 == What now?
 
+* https://github.com/neo4j-labs/agent-memory/tree/main/examples/nams-quickstart[`examples/nams-quickstart/`] — the runnable version of this script.
 * xref:how-to/use-nams.adoc[How-to: Use NAMS] — full config reference.
 * xref:how-to/migrate-to-nams.adoc[How-to: Migrate to NAMS] — port existing bolt code.
 * xref:explanation/backends.adoc[Bolt vs NAMS] — when to choose which.
@@ -161,6 +318,6 @@ You didn't touch Neo4j. You didn't configure embeddings. You didn't run schema s
 
 == Cleanup
 
-Want to wipe your tutorial data? It lives in your NAMS workspace; manage it through the NAMS UI at https://memory.neo4jlabs.com.
+Your tutorial data lives in your NAMS workspace; manage it through the dashboard at https://memory.neo4jlabs.com.
 
-For bolt-side cleanup you'd run a `MATCH (n) DETACH DELETE n` Cypher; on NAMS, that write-Cypher is rejected client-side. Use the NAMS dashboard or `clear_session(conversation_id)` for individual conversations.
+Write Cypher (`MATCH (n) DETACH DELETE n`) is rejected client-side before a request is sent, so use the dashboard, or `clear_session(conversation_id)` for a single conversation.

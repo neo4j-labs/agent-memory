@@ -1,4 +1,14 @@
 {
   "extends": "../tsconfig.base.json",
-  "include": ["src/**/*"]
+  "compilerOptions": {
+    // The shared base models a bundler; these scripts run on the Node ESM
+    // loader (and `ai` 7 is ESM-only), so model that instead.
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "verbatimModuleSyntax": true
+  },
+  "include": ["src/**/*", "test/**/*"]
 }

@@ -1,30 +1,58 @@
 """Microsoft Agent Framework agent for the retail assistant.
 
-This module creates and configures the shopping assistant agent with:
-- Neo4j memory integration (context provider, message store)
-- Product search and recommendation tools (callable FunctionTools)
-- Preference learning capabilities
+Targets the Agent Framework 1.x GA line (``agent-framework-core>=1.17``
+plus ``agent-framework-openai`` for the chat client).
+
+What this module wires up:
+
+* a chat client (OpenAI, or Azure OpenAI through the same class),
+* the memory tools shipped by ``neo4j_agent_memory`` —
+  ``create_memory_tools(memory, include_gds_tools=...)``,
+* the catalog tools, which are **thin adapters** over ``backend/tools/*.py``
+  (one implementation per operation; the REST API in ``main.py`` calls the
+  same functions),
+* ``memory.context_provider``, which owns conversation persistence. Nothing
+  here calls ``memory.save_message()``: ``Neo4jContextProvider.after_run()``
+  writes the user turn and the assistant turn, so doing both would store
+  every message twice.
+* a reasoning trace per turn, recorded through ``client.reasoning`` so it can
+  carry ``triggered_by_message_id``, ``touched_entities`` audit edges and a
+  structured ``TraceOutcome`` — including on failure.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING, Annotated, AsyncGenerator
+import time
+from collections.abc import AsyncGenerator
+from typing import Annotated, Any
+from uuid import UUID
 
 from agent_framework import Agent, FunctionTool, Message, tool
-from agent_framework.azure import AzureOpenAIResponsesClient
 from agent_framework.openai import OpenAIChatClient
 from memory_config import Settings
+from tools import (
+    add_to_cart,
+    check_inventory,
+    explain_product_connection,
+    find_alternatives,
+    get_bought_together,
+    get_cart,
+    get_product_details,
+    get_recommendations,
+    get_related_products,
+    remove_from_cart,
+    search_products,
+)
 
+from neo4j_agent_memory.embeddings.base import Embedder
 from neo4j_agent_memory.integrations.microsoft_agent import (
     Neo4jMicrosoftMemory,
     create_memory_tools,
-    record_agent_trace,
 )
-
-if TYPE_CHECKING:
-    from agent_framework import BaseChatClient
+from neo4j_agent_memory.memory.reasoning import ToolCallStatus
+from neo4j_agent_memory.schema import EntityRef, TraceOutcome
 
 logger = logging.getLogger(__name__)
 
@@ -41,10 +69,10 @@ SYSTEM_PROMPT = """You are a helpful shopping assistant for an online retail sto
 
 Key behaviors:
 - Always be helpful, friendly, and professional
-- When customers express preferences, acknowledge and remember them
-- Use the memory tools to save important preferences and recall relevant information
+- When customers express preferences, acknowledge them AND call remember_preference
+  so they survive to the next conversation
 - When recommending products, explain why they match the customer's needs
-- If a product is out of stock, suggest alternatives
+- If a product is out of stock, use find_alternatives to suggest substitutes
 - Ask clarifying questions when needs are unclear
 
 You have access to memory tools to:
@@ -56,256 +84,338 @@ You have access to memory tools to:
 Always use the appropriate tools to provide personalized assistance."""
 
 
-def get_chat_client() -> "BaseChatClient":
-    """Create the chat client based on settings."""
-    if settings.azure_openai_api_key and settings.azure_openai_endpoint:
-        # Use Azure OpenAI
-        return AzureOpenAIResponsesClient(
-            api_key=settings.azure_openai_api_key,
-            endpoint=settings.azure_openai_endpoint,
-            deployment_name=settings.azure_openai_deployment or "gpt-4",
-        )
-    elif settings.openai_api_key:
-        # Use OpenAI directly
+def get_chat_client() -> OpenAIChatClient:
+    """Create the chat client based on settings.
+
+    At Agent Framework 1.x GA a single ``OpenAIChatClient`` serves both OpenAI
+    and Azure OpenAI: passing ``azure_endpoint`` switches it to Azure routing.
+    The old ``agent_framework.azure.AzureOpenAIResponsesClient`` is deprecated
+    and lives in a separate pre-release distribution, so it is not used here.
+    """
+    if settings.azure_openai_endpoint:
         return OpenAIChatClient(
-            api_key=settings.openai_api_key,
-            model_id="gpt-4-turbo-preview",
+            model=settings.azure_openai_deployment or settings.openai_model,
+            azure_endpoint=settings.azure_openai_endpoint,
+            api_key=(
+                settings.azure_openai_api_key.get_secret_value()
+                if settings.azure_openai_api_key
+                else None
+            ),
+            api_version=settings.azure_openai_api_version,
         )
-    else:
-        raise ValueError(
-            "No OpenAI configuration found. Set OPENAI_API_KEY or Azure OpenAI settings."
+    if settings.openai_api_key:
+        return OpenAIChatClient(
+            model=settings.openai_model,
+            api_key=settings.openai_api_key.get_secret_value(),
         )
+    raise ValueError(
+        "No OpenAI configuration found. Set OPENAI_API_KEY, or AZURE_OPENAI_ENDPOINT "
+        "plus AZURE_OPENAI_API_KEY. See backend/.env.example."
+    )
 
 
-def get_product_tools(memory: Neo4jMicrosoftMemory) -> list[FunctionTool]:
-    """Get product-related callable tools bound to a memory instance."""
+def get_product_tools(
+    memory: Neo4jMicrosoftMemory,
+    embedder: Embedder | None = None,
+) -> list[FunctionTool]:
+    """Adapt the catalog functions in ``backend/tools/`` into agent tools.
+
+    Each wrapper binds the client (and, for search, the embedder) and leaves
+    the model-visible signature to the annotated parameters — the same
+    ``_bind_tool``-style pattern the Google ADK example uses. The Cypher lives
+    in ``tools/*.py`` only, so the REST API and the agent cannot drift.
+    """
     client = memory.memory_client
+    session_id = memory.session_id
 
-    @tool(name="search_products", description="Search the product catalog for items matching a query. Use when customers ask about products.")
-    async def search_products(
+    @tool(
+        name="search_products",
+        description=(
+            "Search the product catalog for items matching a query. "
+            "Use when customers ask about products."
+        ),
+    )
+    async def search_products_tool(
         query: Annotated[str, "Search query describing the product"],
-        category: Annotated[str | None, "Optional category filter (e.g., 'shoes', 'electronics')"] = None,
+        category: Annotated[
+            str | None, "Optional category filter (e.g., 'Running Shoes', 'Apparel')"
+        ] = None,
         brand: Annotated[str | None, "Optional brand filter"] = None,
         max_price: Annotated[float | None, "Optional maximum price filter"] = None,
     ) -> str:
-        """Search products in the catalog."""
-        # Build filter conditions
-        conditions = []
-        params = {"query": query, "limit": 10}
+        result = await search_products(
+            client,
+            query,
+            category=category,
+            brand=brand,
+            max_price=max_price,
+            embedder=embedder,
+        )
+        return json.dumps(result, default=str)
 
-        if category:
-            conditions.append("p.category = $category")
-            params["category"] = category
-        if brand:
-            conditions.append("p.brand = $brand")
-            params["brand"] = brand
-        if max_price:
-            conditions.append("p.price <= $max_price")
-            params["max_price"] = max_price
-
-        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-
-        # Try vector search first
-        try:
-            embedding = await client.embeddings.embed(query)
-            cypher = f"""
-            CALL db.index.vector.queryNodes('product_embedding', 10, $embedding)
-            YIELD node as p, score
-            {where_clause}
-            RETURN p.name as name, p.description as description, p.price as price,
-                   p.category as category, p.brand as brand, p.in_stock as in_stock,
-                   elementId(p) as id, score
-            ORDER BY score DESC
-            LIMIT 10
-            """
-            params["embedding"] = embedding
-            result = await client.graph.execute_read(cypher, params)
-        except Exception:
-            # Fallback to text search
-            cypher = f"""
-            MATCH (p:Product)
-            WHERE (p.name CONTAINS $query OR p.description CONTAINS $query)
-            {" AND " + " AND ".join(conditions) if conditions else ""}
-            RETURN p.name as name, p.description as description, p.price as price,
-                   p.category as category, p.brand as brand, p.in_stock as in_stock,
-                   elementId(p) as id, 1.0 as score
-            LIMIT 10
-            """
-            result = await client.graph.execute_read(cypher, params)
-
-        products = [dict(r) for r in result]
-        return json.dumps({"products": products, "count": len(products)})
-
-    @tool(name="get_product_details", description="Get detailed information about a specific product by ID.")
-    async def get_product_details(
+    @tool(
+        name="get_product_details",
+        description="Get detailed information about a specific product by ID.",
+    )
+    async def get_product_details_tool(
         product_id: Annotated[str, "The product ID"],
     ) -> str:
-        """Get detailed product information."""
-        cypher = """
-        MATCH (p:Product)
-        WHERE elementId(p) = $product_id OR p.id = $product_id
-        RETURN p.name as name, p.description as description, p.price as price,
-               p.category as category, p.brand as brand, p.in_stock as in_stock,
-               p.inventory as inventory, p.attributes as attributes,
-               elementId(p) as id
-        """
-        result = await client.graph.execute_read(cypher, {"product_id": product_id})
-        if result:
-            return json.dumps(dict(result[0]))
-        return json.dumps({"error": "Product not found"})
+        product = await get_product_details(client, product_id)
+        return json.dumps(product or {"error": "Product not found"}, default=str)
 
-    @tool(name="get_related_products", description="Find products related to a given product (similar items, accessories, etc).")
-    async def get_related_products(
+    @tool(
+        name="get_related_products",
+        description=(
+            "Find products related to a given product: same category, same brand, "
+            "explicitly similar, frequently bought together, or sharing an attribute."
+        ),
+    )
+    async def get_related_products_tool(
         product_id: Annotated[str, "The product ID to find related items for"],
-        relationship_type: Annotated[str | None, "Type of relationship: similar, accessory, bundle, any"] = None,
+        limit: Annotated[int, "Maximum number of related products"] = 5,
     ) -> str:
-        """Find related products."""
-        rel_type = relationship_type or "any"
+        result = await get_related_products(client, product_id, limit=limit)
+        return json.dumps(result, default=str)
 
-        if rel_type == "any":
-            cypher = """
-            MATCH (p:Product)
-            WHERE elementId(p) = $product_id OR p.id = $product_id
-            CALL (p) {
-                MATCH (p)-[:IN_CATEGORY]->(c)<-[:IN_CATEGORY]-(related:Product)
-                WHERE related <> p
-                RETURN related, 'same category' as reason
-                LIMIT 3
-                UNION
-                MATCH (p)-[:MADE_BY]->(b)<-[:MADE_BY]-(related:Product)
-                WHERE related <> p
-                RETURN related, 'same brand' as reason
-                LIMIT 3
-            }
-            RETURN related.name as name, related.price as price,
-                   elementId(related) as id, reason
-            LIMIT 5
-            """
-        else:
-            rel_map = {
-                "similar": "SIMILAR_TO",
-                "accessory": "ACCESSORY_FOR",
-                "bundle": "BUNDLED_WITH",
-            }
-            rel = rel_map.get(rel_type, "SIMILAR_TO")
-            cypher = f"""
-            MATCH (p:Product)-[:{rel}]-(related:Product)
-            WHERE elementId(p) = $product_id OR p.id = $product_id
-            RETURN related.name as name, related.price as price,
-                   elementId(related) as id, '{rel_type}' as reason
-            LIMIT 5
-            """
+    @tool(
+        name="get_bought_together",
+        description="Get products frequently bought together with a given product.",
+    )
+    async def get_bought_together_tool(
+        product_id: Annotated[str, "The product ID"],
+        limit: Annotated[int, "Maximum number of results"] = 3,
+    ) -> str:
+        result = await get_bought_together(client, product_id, limit=limit)
+        return json.dumps(result, default=str)
 
-        result = await client.graph.execute_read(cypher, {"product_id": product_id})
-        return json.dumps({"related": [dict(r) for r in result]})
+    @tool(
+        name="explain_product_connection",
+        description=(
+            "Explain how two products are connected in the graph "
+            "(shared category, brand, attribute, or a longer path)."
+        ),
+    )
+    async def explain_product_connection_tool(
+        product_id_1: Annotated[str, "First product ID"],
+        product_id_2: Annotated[str, "Second product ID"],
+    ) -> str:
+        result = await explain_product_connection(client, product_id_1, product_id_2)
+        return json.dumps(result, default=str)
 
-    @tool(name="check_inventory", description="Check if a product is in stock and get availability info.")
-    async def check_inventory(
+    @tool(
+        name="check_inventory",
+        description="Check if a product is in stock and get availability info.",
+    )
+    async def check_inventory_tool(
         product_id: Annotated[str, "The product ID to check"],
     ) -> str:
-        """Check product inventory status."""
-        cypher = """
-        MATCH (p:Product)
-        WHERE elementId(p) = $product_id OR p.id = $product_id
-        RETURN p.name as name, p.in_stock as in_stock, p.inventory as quantity
-        """
-        result = await client.graph.execute_read(cypher, {"product_id": product_id})
-        if result:
-            r = result[0]
-            return json.dumps({
-                "name": r["name"],
-                "in_stock": r["in_stock"],
-                "quantity": r["quantity"] or 0,
-                "status": "Available" if r["in_stock"] else "Out of Stock",
-            })
-        return json.dumps({"error": "Product not found"})
+        result = await check_inventory(client, product_id)
+        return json.dumps(result, default=str)
 
-    @tool(name="get_recommendations", description="Get personalized product recommendations for the customer based on their preferences and history.")
-    async def get_recommendations(
-        category: Annotated[str | None, "Optional category to get recommendations for"] = None,
+    @tool(
+        name="find_alternatives",
+        description="Find in-stock alternatives for a product that is unavailable.",
+    )
+    async def find_alternatives_tool(
+        product_id: Annotated[str, "The out-of-stock product ID"],
+        limit: Annotated[int, "Maximum number of alternatives"] = 3,
+    ) -> str:
+        result = await find_alternatives(client, product_id, limit=limit)
+        return json.dumps(result, default=str)
+
+    @tool(
+        name="get_recommendations",
+        description=(
+            "Get personalized product recommendations based on stored preferences "
+            "and the products discussed in this session."
+        ),
+    )
+    async def get_recommendations_tool(
+        category: Annotated[str | None, "Optional category to recommend within"] = None,
         limit: Annotated[int, "Maximum number of recommendations"] = 5,
     ) -> str:
-        """Get personalized product recommendations."""
-        # Get user preferences from memory
-        preferences = await client.long_term.search_preferences(
-            query=category or "shopping preferences", limit=10
+        result = await get_recommendations(
+            client,
+            user_id=memory.user_id,
+            session_id=session_id,
+            category=category,
+            limit=limit,
         )
-        pref_categories = [p.category for p in preferences]
-        pref_values = [p.preference for p in preferences]
+        return json.dumps(result, default=str)
 
-        # Build recommendation query based on preferences
-        if preferences:
-            cypher = """
-            MATCH (p:Product)
-            WHERE p.in_stock = true
-            AND (p.brand IN $prefs OR p.category IN $categories)
-            RETURN p.name as name, p.price as price, p.category as category,
-                   p.brand as brand, elementId(p) as id,
-                   'Based on your preferences' as reason
-            LIMIT $limit
-            """
-            params = {
-                "prefs": pref_values,
-                "categories": pref_categories + ([category] if category else []),
-                "limit": limit,
-            }
-        else:
-            # No preferences yet, return popular items
-            cypher = """
-            MATCH (p:Product)
-            WHERE p.in_stock = true
-            RETURN p.name as name, p.price as price, p.category as category,
-                   p.brand as brand, elementId(p) as id,
-                   'Popular item' as reason
-            ORDER BY p.popularity DESC
-            LIMIT $limit
-            """
-            params = {"limit": limit}
+    @tool(name="get_cart", description="Show the customer's current shopping cart.")
+    async def get_cart_tool() -> str:
+        result = await get_cart(client, session_id)
+        return json.dumps(result, default=str)
 
-        if category:
-            cypher = cypher.replace(
-                "WHERE p.in_stock = true",
-                "WHERE p.in_stock = true AND p.category = $category",
-            )
-            params["category"] = category
+    @tool(name="add_to_cart", description="Add a product to the customer's cart.")
+    async def add_to_cart_tool(
+        product_id: Annotated[str, "The product ID to add"],
+        quantity: Annotated[int, "How many to add"] = 1,
+    ) -> str:
+        result = await add_to_cart(client, session_id, product_id, quantity=quantity)
+        return json.dumps(result, default=str)
 
-        result = await client.graph.execute_read(cypher, params)
-        return json.dumps({"recommendations": [dict(r) for r in result]})
+    @tool(name="remove_from_cart", description="Remove a product from the cart.")
+    async def remove_from_cart_tool(
+        product_id: Annotated[str, "The product ID to remove"],
+    ) -> str:
+        result = await remove_from_cart(client, session_id, product_id)
+        return json.dumps(result, default=str)
 
     return [
-        search_products,
-        get_product_details,
-        get_related_products,
-        check_inventory,
-        get_recommendations,
+        search_products_tool,
+        get_product_details_tool,
+        get_related_products_tool,
+        get_bought_together_tool,
+        explain_product_connection_tool,
+        check_inventory_tool,
+        find_alternatives_tool,
+        get_recommendations_tool,
+        get_cart_tool,
+        add_to_cart_tool,
+        remove_from_cart_tool,
     ]
 
 
-async def create_agent(memory: Neo4jMicrosoftMemory) -> Agent:
+async def create_agent(
+    memory: Neo4jMicrosoftMemory,
+    embedder: Embedder | None = None,
+) -> Agent:
     """Create a shopping assistant agent with Neo4j memory."""
     chat_client = get_chat_client()
 
-    # Get memory tools (callable FunctionTools)
-    memory_tools = create_memory_tools(
-        memory,
-        include_gds_tools=bool(memory.gds),
-    )
+    # Memory tools shipped by the library (search_memory, remember_preference,
+    # recall_preferences, search_knowledge, remember_fact, find_similar_tasks,
+    # plus GDS-backed tools when a GDSConfig is enabled).
+    memory_tools = create_memory_tools(memory, include_gds_tools=bool(memory.gds))
 
-    # Get product tools (callable FunctionTools)
-    product_tools = get_product_tools(memory)
+    product_tools = get_product_tools(memory, embedder)
 
-    # Combine all tools
-    all_tools = memory_tools + product_tools
-
-    # Create agent with context provider
-    agent = chat_client.as_agent(
+    return chat_client.as_agent(
         name="ShoppingAssistant",
         instructions=SYSTEM_PROMPT,
-        tools=all_tools,
+        tools=[*memory_tools, *product_tools],
+        # The provider injects memory before the model call and persists the
+        # turn afterwards. Do not also write messages by hand.
         context_providers=[memory.context_provider],
     )
 
-    return agent
+
+def _product_names(result_text: str, limit: int = 5) -> list[str]:
+    """Best-effort product names out of a tool result payload.
+
+    Used to build ``(:ReasoningStep)-[:TOUCHED]->(:Entity)`` audit edges, so a
+    later question like "which tool call touched the Nike Pegasus 40?" is a
+    one-hop query.
+    """
+    try:
+        payload = json.loads(result_text)
+    except (TypeError, ValueError):
+        return []
+
+    names: list[str] = []
+
+    def walk(node: Any) -> None:
+        if len(names) >= limit:
+            return
+        if isinstance(node, dict):
+            name = node.get("name")
+            if isinstance(name, str) and name and name not in names:
+                names.append(name)
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(payload)
+    return names
+
+
+async def _latest_user_message_id(
+    memory: Neo4jMicrosoftMemory,
+    content: str,
+) -> UUID | None:
+    """Find the id of the just-persisted user message, for INITIATED_BY.
+
+    The context provider writes the turn during ``agent.run()``, so by the
+    time the stream is finished the message exists and can be linked.
+    """
+    try:
+        conversation = await memory.memory_client.short_term.get_conversation(
+            memory.session_id, limit=10
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Could not read back the conversation for trace linking: %s", exc)
+        return None
+
+    for message in reversed(conversation.messages):
+        role = getattr(message.role, "value", message.role)
+        if role == "user" and message.content == content:
+            return message.id
+    return None
+
+
+async def _record_trace(
+    memory: Neo4jMicrosoftMemory,
+    task: str,
+    response: str,
+    tool_calls: list[dict[str, Any]],
+    error: Exception | None,
+    started: float,
+) -> None:
+    """Record one turn as a reasoning trace with audit edges.
+
+    ``record_agent_trace()`` from the integration is the one-call version, but
+    it exposes neither ``touched_entities`` nor ``TraceOutcome``, so this drops
+    to ``client.reasoning`` directly. Failures are recorded too — a trace store
+    that only ever contains successes teaches the agent nothing.
+    """
+    client = memory.memory_client
+    message_id = await _latest_user_message_id(memory, task)
+
+    trace = await client.reasoning.start_trace(
+        memory.session_id,
+        task=task,
+        triggered_by_message_id=message_id,
+        metadata={"user_id": memory.user_id} if memory.user_id else None,
+    )
+
+    touched: list[EntityRef] = []
+    step = await client.reasoning.add_step(
+        trace.id,
+        thought="Answer the shopper's question using the catalog and stored memory.",
+        action=f"{len(tool_calls)} tool call(s)" if tool_calls else "direct answer",
+        observation=response[:500] if response else None,
+    )
+
+    for call in tool_calls:
+        entity_refs = [
+            EntityRef(name=name, type="OBJECT") for name in _product_names(call.get("result", ""))
+        ]
+        touched.extend(entity_refs)
+        await client.reasoning.record_tool_call(
+            step.id,
+            tool_name=call["name"],
+            arguments=call.get("arguments") or {},
+            result=call.get("result"),
+            status=ToolCallStatus.SUCCESS,
+            message_id=message_id,
+            touched_entities=entity_refs or None,
+        )
+
+    outcome = TraceOutcome(
+        success=error is None,
+        summary=(response[:500] if error is None else str(error)[:500]) or "no response",
+        error_kind=type(error).__name__ if error else None,
+        related_entities=touched[:10],
+        metrics={
+            "latency_ms": round((time.monotonic() - started) * 1000, 1),
+            "tools_called": float(len(tool_calls)),
+        },
+    )
+    await client.reasoning.complete_trace(trace.id, outcome=outcome)
 
 
 async def run_agent_stream(
@@ -325,77 +435,85 @@ async def run_agent_stream(
         - token: {"content": str} - Response token
         - tool_call: {"name": str, "arguments": str} - Tool invocation
         - tool_result: {"name": str, "result": str} - Tool result
-        - done: {"session_id": str} - Completion
         - error: {"error": str} - Error
+
+    ``main.py`` appends the terminating ``done`` event.
     """
-    tool_calls_for_trace = []
+    started = time.monotonic()
+    tool_calls_for_trace: list[dict[str, Any]] = []
+    # function_result content carries only the call_id, so remember which name
+    # each id belongs to as the calls stream in.
+    call_names: dict[str, str] = {}
+    call_arguments: dict[str, Any] = {}
+    full_response = ""
+    failure: Exception | None = None
 
     try:
-        # Save user message first
-        await memory.save_message("user", message)
-
-        # Create user message
+        # Messages are persisted by Neo4jContextProvider.after_run(); do not
+        # double-write them here.
         user_msg = Message("user", [message])
 
-        # Stream agent response — framework auto-invokes callable tools
-        full_response = ""
         async for update in agent.run(user_msg, stream=True):
-            # Check for text content
             if update.text:
                 full_response += update.text
-                yield {
-                    "event": "token",
-                    "data": json.dumps({"content": update.text}),
-                }
+                yield {"event": "token", "data": json.dumps({"content": update.text})}
 
-            # Observe tool calls and results (framework handles execution)
             for content in update.contents:
                 if content.type == "function_call":
+                    call_names[str(content.call_id)] = content.name or "unknown_tool"
+                    call_arguments[str(content.call_id)] = content.arguments
                     yield {
                         "event": "tool_call",
-                        "data": json.dumps({
-                            "name": content.name,
-                            "arguments": content.arguments,
-                        }),
+                        "data": json.dumps(
+                            {
+                                "call_id": str(content.call_id),
+                                "name": content.name,
+                                "arguments": content.arguments,
+                            },
+                            default=str,
+                        ),
                     }
 
                 elif content.type == "function_result":
-                    tool_calls_for_trace.append({
-                        "name": content.call_id,
-                        "result": content.result,
-                    })
-
+                    call_id = str(content.call_id)
+                    name = call_names.get(call_id, "unknown_tool")
+                    result = "" if content.result is None else str(content.result)
+                    arguments = call_arguments.get(call_id)
+                    if isinstance(arguments, str):
+                        try:
+                            arguments = json.loads(arguments)
+                        except ValueError:
+                            arguments = {"raw": arguments}
+                    tool_calls_for_trace.append(
+                        {
+                            "name": name,
+                            "arguments": arguments if isinstance(arguments, dict) else {},
+                            "result": result,
+                        }
+                    )
                     yield {
                         "event": "tool_result",
-                        "data": json.dumps({
-                            "name": content.call_id,
-                            "result": content.result,
-                        }),
+                        # call_id lets the UI pair a result with its call:
+                        # function_result content carries no tool name of its own.
+                        "data": json.dumps(
+                            {"call_id": call_id, "name": name, "result": result}, default=str
+                        ),
                     }
 
-        # Save assistant response
-        if full_response:
-            await memory.save_message("assistant", full_response)
-
-            # Record trace for learning
-            messages_for_trace = [
-                {"role": "user", "content": message},
-                {"role": "assistant", "content": full_response[:500]},  # Truncate long responses
-            ]
-
-            await record_agent_trace(
-                memory=memory,
-                messages=messages_for_trace,
-                task=message,
-                tool_calls=tool_calls_for_trace,
-                outcome="success",
-                success=True,
-                generate_embedding=True,
-            )
-
     except Exception as e:
+        failure = e
         logger.exception("Error in agent stream")
-        yield {
-            "event": "error",
-            "data": json.dumps({"error": str(e)}),
-        }
+        yield {"event": "error", "data": json.dumps({"error": str(e)})}
+
+    # Record the turn either way: a failed turn is the interesting one.
+    try:
+        await _record_trace(
+            memory,
+            task=message,
+            response=full_response,
+            tool_calls=tool_calls_for_trace,
+            error=failure,
+            started=started,
+        )
+    except Exception as trace_error:  # pragma: no cover - never fail a response on this
+        logger.warning("Could not record reasoning trace: %s", trace_error)

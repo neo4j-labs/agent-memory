@@ -1,26 +1,81 @@
 """Neo4j domain data service for the Financial Advisor.
 
 Provides async methods to query domain-specific data (customers, transactions,
-organizations, alerts, sanctions, PEPs) from Neo4j using the MemoryClient's
-graph client for connection reuse.
+organizations, alerts, sanctions, PEPs) from Neo4j. The service takes the
+:class:`~neo4j_agent_memory.MemoryClient` itself so domain data and agent
+memory share one driver, one database and one connection pool.
+
+Reads and writes take different routes on purpose:
+
+* **reads** go through ``client.query.cypher(...)`` — the portable, read-only
+  validated accessor that works on both the bolt and the hosted (NAMS)
+  backends;
+* **writes** go through ``client.graph.execute_write(...)``, which is
+  **bolt-only**. Arbitrary Cypher writes are not part of the hosted backend's
+  surface, so a NAMS deployment of this app would keep the read paths and move
+  these few writes behind its own API.
 """
 
 from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from neo4j_agent_memory import MemoryClient
 
 logger = logging.getLogger(__name__)
 
+# Memory labels written by neo4j-agent-memory. Used by get_memory_graph() so
+# the "context graph" view actually contains the context graph.
+MEMORY_LABELS = (
+    "Conversation",
+    "Message",
+    "Entity",
+    "Preference",
+    "Fact",
+    "ReasoningTrace",
+    "ReasoningStep",
+    "ToolCall",
+)
+
+#: Domain labels loaded by ``data/load_sample_data.py``.
+DOMAIN_LABELS = (
+    "Customer",
+    "Organization",
+    "Transaction",
+    "Alert",
+    "SanctionedEntity",
+    "PEP",
+    "Investigation",
+)
+
 
 class Neo4jDomainService:
-    """Queries domain data from Neo4j via the MemoryClient graph client."""
+    """Queries domain data from Neo4j via the memory client."""
 
-    def __init__(self, graph_client):
-        """Initialize with a Neo4jClient (from MemoryClient.graph)."""
-        self._graph = graph_client
+    def __init__(self, client: MemoryClient) -> None:
+        """Initialize with the application's :class:`MemoryClient`."""
+        self._client = client
+
+    async def read(self, query: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        """Run a read-only Cypher query through the shared memory client.
+
+        Public because a handful of tool functions in ``src/tools/`` own their
+        own one-off queries. ``client.query.cypher`` validates read-only-ness,
+        so this cannot be used to write.
+        """
+        return await self._client.query.cypher(query, params)
+
+    #: Internal alias used by this module's own query methods.
+    _read = read
+
+    async def _write(
+        self, query: str, params: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
+        """Run a write query. Bolt-only — see the module docstring."""
+        return await self._client.graph.execute_write(query, params or {})
 
     # ── Customers ──────────────────────────────────────────────────────
 
@@ -47,7 +102,7 @@ class Neo4jDomainService:
         ORDER BY c.id
         SKIP $offset LIMIT $limit
         """
-        results = await self._graph.execute_read(query, params)
+        results = await self._read(query, params)
         return [r["customer"] for r in results]
 
     async def get_customer(self, customer_id: str) -> dict[str, Any] | None:
@@ -58,7 +113,7 @@ class Neo4jDomainService:
         WITH c, collect(d {.type, .status, .expiry_date, .submission_date}) AS docs
         RETURN c {.*, documents: docs} AS customer
         """
-        results = await self._graph.execute_read(query, {"id": customer_id})
+        results = await self._read(query, {"id": customer_id})
         return results[0]["customer"] if results else None
 
     async def get_customer_documents(
@@ -76,7 +131,7 @@ class Neo4jDomainService:
         {where}
         RETURN d {{.*}} AS document
         """
-        results = await self._graph.execute_read(query, params)
+        results = await self._read(query, params)
         return [r["document"] for r in results]
 
     # ── Transactions ───────────────────────────────────────────────────
@@ -108,7 +163,7 @@ class Neo4jDomainService:
         RETURN t {{.*}} AS transaction
         ORDER BY t.date DESC
         """
-        results = await self._graph.execute_read(query, params)
+        results = await self._read(query, params)
         return [r["transaction"] for r in results]
 
     async def get_transaction_stats(self, customer_id: str) -> dict[str, Any]:
@@ -126,7 +181,7 @@ class Neo4jDomainService:
                collect(DISTINCT t.counterparty) AS counterparties,
                collect(DISTINCT t.type) AS transaction_types
         """
-        results = await self._graph.execute_read(query, {"id": customer_id})
+        results = await self._read(query, {"id": customer_id})
         if not results:
             return {
                 "transaction_count": 0,
@@ -148,7 +203,7 @@ class Neo4jDomainService:
         RETURN t {.*} AS transaction
         ORDER BY t.date
         """
-        results = await self._graph.execute_read(query, {"id": customer_id})
+        results = await self._read(query, {"id": customer_id})
         return [r["transaction"] for r in results]
 
     async def detect_rapid_movement(self, customer_id: str) -> list[dict[str, Any]]:
@@ -166,7 +221,7 @@ class Neo4jDomainService:
                t_in.amount - t_out.amount AS retained
         ORDER BY t_in.date
         """
-        results = await self._graph.execute_read(query, {"id": customer_id})
+        results = await self._read(query, {"id": customer_id})
         return results
 
     async def detect_layering(self, customer_id: str) -> list[dict[str, Any]]:
@@ -182,7 +237,7 @@ class Neo4jDomainService:
         RETURN t {.*} AS transaction
         ORDER BY t.date
         """
-        results = await self._graph.execute_read(query, {"id": customer_id})
+        results = await self._read(query, {"id": customer_id})
         return [r["transaction"] for r in results]
 
     async def get_velocity_metrics(self, customer_id: str) -> dict[str, Any]:
@@ -193,7 +248,7 @@ class Neo4jDomainService:
         RETURN tx_type, cnt, vol
         ORDER BY tx_type
         """
-        results = await self._graph.execute_read(query, {"id": customer_id})
+        results = await self._read(query, {"id": customer_id})
         by_type = {r["tx_type"]: {"count": r["cnt"], "volume": r["vol"]} for r in results}
         total_txns = sum(r["cnt"] for r in results)
         total_vol = sum(r["vol"] for r in results)
@@ -209,16 +264,14 @@ class Neo4jDomainService:
 
     async def find_connections(self, entity_id: str, *, depth: int = 2) -> dict[str, Any]:
         """Find connected entities up to a given depth."""
+        # Written without a CALL subquery on purpose: `client.query.cypher`
+        # rejects `CALL {` because a subquery can contain writes.
         query = """
-        MATCH (start {id: $id})
-        CALL {
-            WITH start
-            MATCH path = (start)-[*1..$depth]-(connected)
-            WHERE connected <> start
-            RETURN DISTINCT connected,
-                   length(path) AS distance,
-                   [r IN relationships(path) | type(r)] AS rel_types
-        }
+        MATCH path = (start {id: $id})-[*1..$depth]-(connected)
+        WHERE connected <> start
+        WITH DISTINCT connected,
+             length(path) AS distance,
+             [r IN relationships(path) | type(r)] AS rel_types
         RETURN connected {.id, .name, .type, .jurisdiction, .shell_indicators, .business_type} AS entity,
                distance,
                rel_types
@@ -226,7 +279,7 @@ class Neo4jDomainService:
         """
         # depth can't be parameterized in Neo4j variable-length paths
         actual_query = query.replace("$depth", str(min(depth, 3)))
-        results = await self._graph.execute_read(actual_query, {"id": entity_id})
+        results = await self._read(actual_query, {"id": entity_id})
         return {
             "entity_id": entity_id,
             "connections": results,
@@ -239,7 +292,7 @@ class Neo4jDomainService:
         WHERE size(o.shell_indicators) > 0
         RETURN DISTINCT o {.id, .name, .jurisdiction, .business_type, .shell_indicators} AS org
         """
-        results = await self._graph.execute_read(query, {"id": entity_id})
+        results = await self._read(query, {"id": entity_id})
         return [r["org"] for r in results]
 
     async def trace_ownership(self, entity_id: str) -> dict[str, Any]:
@@ -256,7 +309,7 @@ class Neo4jDomainService:
                chain_length
         ORDER BY chain_length
         """
-        results = await self._graph.execute_read(query, {"id": entity_id})
+        results = await self._read(query, {"id": entity_id})
         owners = [r for r in results if r["owner"] is not None]
         return {
             "entity_id": entity_id,
@@ -277,7 +330,7 @@ class Neo4jDomainService:
             .id, .name, .type, .jurisdiction, .shell_indicators, .role
         } AS entity
         """
-        results = await self._graph.execute_read(query, {"id": entity_id})
+        results = await self._read(query, {"id": entity_id})
 
         risk_score = 0
         risk_factors = []
@@ -370,7 +423,7 @@ class Neo4jDomainService:
             a.created_at DESC
         SKIP $offset LIMIT $limit
         """
-        results = await self._graph.execute_read(query, params)
+        results = await self._read(query, params)
         return [r["alert"] for r in results]
 
     async def get_alert(self, alert_id: str) -> dict[str, Any] | None:
@@ -382,7 +435,7 @@ class Neo4jDomainService:
         RETURN a {.*, customer_id: c.id, customer_name: c.name,
                    transactions: txns} AS alert
         """
-        results = await self._graph.execute_read(query, {"id": alert_id})
+        results = await self._read(query, {"id": alert_id})
         return results[0]["alert"] if results else None
 
     async def create_alert(self, alert: dict[str, Any]) -> dict[str, Any]:
@@ -404,7 +457,7 @@ class Neo4jDomainService:
         RETURN a {.*, customer_id: c.id, customer_name: c.name} AS alert
         """
         alert_id = alert.get("id", f"ALERT-{uuid.uuid4().hex[:8].upper()}")
-        results = await self._graph.execute_write(
+        results = await self._write(
             query,
             {
                 "customer_id": alert["customer_id"],
@@ -444,7 +497,7 @@ class Neo4jDomainService:
         SET {", ".join(set_clauses)}
         RETURN a {{.*, customer_id: c.id, customer_name: c.name}} AS alert
         """
-        results = await self._graph.execute_write(query, params)
+        results = await self._write(query, params)
         return results[0]["alert"] if results else None
 
     async def get_alert_summary(self) -> dict[str, Any]:
@@ -466,7 +519,7 @@ class Neo4jDomainService:
             sum(CASE WHEN sev = 'CRITICAL' AND NOT stat IN ['RESOLVED', 'FALSE_POSITIVE'] THEN 1 ELSE 0 END) AS critical_unresolved,
             sum(CASE WHEN sev = 'HIGH' AND NOT stat IN ['RESOLVED', 'FALSE_POSITIVE'] THEN 1 ELSE 0 END) AS high_unresolved
         """
-        results = await self._graph.execute_read(query)
+        results = await self._read(query)
         if not results:
             return {
                 "total": 0,
@@ -521,7 +574,7 @@ class Neo4jDomainService:
                    ELSE 0.7
                END AS confidence
         """
-        results = await self._graph.execute_read(query, {"name": name_lower})
+        results = await self._read(query, {"name": name_lower})
         return results
 
     # ── PEP ────────────────────────────────────────────────────────────
@@ -543,7 +596,7 @@ class Neo4jDomainService:
                CASE WHEN toLower(p.name) = $name THEN 1.0
                     ELSE 0.7 END AS confidence
         """
-        results = await self._graph.execute_read(query, {"name": name_lower})
+        results = await self._read(query, {"name": name_lower})
         matches.extend(results)
 
         # PEP relatives
@@ -555,7 +608,7 @@ class Neo4jDomainService:
                    'PEP_RELATIVE' AS match_type,
                    0.95 AS confidence
             """
-            results = await self._graph.execute_read(query, {"name": name_lower})
+            results = await self._read(query, {"name": name_lower})
             matches.extend(results)
 
         return matches
@@ -574,8 +627,8 @@ class Neo4jDomainService:
         RETURN type(r) AS type, count(*) AS count
         ORDER BY type
         """
-        nodes = await self._graph.execute_read(node_query)
-        rels = await self._graph.execute_read(rel_query)
+        nodes = await self._read(node_query)
+        rels = await self._read(rel_query)
 
         total_nodes = sum(r["count"] for r in nodes)
         total_rels = sum(r["count"] for r in rels)
@@ -585,6 +638,81 @@ class Neo4jDomainService:
             "total_relationships": total_rels,
             "nodes_by_label": {r["label"]: r["count"] for r in nodes},
             "relationships_by_type": {r["type"]: r["count"] for r in rels},
+        }
+
+    async def get_neighbors(
+        self,
+        entity_id: str,
+        *,
+        depth: int = 1,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """Get the neighbourhood of a node, shaped for graph visualisation.
+
+        Matches on ``id`` or ``name`` so it works for both domain nodes
+        (``Customer {id}``) and memory nodes (``Entity {name}``).
+        """
+        # Variable-length bounds cannot be parameterised; clamp then inline.
+        hops = max(1, min(int(depth), 3))
+        query = f"""
+        MATCH path = (start)-[*1..{hops}]-(neighbor)
+        WHERE start.id = $entity_id OR start.name = $entity_id
+        WITH start, neighbor, relationships(path) AS rels
+        LIMIT $limit
+        RETURN
+            coalesce(start.id, start.name) AS start_id,
+            coalesce(start.name, start.id) AS start_name,
+            labels(start) AS start_labels,
+            coalesce(neighbor.id, neighbor.name) AS neighbor_id,
+            coalesce(neighbor.name, neighbor.id) AS neighbor_name,
+            labels(neighbor) AS neighbor_labels,
+            [rel IN rels | type(rel)] AS relationship_types
+        """
+        records = await self._read(query, {"entity_id": entity_id, "limit": limit})
+
+        nodes: dict[str, dict[str, Any]] = {}
+        edges: list[dict[str, Any]] = []
+
+        for record in records:
+            start_id = record["start_id"]
+            if start_id and start_id not in nodes:
+                nodes[start_id] = {
+                    "id": start_id,
+                    "label": record["start_name"] or start_id,
+                    "type": record["start_labels"][0] if record["start_labels"] else "Unknown",
+                    "labels": record["start_labels"] or [],
+                    "isRoot": True,
+                }
+
+            neighbor_id = record["neighbor_id"]
+            if neighbor_id and neighbor_id not in nodes:
+                nodes[neighbor_id] = {
+                    "id": neighbor_id,
+                    "label": record["neighbor_name"] or neighbor_id,
+                    "type": record["neighbor_labels"][0]
+                    if record["neighbor_labels"]
+                    else "Unknown",
+                    "labels": record["neighbor_labels"] or [],
+                    "isRoot": False,
+                }
+
+            rel_types = record["relationship_types"] or []
+            if start_id and neighbor_id and rel_types:
+                edges.append(
+                    {
+                        "from": start_id,
+                        "to": neighbor_id,
+                        "relationship": rel_types[0],
+                    }
+                )
+
+        return {
+            "entity_id": entity_id,
+            "depth": hops,
+            "nodes": list(nodes.values()),
+            "edges": edges,
+            "total_nodes": len(nodes),
+            "total_edges": len(edges),
         }
 
     # ── Investigations ─────────────────────────────────────────────────
@@ -598,20 +726,29 @@ class Neo4jDomainService:
             i.title = $title, i.description = $description,
             i.status = $status, i.priority = $priority,
             i.trigger = $trigger, i.created_at = datetime(),
-            i.customer_id = $customer_id
+            i.customer_id = $customer_id, i.type = $type,
+            i.reason = $reason, i.assigned_to = $assigned_to,
+            i.session_id = $session_id
         MERGE (c)-[:HAS_INVESTIGATION]->(i)
         RETURN i {.*, customer_id: c.id, customer_name: c.name} AS investigation
         """
         inv_id = investigation.get("id", f"INV-{uuid.uuid4().hex[:8].upper()}")
-        results = await self._graph.execute_write(query, {
-            "customer_id": investigation["customer_id"],
-            "id": inv_id,
-            "title": investigation.get("title", ""),
-            "description": investigation.get("description", ""),
-            "status": investigation.get("status", "PENDING"),
-            "priority": investigation.get("priority", "MEDIUM"),
-            "trigger": investigation.get("trigger", ""),
-        })
+        results = await self._write(
+            query,
+            {
+                "customer_id": investigation["customer_id"],
+                "id": inv_id,
+                "title": investigation.get("title", ""),
+                "description": investigation.get("description", ""),
+                "status": investigation.get("status", "pending"),
+                "priority": investigation.get("priority", "normal"),
+                "trigger": investigation.get("trigger", ""),
+                "type": investigation.get("type", "comprehensive"),
+                "reason": investigation.get("reason", investigation.get("title", "")),
+                "assigned_to": investigation.get("assigned_to"),
+                "session_id": investigation.get("session_id"),
+            },
+        )
         return results[0]["investigation"] if results else {**investigation, "id": inv_id}
 
     async def get_investigation(self, investigation_id: str) -> dict[str, Any] | None:
@@ -620,10 +757,12 @@ class Neo4jDomainService:
         MATCH (c:Customer)-[:HAS_INVESTIGATION]->(i:Investigation {id: $id})
         RETURN i {.*, customer_id: c.id, customer_name: c.name} AS investigation
         """
-        results = await self._graph.execute_read(query, {"id": investigation_id})
+        results = await self._read(query, {"id": investigation_id})
         return results[0]["investigation"] if results else None
 
-    async def list_investigations(self, *, status: str | None = None, customer_id: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+    async def list_investigations(
+        self, *, status: str | None = None, customer_id: str | None = None, limit: int = 100
+    ) -> list[dict[str, Any]]:
         """List investigations with optional filters."""
         filters = []
         params: dict[str, Any] = {"limit": limit}
@@ -641,20 +780,38 @@ class Neo4jDomainService:
         ORDER BY i.created_at DESC
         LIMIT $limit
         """
-        results = await self._graph.execute_read(query, params)
+        results = await self._read(query, params)
         return [r["investigation"] for r in results]
 
-    async def update_investigation(self, investigation_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
+    #: Properties ``update_investigation`` is allowed to set. An allowlist, not
+    #: a blocklist: the keys are interpolated into the SET clause.
+    UPDATABLE_INVESTIGATION_PROPERTIES = (
+        "status",
+        "priority",
+        "conclusion",
+        "summary",
+        "overall_risk_level",
+        "agents_consulted",
+        "trace_id",
+        "session_id",
+        "assigned_to",
+        "reviewed_by",
+    )
+
+    async def update_investigation(
+        self, investigation_id: str, updates: dict[str, Any]
+    ) -> dict[str, Any] | None:
         """Update investigation properties."""
         set_clauses = []
         params: dict[str, Any] = {"id": investigation_id}
         for key, value in updates.items():
-            if key in ("status", "priority", "conclusion", "summary", "overall_risk_level"):
+            if key in self.UPDATABLE_INVESTIGATION_PROPERTIES:
                 set_clauses.append(f"i.{key} = ${key}")
                 params[key] = value
-        if updates.get("status") == "IN_PROGRESS":
+        status = str(updates.get("status", "")).lower()
+        if status == "in_progress":
             set_clauses.append("i.started_at = datetime()")
-        elif updates.get("status") == "COMPLETED":
+        elif status in ("completed", "closed"):
             set_clauses.append("i.completed_at = datetime()")
         if not set_clauses:
             return await self.get_investigation(investigation_id)
@@ -663,46 +820,153 @@ class Neo4jDomainService:
         SET {", ".join(set_clauses)}, i.updated_at = datetime()
         RETURN i {{.*, customer_id: c.id, customer_name: c.name}} AS investigation
         """
-        results = await self._graph.execute_write(query, params)
+        results = await self._write(query, params)
         return results[0]["investigation"] if results else None
 
     # ── Memory Graph (for NVL visualization) ───────────────────────────
 
-    async def get_memory_graph(self, *, session_id: str | None = None, limit: int = 500) -> dict[str, Any]:
-        """Get a subgraph of domain + memory data for NVL visualization."""
-        query = """
-        MATCH (n)
-        WHERE n:Customer OR n:Organization OR n:Transaction OR n:Alert
-           OR n:SanctionedEntity OR n:PEP OR n:Investigation
-        WITH n LIMIT $limit
-        OPTIONAL MATCH (n)-[r]-(m)
-        RETURN
-            collect(DISTINCT {
-                id: coalesce(n.id, n.name, toString(id(n))),
-                label: coalesce(n.name, n.id, n.title),
-                labels: labels(n),
-                properties: properties(n)
-            }) AS nodes,
-            collect(DISTINCT {
-                id: toString(id(r)),
-                from: coalesce(startNode(r).id, startNode(r).name, toString(id(startNode(r)))),
-                to: coalesce(endNode(r).id, endNode(r).name, toString(id(endNode(r)))),
-                type: type(r),
-                properties: properties(r)
-            }) AS relationships
+    #: Seeds the session-scoped context graph: the conversation and its
+    #: messages, the entities those messages mention, and the reasoning chain
+    #: recorded for the session (including the ``TOUCHED`` audit edges).
+    _SESSION_GRAPH_SEEDS = """
+    MATCH (c:Conversation {session_id: $session_id})
+    OPTIONAL MATCH (c)-[:HAS_MESSAGE]->(m:Message)
+    OPTIONAL MATCH (m)-[:MENTIONS]->(me:Entity)
+    WITH c, collect(DISTINCT m) AS messages, collect(DISTINCT me) AS mentioned
+    WITH [c] + messages + mentioned AS conversation_nodes
+    OPTIONAL MATCH (rt:ReasoningTrace {session_id: $session_id})
+    OPTIONAL MATCH (rt)-[:HAS_STEP]->(rs:ReasoningStep)
+    OPTIONAL MATCH (rs)-[:USES_TOOL]->(tc:ToolCall)
+    OPTIONAL MATCH (rs)-[:TOUCHED]->(te:Entity)
+    WITH conversation_nodes,
+         collect(DISTINCT rt) AS traces,
+         collect(DISTINCT rs) AS steps,
+         collect(DISTINCT tc) AS tool_calls,
+         collect(DISTINCT te) AS touched
+    WITH conversation_nodes + traces + steps + tool_calls + touched AS seeds
+    UNWIND seeds AS n
+    WITH DISTINCT n
+    WHERE n IS NOT NULL
+    RETURN elementId(n) AS element_id,
+           coalesce(n.id, n.name, elementId(n)) AS id,
+           coalesce(n.name, n.title, n.content, n.task, n.tool_name, n.id) AS label,
+           labels(n) AS labels,
+           properties(n) AS properties
+    LIMIT $limit
+    """
+
+    #: Unscoped fallback: a capped sample across both the domain labels and the
+    #: memory labels, so the view is never all-domain or all-memory.
+    _SAMPLE_GRAPH_SEEDS = """
+    MATCH (n)
+    WHERE any(l IN labels(n) WHERE l IN $labels)
+    WITH n, CASE WHEN any(l IN labels(n) WHERE l IN $memory_labels) THEN 0 ELSE 1 END AS bucket
+    ORDER BY bucket
+    LIMIT $limit
+    RETURN elementId(n) AS element_id,
+           coalesce(n.id, n.name, elementId(n)) AS id,
+           coalesce(n.name, n.title, n.content, n.task, n.tool_name, n.id) AS label,
+           labels(n) AS labels,
+           properties(n) AS properties
+    """
+
+    #: Relationships induced by a node set (both endpoints must be in it).
+    _INDUCED_RELATIONSHIPS = """
+    MATCH (a)-[r]->(b)
+    WHERE elementId(a) IN $element_ids AND elementId(b) IN $element_ids
+    RETURN elementId(r) AS id,
+           elementId(a) AS from_element_id,
+           elementId(b) AS to_element_id,
+           type(r) AS type,
+           properties(r) AS properties
+    """
+
+    async def get_memory_graph(
+        self, *, session_id: str | None = None, limit: int = 500
+    ) -> dict[str, Any]:
+        """Get a subgraph of domain **and** memory data for visualisation.
+
+        With ``session_id`` the result is scoped to one conversation: its
+        messages, the entities they mention, and the reasoning trace / steps /
+        tool calls recorded for that session. Without it, a capped sample
+        across the memory and domain labels is returned.
         """
-        results = await self._graph.execute_read(query, {"limit": limit})
-        if not results:
+        if session_id:
+            node_rows = await self._read(
+                self._SESSION_GRAPH_SEEDS,
+                {"session_id": session_id, "limit": limit},
+            )
+        else:
+            node_rows = await self._read(
+                self._SAMPLE_GRAPH_SEEDS,
+                {
+                    "labels": list(MEMORY_LABELS + DOMAIN_LABELS),
+                    "memory_labels": list(MEMORY_LABELS),
+                    "limit": limit,
+                },
+            )
+
+        nodes: dict[str, dict[str, Any]] = {}
+        for row in node_rows:
+            element_id = row.get("element_id")
+            if not element_id or element_id in nodes:
+                continue
+            raw_label = row.get("label") or row.get("id") or element_id
+            nodes[element_id] = {
+                "id": row.get("id") or element_id,
+                "element_id": element_id,
+                "label": str(raw_label)[:80],
+                "labels": row.get("labels") or [],
+                "properties": row.get("properties") or {},
+            }
+
+        if not nodes:
             return {"nodes": [], "relationships": []}
-        row = results[0]
-        seen_nodes = {}
-        for n in row.get("nodes", []):
-            nid = n.get("id")
-            if nid and nid not in seen_nodes:
-                seen_nodes[nid] = n
-        seen_rels = {}
-        for r in row.get("relationships", []):
-            rid = r.get("id")
-            if rid and rid not in seen_rels and r.get("from") and r.get("to"):
-                seen_rels[rid] = r
-        return {"nodes": list(seen_nodes.values()), "relationships": list(seen_rels.values())}
+
+        rel_rows = await self._read(
+            self._INDUCED_RELATIONSHIPS,
+            {"element_ids": list(nodes)},
+        )
+        relationships = [
+            {
+                "id": row["id"],
+                "from": nodes[row["from_element_id"]]["id"],
+                "to": nodes[row["to_element_id"]]["id"],
+                "type": row["type"],
+                "properties": row.get("properties") or {},
+            }
+            for row in rel_rows
+            if row.get("from_element_id") in nodes and row.get("to_element_id") in nodes
+        ]
+
+        return {"nodes": list(nodes.values()), "relationships": relationships}
+
+    # ── Reasoning audit (the TOUCHED one-hop) ──────────────────────────
+
+    async def get_entity_audit_trail(
+        self, entity_name: str, *, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        """Answer "which reasoning steps touched this entity, and via which tool?".
+
+        This is the payoff of passing ``touched_entities=`` when recording tool
+        calls: one hop from an :Entity to the reasoning that produced it.
+        """
+        query = """
+        MATCH (e:Entity)<-[:TOUCHED]-(s:ReasoningStep)<-[:HAS_STEP]-(t:ReasoningTrace)
+        WHERE toLower(e.name) = toLower($name)
+        OPTIONAL MATCH (s)-[:USES_TOOL]->(tc:ToolCall)
+        RETURN e.name AS entity_name,
+               t.id AS trace_id,
+               t.session_id AS session_id,
+               t.task AS task,
+               t.outcome AS outcome,
+               t.started_at AS started_at,
+               s.id AS step_id,
+               s.step_number AS step_number,
+               s.thought AS thought,
+               s.action AS action,
+               collect(DISTINCT tc.tool_name) AS tools
+        ORDER BY started_at DESC, step_number
+        LIMIT $limit
+        """
+        return await self._read(query, {"name": entity_name, "limit": limit})

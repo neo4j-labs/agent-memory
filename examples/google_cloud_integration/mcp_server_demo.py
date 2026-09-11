@@ -1,29 +1,49 @@
 #!/usr/bin/env python3
 """MCP Server Demo.
 
-Demonstrates the Neo4j Agent Memory MCP server with 16 tools
-organized into core (6) and extended (16) profiles.
+Demonstrates the Neo4j Agent Memory MCP server: 6 core tools, 16 in the
+extended profile (the default).
 
 Features demonstrated:
-- Starting the MCP server programmatically
-- Core and extended tool profiles
-- Tool invocation examples
-- Both stdio and SSE transport modes
-- Session strategies and server instructions
+- Tool profiles (core vs extended) listed from a live server
+- Tool invocation through ``fastmcp.Client``, reading ``result.data``
+- Starting the server over stdio and Streamable HTTP
+- ``--schemas`` prints every tool's JSON input schema (no database needed)
 
 Requirements:
-    pip install neo4j-agent-memory[mcp]
+    pip install "neo4j-agent-memory[mcp]"     # FastMCP 4 / MCP Python SDK 2
+
+Note on transports: FastMCP 4 serves stdio and Streamable HTTP at ``/mcp/``. The
+legacy HTTP+SSE transport is deprecated in the MCP spec; ``--transport sse``
+still starts a server but warns and serves Streamable HTTP.
+
+Runs with no API key: the shared settings helper falls back to a local
+sentence-transformers embedder. Set ``MEMORY_API_KEY`` to target hosted NAMS.
 """
 
+from __future__ import annotations
+
+import argparse
 import asyncio
 import json
-import os
 from datetime import datetime
+from typing import Any
 
-from pydantic import SecretStr
+from _common import build_settings, describe_settings, load_env
 
 
-async def demo_server_tools():
+def tool_payload(result: Any) -> dict[str, Any]:
+    """Read a tool result.
+
+    ``result.data`` is FastMCP 4's parsed output — preferred over reaching into
+    ``result.content[0].text``. Every memory tool is annotated ``-> str`` and
+    returns ``json.dumps(...)``, so the parsed value is itself a JSON string
+    that still needs one ``json.loads``.
+    """
+    return dict(json.loads(result.data))
+
+
+async def demo_server_tools() -> None:
     """Demonstrate MCP server tools and their schemas."""
     from fastmcp import Client
 
@@ -55,10 +75,8 @@ async def demo_server_tools():
     print()
 
 
-async def demo_tool_usage():
+async def demo_tool_usage() -> None:
     """Demonstrate how tools are used via FastMCP Client."""
-    from neo4j_agent_memory import MemorySettings
-    from neo4j_agent_memory.config.settings import Neo4jConfig
     from neo4j_agent_memory.mcp.server import create_mcp_server
 
     print("=" * 60)
@@ -66,13 +84,10 @@ async def demo_tool_usage():
     print("=" * 60)
     print()
 
-    settings = MemorySettings(
-        neo4j=Neo4jConfig(
-            uri=os.environ.get("NEO4J_URI", "bolt://localhost:7687"),
-            username=os.environ.get("NEO4J_USER", "neo4j"),
-            password=SecretStr(os.environ.get("NEO4J_PASSWORD", "password")),
-        )
-    )
+    settings = build_settings()
+    print("Configuration:")
+    describe_settings(settings)
+    print()
 
     server = create_mcp_server(settings, profile="extended")
 
@@ -93,7 +108,7 @@ async def demo_tool_usage():
                 "role": "user",
             },
         )
-        data = json.loads(result.content[0].text)
+        data = tool_payload(result)
         print(f"   Stored message ID: {data.get('id', 'N/A')}")
         print()
 
@@ -115,7 +130,7 @@ async def demo_tool_usage():
             "memory_get_context",
             {"session_id": session_id},
         )
-        data = json.loads(result.content[0].text)
+        data = tool_payload(result)
         print(f"   Session: {data.get('session_id')}")
         print(f"   Has context: {data.get('has_context')}")
         print()
@@ -128,7 +143,7 @@ async def demo_tool_usage():
             "memory_search",
             {"query": "Q1 report deadline", "limit": 5},
         )
-        data = json.loads(result.content[0].text)
+        data = tool_payload(result)
         results = data.get("results", {})
         total = sum(len(v) for v in results.values())
         print("   Query: 'Q1 report deadline'")
@@ -146,7 +161,7 @@ async def demo_tool_usage():
                 "preference": "Prefers detailed weekly status reports",
             },
         )
-        data = json.loads(result.content[0].text)
+        data = tool_payload(result)
         print(f"   Stored preference ID: {data.get('id', 'N/A')}")
         print()
 
@@ -158,7 +173,7 @@ async def demo_tool_usage():
             "memory_get_conversation",
             {"session_id": session_id, "limit": 10},
         )
-        data = json.loads(result.content[0].text)
+        data = tool_payload(result)
         print(f"   Session: {session_id}")
         print(f"   Messages: {data.get('message_count', 0)}")
         print()
@@ -171,7 +186,7 @@ async def demo_tool_usage():
             "graph_query",
             {"query": "MATCH (m:Message) RETURN count(m) as message_count"},
         )
-        data = json.loads(result.content[0].text)
+        data = tool_payload(result)
         print("   Query: MATCH (m:Message) RETURN count(m)")
         print(f"   Result: {data.get('rows', [])}")
         print()
@@ -181,7 +196,7 @@ async def demo_tool_usage():
         print()
 
 
-async def demo_server_startup():
+async def demo_server_startup() -> None:
     """Show how to start the MCP server."""
     print("=" * 60)
     print("MCP Server - Starting the Server")
@@ -194,8 +209,8 @@ async def demo_server_startup():
 # Start with stdio transport (for Claude Desktop)
 neo4j-agent-memory mcp serve --password secret
 
-# Start with SSE transport (for Cloud Run/HTTP)
-neo4j-agent-memory mcp serve --transport sse --port 8080 --password secret
+# Start with Streamable HTTP (for Cloud Run/HTTP) — endpoint is /mcp/
+neo4j-agent-memory mcp serve --transport http --host 0.0.0.0 --port 8080 --password secret
 
 # Core profile (fewer tools, less context overhead)
 neo4j-agent-memory mcp serve --profile core --password secret
@@ -217,8 +232,8 @@ server = create_mcp_server(settings, profile="extended")
 # stdio transport
 await server.run_async(transport="stdio")
 
-# Or SSE transport for HTTP
-await server.run_async(transport="sse", host="0.0.0.0", port=8080)
+# Or Streamable HTTP, served at /mcp/
+await server.run_async(transport="http", host="0.0.0.0", port=8080)
 """)
 
     print("Option 3: Claude Desktop Configuration")
@@ -240,7 +255,7 @@ Add to ~/Library/Application Support/Claude/claude_desktop_config.json:
 """)
 
 
-async def demo_tool_schemas():
+async def demo_tool_schemas() -> None:
     """Show the JSON schemas for MCP tool inputs."""
     from fastmcp import Client
 
@@ -263,7 +278,7 @@ async def demo_tool_schemas():
                     {
                         "name": tool.name,
                         "description": tool.description,
-                        "inputSchema": tool.inputSchema,
+                        "inputSchema": tool.input_schema,
                     },
                     indent=2,
                 )
@@ -272,8 +287,10 @@ async def demo_tool_schemas():
             print()
 
 
-async def main():
-    """Run all MCP server demos."""
+async def main(*, schemas: bool = False, tools: bool = True) -> None:
+    """Run the MCP server demos."""
+    load_env()
+
     print("\n" + "=" * 60)
     print("Neo4j Agent Memory - MCP Server Demo")
     print("=" * 60 + "\n")
@@ -281,14 +298,13 @@ async def main():
     await demo_server_tools()
     await demo_server_startup()
 
-    # Only run tool usage if Neo4j is configured
-    if os.environ.get("NEO4J_PASSWORD"):
-        try:
-            await demo_tool_usage()
-        except Exception as e:
-            print(f"Tool usage demo skipped: {e}")
+    if schemas:
+        await demo_tool_schemas()
+
+    if tools:
+        await demo_tool_usage()
     else:
-        print("Skipping tool usage demo (NEO4J_PASSWORD not set)")
+        print("Skipping the tool-usage phase (--no-tools)")
         print()
 
     print("\n" + "=" * 60)
@@ -296,8 +312,28 @@ async def main():
     print("=" * 60 + "\n")
     print("To start the server, run:")
     print("  neo4j-agent-memory mcp serve --password <your-password>")
+    print("  neo4j-agent-memory mcp serve --transport http --host 0.0.0.0 --port 8080")
     print()
 
 
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--schemas",
+        action="store_true",
+        help="print every extended-profile tool's JSON input schema (no database needed)",
+    )
+    parser.add_argument(
+        "--no-tools",
+        action="store_true",
+        help="skip the tool-usage phase, which needs a reachable Neo4j",
+    )
+    return parser.parse_args(argv)
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    args = parse_args()
+    asyncio.run(main(schemas=args.schemas, tools=not args.no_tools))

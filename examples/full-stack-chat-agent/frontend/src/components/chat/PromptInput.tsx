@@ -1,17 +1,20 @@
 "use client";
 
-import { Box, Flex, Textarea, IconButton } from "@chakra-ui/react";
-import { useState, KeyboardEvent } from "react";
-import { LuSend, LuLoader } from "react-icons/lu";
+import { Box, Flex, IconButton, Textarea } from "@chakra-ui/react";
+import { useState, type KeyboardEvent } from "react";
+import { LuSend, LuSquare } from "react-icons/lu";
 
 interface PromptInputProps {
   onSend: (content: string) => void;
+  /** Aborts the in-flight turn. Rendered as a Stop button while streaming. */
+  onStop?: () => void;
   isLoading?: boolean;
   placeholder?: string;
 }
 
 export function PromptInput({
   onSend,
+  onStop,
   isLoading = false,
   placeholder = "Type a message...",
 }: PromptInputProps) {
@@ -66,16 +69,28 @@ export function PromptInput({
           }}
         />
       </Box>
-      <IconButton
-        aria-label="Send message"
-        onClick={handleSend}
-        disabled={!value.trim() || isLoading}
-        colorPalette="blue"
-        borderRadius="full"
-        size="md"
-      >
-        {isLoading ? <LuLoader className="animate-spin" /> : <LuSend />}
-      </IconButton>
+      {isLoading && onStop ? (
+        <IconButton
+          aria-label="Stop generating"
+          onClick={onStop}
+          colorPalette="red"
+          borderRadius="full"
+          size="md"
+        >
+          <LuSquare />
+        </IconButton>
+      ) : (
+        <IconButton
+          aria-label="Send message"
+          onClick={handleSend}
+          disabled={!value.trim() || isLoading}
+          colorPalette="brand"
+          borderRadius="full"
+          size="md"
+        >
+          <LuSend />
+        </IconButton>
+      )}
     </Flex>
   );
 }

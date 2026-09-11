@@ -1,18 +1,39 @@
 /**
  * API client for the chat backend.
+ *
+ * Every function returns a typed result, and `streamChat` is an async
+ * generator over the backend's SSE contract (see `SSEEvent` in `./types`).
  */
 
 import type {
-  Thread,
-  ThreadWithMessages,
-  Preference,
+  ApiChatMessage,
+  ApiThreadWithMessages,
   Entity,
+  Health,
   MemoryContext,
   MemoryGraph,
+  Message,
+  Preference,
   SSEEvent,
+  Thread,
+  ThreadWithMessages,
 } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
+
+// `/health` is mounted at the application root, not under the `/api` prefix.
+const SERVER_BASE = API_BASE.replace(/\/api\/?$/, "");
+
+/** Thrown by `fetchAPI` so callers can tell "missing" apart from "broken". */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
 
 /**
  * Generic fetch wrapper with error handling.
@@ -20,8 +41,9 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
 async function fetchAPI<T>(
   endpoint: string,
   options?: RequestInit,
+  base: string = API_BASE,
 ): Promise<T> {
-  const response = await fetch(`${API_BASE}${endpoint}`, {
+  const response = await fetch(`${base}${endpoint}`, {
     ...options,
     headers: {
       "Content-Type": "application/json",
@@ -30,12 +52,28 @@ async function fetchAPI<T>(
   });
 
   if (!response.ok) {
-    const error = await response.text();
-    throw new Error(error || `HTTP ${response.status}`);
+    const body = await response.text();
+    throw new ApiError(body || `HTTP ${response.status}`, response.status);
   }
 
   return response.json();
 }
+
+/** The backend serialises tool calls as `tool_calls`; the UI uses `toolCalls`. */
+function toMessage(message: ApiChatMessage): Message {
+  return {
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    timestamp: message.timestamp,
+    toolCalls: message.tool_calls ?? [],
+  };
+}
+
+// Health API (root-mounted, reports whether memory is actually connected)
+export const health = {
+  get: () => fetchAPI<Health>("/health", undefined, SERVER_BASE),
+};
 
 // Thread API
 export const threads = {
@@ -47,7 +85,10 @@ export const threads = {
       body: JSON.stringify({ title }),
     }),
 
-  get: (id: string) => fetchAPI<ThreadWithMessages>(`/threads/${id}`),
+  get: async (id: string): Promise<ThreadWithMessages> => {
+    const thread = await fetchAPI<ApiThreadWithMessages>(`/threads/${id}`);
+    return { ...thread, messages: (thread.messages ?? []).map(toMessage) };
+  },
 
   delete: (id: string) =>
     fetchAPI<{ status: string }>(`/threads/${id}`, { method: "DELETE" }),
@@ -62,7 +103,7 @@ export const threads = {
 export const preferences = {
   list: (category?: string) =>
     fetchAPI<Preference[]>(
-      `/preferences${category ? `?category=${category}` : ""}`,
+      `/preferences${category ? `?category=${encodeURIComponent(category)}` : ""}`,
     ),
 
   add: (category: string, preference: string, context?: string) =>
@@ -118,11 +159,18 @@ export const memory = {
   },
 };
 
-// Chat API with SSE streaming
+/**
+ * Chat API with SSE streaming.
+ *
+ * `EventSource` cannot POST a JSON body, so the stream is read off a plain
+ * `fetch` response. `signal` is what makes a turn cancellable: the Stop
+ * button and the thread-change cleanup in `useChat` both abort through it.
+ */
 export async function* streamChat(
   threadId: string,
   message: string,
   memoryEnabled: boolean = true,
+  signal?: AbortSignal,
 ): AsyncGenerator<SSEEvent> {
   const response = await fetch(`${API_BASE}/chat`, {
     method: "POST",
@@ -134,10 +182,11 @@ export async function* streamChat(
       message,
       memory_enabled: memoryEnabled,
     }),
+    signal,
   });
 
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`);
+    throw new ApiError(`HTTP ${response.status}`, response.status);
   }
 
   const reader = response.body?.getReader();
@@ -174,11 +223,14 @@ export async function* streamChat(
       }
     }
   } finally {
-    reader.releaseLock();
+    // Cancel rather than only release: on an abort or an early `break` from
+    // the consumer this also tears down the underlying HTTP request.
+    await reader.cancel().catch(() => {});
   }
 }
 
 export const api = {
+  health,
   threads,
   preferences,
   entities,

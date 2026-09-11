@@ -87,6 +87,38 @@ The labels are the hard part. Two reasonable starting points:
 The harness doesn't know how you produced the labels — it just compares
 to whatever you provide.
 
+Two properties of the library shape retrieval labels: `add_entity` embeds
+the entity *name* (the description is metadata, not retrieval signal), and
+`search_entities` applies a 0.7 similarity floor. A labelled query that is
+semantically close to the *description* but far from the *name* scores 0.
+
+Make preference cases falsifiable — seed the superseded state too, and
+leave the superseded id out of the expected set:
+
+[source,python]
+----
+old = await client.long_term.add_preference(
+    "consultants", "Any seniority is fine for healthcare engagements",
+    user_identifier=user,
+)
+new = await client.long_term.add_preference(
+    "consultants", "Only principals and senior managers on payer accounts",
+    user_identifier=user,
+)
+# Two positional ids — there is no `new_preference=` keyword.
+await client.long_term.supersede_preference(old.id, new.id)
+
+case = PreferenceCase(
+    user_identifier=user,
+    expected_active_pref_ids={str(new.id)},  # `old.id` must NOT come back
+)
+----
+
+With `MemorySettings.memory.multi_tenant=True`, every scoped write must
+carry `user_identifier=` or raise — so seed two tenants and give each its
+own case, and a cross-tenant leak shows up as an F1 miss rather than a
+silent pass.
+
 === 2. Run the suite
 
 [source,python]
@@ -120,20 +152,40 @@ for d in report.audit.details:
 
 === 4. Wire into CI
 
-Treat the suite as a regression test. Compare against a baseline score
-file, fail the build if any dimension drops below a threshold:
+Treat the suite as a regression test: fail the build below a threshold,
+and write a machine-readable report so the failure is diffable.
 
 [source,python]
 ----
 report = await client.eval.run(suite)
+payload = {
+    "overall": report.overall_score,
+    "audit": report.audit.score if report.audit else None,
+    "retrieval": report.retrieval.score if report.retrieval else None,
+    "preference": report.preference.score if report.preference else None,
+}
+Path("eval-report.json").write_text(json.dumps(payload, indent=2))
 
-assert report.retrieval.score >= 0.80, (
-    f"Retrieval regression: {report.retrieval.score:.2f}"
-)
-assert report.audit.score >= 0.95, (
-    f"Audit regression: {report.audit.score:.2f}"
-)
+if report.overall_score < MIN_SCORE:
+    raise SystemExit(f"Memory-quality regression: {report.overall_score:.2f}")
 ----
+
+Then call it from the workflow and keep the report as an artifact:
+
+[source,yaml]
+----
+- run: uv run python examples/eval-harness/ci_gate.py --min-score 0.9 --report eval-report.json
+- uses: actions/upload-artifact@v4
+  if: always()
+  with:
+    name: eval-report
+    path: eval-report.json
+----
+
+`examples/eval-harness/ci_gate.py` is that script, ready to copy: it exits
+`0` at or above the threshold, `1` below it, and `2` when the run itself
+failed. Appending one JSONL row per run (`main.py --out trend.jsonl`) gives
+you the score over time instead of a single snapshot.
 
 == What the harness is not
 

@@ -27,8 +27,45 @@ export interface Thread {
   message_count: number;
 }
 
-export interface ThreadWithMessages extends Thread {
+/**
+ * `GET /threads/{id}`. The backend's `Thread` model omits `message_count`
+ * (that lives on the list payload only), so this does not extend `Thread`.
+ */
+export interface ThreadWithMessages {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
   messages: Message[];
+}
+
+/** Raw `ChatMessage` as the backend serialises it (snake_case tool calls). */
+export interface ApiChatMessage {
+  id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  timestamp: string;
+  tool_calls?: ToolCall[];
+}
+
+/** Raw `GET /threads/{id}` payload, before `toMessage()` normalisation. */
+export interface ApiThreadWithMessages
+  extends Omit<ThreadWithMessages, "messages"> {
+  messages: ApiChatMessage[];
+}
+
+/**
+ * `GET /health` on the backend root. `memory_connected: false` means the
+ * agent is running without the memory graph — usually a Neo4j password
+ * mismatch between `docker-compose.yml` and `.env`.
+ */
+export interface Health {
+  status: string;
+  memory_connected: boolean;
+  memory_error: string | null;
+  news_connected: boolean;
+  news_error: string | null;
+  extraction_mode?: string;
 }
 
 export interface Preference {

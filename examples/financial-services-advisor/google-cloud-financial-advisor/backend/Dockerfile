@@ -1,37 +1,38 @@
-# Google Cloud Financial Advisor - Backend Dockerfile
-# Optimized for Google Cloud Run deployment using uv
+# Google Cloud Financial Advisor — backend image (Cloud Run ready).
+#
+# Why requirements-docker.txt and not `uv sync`:
+# `pyproject.toml` carries a `[tool.uv.sources]` editable path pointing at the
+# repository root (`../../../..`) for local development. The Docker build
+# context is `./backend`, so that path does not exist inside the image and
+# `uv sync --frozen` fails. `requirements-docker.txt` is the same locked
+# dependency set exported **without** sources, so `neo4j-agent-memory` resolves
+# from PyPI. Regenerate it with `make docker-requirements` whenever
+# `pyproject.toml` or `uv.lock` changes.
 
-FROM python:3.11-slim
+FROM python:3.12-slim
 
-# Install uv
+# uv for fast, reproducible installs
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
-# Set working directory
 WORKDIR /app
 
-# Copy dependency files
-COPY pyproject.toml uv.lock* ./
+COPY requirements-docker.txt ./
+RUN uv pip install --system --no-cache -r requirements-docker.txt
 
-# Install dependencies using uv
-RUN uv sync --frozen --no-dev --no-install-project
-
-# Copy application code
 COPY src/ src/
 
-# Create non-root user for security
+# Non-root user
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 USER appuser
 
-# Cloud Run expects PORT environment variable
+# Cloud Run supplies PORT; default to 8080 for local runs.
 ENV PORT=8080
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
 EXPOSE 8080
 
-# Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import httpx; httpx.get('http://localhost:8080/health')" || exit 1
 
-# Run with uv
-CMD ["uv", "run", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["sh", "-c", "uvicorn src.main:app --host 0.0.0.0 --port ${PORT:-8080}"]

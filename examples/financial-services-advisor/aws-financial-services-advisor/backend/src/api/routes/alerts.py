@@ -8,30 +8,40 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
+
+from ...services.neo4j_service import Neo4jDomainService
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/alerts", tags=["alerts"])
 
 
-def _get_neo4j_service(request: Request):
+def _get_neo4j_service(request: Request) -> Neo4jDomainService:
     svc = getattr(request.app.state, "neo4j_service", None)
     if svc is None:
         raise HTTPException(status_code=503, detail="Neo4j service not available")
-    return svc
+    # app.state is untyped; the lifespan is the only writer.
+    return cast(Neo4jDomainService, svc)
 
 
-def _to_python_datetime(val) -> datetime | None:
-    """Convert a Neo4j DateTime to Python datetime."""
-    if val is None:
+def _to_python_datetime(value: Any) -> datetime | None:
+    """Accept an ISO string, a Python datetime, or a Neo4j DateTime."""
+    if value is None:
         return None
-    if isinstance(val, datetime):
-        return val
-    if hasattr(val, "to_native"):
-        return val.to_native()
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    to_native = getattr(value, "to_native", None)
+    if callable(to_native):
+        native = to_native()
+        return native if isinstance(native, datetime) else None
     return None
 
 
@@ -152,18 +162,20 @@ async def create_alert(request: Request, body: AlertCreateRequest) -> AlertRespo
         raise HTTPException(status_code=404, detail=f"Customer {body.customer_id} not found")
 
     alert_id = f"ALERT-{uuid.uuid4().hex[:6].upper()}"
-    data = await neo4j_service.create_alert({
-        "id": alert_id,
-        "customer_id": body.customer_id,
-        "type": body.type.upper(),
-        "severity": body.severity.upper(),
-        "status": "NEW",
-        "title": body.title,
-        "description": body.description,
-        "evidence": body.evidence,
-        "requires_sar": body.severity.upper() in ["CRITICAL", "HIGH"],
-        "auto_generated": False,
-    })
+    data = await neo4j_service.create_alert(
+        {
+            "id": alert_id,
+            "customer_id": body.customer_id,
+            "type": body.type.upper(),
+            "severity": body.severity.upper(),
+            "status": "NEW",
+            "title": body.title,
+            "description": body.description,
+            "evidence": body.evidence,
+            "requires_sar": body.severity.upper() in ["CRITICAL", "HIGH"],
+            "auto_generated": False,
+        }
+    )
     return _alert_from_dict(data)
 
 

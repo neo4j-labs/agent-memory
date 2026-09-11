@@ -4,14 +4,14 @@ import json
 import logging
 import time
 import uuid
-from typing import Any, AsyncGenerator
+from collections.abc import AsyncGenerator
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
-    SystemPromptPart,
     TextPart,
     ToolCallPart,
     ToolReturnPart,
@@ -20,11 +20,13 @@ from pydantic_ai.messages import (
 from sse_starlette.sse import EventSourceResponse
 
 from neo4j_agent_memory import MemoryClient
+from neo4j_agent_memory.mcp._preference_detector import PreferenceDetector
 from neo4j_agent_memory.memory.reasoning import ToolCallStatus
 from neo4j_agent_memory.memory.short_term import MessageRole
+from neo4j_agent_memory.schema.models import EntityRef, TraceOutcome
 from src.agent.agent import get_podcast_agent
 from src.agent.dependencies import AgentDeps
-from src.api.routes.threads import update_thread_activity
+from src.agent.tools import PREFERENCE_CATEGORIES
 from src.api.schemas import ChatRequest
 from src.memory.client import get_memory_client
 
@@ -52,28 +54,16 @@ def safe_serialize(obj: Any) -> Any:
     return str(obj)
 
 
-# Keywords that indicate preference statements
-PREFERENCE_INDICATORS = [
-    "i prefer",
-    "i like",
-    "i want",
-    "i love",
-    "i enjoy",
-    "i'd rather",
-    "i would rather",
-    "please use",
-    "please give me",
-    "please provide",
-    "i'm interested in",
-    "i am interested in",
-    "my preference is",
-    "my favorite",
-    "i hate",
-    "i don't like",
-    "i dislike",
-    "avoid",
-    "don't give me",
-]
+# Preference detection is delegated to the library's pattern-based detector,
+# which extracts the preference *clause* instead of storing the whole message.
+_preference_detector = PreferenceDetector()
+
+# Podcast-specific category keywords. The detector's own categories (food,
+# music, ...) are not useful here, so we re-categorize into the four buckets
+# ``get_user_preferences`` reads back (``tools.PREFERENCE_CATEGORIES``).
+_FORMAT_WORDS = ("format", "summary", "summaries", "bullet", "concise", "brief", "detailed")
+_CONTENT_WORDS = ("topic", "subject", "podcast", "episode", "guest")
+_TOPIC_WORDS = ("product", "growth", "startup", "leadership", "career", "mental health")
 
 
 async def get_conversation_history(
@@ -81,7 +71,7 @@ async def get_conversation_history(
     session_id: str,
     limit: int = 20,
 ) -> list[ModelRequest | ModelResponse]:
-    """Fetch conversation history and convert to PydanticAI message format.
+    """Fetch the most recent conversation turns in PydanticAI message format.
 
     Args:
         memory: The memory client.
@@ -92,17 +82,17 @@ async def get_conversation_history(
         List of PydanticAI messages suitable for message_history parameter.
     """
     try:
-        conversation = await memory.short_term.get_conversation(
-            session_id=session_id,
-            limit=limit,
-        )
+        # ``get_conversation`` orders messages oldest-first and applies LIMIT in
+        # Cypher, so passing ``limit=`` would pin the agent to the *opening*
+        # turns of a long thread. Fetch the conversation and slice the tail.
+        conversation = await memory.short_term.get_conversation(session_id=session_id)
 
         if not conversation or not conversation.messages:
             return []
 
         history: list[ModelRequest | ModelResponse] = []
 
-        for msg in conversation.messages:
+        for msg in conversation.messages[-limit:]:
             if msg.role == MessageRole.USER:
                 # User messages become ModelRequest with UserPromptPart
                 history.append(ModelRequest(parts=[UserPromptPart(content=msg.content)]))
@@ -118,60 +108,93 @@ async def get_conversation_history(
         return []
 
 
+# POLE+O types (plus the podcast schema's custom types) that a tool result may
+# report. Used to turn tool output into ``:TOUCHED`` audit edges.
+_KNOWN_ENTITY_TYPES = {
+    "PERSON",
+    "OBJECT",
+    "LOCATION",
+    "EVENT",
+    "ORGANIZATION",
+    "CONCEPT",
+    "PRODUCT",
+    "TECHNOLOGY",
+    "BOOK",
+    "COMPANY",
+}
+
+
+def extract_touched_entities(result: Any) -> list[EntityRef]:
+    """Pull ``{name, type}`` pairs out of a tool result.
+
+    Entity-shaped rows become :class:`EntityRef`s, which ``record_tool_call``
+    materializes as ``(:ReasoningStep)-[:TOUCHED]->(:Entity)`` edges so an audit
+    query can reach "what did this step affect?" in one hop. See
+    ``docs/.../how-to/audit-reasoning.adoc``.
+    """
+    if not isinstance(result, list):
+        return []
+    refs: dict[tuple[str, str], EntityRef] = {}
+    for row in result[:25]:
+        if not isinstance(row, dict):
+            continue
+        name = row.get("name")
+        raw_type = row.get("type") or row.get("entity_type")
+        if not isinstance(name, str) or not isinstance(raw_type, str):
+            continue
+        base_type = raw_type.split(":", 1)[0].upper()
+        if base_type not in _KNOWN_ENTITY_TYPES:
+            continue
+        refs[(name, base_type)] = EntityRef(name=name, type=base_type)
+    return list(refs.values())
+
+
+def categorize_preference(text: str) -> str:
+    """Map a detected preference clause onto one of this app's categories."""
+    lowered = text.lower()
+    if any(word in lowered for word in _FORMAT_WORDS):
+        return "format"
+    if any(word in lowered for word in _CONTENT_WORDS):
+        return "content"
+    if any(word in lowered for word in _TOPIC_WORDS):
+        return "topics"
+    return "general"
+
+
 async def extract_and_store_preferences(
     memory: MemoryClient,
     message: str,
     session_id: str,
 ) -> None:
-    """Extract preferences from user message and store in long-term memory."""
-    message_lower = message.lower()
+    """Detect preferences in a user message and store them in long-term memory.
 
-    # Check if the message contains preference indicators
-    has_preference = any(indicator in message_lower for indicator in PREFERENCE_INDICATORS)
-
-    if not has_preference:
+    Uses the library's :class:`PreferenceDetector` (regex patterns, no LLM call)
+    so only the matched clause is persisted -- not the whole user message.
+    """
+    detected = _preference_detector.detect(message)
+    if not detected:
         return
 
-    # Categorize the preference
-    category = "general"
-    if any(
-        word in message_lower
-        for word in [
-            "format",
-            "summary",
-            "summaries",
-            "bullet",
-            "concise",
-            "brief",
-            "detailed",
-        ]
-    ):
-        category = "format"
-    elif any(word in message_lower for word in ["topic", "subject", "podcast", "episode", "guest"]):
-        category = "content"
-    elif any(
-        word in message_lower
-        for word in [
-            "product",
-            "growth",
-            "startup",
-            "leadership",
-            "career",
-            "mental health",
-        ]
-    ):
-        category = "topics"
-
-    try:
-        await memory.long_term.add_preference(
-            category=category,
-            preference=message,
-            context=f"Extracted from conversation in session {session_id}",
-            confidence=0.8,
-        )
-        logger.info(f"Stored preference: [{category}] {message[:50]}...")
-    except Exception as e:
-        logger.warning(f"Failed to store preference: {e}")
+    for pref in detected:
+        category = categorize_preference(pref.source_text)
+        if category not in PREFERENCE_CATEGORIES:  # pragma: no cover - defensive
+            category = "general"
+        try:
+            await memory.long_term.add_preference(
+                category=category,
+                preference=pref.preference,
+                context=pref.source_text,
+                confidence=pref.confidence,
+                metadata={
+                    "source": "chat",
+                    "session_id": session_id,
+                    "sentiment": pref.sentiment,
+                    "detector": "PreferenceDetector",
+                },
+            )
+            logger.info("Stored preference: [%s] %s", category, pref.preference[:60])
+        except Exception:
+            logger.exception("Failed to store preference")
 
 
 async def stream_chat_response(
@@ -182,12 +205,19 @@ async def stream_chat_response(
     message_id = str(uuid.uuid4())
     trace_id: UUID | None = None
     current_step_id: UUID | None = None
+    user_message_id: UUID | None = None
     memory_enabled = request.memory_enabled and memory is not None
     task_success = True
     error_message: str | None = None
+    full_response = ""
 
     # Track tool call timings (tool_call_id -> start_time)
     tool_call_start_times: dict[str, float] = {}
+    # Arguments per tool_call_id, so a turn with several tool calls records the
+    # right arguments for each one (a shared `args` variable records the last).
+    args_by_call_id: dict[str, dict[str, Any]] = {}
+    # Entities the turn touched, collected from tool results for the audit edges.
+    touched: dict[tuple[str, str], EntityRef] = {}
 
     try:
         # Get conversation history before adding the new message
@@ -210,11 +240,12 @@ async def stream_chat_response(
 
         # Store user message in short-term memory
         if memory_enabled and memory:
-            await memory.short_term.add_message(
+            user_message = await memory.short_term.add_message(
                 session_id=request.thread_id,
                 role=MessageRole.USER,
                 content=request.message,
             )
+            user_message_id = user_message.id
 
             # Extract and store any preferences from the user message
             await extract_and_store_preferences(
@@ -229,12 +260,13 @@ async def stream_chat_response(
                 session_id=request.thread_id,
                 task=request.message,
                 metadata={"message_id": message_id},
+                # Creates (:ReasoningTrace)-[:INITIATED_BY]->(:Message)
+                triggered_by_message_id=user_message_id,
             )
             trace_id = trace.id
             logger.info(f"Started reasoning trace: {trace_id}")
 
         # Run agent with streaming and conversation history
-        full_response = ""
         agent = get_podcast_agent()
 
         async with agent.run_stream(
@@ -268,6 +300,7 @@ async def stream_chat_response(
                                         args = {"raw": part.args}
 
                             tool_call_id = part.tool_call_id or str(uuid.uuid4())
+                            args_by_call_id[tool_call_id] = args
 
                             # Record start time for duration calculation
                             tool_call_start_times[tool_call_id] = time.time()
@@ -325,11 +358,14 @@ async def stream_chat_response(
 
                             # Record tool call to reasoning memory
                             if current_step_id and memory:
+                                call_entities = extract_touched_entities(result_content)
+                                for ref in call_entities:
+                                    touched[(ref.name or "", ref.type or "")] = ref
                                 try:
                                     await memory.reasoning.record_tool_call(
                                         step_id=current_step_id,
                                         tool_name=part.tool_name,
-                                        arguments=args if "args" in dir() else {},
+                                        arguments=args_by_call_id.get(tool_call_id, {}),
                                         result=result_content,
                                         status=ToolCallStatus.ERROR
                                         if is_error
@@ -338,6 +374,10 @@ async def stream_chat_response(
                                         error=str(result_content[0].get("error"))
                                         if is_error and isinstance(result_content, list)
                                         else None,
+                                        # (:ToolCall)-[:TRIGGERED_BY]->(:Message)
+                                        message_id=user_message_id,
+                                        # (:ReasoningStep)-[:TOUCHED]->(:Entity)
+                                        touched_entities=call_entities or None,
                                     )
                                     logger.debug(
                                         f"Recorded tool call {part.tool_name} "
@@ -364,9 +404,6 @@ async def stream_chat_response(
                 content=full_response,
             )
 
-        # Update thread activity (2 messages: user + assistant)
-        update_thread_activity(request.thread_id, increment_messages=2)
-
     except Exception as e:
         logger.exception("Error in chat stream")
         task_success = False
@@ -375,13 +412,23 @@ async def stream_chat_response(
         yield {"data": json.dumps(event)}
 
     finally:
-        # Complete reasoning trace with outcome
+        # Complete reasoning trace with a structured outcome: the error kind is
+        # indexed for filtering, related entities make the trace retrievable by
+        # subject, and the metrics land on the ReasoningTrace node.
         if trace_id and memory:
             try:
                 await memory.reasoning.complete_trace(
                     trace_id,
-                    outcome=full_response[:500] if task_success else f"Error: {error_message}",
-                    success=task_success,
+                    outcome=TraceOutcome(
+                        success=task_success,
+                        summary=full_response[:500] if task_success else f"Error: {error_message}",
+                        error_kind=None if task_success else "agent_error",
+                        related_entities=list(touched.values()),
+                        metrics={
+                            "tools_called": float(len(args_by_call_id)),
+                            "response_chars": float(len(full_response)),
+                        },
+                    ),
                 )
                 logger.info(f"Completed reasoning trace: {trace_id} (success: {task_success})")
             except Exception as e:

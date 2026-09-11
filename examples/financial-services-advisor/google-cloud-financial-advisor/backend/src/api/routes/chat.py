@@ -1,4 +1,17 @@
-"""Chat API routes for interacting with the financial advisor agents."""
+"""Chat API routes for interacting with the financial advisor agents.
+
+Two entry points share one ADK event consumer (``services.adk_events``):
+
+* ``POST /api/chat/stream`` — Server-Sent Events, used by the React frontend;
+* ``POST /api/chat`` — the same run, collected into a single JSON response.
+
+Both persist an audit-grade reasoning trace: the user message is stored first so
+the trace can carry ``triggered_by_message_id`` (an ``INITIATED_BY`` edge), each
+agent activation becomes a ``ReasoningStep``, each tool call records the
+entities it touched (``(:ReasoningStep)-[:TOUCHED]->(:Entity)``), and the trace
+is completed with a structured :class:`TraceOutcome`. Steps are written *as the
+run proceeds*, so a crashed run still leaves a partial trace behind.
+"""
 
 from __future__ import annotations
 
@@ -13,7 +26,6 @@ from fastapi.responses import StreamingResponse
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
-from neo4j_agent_memory import ToolCallStatus
 
 from ...agents.supervisor import get_supervisor_agent
 from ...models.chat import (
@@ -27,13 +39,21 @@ from ...models.chat import (
     SearchResult,
     ToolCall,
 )
+from ...services.adk_events import (
+    collect_run,
+    consume_run,
+    truncate_result,
+)
 from ...services.memory_service import (
     FinancialMemoryService,
     get_initialized_memory_service,
 )
+from ...services.trace_writer import TraceWriter
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/chat", tags=["chat"])
+
+APP_NAME = "financial_advisor"
 
 # Demo-only: in-memory session service. Use a persistent store for production.
 session_service = InMemorySessionService()
@@ -46,15 +66,62 @@ def _sse_event(event_type: str, data: dict[str, Any]) -> str:
 
 def _truncate_result(result: Any, max_len: int = 500) -> str | None:
     """Truncate tool results for SSE transmission, always returning a string."""
-    if result is None:
-        return None
-    if isinstance(result, (dict, list)):
-        s = json.dumps(result, default=str)
-    else:
-        s = str(result)
-    if len(s) > max_len:
-        return s[:max_len] + "..."
-    return s
+    return truncate_result(result, max_len)
+
+
+def _memory_operation(tool_name: str) -> str | None:
+    """Classify a tool name as a memory read or write, for the UI indicator."""
+    if any(kw in tool_name for kw in ("search", "context", "history", "load_memory")):
+        return "search"
+    if any(kw in tool_name for kw in ("store", "finding", "record")):
+        return "store"
+    return None
+
+
+def _build_runner(
+    memory_service: FinancialMemoryService,
+    neo4j_service: Any,
+) -> Runner:
+    """Build an ADK Runner wired to both session and memory services.
+
+    Passing ``memory_service=`` is what gives the agents ADK's native
+    ``load_memory`` tool (and ``preload_memory``) against Neo4j — no bespoke
+    search tool per agent.
+    """
+    supervisor = get_supervisor_agent(memory_service, neo4j_service=neo4j_service)
+    return Runner(
+        agent=supervisor,
+        app_name=APP_NAME,
+        session_service=session_service,
+        memory_service=memory_service.adk_memory_service,
+    )
+
+
+async def _ensure_session(session_id: str, user_id: str) -> None:
+    """Create the ADK session if it does not exist yet."""
+    session = await session_service.get_session(
+        app_name=APP_NAME,
+        user_id=user_id,
+        session_id=session_id,
+    )
+    if session is None:
+        await session_service.create_session(
+            app_name=APP_NAME,
+            user_id=user_id,
+            session_id=session_id,
+        )
+
+
+def _contextualise(request: ChatRequest) -> str:
+    """Prefix the user message with any customer/investigation context."""
+    context_parts = []
+    if request.customer_id:
+        context_parts.append(f"Customer context: {request.customer_id}")
+    if request.investigation_id:
+        context_parts.append(f"Investigation context: {request.investigation_id}")
+    if not context_parts:
+        return request.message
+    return f"{' | '.join(context_parts)}\n\n{request.message}"
 
 
 @router.post("/stream")
@@ -65,337 +132,151 @@ async def chat_stream(
 ):
     """Stream agent events via Server-Sent Events.
 
-    Streams real-time events as agents process the request, including:
-    - agent_start/agent_complete: Agent lifecycle
-    - agent_delegate: Supervisor delegating to sub-agents
-    - tool_call/tool_result: Tool invocations and results
-    - memory_access: Neo4j memory reads/writes
-    - thinking: Agent reasoning text
-    - response: Final response text
-    - trace_saved: Reasoning trace persisted to Neo4j
-    - done: Stream complete
+    Event types: ``agent_start``/``agent_complete``, ``agent_delegate``,
+    ``tool_call``/``tool_result``, ``memory_access``, ``thinking``,
+    ``response``, ``trace_saved``, ``done``, ``error``.
     """
     start_time = time.time()
     session_id = request.session_id or str(uuid.uuid4())
+    user_id = "user"
 
     neo4j_service = getattr(raw_request.app.state, "neo4j_service", None)
-    supervisor = get_supervisor_agent(memory_service, neo4j_service=neo4j_service)
-
-    # Create or get session
-    # Demo-only: hardcoded user_id. Use authenticated user identity in production.
-    session = await session_service.get_session(
-        app_name="financial_advisor",
-        user_id="user",
-        session_id=session_id,
-    )
-    if session is None:
-        session = await session_service.create_session(
-            app_name="financial_advisor",
-            user_id="user",
-            session_id=session_id,
-        )
-
-    # Build context message
-    context_parts = []
-    if request.customer_id:
-        context_parts.append(f"Customer context: {request.customer_id}")
-    if request.investigation_id:
-        context_parts.append(f"Investigation context: {request.investigation_id}")
-
-    user_message = request.message
-    if context_parts:
-        user_message = f"{' | '.join(context_parts)}\n\n{request.message}"
-
-    runner = Runner(
-        agent=supervisor,
-        app_name="financial_advisor",
-        session_service=session_service,
-    )
+    await _ensure_session(session_id, user_id)
+    runner = _build_runner(memory_service, neo4j_service)
+    user_message = _contextualise(request)
 
     async def event_generator():
         response_text = ""
-        agents_consulted: set[str] = set()
-        current_agent: str | None = None
-        tool_call_count = 0
-        step_count = 0
-
-        # Reasoning trace state — record after stream completes
-        trace_events: list[dict[str, Any]] = []
-
-        # Cache function call args so we can pair them with responses
-        pending_calls: dict[str, dict[str, Any]] = {}
+        agents_consulted: list[str] = []
+        trace = TraceWriter(memory_service, session_id)
 
         try:
-            async for event in runner.run_async(
-                user_id="user",
+            # Store the user turn first: its id becomes the trace's
+            # INITIATED_BY target.
+            user_message_id = None
+            try:
+                stored = await memory_service.store_message(session_id, "user", request.message)
+                user_message_id = stored.id
+            except Exception as exc:
+                logger.error("Failed to store user message: %s", exc, exc_info=True)
+
+            await trace.start(request.message, triggered_by_message_id=user_message_id)
+
+            async for run_event in consume_run(
+                runner,
+                user_id=user_id,
                 session_id=session_id,
                 new_message=types.Content(
                     role="user",
                     parts=[types.Part(text=user_message)],
                 ),
             ):
-                ts = time.time()
+                await trace.handle(run_event)
+                payload: dict[str, Any] = {
+                    "agent": run_event.agent,
+                    "timestamp": run_event.timestamp,
+                }
 
-                # --- Detect agent transitions via event.author ---
-                author = event.author if event.author != "user" else None
-                if author and author != current_agent:
-                    # Complete previous agent
-                    if current_agent:
-                        yield _sse_event(
-                            "agent_complete",
-                            {
-                                "agent": current_agent,
-                                "timestamp": ts,
-                            },
-                        )
-                        trace_events.append(
-                            {
-                                "type": "agent_complete",
-                                "agent": current_agent,
-                            }
-                        )
-
-                    # Emit delegation event from supervisor
-                    if current_agent:
-                        yield _sse_event(
-                            "agent_delegate",
-                            {
-                                "from": current_agent,
-                                "to": author,
-                                "timestamp": ts,
-                            },
-                        )
-
-                    current_agent = author
-                    agents_consulted.add(current_agent)
-                    step_count += 1
-                    yield _sse_event(
-                        "agent_start",
-                        {
-                            "agent": current_agent,
-                            "timestamp": ts,
-                        },
-                    )
-                    trace_events.append(
-                        {
-                            "type": "agent_start",
-                            "agent": current_agent,
-                        }
-                    )
-
-                # --- Detect transfer_to_agent in actions ---
-                if event.actions and event.actions.transfer_to_agent:
+                if run_event.kind == "agent_start":
+                    if run_event.agent and run_event.agent not in agents_consulted:
+                        agents_consulted.append(run_event.agent)
+                    yield _sse_event("agent_start", payload)
+                elif run_event.kind == "agent_complete":
+                    yield _sse_event("agent_complete", payload)
+                elif run_event.kind == "agent_delegate":
                     yield _sse_event(
                         "agent_delegate",
                         {
-                            "from": current_agent or "supervisor",
-                            "to": event.actions.transfer_to_agent,
-                            "timestamp": ts,
+                            "from": run_event.agent,
+                            "to": run_event.target,
+                            "timestamp": run_event.timestamp,
                         },
                     )
-
-                # --- Extract function calls ---
-                # ADK internal transfer functions to skip
-                _internal_fns = {"transfer_to_agent", "transfer"}
-
-                for fc in event.get_function_calls():
-                    fc_name = fc.name
-                    if fc_name in _internal_fns:
-                        continue
-                    fc_args = dict(fc.args) if fc.args else {}
-                    pending_calls[fc_name] = fc_args
-
-                    # Detect memory tool calls
-                    is_memory_search = any(kw in fc_name for kw in ("search", "context", "history"))
-                    is_memory_store = any(kw in fc_name for kw in ("store", "finding", "record"))
-
-                    if is_memory_search:
+                elif run_event.kind == "tool_call":
+                    operation = _memory_operation(run_event.tool or "")
+                    if operation:
                         yield _sse_event(
                             "memory_access",
                             {
-                                "agent": current_agent,
-                                "operation": "search",
-                                "tool": fc_name,
-                                "query": fc_args.get("query", ""),
-                                "timestamp": ts,
+                                **payload,
+                                "operation": operation,
+                                "tool": run_event.tool,
+                                "query": run_event.args.get("query", ""),
                             },
                         )
-                    elif is_memory_store:
-                        yield _sse_event(
-                            "memory_access",
-                            {
-                                "agent": current_agent,
-                                "operation": "store",
-                                "tool": fc_name,
-                                "timestamp": ts,
-                            },
-                        )
-
                     yield _sse_event(
                         "tool_call",
-                        {
-                            "agent": current_agent,
-                            "tool": fc_name,
-                            "args": fc_args,
-                            "timestamp": ts,
-                        },
+                        {**payload, "tool": run_event.tool, "args": run_event.args},
                     )
-                    trace_events.append(
-                        {
-                            "type": "tool_call",
-                            "agent": current_agent,
-                            "tool": fc_name,
-                            "args": fc_args,
-                        }
-                    )
-
-                # --- Extract function responses ---
-                for fr in event.get_function_responses():
-                    if fr.name in _internal_fns:
-                        continue
-                    tool_call_count += 1
-                    fr_args = pending_calls.pop(fr.name, {})
+                elif run_event.kind == "tool_result":
                     yield _sse_event(
                         "tool_result",
                         {
-                            "agent": current_agent,
-                            "tool": fr.name,
-                            "result": _truncate_result(fr.response),
-                            "timestamp": ts,
+                            **payload,
+                            "tool": run_event.tool,
+                            "result": _truncate_result(run_event.result),
                         },
                     )
-                    trace_events.append(
-                        {
-                            "type": "tool_result",
-                            "agent": current_agent,
-                            "tool": fr.name,
-                            "args": fr_args,
-                            "result": fr.response,
-                        }
+                elif run_event.kind == "thinking":
+                    yield _sse_event(
+                        "thinking",
+                        {**payload, "thought": (run_event.text or "")[:300]},
                     )
-
-                # --- Extract text content ---
-                if event.content and event.content.parts:
-                    for part in event.content.parts:
-                        if part.text:
-                            # Only emit thinking for non-final text from sub-agents
-                            if not event.is_final_response():
-                                yield _sse_event(
-                                    "thinking",
-                                    {
-                                        "agent": current_agent,
-                                        "thought": part.text[:300],
-                                        "timestamp": ts,
-                                    },
-                                )
-                            response_text += part.text
-
-            # Complete last agent
-            if current_agent:
-                yield _sse_event(
-                    "agent_complete",
-                    {
-                        "agent": current_agent,
-                        "timestamp": time.time(),
-                    },
-                )
+                    response_text += run_event.text or ""
+                elif run_event.kind == "response":
+                    response_text += run_event.text or ""
 
             if not response_text:
                 response_text = "Investigation complete."
 
-            # --- Emit final response ---
-            yield _sse_event(
-                "response",
-                {
-                    "content": response_text,
-                    "session_id": session_id,
-                },
+            yield _sse_event("response", {"content": response_text, "session_id": session_id})
+
+            # Store the assistant turn (entity extraction runs here too).
+            try:
+                await memory_service.store_message(session_id, "assistant", response_text)
+            except Exception as exc:
+                logger.error("Failed to store assistant message: %s", exc, exc_info=True)
+
+            total_duration = int((time.time() - start_time) * 1000)
+            await trace.complete(
+                summary=response_text,
+                success=True,
+                duration_ms=total_duration,
             )
 
-            # --- Store conversation in memory (triggers entity extraction) ---
-            try:
-                await memory_service.add_session(
-                    session_id=session_id,
-                    messages=[
-                        {"role": "user", "content": request.message},
-                        {"role": "assistant", "content": response_text},
-                    ],
-                )
-                logger.info("Session stored with entity extraction for %s", session_id)
-            except Exception as e:
-                logger.warning("Failed to store session: %s", e)
-
-            # --- Save reasoning trace to Neo4j ---
-            trace_id = None
-            try:
-                reasoning = memory_service.client.reasoning
-                trace = await reasoning.start_trace(
-                    session_id=session_id,
-                    task=request.message,
-                    generate_embedding=False,
-                )
-                trace_id = trace.id
-
-                # Group trace events by agent
-                current_step = None
-                current_step_agent = None
-                for te in trace_events:
-                    if te["type"] == "agent_start":
-                        current_step = await reasoning.add_step(
-                            trace_id=trace.id,
-                            thought=f"Agent {te['agent']} activated",
-                            action=f"Processing as {te['agent']}",
-                            generate_embedding=False,
-                        )
-                        current_step_agent = te["agent"]
-                    elif te["type"] == "tool_result" and current_step:
-                        await reasoning.record_tool_call(
-                            step_id=current_step.id,
-                            tool_name=te["tool"],
-                            arguments=te.get("args", {}),
-                            result=te.get("result"),
-                            status=ToolCallStatus.SUCCESS,
-                        )
-
-                await reasoning.complete_trace(
-                    trace_id=trace.id,
-                    outcome=response_text[:500],
-                    success=True,
-                )
-
+            if trace.trace_id is not None:
                 yield _sse_event(
                     "trace_saved",
                     {
-                        "trace_id": str(trace_id),
-                        "step_count": step_count,
-                        "tool_call_count": tool_call_count,
+                        "trace_id": str(trace.trace_id),
+                        "step_count": trace.step_count,
+                        "tool_call_count": trace.tool_call_count,
+                        "touched_entities": [r.name for r in trace.touched],
                     },
                 )
-                logger.info(
-                    "Reasoning trace saved: %s (%d steps, %d tool calls)",
-                    trace_id,
-                    step_count,
-                    tool_call_count,
-                )
-            except Exception as e:
-                logger.warning("Failed to save reasoning trace: %s", e)
 
-            # --- Done ---
-            total_duration = int((time.time() - start_time) * 1000)
             yield _sse_event(
                 "done",
                 {
                     "session_id": session_id,
-                    "agents_consulted": sorted(agents_consulted),
-                    "tool_call_count": tool_call_count,
+                    "agents_consulted": agents_consulted,
+                    "tool_call_count": trace.tool_call_count,
                     "total_duration_ms": total_duration,
-                    "trace_id": str(trace_id) if trace_id else None,
+                    "trace_id": str(trace.trace_id) if trace.trace_id else None,
                 },
             )
 
-        except Exception as e:
-            logger.error("Stream error: %s", e, exc_info=True)
-            yield _sse_event("error", {"message": str(e)})
+        except Exception as exc:
+            logger.error("Stream error: %s", exc, exc_info=True)
+            await trace.complete(
+                summary=str(exc),
+                success=False,
+                duration_ms=int((time.time() - start_time) * 1000),
+                error_kind=type(exc).__name__,
+            )
+            yield _sse_event("error", {"message": str(exc)})
+        finally:
+            await runner.close()
 
     return StreamingResponse(
         event_generator(),
@@ -414,96 +295,48 @@ async def chat(
     raw_request: Request,
     memory_service: FinancialMemoryService = Depends(get_initialized_memory_service),
 ) -> ChatResponse:
-    """Send a message to the financial advisor and get a response.
+    """Send a message to the financial advisor and get a single JSON response.
 
-    The supervisor agent will analyze the request and delegate to
-    specialized agents (KYC, AML, Relationship, Compliance) as needed.
+    Same run as ``/stream``, collected instead of streamed.
     """
     start_time = time.time()
-
-    # Generate or use existing session ID
     session_id = request.session_id or str(uuid.uuid4())
+    user_id = "user"
 
     try:
-        # Get neo4j_service from app state (set during startup)
         neo4j_service = getattr(raw_request.app.state, "neo4j_service", None)
+        await _ensure_session(session_id, user_id)
+        runner = _build_runner(memory_service, neo4j_service)
 
-        # Get the supervisor agent (passes neo4j_service to tool bindings)
-        supervisor = get_supervisor_agent(memory_service, neo4j_service=neo4j_service)
+        stored = await memory_service.store_message(session_id, "user", request.message)
+        trace = TraceWriter(memory_service, session_id)
+        await trace.start(request.message, triggered_by_message_id=stored.id)
 
-        # Create or get session
-        session = await session_service.get_session(
-            app_name="financial_advisor",
-            user_id="user",
-            session_id=session_id,
-        )
-        if session is None:
-            session = await session_service.create_session(
-                app_name="financial_advisor",
-                user_id="user",
+        try:
+            summary = await collect_run(
+                runner,
+                user_id=user_id,
                 session_id=session_id,
+                new_message=types.Content(
+                    role="user",
+                    parts=[types.Part(text=_contextualise(request))],
+                ),
             )
+        finally:
+            await runner.close()
 
-        # Build context message
-        context_parts = []
-        if request.customer_id:
-            context_parts.append(f"Customer context: {request.customer_id}")
-        if request.investigation_id:
-            context_parts.append(f"Investigation context: {request.investigation_id}")
+        for run_event in summary.events:
+            await trace.handle(run_event)
 
-        user_message = request.message
-        if context_parts:
-            user_message = f"{' | '.join(context_parts)}\n\n{request.message}"
-
-        # Create runner and execute
-        runner = Runner(
-            agent=supervisor,
-            app_name="financial_advisor",
-            session_service=session_service,
-        )
-
-        # Run the agent (run_async returns an async generator of events)
-        response_text = ""
-        tool_calls = []
-        agents_consulted = set()
-
-        async for event in runner.run_async(
-            user_id="user",
-            session_id=session_id,
-            new_message=types.Content(
-                role="user",
-                parts=[types.Part(text=user_message)],
-            ),
-        ):
-            if hasattr(event, "content") and event.content and event.content.parts:
-                for part in event.content.parts:
-                    if hasattr(part, "text") and part.text:
-                        response_text += part.text
-            if hasattr(event, "tool_calls") and event.tool_calls:
-                for tc in event.tool_calls:
-                    tool_calls.append(
-                        ToolCall(
-                            tool_name=tc.name,
-                            arguments=tc.args or {},
-                            agent=getattr(event, "agent_name", None),
-                        )
-                    )
-            if hasattr(event, "agent_name"):
-                agents_consulted.add(event.agent_name)
-
-        if not response_text:
-            response_text = "Investigation complete."
-
-        # Store the conversation in memory
-        await memory_service.add_session(
-            session_id=session_id,
-            messages=[
-                {"role": "user", "content": request.message},
-                {"role": "assistant", "content": response_text},
-            ],
-        )
+        response_text = summary.response_text or "Investigation complete."
+        await memory_service.store_message(session_id, "assistant", response_text)
 
         response_time = int((time.time() - start_time) * 1000)
+        await trace.complete(
+            summary=response_text,
+            success=True,
+            duration_ms=response_time,
+        )
 
         return ChatResponse(
             session_id=session_id,
@@ -511,16 +344,23 @@ async def chat(
                 role=MessageRole.ASSISTANT,
                 content=response_text,
             ),
-            agents_consulted=list(agents_consulted),
-            tool_calls=tool_calls,
+            agents_consulted=summary.agents_consulted,
+            tool_calls=[
+                ToolCall(
+                    tool_name=call.tool,
+                    arguments=call.args,
+                    agent=call.agent,
+                )
+                for call in summary.tool_calls
+            ],
             customer_id=request.customer_id,
             investigation_id=request.investigation_id,
             response_time_ms=response_time,
         )
 
-    except Exception as e:
-        logger.error(f"Chat error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        logger.error("Chat error: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/history/{session_id}", response_model=ConversationHistory)
@@ -548,9 +388,9 @@ async def get_conversation_history(
             messages=messages,
         )
 
-    except Exception as e:
-        logger.error(f"Error getting history: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        logger.error("Error getting history: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.post("/search", response_model=SearchResponse)
@@ -573,16 +413,16 @@ async def search_memory(
                     content=r["content"],
                     type=r["type"],
                     score=r.get("score"),
-                    metadata=r.get("metadata", {}),
+                    metadata=r.get("metadata") or {},
                 )
                 for r in results
             ],
             total=len(results),
         )
 
-    except Exception as e:
-        logger.error(f"Search error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        logger.error("Search error: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.delete("/session/{session_id}")
@@ -594,6 +434,6 @@ async def clear_session(
     try:
         await memory_service.clear_session(session_id)
         return {"status": "cleared", "session_id": session_id}
-    except Exception as e:
-        logger.error(f"Error clearing session: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        logger.error("Error clearing session: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc

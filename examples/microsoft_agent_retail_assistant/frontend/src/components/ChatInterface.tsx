@@ -1,48 +1,55 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  Badge,
   Box,
+  Button,
+  Card,
+  Code,
   Flex,
-  VStack,
   HStack,
   Input,
-  Button,
-  Text,
-  Card,
-  Badge,
   Spinner,
+  Text,
+  VStack,
 } from "@chakra-ui/react";
 import ReactMarkdown from "react-markdown";
-import { streamChat } from "@/lib/api";
+import { parseToolArguments, streamChat } from "@/lib/api";
+
+interface ToolCall {
+  /** `call_id` when the backend sends one, else the tool name. */
+  key: string;
+  name: string;
+  arguments: Record<string, unknown>;
+  result?: string;
+}
 
 interface Message {
   id: string;
   role: "user" | "assistant" | "system";
   content: string;
-  timestamp: Date;
+  /** Absent for the static welcome bubble, which must not print a
+      server-rendered clock (it would mismatch on hydration). */
+  timestamp?: Date;
   isStreaming?: boolean;
-  toolCalls?: Array<{
-    name: string;
-    arguments: Record<string, unknown>;
-    result?: string;
-  }>;
+  toolCalls?: ToolCall[];
 }
 
 interface ChatInterfaceProps {
   sessionId: string;
+  userId: string;
 }
 
-export function ChatInterface({ sessionId }: ChatInterfaceProps) {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: "welcome",
-      role: "assistant",
-      content:
-        "Hello! I'm your personal shopping assistant. I can help you find products, remember your preferences, and make personalized recommendations. What are you looking for today?",
-      timestamp: new Date(),
-    },
-  ]);
+const WELCOME: Message = {
+  id: "welcome",
+  role: "assistant",
+  content:
+    "Hello! I'm your personal shopping assistant. I can help you find products, remember your preferences, and make personalized recommendations. What are you looking for today?",
+};
+
+export function ChatInterface({ sessionId, userId }: ChatInterfaceProps) {
+  const [messages, setMessages] = useState<Message[]>([WELCOME]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -55,6 +62,10 @@ export function ChatInterface({ sessionId }: ChatInterfaceProps) {
   useEffect(() => {
     scrollToBottom();
   }, [messages, scrollToBottom]);
+
+  // Switching shoppers switches sessions, and page.tsx keys this component on
+  // the session id — React discards the old transcript for us, so there is no
+  // reset effect here.
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -72,111 +83,91 @@ export function ChatInterface({ sessionId }: ChatInterfaceProps) {
     setIsLoading(true);
 
     const assistantMessageId = `assistant-${Date.now()}`;
-    const assistantMessage: Message = {
-      id: assistantMessageId,
-      role: "assistant",
-      content: "",
-      timestamp: new Date(),
-      isStreaming: true,
-      toolCalls: [],
-    };
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: assistantMessageId,
+        role: "assistant",
+        content: "",
+        timestamp: new Date(),
+        isStreaming: true,
+        toolCalls: [],
+      },
+    ]);
 
-    setMessages((prev) => [...prev, assistantMessage]);
+    const patch = (update: (message: Message) => Message) =>
+      setMessages((prev) =>
+        prev.map((m) => (m.id === assistantMessageId ? update(m) : m))
+      );
 
     try {
-      for await (const event of streamChat(userMessage.content, sessionId)) {
-        const data = event.data as Record<string, unknown>;
+      for await (const event of streamChat(
+        userMessage.content,
+        sessionId,
+        userId
+      )) {
+        switch (event.event) {
+          case "token":
+            patch((m) => ({ ...m, content: m.content + event.data.content }));
+            break;
 
-        if (data.content) {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantMessageId
-                ? { ...m, content: m.content + data.content }
-                : m
-            )
-          );
-        }
+          case "tool_call": {
+            const key = event.data.call_id ?? event.data.name;
+            patch((m) => ({
+              ...m,
+              toolCalls: [
+                ...(m.toolCalls ?? []),
+                {
+                  key,
+                  name: event.data.name,
+                  arguments: parseToolArguments(event.data.arguments),
+                },
+              ],
+            }));
+            break;
+          }
 
-        if (data.name && data.arguments) {
-          // Tool call started
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantMessageId
-                ? {
-                    ...m,
-                    toolCalls: [
-                      ...(m.toolCalls || []),
-                      {
-                        name: data.name as string,
-                        arguments: data.arguments as Record<string, unknown>,
-                      },
-                    ],
-                  }
-                : m
-            )
-          );
-        }
+          case "tool_result": {
+            // Match on `call_id` when the backend supplies one; otherwise fall
+            // back to the first still-pending call with the same tool name, so
+            // two calls to one tool resolve in order instead of both grabbing
+            // the first result.
+            const { call_id: callId, name, result } = event.data;
+            patch((m) => {
+              const calls = m.toolCalls ?? [];
+              const index = callId
+                ? calls.findIndex((tc) => tc.key === callId)
+                : calls.findIndex((tc) => tc.name === name && !tc.result);
+              if (index === -1) return m;
+              const next = [...calls];
+              next[index] = { ...next[index], result };
+              return { ...m, toolCalls: next };
+            });
+            break;
+          }
 
-        if (data.name && data.result) {
-          // Tool result
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantMessageId
-                ? {
-                    ...m,
-                    toolCalls: m.toolCalls?.map((tc) =>
-                      tc.name === data.name
-                        ? { ...tc, result: data.result as string }
-                        : tc
-                    ),
-                  }
-                : m
-            )
-          );
-        }
+          case "done":
+            patch((m) => ({ ...m, isStreaming: false }));
+            break;
 
-        if (data.session_id) {
-          // Done event
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantMessageId ? { ...m, isStreaming: false } : m
-            )
-          );
-        }
-
-        if (data.error) {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantMessageId
-                ? {
-                    ...m,
-                    content: `Error: ${data.error}`,
-                    isStreaming: false,
-                  }
-                : m
-            )
-          );
+          case "error":
+            patch((m) => ({
+              ...m,
+              content: m.content || `Error: ${event.data.error}`,
+              isStreaming: false,
+            }));
+            break;
         }
       }
     } catch (error) {
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantMessageId
-            ? {
-                ...m,
-                content: `Error: ${error instanceof Error ? error.message : "Unknown error"}`,
-                isStreaming: false,
-              }
-            : m
-        )
-      );
+      patch((m) => ({
+        ...m,
+        content: `Error: ${error instanceof Error ? error.message : "Unknown error"}`,
+        isStreaming: false,
+      }));
     } finally {
       setIsLoading(false);
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantMessageId ? { ...m, isStreaming: false } : m
-        )
-      );
+      patch((m) => ({ ...m, isStreaming: false }));
       inputRef.current?.focus();
     }
   };
@@ -204,9 +195,9 @@ export function ChatInterface({ sessionId }: ChatInterfaceProps) {
       {/* Example prompts */}
       {messages.length <= 2 && (
         <HStack gap={2} flexWrap="wrap" mb={4}>
-          {examplePrompts.map((prompt, i) => (
+          {examplePrompts.map((prompt) => (
             <Button
-              key={i}
+              key={prompt}
               size="sm"
               variant="outline"
               colorPalette="teal"
@@ -228,7 +219,7 @@ export function ChatInterface({ sessionId }: ChatInterfaceProps) {
             placeholder="Ask me about products, preferences, or recommendations..."
             size="lg"
             disabled={isLoading}
-            bg="white"
+            bg="bg.panel"
           />
           <Button
             type="submit"
@@ -251,29 +242,17 @@ function MessageBubble({ message }: { message: Message }) {
     <Flex justify={isUser ? "flex-end" : "flex-start"}>
       <Card.Root
         maxW="80%"
-        bg={isUser ? "teal.500" : "white"}
-        color={isUser ? "white" : "gray.800"}
+        bg={isUser ? "teal.solid" : "bg.panel"}
+        color={isUser ? "teal.contrast" : "fg"}
+        borderColor="border.subtle"
         shadow="sm"
       >
         <Card.Body p={4}>
           {/* Tool calls */}
           {message.toolCalls && message.toolCalls.length > 0 && (
             <VStack align="stretch" gap={2} mb={3}>
-              {message.toolCalls.map((tc, i) => (
-                <Box
-                  key={i}
-                  bg={isUser ? "teal.600" : "gray.100"}
-                  p={2}
-                  borderRadius="md"
-                  fontSize="sm"
-                >
-                  <HStack>
-                    <Badge colorPalette="purple" size="sm">
-                      {tc.name}
-                    </Badge>
-                    {!tc.result && <Spinner size="xs" />}
-                  </HStack>
-                </Box>
+              {message.toolCalls.map((tc) => (
+                <ToolCallRow key={tc.key} call={tc} onTealBubble={isUser} />
               ))}
             </VStack>
           )}
@@ -287,7 +266,7 @@ function MessageBubble({ message }: { message: Message }) {
                 "& p:last-child": { marginBottom: 0 },
                 "& ul, & ol": { paddingLeft: "1.5em", marginBottom: "0.5em" },
                 "& code": {
-                  background: isUser ? "rgba(255,255,255,0.2)" : "gray.100",
+                  background: "var(--chakra-colors-bg-muted)",
                   padding: "0.1em 0.3em",
                   borderRadius: "3px",
                   fontSize: "0.9em",
@@ -304,16 +283,75 @@ function MessageBubble({ message }: { message: Message }) {
           ) : null}
 
           {/* Timestamp */}
-          <Text
-            fontSize="xs"
-            color={isUser ? "teal.100" : "gray.400"}
-            mt={2}
-            textAlign="right"
-          >
-            {message.timestamp.toLocaleTimeString()}
-          </Text>
+          {message.timestamp && (
+            <Text
+              fontSize="xs"
+              color={isUser ? "teal.contrast" : "fg.muted"}
+              opacity={isUser ? 0.8 : 1}
+              mt={2}
+              textAlign="right"
+            >
+              {message.timestamp.toLocaleTimeString()}
+            </Text>
+          )}
         </Card.Body>
       </Card.Root>
     </Flex>
   );
+}
+
+/**
+ * One tool invocation: the spinner clears when the matching `tool_result`
+ * frame arrives, and the arguments are rendered from the parsed JSON.
+ */
+function ToolCallRow({
+  call,
+  onTealBubble,
+}: {
+  call: ToolCall;
+  onTealBubble: boolean;
+}) {
+  const argSummary = Object.entries(call.arguments)
+    .map(([key, value]) => `${key}: ${formatArg(value)}`)
+    .join(", ");
+
+  return (
+    <Box
+      bg={onTealBubble ? "teal.emphasized" : "bg.muted"}
+      p={2}
+      borderRadius="md"
+      fontSize="sm"
+    >
+      <HStack>
+        <Badge colorPalette="purple" size="sm">
+          {call.name}
+        </Badge>
+        {call.result ? (
+          <Badge colorPalette="green" size="sm" variant="subtle">
+            done
+          </Badge>
+        ) : (
+          <Spinner size="xs" />
+        )}
+      </HStack>
+      {argSummary && (
+        <Code
+          mt={1}
+          display="block"
+          bg="transparent"
+          fontSize="xs"
+          color="fg.muted"
+          lineClamp={2}
+        >
+          {argSummary}
+        </Code>
+      )}
+    </Box>
+  );
+}
+
+function formatArg(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value === null || value === undefined) return "-";
+  return JSON.stringify(value);
 }

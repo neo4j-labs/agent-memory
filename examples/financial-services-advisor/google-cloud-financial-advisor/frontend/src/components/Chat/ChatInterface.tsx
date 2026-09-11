@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Box,
   Heading,
@@ -11,21 +11,27 @@ import {
   Badge,
   SimpleGrid,
 } from "@chakra-ui/react";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion } from "motion/react";
 import {
-  FiSend,
-  FiUser,
-  FiCpu,
-  FiShield,
-  FiSearch,
-  FiUsers,
-  FiAlertTriangle,
-  FiFileText,
-  FiActivity,
-} from "react-icons/fi";
-import { useAgentStream, AgentState } from "../../hooks/useAgentStream";
+  LuSend,
+  LuUser,
+  LuCpu,
+  LuShield,
+  LuSearch,
+  LuUsers,
+  LuTriangleAlert,
+  LuFileText,
+  LuActivity,
+  LuDatabase,
+  LuPlus,
+} from "react-icons/lu";
+import { useQuery } from "@tanstack/react-query";
+import { useAgentStream, type AgentState } from "../../hooks/useAgentStream";
+import { getChatHistory, getSessionTraces } from "../../lib/api";
+import { useChatSession } from "../../lib/session";
 import { AgentOrchestrationView } from "./AgentOrchestrationView";
 import { AgentActivityTimeline } from "./AgentActivityTimeline";
+import { MarkdownMessage } from "./MarkdownMessage";
 
 interface Message {
   role: "user" | "assistant";
@@ -36,6 +42,8 @@ interface Message {
   // Captured stream state for post-completion timeline
   agentStates?: Map<string, AgentState>;
   traceId?: string | null;
+  /** True when the turn was replayed from Neo4j rather than streamed here. */
+  restored?: boolean;
 }
 
 function ChatMessage({ message }: { message: Message }) {
@@ -49,17 +57,27 @@ function ChatMessage({ message }: { message: Message }) {
     >
       <Box alignSelf={isUser ? "flex-end" : "flex-start"} maxW="85%" mb={4}>
         <HStack gap={2} mb={1} justify={isUser ? "flex-end" : "flex-start"}>
-          <Box p={1} borderRadius="full" bg={isUser ? "blue.100" : "green.100"}>
-            {isUser ? <FiUser size={14} /> : <FiCpu size={14} />}
+          <Box
+            p={1}
+            borderRadius="full"
+            bg={isUser ? "brand.subtle" : "teal.subtle"}
+            color={isUser ? "brand.fg" : "teal.fg"}
+          >
+            {isUser ? <LuUser size={14} /> : <LuCpu size={14} />}
           </Box>
           <Text fontSize="xs" color="fg.muted">
             {isUser ? "You" : "Financial Advisor"}
           </Text>
+          {message.restored && (
+            <Badge size="sm" variant="subtle" colorPalette="teal">
+              <LuDatabase size={10} /> replayed from Neo4j
+            </Badge>
+          )}
         </HStack>
 
         <Box
-          bg={isUser ? "blue.600" : "bg.panel"}
-          color={isUser ? "white" : "fg"}
+          bg={isUser ? "brand.solid" : "bg.panel"}
+          color={isUser ? "brand.contrast" : "fg"}
           px={4}
           py={3}
           borderRadius="lg"
@@ -67,7 +85,11 @@ function ChatMessage({ message }: { message: Message }) {
           border={isUser ? "none" : "1px solid"}
           borderColor="border.subtle"
         >
-          <Text whiteSpace="pre-wrap">{message.content}</Text>
+          {isUser ? (
+            <Text whiteSpace="pre-wrap">{message.content}</Text>
+          ) : (
+            <MarkdownMessage content={message.content} />
+          )}
         </Box>
 
         {/* Agent activity timeline for assistant messages */}
@@ -87,63 +109,104 @@ function ChatMessage({ message }: { message: Message }) {
 export default function ChatInterface() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
-  const [sessionId, setSessionId] = useState<string | undefined>();
+  // The session id lives at app level so the Context Graph view can scope
+  // itself to this conversation, and so a reload can replay it from Neo4j.
+  const { sessionId, setSessionId } = useChatSession();
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const {
     isStreaming,
     activeAgent,
     agentStates,
-    finalResponse,
-    streamResult,
     error,
     delegationChain,
     startStream,
   } = useAgentStream();
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  };
+  // --- Replay a stored conversation (short-term memory) and its reasoning
+  // traces (reasoning memory) when we reopen a session we already have an id
+  // for. Without this the audit trail would only ever live in this tab.
+  const replaying = !!sessionId && messages.length === 0;
+  const historyQuery = useQuery({
+    queryKey: ["chat-history", sessionId],
+    queryFn: () => getChatHistory(sessionId!),
+    enabled: replaying,
+    staleTime: Infinity,
+    retry: false,
+  });
+  const tracesQuery = useQuery({
+    queryKey: ["session-traces", sessionId],
+    queryFn: () => getSessionTraces(sessionId!),
+    enabled: replaying,
+    staleTime: Infinity,
+    retry: false,
+  });
 
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages, agentStates, isStreaming]);
+  const restoredMessages = useMemo<Message[]>(() => {
+    if (!historyQuery.data) return [];
+    // `getSessionTraces` returns newest-first; assistant turns run oldest-first.
+    const traceIds = [...(tracesQuery.data ?? [])].reverse().map((t) => t.id);
+    let assistantTurn = 0;
+    return historyQuery.data.messages
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .map((m) =>
+        m.role === "assistant"
+          ? {
+              role: "assistant" as const,
+              content: m.content,
+              restored: true,
+              traceId: traceIds[assistantTurn++] ?? null,
+            }
+          : { role: "user" as const, content: m.content },
+      );
+  }, [historyQuery.data, tracesQuery.data]);
 
-  // When stream completes, add the assistant message
-  useEffect(() => {
-    if (finalResponse && streamResult && !isStreaming) {
-      setSessionId(streamResult.sessionId || undefined);
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content: finalResponse,
-          agents_consulted: streamResult.agentsConsulted,
-          response_time_ms: streamResult.totalDurationMs,
-          agentStates: new Map(agentStates),
-          traceId: streamResult.traceId,
-        },
-      ]);
-    }
-    // Only trigger when streaming stops with a result
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isStreaming]);
+  // What the transcript shows: live turns once there are any, otherwise the
+  // turns replayed from Neo4j.
+  const visibleMessages = messages.length > 0 ? messages : restoredMessages;
 
-  const handleSend = () => {
-    if (!input.trim() || isStreaming) return;
-
-    // Add user message
-    setMessages((prev) => [...prev, { role: "user", content: input }]);
-
-    // Start streaming
-    startStream(input, sessionId);
+  const startNewConversation = useCallback(() => {
+    setMessages([]);
     setInput("");
+    setSessionId(null);
+  }, [setSessionId]);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [visibleMessages, agentStates, isStreaming]);
+
+  const handleSend = async () => {
+    const prompt = input.trim();
+    if (!prompt || isStreaming) return;
+
+    // Seed the transcript with anything replayed from Neo4j plus this turn.
+    setMessages((prev) => [
+      ...(prev.length > 0 ? prev : restoredMessages),
+      { role: "user", content: prompt },
+    ]);
+    setInput("");
+
+    const outcome = await startStream(prompt, sessionId ?? undefined);
+    if (!outcome) return;
+
+    setSessionId(outcome.sessionId ?? null);
+    setMessages((prev) => [
+      ...prev,
+      {
+        role: "assistant",
+        content: outcome.response,
+        agents_consulted: outcome.agentsConsulted,
+        response_time_ms: outcome.totalDurationMs,
+        agentStates: outcome.agentStates,
+        traceId: outcome.traceId,
+      },
+    ]);
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      handleSend();
+      void handleSend();
     }
   };
 
@@ -151,7 +214,7 @@ export default function ChatInterface() {
     {
       title: "Full Compliance Investigation",
       agents: ["KYC", "AML", "Relationship", "Compliance"],
-      icon: FiShield,
+      icon: LuShield,
       color: "red",
       prompt:
         "Run a full compliance investigation on CUST-003 Global Holdings Ltd \u2014 check KYC documents, scan for structuring patterns, trace the shell company network, and screen against sanctions lists",
@@ -159,7 +222,7 @@ export default function ChatInterface() {
     {
       title: "Detect Structuring Pattern",
       agents: ["AML"],
-      icon: FiAlertTriangle,
+      icon: LuTriangleAlert,
       color: "orange",
       prompt:
         "I see four cash deposits of $9,500 each from CUST-003 in late January. Analyze whether this is a structuring pattern and identify where the funds went",
@@ -167,7 +230,7 @@ export default function ChatInterface() {
     {
       title: "Compare Customer Risk Profiles",
       agents: ["KYC", "Compliance"],
-      icon: FiActivity,
+      icon: LuActivity,
       color: "blue",
       prompt:
         "Compare the risk profiles of all three customers and flag which ones need enhanced due diligence",
@@ -175,7 +238,7 @@ export default function ChatInterface() {
     {
       title: "Trace Beneficial Ownership",
       agents: ["Relationship"],
-      icon: FiUsers,
+      icon: LuUsers,
       color: "purple",
       prompt:
         "Trace the beneficial ownership chain from Global Holdings Ltd through Shell Corp Cayman and Anonymous Trust Seychelles \u2014 who ultimately controls these entities?",
@@ -183,7 +246,7 @@ export default function ChatInterface() {
     {
       title: "Investigate Wire Transfers",
       agents: ["AML", "KYC"],
-      icon: FiSearch,
+      icon: LuSearch,
       color: "teal",
       prompt:
         "Maria Garcia (CUST-002) has rapid wire transfers totaling over $280K. Investigate whether her import/export business justifies this transaction volume",
@@ -191,7 +254,7 @@ export default function ChatInterface() {
     {
       title: "Generate SAR Report",
       agents: ["Compliance", "AML"],
-      icon: FiFileText,
+      icon: LuFileText,
       color: "yellow",
       prompt:
         "Generate a Suspicious Activity Report for the $250,000 wire from an unknown offshore entity to CUST-003 that was moved to Shell Corp Cayman the next day",
@@ -209,7 +272,19 @@ export default function ChatInterface() {
             </Badge>
           )}
           {sessionId && (
-            <Badge variant="outline">Session: {sessionId.slice(0, 8)}...</Badge>
+            <Badge variant="outline" fontFamily="mono">
+              Session: {sessionId.slice(0, 8)}…
+            </Badge>
+          )}
+          {sessionId && (
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={startNewConversation}
+              disabled={isStreaming}
+            >
+              <LuPlus /> New conversation
+            </Button>
           )}
         </HStack>
       </HStack>
@@ -217,7 +292,7 @@ export default function ChatInterface() {
       {/* Messages area */}
       <Card.Root flex="1" mb={4} overflow="hidden">
         <Card.Body overflowY="auto" display="flex" flexDirection="column" p={4}>
-          {messages.length === 0 && !isStreaming ? (
+          {visibleMessages.length === 0 && !isStreaming ? (
             <VStack justify="center" flex="1" gap={6} py={4}>
               <VStack gap={1}>
                 <Heading size="md" color="fg.muted">
@@ -283,7 +358,7 @@ export default function ChatInterface() {
           ) : (
             <VStack align="stretch" gap={0}>
               <AnimatePresence>
-                {messages.map((msg, i) => (
+                {visibleMessages.map((msg, i) => (
                   <ChatMessage key={i} message={msg} />
                 ))}
               </AnimatePresence>
@@ -326,12 +401,12 @@ export default function ChatInterface() {
         />
         <Button
           colorPalette="blue"
-          onClick={handleSend}
+          onClick={() => void handleSend()}
           disabled={!input.trim() || isStreaming}
           size="lg"
           aria-label="Send message"
         >
-          <FiSend />
+          <LuSend />
         </Button>
       </HStack>
 

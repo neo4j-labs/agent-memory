@@ -43,7 +43,9 @@ export default function RootLayout({
         className={`${syne.variable} ${publicSans.variable} ${jetbrainsMono.variable}`}
       >
         <Provider>{children}</Provider>
-        <Analytics />
+        {/* Opt-in only: a fork should not send page views to someone else's
+            project. The hosted Neo4j Labs demo sets this to "true". */}
+        {process.env.NEXT_PUBLIC_ENABLE_ANALYTICS === "true" && <Analytics />}
       </body>
     </html>
   );

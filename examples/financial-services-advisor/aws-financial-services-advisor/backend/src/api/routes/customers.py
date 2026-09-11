@@ -7,23 +7,24 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from ...models.customer import RiskLevel
+from ...services.neo4j_service import Neo4jDomainService
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/customers", tags=["customers"])
 
 
-def _get_neo4j_service(request: Request):
+def _get_neo4j_service(request: Request) -> Neo4jDomainService:
     """Get Neo4jDomainService from app state."""
     svc = getattr(request.app.state, "neo4j_service", None)
     if svc is None:
         raise HTTPException(status_code=503, detail="Neo4j service not available")
-    return svc
+    # app.state is untyped; the lifespan is the only writer.
+    return cast(Neo4jDomainService, svc)
 
 
 def _compute_risk(customer: dict) -> dict[str, Any]:
@@ -56,8 +57,11 @@ def _compute_risk(customer: dict) -> dict[str, Any]:
     if pending_docs > 0:
         total_score += pending_docs * 5
         contributing_factors.append(
-            {"factor": "incomplete_documentation", "weight": pending_docs * 5,
-             "description": f"{pending_docs} documents pending verification"}
+            {
+                "factor": "incomplete_documentation",
+                "weight": pending_docs * 5,
+                "description": f"{pending_docs} documents pending verification",
+            }
         )
 
     total_score = min(total_score, 100)
@@ -71,7 +75,11 @@ def _compute_risk(customer: dict) -> dict[str, Any]:
     else:
         risk_level = "LOW"
 
-    return {"risk_score": total_score, "risk_level": risk_level, "contributing_factors": contributing_factors}
+    return {
+        "risk_score": total_score,
+        "risk_level": risk_level,
+        "contributing_factors": contributing_factors,
+    }
 
 
 class CustomerResponse(BaseModel):
@@ -147,7 +155,7 @@ async def list_customers(
 
     total = len(customers)
     start = (page - 1) * page_size
-    return CustomerListResponse(customers=customers[start:start + page_size], total=total)
+    return CustomerListResponse(customers=customers[start : start + page_size], total=total)
 
 
 @router.get("/{customer_id}", response_model=CustomerResponse)
@@ -202,7 +210,14 @@ async def get_customer_network(
 
     conn_data = await neo4j_service.find_connections(customer_id, depth=depth)
 
-    nodes = [{"id": customer_id, "label": cust.get("name", customer_id), "type": cust.get("type", "UNKNOWN"), "isRoot": True}]
+    nodes = [
+        {
+            "id": customer_id,
+            "label": cust.get("name", customer_id),
+            "type": cust.get("type", "UNKNOWN"),
+            "isRoot": True,
+        }
+    ]
     edges = []
 
     for conn in conn_data.get("connections", []):
@@ -210,20 +225,30 @@ async def get_customer_network(
         entity_id = entity.get("id") or entity.get("name")
         rel_types = conn.get("rel_types", [])
 
-        nodes.append({
-            "id": entity_id,
-            "label": entity.get("name"),
-            "type": entity.get("type"),
-            "jurisdiction": entity.get("jurisdiction"),
-            "distance": conn.get("distance", 1),
-        })
-        edges.append({
-            "from": customer_id if conn.get("distance", 1) == 1 else None,
-            "to": entity_id,
-            "relationship": rel_types[0] if rel_types else "CONNECTED_TO",
-        })
+        nodes.append(
+            {
+                "id": entity_id,
+                "label": entity.get("name"),
+                "type": entity.get("type"),
+                "jurisdiction": entity.get("jurisdiction"),
+                "distance": conn.get("distance", 1),
+            }
+        )
+        edges.append(
+            {
+                "from": customer_id if conn.get("distance", 1) == 1 else None,
+                "to": entity_id,
+                "relationship": rel_types[0] if rel_types else "CONNECTED_TO",
+            }
+        )
 
-    return {"customer_id": customer_id, "depth": depth, "nodes": nodes, "edges": edges, "total_connections": len(conn_data.get("connections", []))}
+    return {
+        "customer_id": customer_id,
+        "depth": depth,
+        "nodes": nodes,
+        "edges": edges,
+        "total_connections": len(conn_data.get("connections", [])),
+    }
 
 
 @router.get("/{customer_id}/verify")
@@ -240,7 +265,11 @@ async def verify_customer(request: Request, customer_id: str) -> dict[str, Any]:
     if cust.get("type") == "individual":
         required_docs = ["passport", "utility_bill"]
     else:
-        required_docs = ["certificate_of_incorporation", "register_of_directors", "proof_of_address"]
+        required_docs = [
+            "certificate_of_incorporation",
+            "register_of_directors",
+            "proof_of_address",
+        ]
 
     doc_types_verified = {d["type"] for d in documents if d.get("status") == "verified"}
     missing_docs = [doc for doc in required_docs if doc not in doc_types_verified]
@@ -263,4 +292,6 @@ async def verify_customer(request: Request, customer_id: str) -> dict[str, Any]:
 async def create_customer(name: str, type: str = "individual") -> CustomerResponse:
     """Create a new customer (demo - not persisted to Neo4j)."""
     customer_id = f"CUST-{uuid.uuid4().hex[:6].upper()}"
-    return CustomerResponse(id=customer_id, name=name, type=type, risk_level="MEDIUM", risk_score=20)
+    return CustomerResponse(
+        id=customer_id, name=name, type=type, risk_level="MEDIUM", risk_score=20
+    )

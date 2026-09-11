@@ -158,12 +158,12 @@ See xref:explanation/multi-agent-sharing.adoc[Cross-Agent Memory Sharing] for th
 
 === icon:podcast[] Lenny's Podcast Memory Explorer _(Flagship)_
 
-299 podcast episodes transformed into a searchable knowledge graph with a full-stack AI chat agent, interactive graph visualization, geospatial map view, and Wikipedia-enriched entity cards.
+A podcast corpus transformed into a searchable knowledge graph with a full-stack AI chat agent, interactive graph visualization, geospatial map view, and Wikipedia-enriched entity cards. The real transcript corpus is not shipped with the repository — `make load-sample` runs against synthetic fixtures.
 
 [cols="^1,^1,^1", options="header"]
 |===
-|Episodes loaded |Agent tools |Memory types
-|299 |19 |3
+|Episodes in the full corpus |Agent tools |Memory types
+|299 |28 |3
 |===
 
 * Interactive graph visualization (Neo4j NVL)
@@ -173,7 +173,7 @@ See xref:explanation/multi-agent-sharing.adoc[Cross-Agent Memory Sharing] for th
 * Automatic preference learning from conversation
 * FastAPI + PydanticAI + Next.js + Chakra UI
 
-https://lennys-memory.vercel.app[Try Live Demo] | https://github.com/neo4j-labs/agent-memory/tree/main/neo4j-agent-memory/examples/lennys-memory[View on GitHub]
+https://lennys-memory.vercel.app[Try Live Demo] | https://github.com/neo4j-labs/agent-memory/tree/main/examples/lennys-memory[View on GitHub]
 
 === icon:newspaper[] Full-Stack Chat Agent
 
@@ -183,7 +183,7 @@ A news research assistant that uses all three memory types with an interactive m
 * Conversation-scoped graph filtering
 * Dual Neo4j databases (memory + news)
 
-https://github.com/neo4j-labs/agent-memory/tree/main/neo4j-agent-memory/examples/full-stack-chat-agent[View on GitHub]
+https://github.com/neo4j-labs/agent-memory/tree/main/examples/full-stack-chat-agent[View on GitHub]
 
 === icon:flask[] Domain Schema Examples
 
@@ -191,7 +191,7 @@ https://github.com/neo4j-labs/agent-memory/tree/main/neo4j-agent-memory/examples
 
 _Schemas: Podcast · News · Scientific · Business · Medical · Legal · Entertainment · POLE+O_
 
-https://github.com/neo4j-labs/agent-memory/tree/main/neo4j-agent-memory/examples/domain-schemas[View on GitHub]
+https://github.com/neo4j-labs/agent-memory/tree/main/examples/domain-schemas[View on GitHub]
 
 == Quick Start
 

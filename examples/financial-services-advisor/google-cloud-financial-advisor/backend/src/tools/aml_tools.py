@@ -149,7 +149,7 @@ async def flag_suspicious_transaction(
     MATCH (c:Customer)-[:HAS_TRANSACTION]->(t:Transaction {id: $txn_id})
     RETURN c.id AS customer_id, t {.*} AS transaction
     """
-    results = await neo4j_service._graph.execute_read(query, {"txn_id": transaction_id})
+    results = await neo4j_service.read(query, {"txn_id": transaction_id})
     if not results:
         return {
             "transaction_id": transaction_id,
@@ -237,7 +237,7 @@ async def analyze_velocity(
     WHERE t.amount > 50000
     RETURN t.id AS id
     """
-    large_results = await neo4j_service._graph.execute_read(large_txns_query, {"id": customer_id})
+    large_results = await neo4j_service.read(large_txns_query, {"id": customer_id})
     if large_results:
         anomalies.append(
             {

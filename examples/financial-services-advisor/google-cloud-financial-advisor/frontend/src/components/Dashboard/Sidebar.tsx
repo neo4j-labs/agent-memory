@@ -1,4 +1,4 @@
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation } from "react-router";
 import {
   Box,
   VStack,
@@ -15,6 +15,7 @@ import {
   LuUsers,
   LuSearch,
   LuTriangleAlert,
+  LuNetwork,
   LuBot,
   LuDatabase,
   LuShield,
@@ -37,9 +38,9 @@ function NavItem({ icon, label, to, isActive, badge }: NavItemProps) {
         px={3}
         py={2.5}
         borderRadius="md"
-        bg={isActive ? "blue.50" : "transparent"}
-        color={isActive ? "blue.600" : "fg.muted"}
-        _hover={{ bg: isActive ? "blue.50" : "bg.subtle" }}
+        bg={isActive ? "brand.subtle" : "transparent"}
+        color={isActive ? "brand.fg" : "fg.muted"}
+        _hover={{ bg: isActive ? "brand.subtle" : "bg.subtle" }}
         transition="all 0.15s"
         position="relative"
       >
@@ -50,7 +51,7 @@ function NavItem({ icon, label, to, isActive, badge }: NavItemProps) {
             top="20%"
             bottom="20%"
             w="3px"
-            bg="blue.500"
+            bg="brand.solid"
             borderRadius="full"
           />
         )}
@@ -104,7 +105,7 @@ export default function Sidebar() {
       {/* Logo */}
       <Box px={5} mb={6}>
         <HStack gap={2} mb={1}>
-          <Box color="blue.500">
+          <Box color="brand.fg">
             <LuShield size={20} />
           </Box>
           <Text fontSize="md" fontWeight="bold" color="fg">
@@ -174,6 +175,12 @@ export default function Sidebar() {
           to="/alerts"
           isActive={location.pathname === "/alerts"}
           badge={criticalCount}
+        />
+        <NavItem
+          icon={<LuNetwork size={18} />}
+          label="Context Graph"
+          to="/graph"
+          isActive={location.pathname === "/graph"}
         />
       </VStack>
 

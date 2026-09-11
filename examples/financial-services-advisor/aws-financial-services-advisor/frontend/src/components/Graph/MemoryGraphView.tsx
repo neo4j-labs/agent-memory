@@ -1,105 +1,99 @@
-import { useEffect, useState, useCallback, useRef } from 'react'
-import { Box, Heading, Text, Spinner, Flex, Badge, HStack } from '@chakra-ui/react'
-import { InteractiveNvlWrapper } from '@neo4j-nvl/react'
+import { Badge, Box, Flex, HStack, Heading, IconButton, Spinner, Text } from '@chakra-ui/react'
+import type NVL from '@neo4j-nvl/base'
 import type { Node, Relationship } from '@neo4j-nvl/base'
-import { LuNetwork, LuRefreshCw } from 'react-icons/lu'
-import api from '../../lib/api'
+import { InteractiveNvlWrapper } from '@neo4j-nvl/react'
+import { useQuery } from '@tanstack/react-query'
+import { useCallback, useRef, useState } from 'react'
+import { LuMaximize, LuNetwork, LuRefreshCw } from 'react-icons/lu'
+import { graphApi, normalizeNeighborNode, type GraphData } from '../../lib/api'
+import { getNodeColor, nodeColors } from '../../theme'
 
-const NODE_COLORS: Record<string, string> = {
-  Customer: '#68BDF6',
-  Organization: '#FB95AF',
-  Transaction: '#FFD86E',
-  Alert: '#FF6B6B',
-  SanctionedEntity: '#E74C3C',
-  PEP: '#9B59B6',
-  Document: '#A5D6A7',
-  Investigation: '#F39C12',
-  Entity: '#DE9BF9',
-  Person: '#68BDF6',
-  PEPRelative: '#BB8FCE',
-  SanctionAlias: '#E6B0AA',
-}
+const EMPTY_GRAPH: GraphData = { nodes: [], relationships: [] }
 
-function getNodeColor(labels: string[]): string {
-  for (const label of labels) {
-    if (NODE_COLORS[label]) return NODE_COLORS[label]
-  }
-  return '#95A5A6'
-}
-
-interface GraphData {
-  nodes: Array<{
-    id: string
-    label: string
-    labels: string[]
-    properties: Record<string, unknown>
-  }>
-  relationships: Array<{
-    id: string
-    from: string
-    to: string
-    type: string
-  }>
-}
-
+/**
+ * The compliance graph, rendered with the Neo4j Visualization Library.
+ *
+ * The base scene comes from `GET /api/graph/memory`; double-clicking a node
+ * fetches `GET /api/graph/neighbors/{id}` and merges the result into a local
+ * `expanded` overlay, so the cached base scene stays untouched.
+ */
 export default function MemoryGraphView() {
-  const [graphData, setGraphData] = useState<GraphData | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const nvlRef = useRef<any>(null)
+  const [expanded, setExpanded] = useState<GraphData>(EMPTY_GRAPH)
+  const [expandNote, setExpandNote] = useState<string | null>(null)
+  // The interactive wrapper forwards the NVL instance itself.
+  const nvlRef = useRef<NVL | null>(null)
 
-  const fetchGraph = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const { data } = await api.get('/graph/memory', { params: { limit: 500 } })
-      setGraphData(data)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load graph')
-    } finally {
-      setLoading(false)
-    }
-  }, [])
+  const {
+    data: base,
+    isPending,
+    error,
+    refetch,
+  } = useQuery({
+    queryKey: ['graph', 'memory'],
+    queryFn: () => graphApi.getMemoryGraph(500),
+  })
 
-  useEffect(() => {
-    fetchGraph()
-  }, [fetchGraph])
+  const reload = useCallback(() => {
+    setExpanded(EMPTY_GRAPH)
+    setExpandNote(null)
+    void refetch()
+  }, [refetch])
 
-  const fetchNeighbors = useCallback(async (nodeId: string) => {
-    try {
-      const { data } = await api.get(`/graph/neighbors/${encodeURIComponent(nodeId)}`, {
-        params: { depth: 1, limit: 20 },
-      })
-      if (data.nodes && graphData) {
-        const existingIds = new Set(graphData.nodes.map(n => n.id))
-        const newNodes = (data.nodes as any[])
-          .filter((n: any) => !existingIds.has(n.id))
-          .map((n: any) => ({
-            id: n.id,
-            label: n.label || n.id,
-            labels: [n.type || 'Unknown'],
-            properties: n,
-          }))
-        const newEdges = (data.edges || []).map((e: any, i: number) => ({
-          id: `expanded-${nodeId}-${i}`,
-          from: e.from || nodeId,
-          to: e.to,
-          type: e.relationship || 'RELATED',
-        }))
-        setGraphData(prev => prev ? {
-          nodes: [...prev.nodes, ...newNodes],
-          relationships: [...prev.relationships, ...newEdges],
-        } : prev)
+  const graphData: GraphData | null = base
+    ? {
+        nodes: [...base.nodes, ...expanded.nodes],
+        relationships: [...base.relationships, ...expanded.relationships],
       }
-    } catch {
-      // Silently fail on neighbor expansion
-    }
-  }, [graphData])
+    : null
 
-  if (loading) {
+  const fetchNeighbors = useCallback(
+    async (nodeId: string) => {
+      try {
+        const data = await graphApi.getNeighbors(nodeId, 1, 20)
+        const neighbours = data.nodes.filter((n) => n.id && !n.isRoot)
+        const edges = (data.edges ?? []).filter((e) => e.to)
+        const knownIds = new Set((base?.nodes ?? []).map((n) => n.id))
+
+        setExpanded((prev) => {
+          const existingIds = new Set([...knownIds, ...prev.nodes.map((n) => n.id)])
+          const existingRelIds = new Set(prev.relationships.map((r) => r.id))
+          return {
+            nodes: [
+              ...prev.nodes,
+              ...neighbours.filter((n) => !existingIds.has(n.id)).map(normalizeNeighborNode),
+            ],
+            relationships: [
+              ...prev.relationships,
+              ...edges
+                .map((e, i) => ({
+                  id: `expanded-${nodeId}-${i}`,
+                  from: e.from || nodeId,
+                  to: e.to,
+                  type: e.relationship || 'RELATED',
+                }))
+                .filter((r) => !existingRelIds.has(r.id)),
+            ],
+          }
+        })
+
+        setExpandNote(
+          neighbours.length > 0
+            ? `Expanded ${nodeId}: ${neighbours.length} neighbour(s)`
+            : `No neighbours found for ${nodeId}`,
+        )
+      } catch (err) {
+        setExpandNote(
+          `Could not expand ${nodeId}: ${err instanceof Error ? err.message : 'request failed'}`,
+        )
+      }
+    },
+    [base],
+  )
+
+  if (isPending) {
     return (
-      <Flex h="calc(100vh - 48px)" align="center" justify="center">
-        <Spinner size="lg" />
+      <Flex h="calc(100dvh - 48px)" align="center" justify="center">
+        <Spinner size="lg" colorPalette="brand" />
         <Text ml={3}>Loading graph...</Text>
       </Flex>
     )
@@ -107,32 +101,40 @@ export default function MemoryGraphView() {
 
   if (error) {
     return (
-      <Flex h="calc(100vh - 48px)" align="center" justify="center" direction="column">
-        <Text color="red.500">{error}</Text>
-        <Text fontSize="sm" color="gray.500" mt={2}>Make sure sample data is loaded (make load-data)</Text>
+      <Flex h="calc(100dvh - 48px)" align="center" justify="center" direction="column" gap={2}>
+        <Text color="fg.error">
+          {error instanceof Error ? error.message : 'Failed to load graph'}
+        </Text>
+        <Text fontSize="sm" color="fg.muted">
+          Is the backend running, and has sample data been loaded (<code>make load-data</code>)?
+        </Text>
       </Flex>
     )
   }
 
   if (!graphData || graphData.nodes.length === 0) {
     return (
-      <Flex h="calc(100vh - 48px)" align="center" justify="center" direction="column">
-        <LuNetwork size={48} color="gray" />
-        <Text mt={4} color="gray.500">No graph data. Run "make load-data" first.</Text>
+      <Flex h="calc(100dvh - 48px)" align="center" justify="center" direction="column" gap={4}>
+        <Box color="fg.subtle">
+          <LuNetwork size={48} />
+        </Box>
+        <Text color="fg.muted">
+          No graph data. Run <code>make load-data</code> first.
+        </Text>
       </Flex>
     )
   }
 
-  const nvlNodes: Node[] = graphData.nodes.map(n => ({
+  const nvlNodes: Node[] = graphData.nodes.map((n) => ({
     id: n.id,
     caption: n.label || n.id,
-    color: getNodeColor(n.labels || []),
+    color: getNodeColor(n.labels ?? []),
     size: n.labels?.includes('Customer') ? 30 : 20,
   }))
 
   const nvlRels: Relationship[] = graphData.relationships
-    .filter(r => r.from && r.to)
-    .map(r => ({
+    .filter((r) => r.from && r.to)
+    .map((r) => ({
       id: r.id,
       from: r.from,
       to: r.to,
@@ -140,43 +142,65 @@ export default function MemoryGraphView() {
     }))
 
   return (
-    <Box h="calc(100vh - 48px)">
+    <Box h="calc(100dvh - 48px)">
       <Flex direction="column" h="full">
-        <Flex justify="space-between" align="center" mb={2} px={2}>
+        <Flex justify="space-between" align="center" mb={2} px={2} gap={2} flexWrap="wrap">
           <HStack>
             <LuNetwork size={20} />
-            <Heading size="md">Context Graph</Heading>
-            <Badge colorPalette="blue">{graphData.nodes.length} nodes</Badge>
+            <Heading size="md" fontFamily="heading">
+              Context Graph
+            </Heading>
+            <Badge colorPalette="brand">{graphData.nodes.length} nodes</Badge>
             <Badge colorPalette="gray">{graphData.relationships.length} relationships</Badge>
           </HStack>
           <HStack>
-            <Text fontSize="xs" color="gray.500">Double-click a node to expand</Text>
-            <Box cursor="pointer" onClick={fetchGraph} title="Refresh">
-              <LuRefreshCw size={16} />
-            </Box>
+            <Text fontSize="xs" color="fg.muted">
+              {expandNote ?? 'Double-click a node to expand its neighbours'}
+            </Text>
+            <IconButton
+              aria-label="Fit graph to screen"
+              title="Fit to screen"
+              size="sm"
+              variant="ghost"
+              onClick={() => nvlRef.current?.fit(nvlNodes.map((n) => n.id))}
+            >
+              <LuMaximize />
+            </IconButton>
+            <IconButton
+              aria-label="Reload graph"
+              title="Reload"
+              size="sm"
+              variant="ghost"
+              onClick={reload}
+            >
+              <LuRefreshCw />
+            </IconButton>
           </HStack>
         </Flex>
 
         <Flex mb={2} px={2} gap={2} flexWrap="wrap">
-          {Object.entries(NODE_COLORS).slice(0, 8).map(([label, color]) => (
+          {Object.entries(nodeColors).map(([label, color]) => (
             <Badge key={label} size="sm" style={{ borderLeft: `3px solid ${color}` }} pl={2}>
               {label}
             </Badge>
           ))}
         </Flex>
 
-        <Box flex={1} border="1px solid" borderColor="gray.200" borderRadius="md" overflow="hidden">
+        <Box flex={1} borderWidth="1px" borderColor="border" borderRadius="md" overflow="hidden">
           <InteractiveNvlWrapper
             ref={nvlRef}
             nodes={nvlNodes}
             rels={nvlRels}
             nvlOptions={{
-              layout: 'force-directed',
+              // 'forceDirected' - not 'force-directed'; see the Layout union.
+              layout: 'forceDirected',
               relationshipThreshold: 0.55,
             }}
-            nvlCallbacks={{
+            // Mouse callbacks live on `mouseEventCallbacks`; keys passed to
+            // `nvlCallbacks` (lifecycle callbacks) are silently ignored.
+            mouseEventCallbacks={{
               onNodeDoubleClick: (node: Node) => {
-                if (node.id) fetchNeighbors(node.id)
+                if (node.id) void fetchNeighbors(node.id)
               },
             }}
           />

@@ -9,7 +9,7 @@ import {
   Separator,
   Collapsible,
 } from '@chakra-ui/react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion, AnimatePresence } from 'motion/react'
 import {
   LuBot,
   LuFileCheck,
@@ -23,6 +23,7 @@ import {
 } from 'react-icons/lu'
 import { useState } from 'react'
 import type { AgentState } from '../../hooks/useAgentStream'
+import { AGENT_DESCRIPTIONS, agentColor, agentLabel } from '../../lib/agents'
 import { ToolCallCard } from './ToolCallCard'
 import { MemoryAccessIndicator } from './MemoryAccessIndicator'
 
@@ -35,50 +36,20 @@ interface AgentOrchestrationViewProps {
   totalDurationMs?: number
 }
 
-const agentConfig: Record<string, {
-  label: string
-  icon: React.ReactNode
-  color: string
-  description: string
-}> = {
-  supervisor: {
-    label: 'Supervisor',
-    icon: <LuBot size={16} />,
-    color: 'blue',
-    description: 'Orchestrating investigation',
-  },
-  kyc_agent: {
-    label: 'KYC Agent',
-    icon: <LuFileCheck size={16} />,
-    color: 'teal',
-    description: 'Identity verification & due diligence',
-  },
-  aml_agent: {
-    label: 'AML Agent',
-    icon: <LuSearch size={16} />,
-    color: 'orange',
-    description: 'Transaction monitoring & pattern detection',
-  },
-  relationship_agent: {
-    label: 'Relationship Agent',
-    icon: <LuUsers size={16} />,
-    color: 'purple',
-    description: 'Network analysis & ownership tracing',
-  },
-  compliance_agent: {
-    label: 'Compliance Agent',
-    icon: <LuShield size={16} />,
-    color: 'red',
-    description: 'Sanctions screening & regulatory checks',
-  },
+const agentIcons: Record<string, React.ReactNode> = {
+  supervisor: <LuBot size={16} />,
+  kyc_agent: <LuFileCheck size={16} />,
+  aml_agent: <LuSearch size={16} />,
+  relationship_agent: <LuUsers size={16} />,
+  compliance_agent: <LuShield size={16} />,
 }
 
 function getAgentConfig(name: string) {
-  return agentConfig[name] || {
-    label: name,
-    icon: <LuBot size={16} />,
-    color: 'gray',
-    description: 'Processing',
+  return {
+    label: agentLabel(name),
+    icon: agentIcons[name] ?? <LuBot size={16} />,
+    color: agentColor(name),
+    description: AGENT_DESCRIPTIONS[name] ?? 'Processing',
   }
 }
 

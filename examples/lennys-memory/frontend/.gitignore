@@ -1,0 +1,3 @@
+# Incremental TypeScript build artifacts (the root .gitignore only covers
+# typescript/.tsbuildinfo, and tsconfig.tsbuildinfo used to be tracked here).
+*.tsbuildinfo

@@ -1,14 +1,20 @@
-version: '3.8'
-
+# One Neo4j 5.26 LTS instance holding both graphs the example uses:
+#   - the memory graph (neo4j-agent-memory writes Conversation/Message/Entity/…)
+#   - the news graph   (seeded by backend/scripts/load_news_sample.py)
+#
+# The password here is the single source of truth: backend/.env.example and the
+# README both use `password`. Change it in all three places together, or the
+# backend boots with memory disabled.
 services:
   neo4j:
-    image: neo4j:5.20-community
+    image: neo4j:5.26-community
     container_name: news-chat-neo4j
     ports:
-      - "7474:7474"  # HTTP
-      - "7687:7687"  # Bolt
+      - "7474:7474" # HTTP / Neo4j Browser
+      - "7687:7687" # Bolt
     environment:
       NEO4J_AUTH: neo4j/password
+      # APOC powers the agent's `get_database_schema` tool (apoc.meta.*).
       NEO4J_PLUGINS: '["apoc"]'
       NEO4J_apoc_export_file_enabled: "true"
       NEO4J_apoc_import_file_enabled: "true"
@@ -18,10 +24,15 @@ services:
       - neo4j_logs:/logs
       - neo4j_plugins:/plugins
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:7474"]
+      test:
+        [
+          "CMD-SHELL",
+          "cypher-shell -u neo4j -p password 'RETURN 1' || exit 1",
+        ]
       interval: 10s
-      timeout: 5s
-      retries: 5
+      timeout: 10s
+      retries: 10
+      start_period: 30s
 
 volumes:
   neo4j_data:

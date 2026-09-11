@@ -9,10 +9,10 @@
     "description": "Multiple cash deposits just under $10,000 threshold detected over 4 consecutive days.",
     "transaction_ids": ["TXN-203", "TXN-204", "TXN-205", "TXN-206"],
     "evidence": [
-      "TXN-203: $9,500 cash deposit on 2024-01-20",
-      "TXN-204: $9,500 cash deposit on 2024-01-21",
-      "TXN-205: $9,500 cash deposit on 2024-01-22",
-      "TXN-206: $9,500 cash deposit on 2024-01-23"
+      "TXN-203: $9,500 cash deposit (day 1 of 4)",
+      "TXN-204: $9,500 cash deposit (day 2 of 4)",
+      "TXN-205: $9,500 cash deposit (day 3 of 4)",
+      "TXN-206: $9,500 cash deposit (day 4 of 4)"
     ],
     "requires_sar": true,
     "auto_generated": true

@@ -1,4 +1,14 @@
 {
   "extends": "../tsconfig.base.json",
-  "include": ["src/**/*"]
+  // The shared base is bundler-shaped; an MCP server is a plain Node process,
+  // so resolve the way Node does.
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "verbatimModuleSyntax": true,
+    "types": ["node"]
+  },
+  "include": ["src/**/*", "test/**/*"]
 }

@@ -1,11 +1,32 @@
-"""Add messages to the adopted graph and verify MENTIONS link to existing nodes.
+"""Write messages against the adopted graph and prove no duplicates appear.
 
-Run after ``adopt.py``. The script writes a couple of messages that name
-people and movies from the seed graph, then queries Neo4j to confirm
-that the resulting ``MENTIONS`` edges point at the pre-existing domain
-nodes — not at duplicates.
+Run after ``adopt.py``. The script writes two messages that name people and
+movies from the seed graph, then asserts that the resulting ``MENTIONS``
+edges point at the pre-existing domain nodes — and that the graph still
+holds exactly one node per name.
 
-    uv run examples/existing-graph/memory_io.py
+    uv run python examples/existing-graph/memory_io.py
+
+Why mentions are linked explicitly
+----------------------------------
+``add_message()`` defaults to running the configured NER pipeline. Against
+an adopted graph that path has two verified failure modes in v0.5.0, both
+silent:
+
+* the extractors map their labels through POLE+O, so a movie comes back
+  typed ``OBJECT`` — and because entities MERGE on ``(:Entity {name,
+  type})`` that writes a *second* ``:Entity:Object`` node beside the
+  adopted ``:Movie``, and the mention links to the duplicate;
+* give the extractor a ``label_mapping`` so it emits ``MOVIE`` and the
+  MERGE does find the adopted node — but no ``MENTIONS`` edge is written
+  at all, because the link step looks the entity up by the id it generated
+  rather than the id the MERGE returned (the adopted node kept its own).
+
+``extraction_mode="explicit"`` sidesteps both: it skips extraction and
+MERGEs exactly the entities you name, linking by the id that MERGE
+returns. That is the right default whenever your application already knows
+which domain objects a message is about — which, with an existing graph,
+it usually does. See the README "Known gaps" section.
 """
 
 from __future__ import annotations
@@ -17,59 +38,99 @@ import sys
 # Allow running as a standalone script (uv run python examples/existing-graph/memory_io.py).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from memory_settings import build_settings
+from memory_settings import DEMO_NAMES, SESSION_ID, build_settings, describe_target
 
 from neo4j_agent_memory import MemoryClient
+from neo4j_agent_memory.schema.models import EntityRef
 
-SESSION_ID = "existing-graph-demo"
+MESSAGES: list[tuple[str, str, list[EntityRef]]] = [
+    (
+        "user",
+        "Have you seen Inception? Bob Singh directed it.",
+        [
+            # `label` records the source domain label for readers and tools;
+            # the MERGE itself matches on name + type.
+            EntityRef(name="Inception", type="MOVIE", label="Movie"),
+            EntityRef(name="Bob Singh", type="PERSON", label="Person"),
+        ],
+    ),
+    (
+        "assistant",
+        "Yes, and Carol Reyes plays a brilliant linguist in Arrival.",
+        [
+            EntityRef(name="Arrival", type="MOVIE", label="Movie"),
+            EntityRef(name="Carol Reyes", type="PERSON", label="Person"),
+        ],
+    ),
+]
+
+NO_MENTIONS_HINT = (
+    "No MENTIONS edges were created. Run adopt.py first, and check that the "
+    "types in explicit_mentions match LABEL_TO_TYPE in memory_settings.py."
+)
 
 
 async def write_and_verify() -> None:
     settings = build_settings()
+    print(f"==> Writing messages with explicit mentions to {describe_target()}")
+
     async with MemoryClient(settings) as client:
-        # A couple of messages that mention people/movies the domain graph
-        # already knows about.
-        await client.short_term.add_message(
-            SESSION_ID,
-            "user",
-            "Have you seen Inception? Bob Singh directed it.",
-        )
-        await client.short_term.add_message(
-            SESSION_ID,
-            "assistant",
-            "Yes, and Carol Reyes plays a brilliant linguist in Arrival.",
-        )
+        for role, content, mentions in MESSAGES:
+            await client.short_term.add_message(
+                SESSION_ID,
+                role,
+                content,
+                extraction_mode="explicit",
+                explicit_mentions=mentions,
+            )
 
-        # If adoption worked, there should still be exactly one node per
-        # name across the entire graph — even though the messages above
-        # mentioned them and would have triggered a MERGE on
-        # (:Entity {name, type}).
-        rows = await client.graph.execute_read(
+        # Count every node the library could have created for these names —
+        # across *all* labels, not just :Person/:Movie. A duplicate shows up
+        # as total=2 with a second label set such as ["Entity", "Object"].
+        rows = await client.query.cypher(
             """
-            UNWIND ['Bob Singh', 'Carol Reyes', 'Inception', 'Arrival'] AS target
-            MATCH (n {name: target})
-            WHERE n:Person OR n:Movie
-            RETURN target, count(n) AS count
+            UNWIND $names AS target
+            MATCH (n) WHERE n.name = target
+            RETURN target, count(n) AS total,
+                   collect(DISTINCT labels(n)) AS label_sets
             ORDER BY target
-            """
+            """,
+            {"names": DEMO_NAMES},
         )
-        print("Per-name node count after writes (1 means adoption worked):")
+        print("\nNodes per demo name (1 means library writes hit the adopted node):")
+        duplicates = []
         for row in rows:
-            print(f"  {row['target']:<14} -> {row['count']}")
+            label_sets = [":".join(labels) for labels in row["label_sets"]]
+            print(f"  {row['target']:<14} total={row['total']:<3} {label_sets}")
+            if row["total"] != 1:
+                duplicates.append(row["target"])
 
-        # And the MENTIONS edges should connect messages to the
-        # pre-existing domain nodes.
-        rows = await client.graph.execute_read(
+        # MENTIONS edges must point at the adopted domain nodes.
+        mention_rows = await client.query.cypher(
             """
-            MATCH (m:Message)-[:MENTIONS]->(e:Entity)
-            WHERE e.name IN ['Bob Singh', 'Carol Reyes', 'Inception', 'Arrival']
-            RETURN e.name AS name, labels(e) AS labels
+            MATCH (c:Conversation {session_id: $session_id})
+                  -[:HAS_MESSAGE]->(:Message)-[:MENTIONS]->(e:Entity)
+            RETURN DISTINCT e.name AS name, e.type AS type,
+                            labels(e) AS labels, e.id AS id
             ORDER BY name
-            """
+            """,
+            {"session_id": SESSION_ID},
         )
         print("\nMENTIONS edges produced by add_message():")
-        for row in rows:
-            print(f"  {row['name']:<14} -> labels={row['labels']}")
+        for row in mention_rows:
+            print(f"  {row['name']:<14} {row['type']:<8} {':'.join(row['labels'])}")
+
+        if duplicates:
+            raise SystemExit(
+                "Duplicate nodes found for: "
+                + ", ".join(duplicates)
+                + ". The library write did not land on the adopted node — check "
+                "that adopt.py ran and that the entity types match LABEL_TO_TYPE."
+            )
+        if not mention_rows:
+            raise SystemExit(NO_MENTIONS_HINT)
+
+        print("\nOK: one node per name, and every MENTIONS edge lands on an adopted node.")
 
 
 if __name__ == "__main__":

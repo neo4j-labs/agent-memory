@@ -96,7 +96,7 @@ export function Sidebar({
           </>
         ) : suggestions.length === 0 ? (
           <Text fontSize="sm" color="fg.muted" textAlign="center" py="8">
-            No previous conversations yet
+            No suggestions available
           </Text>
         ) : (
           suggestions.map((suggestion) => (
@@ -115,9 +115,12 @@ export function Sidebar({
               <Text fontSize="sm" color="fg.default" lineClamp={2}>
                 {suggestion.firstMessage}
               </Text>
-              <Text fontSize="xs" color="fg.muted" mt="1">
-                {new Date(suggestion.timestamp).toLocaleDateString()}
-              </Text>
+              {(suggestion.category || suggestion.timestamp) && (
+                <Text fontSize="xs" color="fg.muted" mt="1">
+                  {suggestion.category ??
+                    new Date(suggestion.timestamp!).toLocaleDateString()}
+                </Text>
+              )}
             </Box>
           ))
         )}
@@ -207,7 +210,7 @@ export function Sidebar({
                 transition="background 0.2s"
               >
                 <Text fontSize="xs" color="fg.muted">
-                  Lenny's Podcast
+                  Lenny&apos;s Podcast
                 </Text>
               </Flex>
             </Link>

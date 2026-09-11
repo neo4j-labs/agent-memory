@@ -35,20 +35,14 @@ class InvestigationFinding(BaseModel):
     """Individual finding within an investigation."""
 
     id: str = Field(..., description="Finding identifier")
-    timestamp: datetime = Field(
-        default_factory=datetime.utcnow, description="Finding timestamp"
-    )
+    timestamp: datetime = Field(default_factory=datetime.utcnow, description="Finding timestamp")
     agent: str = Field(..., description="Agent that produced the finding")
     category: str = Field(..., description="Finding category")
     severity: FindingSeverity = Field(..., description="Finding severity")
     title: str = Field(..., description="Finding title")
     description: str = Field(..., description="Detailed description")
-    evidence: dict[str, Any] = Field(
-        default_factory=dict, description="Supporting evidence"
-    )
-    recommendations: list[str] = Field(
-        default_factory=list, description="Recommended actions"
-    )
+    evidence: dict[str, Any] = Field(default_factory=dict, description="Supporting evidence")
+    recommendations: list[str] = Field(default_factory=list, description="Recommended actions")
 
 
 class InvestigationCreate(BaseModel):
@@ -70,18 +64,12 @@ class Investigation(InvestigationCreate):
     status: InvestigationStatus = Field(
         default=InvestigationStatus.PENDING, description="Current status"
     )
-    created_at: datetime = Field(
-        default_factory=datetime.utcnow, description="Creation timestamp"
-    )
+    created_at: datetime = Field(default_factory=datetime.utcnow, description="Creation timestamp")
     updated_at: datetime = Field(
         default_factory=datetime.utcnow, description="Last update timestamp"
     )
-    started_at: datetime | None = Field(
-        default=None, description="When investigation started"
-    )
-    completed_at: datetime | None = Field(
-        default=None, description="When investigation completed"
-    )
+    started_at: datetime | None = Field(default=None, description="When investigation started")
+    completed_at: datetime | None = Field(default=None, description="When investigation completed")
     findings: list[InvestigationFinding] = Field(
         default_factory=list, description="Investigation findings"
     )
@@ -98,18 +86,12 @@ class InvestigationWorkflow(BaseModel):
 
     investigation_id: str = Field(..., description="Investigation identifier")
     current_step: str = Field(..., description="Current workflow step")
-    completed_steps: list[str] = Field(
-        default_factory=list, description="Completed workflow steps"
-    )
-    pending_steps: list[str] = Field(
-        default_factory=list, description="Pending workflow steps"
-    )
+    completed_steps: list[str] = Field(default_factory=list, description="Completed workflow steps")
+    pending_steps: list[str] = Field(default_factory=list, description="Pending workflow steps")
     agent_assignments: dict[str, str] = Field(
         default_factory=dict, description="Step to agent mapping"
     )
-    step_results: dict[str, Any] = Field(
-        default_factory=dict, description="Results from each step"
-    )
+    step_results: dict[str, Any] = Field(default_factory=dict, description="Results from each step")
 
 
 class AuditTrailEntry(BaseModel):
@@ -121,21 +103,15 @@ class AuditTrailEntry(BaseModel):
     actor: str = Field(..., description="Who performed the action (user or agent)")
     actor_type: str = Field(..., description="Type of actor (human/agent)")
     details: dict[str, Any] = Field(default_factory=dict, description="Action details")
-    reasoning: str | None = Field(
-        default=None, description="Reasoning behind the action"
-    )
+    reasoning: str | None = Field(default=None, description="Reasoning behind the action")
 
 
 class InvestigationAuditTrail(BaseModel):
     """Full audit trail for an investigation."""
 
     investigation_id: str = Field(..., description="Investigation identifier")
-    entries: list[AuditTrailEntry] = Field(
-        default_factory=list, description="Audit trail entries"
-    )
-    agents_involved: list[str] = Field(
-        default_factory=list, description="Agents that participated"
-    )
+    entries: list[AuditTrailEntry] = Field(default_factory=list, description="Audit trail entries")
+    agents_involved: list[str] = Field(default_factory=list, description="Agents that participated")
     total_duration_seconds: int | None = Field(
         default=None, description="Total investigation duration"
     )

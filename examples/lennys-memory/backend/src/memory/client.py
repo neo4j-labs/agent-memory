@@ -80,10 +80,7 @@ async def init_memory_client() -> MemoryClient | None:
     )
 
     llm_kwargs: dict = {}
-    if (
-        settings.llm_model.startswith("openai/")
-        and settings.openai_api_key.get_secret_value()
-    ):
+    if settings.llm_model.startswith("openai/") and settings.openai_api_key.get_secret_value():
         llm_kwargs["api_key"] = settings.openai_api_key.get_secret_value()
     elif settings.llm_model.startswith("anthropic/") and settings.anthropic_api_key:
         llm_kwargs["api_key"] = settings.anthropic_api_key.get_secret_value()
@@ -117,6 +114,13 @@ async def init_memory_client() -> MemoryClient | None:
         # Auto-merge near-exact duplicates (>=0.95 similarity), flag potential
         # duplicates (>=0.85) for review, and use fuzzy string matching to
         # catch typos and name variations across podcast episodes.
+        #
+        # NOTE: this reaches a private attribute because ``MemorySettings`` has
+        # no deduplication field yet (``LongTermMemory(deduplication=...)`` is
+        # only reachable when you construct the layer yourself). Tracked as a
+        # library follow-up; replace with the settings field once it lands.
+        # Fuzzy matching needs the ``fuzzy`` extra (rapidfuzz) -- without it the
+        # library silently falls back to embedding-only matching.
         _memory_client.long_term._deduplication = DeduplicationConfig(
             auto_merge_threshold=0.95,
             flag_threshold=0.85,

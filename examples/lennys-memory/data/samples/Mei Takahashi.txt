@@ -1,0 +1,26 @@
+Host (00:00:00):
+My guest is Mei Takahashi, who runs platform engineering at Harbourline in Singapore. Mei, thanks for joining.
+
+Mei Takahashi (00:00:15):
+Happy to be here.
+
+Host (00:00:20):
+Harbourline migrated off a monolith while tripling headcount. Most teams fail at one of those.
+
+Mei Takahashi (00:00:33):
+We nearly failed at both. The thing that saved us was refusing to do a rewrite. We carved out one service at a time, and every carve-out had to pay for itself within a quarter.
+
+(00:01:05):
+We also wrote down the migration as a product with a roadmap and a customer, and the customer was the application team in Sydney that suffered most from the monolith.
+
+Host (00:01:35):
+How do you think about developer experience as a product?
+
+Mei Takahashi (00:01:44):
+Latency of feedback is the whole game. When a test suite takes forty minutes, engineers stop running it, and your quality gate is decorative. We cut ours to six minutes and bug escape rate fell by half.
+
+Host (00:02:15):
+What are you reading right now?
+
+Mei Takahashi (00:02:22):
+A lot about organizational design, and a surprising amount about port logistics. Singapore is a good place to think about throughput.

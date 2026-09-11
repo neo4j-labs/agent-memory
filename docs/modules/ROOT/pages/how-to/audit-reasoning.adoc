@@ -2,6 +2,12 @@
 :page-product: agent-memory
 :toclevels: 2
 
+include::partial$backend-bolt-only.adoc[]
+
+NOTE: Writing `:TOUCHED` edges is bolt-only — NAMS drops
+`touched_entities` today. The audit *read* is portable: run it through
+`client.query.cypher`, which works on both backends.
+
 How to make every agent reasoning step queryable from any entity it
 referenced — a 1-hop traversal instead of the default 3-hop path.
 
@@ -23,8 +29,14 @@ Run the headline audit query in 1 hop:
 ----
 MATCH (c:Entity {name: 'Anthem'})<-[:TOUCHED]-(s:ReasoningStep)
       <-[:HAS_STEP]-(rt:ReasoningTrace)
-RETURN rt.task, s.thought, rt.outcome
+OPTIONAL MATCH (rt)-[:INITIATED_BY]->(m:Message)
+RETURN rt.task, s.thought, rt.outcome, rt.success, rt.error_kind,
+       rt.metrics_json, m.content AS triggered_by
 ----
+
+`TraceOutcome` lands as queryable columns — `rt.outcome` is the summary
+string, with `success`, `error_kind` and `metrics_json` beside it — not an
+opaque blob.
 
 == Approach 1 — Pass `touched_entities` directly
 
@@ -41,7 +53,7 @@ await client.reasoning.record_tool_call(
     arguments={"client_name": "Anthem"},
     result=[{"consultant": "Sara"}],
     touched_entities=[
-        EntityRef(name="Anthem", type="Client"),
+        EntityRef(name="Anthem", type="CLIENT"),
         EntityRef(name="Sara", type="PERSON"),
     ],
 )
@@ -53,6 +65,11 @@ and writes a `pass:[(:ReasoningStep)-[:TOUCHED {recorded_at}]->(:Entity)]`
 edge. Re-recording the same touched entity is a no-op — the relationship
 is keyed on the (step, entity) pair.
 
+IMPORTANT: Entity types are uppercase strings. The MERGE stores `type`
+verbatim, so `type="Client"` creates a second `:Entity` node that
+`add_entity` (which uppercases) can never match. Prefer
+`EntityRef(id=...)` when the entity already exists.
+
 == Approach 2 — Register an observer hook
 
 Often the touched entities aren't known until the tool result is in
@@ -62,16 +79,26 @@ the result:
 
 [source,python]
 ----
+from typing import Any
+
 from neo4j_agent_memory.schema.models import EntityRef
 
 
-def infer_touched(tool_name, arguments, result):
+def infer_touched(
+    tool_name: str,
+    arguments: dict[str, Any],
+    result: Any,
+) -> list[EntityRef]:
     """Domain-specific mapping from tool calls to EntityRef lists."""
-    refs = []
+    refs: list[EntityRef] = []
     if tool_name == "recommend_team":
-        refs.append(EntityRef(name=arguments["client_name"], type="Client"))
-        for row in result or []:
-            refs.append(EntityRef(name=row["consultant"], type="PERSON"))
+        client_name = arguments.get("client_name")
+        if client_name:
+            refs.append(EntityRef(name=client_name, type="CLIENT"))
+        if isinstance(result, list):
+            for row in result:
+                if isinstance(row, dict) and "consultant" in row:
+                    refs.append(EntityRef(name=row["consultant"], type="PERSON"))
     return refs
 
 
@@ -80,6 +107,16 @@ async def link_touched_entities(tool_call, ctx):
     for ref in infer_touched(tool_call.tool_name, tool_call.arguments, tool_call.result):
         await ctx.add_touched_edge(ref)
 ----
+
+The hook receives a `ToolCall` and a `HookContext` (both in
+`neo4j_agent_memory.memory.reasoning`); annotate them when you type-check
+your agent — `examples/audit-trail/main.py` shows the annotated form.
+
+TIP: `client.reasoning` is typed as the portable `ReasoningProtocol`,
+which does not carry the bolt-only hook. Construct the client with
+`BoltSettings` and `await connect(settings)` to get a
+`BoltMemoryClient`, whose `reasoning` is the concrete `ReasoningMemory` —
+that is what makes the decorator and `get_tool_stats()` type-check.
 
 Hook errors are logged but never raised — memory writes must not break
 agent execution loops. Hooks fire in registration order, after the tool
@@ -104,7 +141,7 @@ await client.reasoning.complete_trace(
         summary="Recommendation failed: no consultants matched skills",
         error_kind="no_results",
         related_entities=[
-            EntityRef(name="Anthem", type="Client"),
+            EntityRef(name="Anthem", type="CLIENT"),
         ],
         metrics={"tools_called": 1.0},
     ),

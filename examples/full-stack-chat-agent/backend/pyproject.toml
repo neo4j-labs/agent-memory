@@ -1,27 +1,42 @@
 [project]
 name = "news-chat-agent"
-version = "0.1.0"
+version = "0.2.0"
 description = "Full-stack chat agent with neo4j-agent-memory integration"
-requires-python = ">=3.11"
+# Matches the library floor (repo-wide `>=3.10`).
+requires-python = ">=3.10"
 dependencies = [
-    "fastapi>=0.115.0",
-    "uvicorn[standard]>=0.32.0",
-    "pydantic-ai>=0.0.39",
-    "pydantic-settings>=2.6.0",
-    "neo4j>=5.26.0",
-    "sse-starlette>=2.2.0",
-    "python-dotenv>=1.0.0",
-    "neo4j-agent-memory[openai]>=0.1.0",
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.32,<1",
+    # PydanticAI 2.x. We depend on the `pydantic-ai-slim` distribution (same
+    # `pydantic_ai` import package) with only the OpenAI provider, matching the
+    # library's own `[pydantic-ai]` extra. To point AGENT_MODEL at another
+    # provider, add its extra too (e.g. `pydantic-ai-slim[openai,anthropic]`).
+    "pydantic-ai-slim[openai]>=2.0,<3",
+    "pydantic-settings>=2.6,<3",
+    "neo4j>=5.26,<7",
+    "sse-starlette>=3.4,<4",
+    "python-dotenv>=1.0,<2",
+    # `extraction` adds spaCy + GLiNER so EXTRACTION_MODE=local works with no
+    # API key. Drop it (and set EXTRACTION_MODE=llm or none) for a lean install.
+    "neo4j-agent-memory[openai,extraction]>=0.5.0,<0.7",
+    "en-core-web-sm",
+]
+
+[project.optional-dependencies]
+dev = [
+    "mypy>=1.13",
+    "ruff>=0.8",
 ]
 
 [tool.uv]
 package = true
 
 [tool.uv.sources]
-# For local development, use the editable path:
+# Local development: resolve the library from this repo.
 neo4j-agent-memory = { path = "../../..", editable = true }
-# For deployment (Railway/production), use the Git URL:
-# neo4j-agent-memory = { git = "https://github.com/neo4j-labs/agent-memory" }
+# Deployment: drop the line above and let the version range resolve from PyPI,
+# or point at a tag: neo4j-agent-memory = { git = "https://github.com/neo4j-labs/agent-memory", tag = "python-v0.5.0" }
+en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" }
 
 [build-system]
 requires = ["hatchling"]
@@ -29,3 +44,13 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_unused_ignores = false
+plugins = ["pydantic.mypy"]

@@ -1,0 +1,9 @@
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+.env.local
+
+# Written by `next dev`, regenerated on demand.
+AGENTS.md
+CLAUDE.md

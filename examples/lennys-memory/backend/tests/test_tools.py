@@ -18,21 +18,21 @@ from src.agent.tools import (
     get_entity_provenance,
     get_episode_list,
     get_episode_summary,
-    get_memory_stats,
     get_most_mentioned_entities,
     get_session_reasoning_history,
     get_speaker_list,
     get_tool_usage_patterns,
-    get_user_preferences,
-    # NEW: Enhanced reasoning memory tools
     learn_from_similar_task,
     list_podcast_sessions,
-    search_by_episode,
     search_by_speaker,
     search_entities,
     search_podcast_content,
     trigger_entity_enrichment,
 )
+
+from neo4j_agent_memory.memory.long_term import Entity
+from neo4j_agent_memory.memory.reasoning import ToolStats
+from neo4j_agent_memory.memory.short_term import Conversation, Message, MessageRole
 
 
 class TestSearchPodcastContent:
@@ -134,8 +134,8 @@ class TestSearchBySpeaker:
         await search_by_speaker(mock_agent_context, "Brian Chesky")
 
         # Check the Cypher query was called
-        mock_agent_context.deps.client._client.execute_read.assert_called_once()
-        call_args = mock_agent_context.deps.client._client.execute_read.call_args
+        mock_agent_context.deps.client.query.cypher.assert_called_once()
+        call_args = mock_agent_context.deps.client.query.cypher.call_args
         query = call_args[0][0]
 
         # Verify session_id prefix filter is in the query
@@ -146,7 +146,7 @@ class TestSearchBySpeaker:
         """Verify topic filtering is applied when specified."""
         await search_by_speaker(mock_agent_context, "Brian Chesky", topic="growth")
 
-        call_args = mock_agent_context.deps.client._client.execute_read.call_args
+        call_args = mock_agent_context.deps.client.query.cypher.call_args
         query = call_args[0][0]
         params = call_args[0][1]
 
@@ -175,7 +175,7 @@ class TestGetEntityContext:
         await get_entity_context(mock_agent_context, "Airbnb")
 
         # Check the mentions query filters by session prefix
-        call_args = mock_agent_context.deps.client._client.execute_read.call_args
+        call_args = mock_agent_context.deps.client.query.cypher.call_args
         query = call_args[0][0]
 
         assert "session_id STARTS WITH 'lenny-podcast-'" in query
@@ -195,7 +195,7 @@ class TestFindRelatedEntities:
         await find_related_entities(mock_agent_context, "Airbnb")
 
         # Check that one of the execute_read calls contains the podcast filter
-        calls = mock_agent_context.deps.client._client.execute_read.call_args_list
+        calls = mock_agent_context.deps.client.query.cypher.call_args_list
         queries = [call[0][0] for call in calls]
 
         # The main co-occurrence query should filter to podcast sessions
@@ -210,7 +210,7 @@ class TestGetMostMentionedEntities:
         """Verify mention count query filters to podcast sessions."""
         await get_most_mentioned_entities(mock_agent_context)
 
-        call_args = mock_agent_context.deps.client._client.execute_read.call_args
+        call_args = mock_agent_context.deps.client.query.cypher.call_args
         query = call_args[0][0]
 
         assert "session_id STARTS WITH 'lenny-podcast-'" in query
@@ -220,7 +220,7 @@ class TestGetMostMentionedEntities:
         """Verify entity type filter is applied when specified."""
         await get_most_mentioned_entities(mock_agent_context, entity_type="PERSON")
 
-        call_args = mock_agent_context.deps.client._client.execute_read.call_args
+        call_args = mock_agent_context.deps.client.query.cypher.call_args
         params = call_args[0][1]
 
         assert params["type"] == "PERSON"
@@ -231,24 +231,20 @@ class TestSearchEntities:
 
     @pytest.mark.asyncio
     async def test_returns_expected_fields(self, mock_agent_context):
-        """Verify returned entity data structure."""
-        # Mock the embedder
-        mock_embedder = MagicMock()
-        mock_embedder.embed = AsyncMock(return_value=[0.1] * 1536)
-        mock_agent_context.deps.client.long_term._embedder = mock_embedder
+        """Verify returned entity data structure.
 
-        # Mock execute_read to return entity data as the function uses direct Cypher
-        mock_agent_context.deps.client._client.execute_read = AsyncMock(
+        The tool ranks with the library's vector search and then reads the
+        enrichment properties (which the Entity model does not surface) in one
+        follow-up query -- no private embedder access.
+        """
+        entity = Entity(name="Product-Market Fit", type="CONCEPT", subtype="BUSINESS")
+        mock_agent_context.deps.client.long_term.search_entities.return_value = [entity]
+        mock_agent_context.deps.client.query.cypher = AsyncMock(
             return_value=[
                 {
-                    "id": "123",
-                    "name": "Product-Market Fit",
-                    "type": "CONCEPT",
-                    "subtype": "business",
-                    "description": None,  # description property doesn't exist
+                    "id": str(entity.id),
                     "enriched_description": "Enriched description",
                     "wikipedia_url": "https://en.wikipedia.org/wiki/Product-market_fit",
-                    "score": 0.95,
                 }
             ]
         )
@@ -258,6 +254,7 @@ class TestSearchEntities:
         assert len(results) == 1
         assert results[0]["name"] == "Product-Market Fit"
         assert results[0]["type"] == "CONCEPT"
+        assert results[0]["description"] == "Enriched description"
         assert results[0]["enriched"] is True
 
 
@@ -269,7 +266,7 @@ class TestGetEpisodeList:
         """Verify query filters by lenny-podcast- session prefix."""
         await get_episode_list(mock_agent_context)
 
-        call_args = mock_agent_context.deps.client._client.execute_read.call_args
+        call_args = mock_agent_context.deps.client.query.cypher.call_args
         query = call_args[0][0]
 
         assert "session_id STARTS WITH 'lenny-podcast-'" in query
@@ -283,7 +280,7 @@ class TestGetSpeakerList:
         """Verify query filters by lenny-podcast- session prefix."""
         await get_speaker_list(mock_agent_context)
 
-        call_args = mock_agent_context.deps.client._client.execute_read.call_args
+        call_args = mock_agent_context.deps.client.query.cypher.call_args
         query = call_args[0][0]
 
         assert "session_id STARTS WITH 'lenny-podcast-'" in query
@@ -399,17 +396,19 @@ class TestGetToolUsagePatterns:
     @pytest.mark.asyncio
     async def test_returns_tool_statistics(self, mock_agent_context):
         """Verify the tool returns formatted tool statistics."""
-        mock_stats = MagicMock()
-        mock_stats.tool_name = "tool_search_podcast"
-        mock_stats.total_calls = 100
-        mock_stats.success_count = 95
-        mock_stats.failure_count = 5
-        mock_stats.success_rate = 0.95
-        mock_stats.avg_duration_ms = 150.5
-
-        mock_agent_context.deps.client.reasoning.get_tool_stats = AsyncMock(
-            return_value=[mock_stats]
+        # A real ToolStats instance: the tool used to read `tool_name` /
+        # `success_count` / `failure_count`, which a bare MagicMock happily
+        # invented. The real fields are name / successful_calls / failed_calls.
+        stats = ToolStats(
+            name="tool_search_podcast",
+            total_calls=100,
+            successful_calls=95,
+            failed_calls=5,
+            success_rate=0.95,
+            avg_duration_ms=150.5,
         )
+
+        mock_agent_context.deps.client.reasoning.get_tool_stats = AsyncMock(return_value=[stats])
 
         result = await get_tool_usage_patterns(mock_agent_context)
 
@@ -491,7 +490,7 @@ class TestFindDuplicateEntities:
     async def test_returns_duplicate_pairs(self, mock_agent_context):
         """Verify the tool returns potential duplicate entity pairs."""
         # Mock the fallback Cypher query result
-        mock_agent_context.deps.client._client.execute_read = AsyncMock(
+        mock_agent_context.deps.client.query.cypher = AsyncMock(
             return_value=[
                 {
                     "id1": "entity-1",
@@ -504,10 +503,8 @@ class TestFindDuplicateEntities:
                 }
             ]
         )
-        # Make find_potential_duplicates raise AttributeError to trigger fallback
-        mock_agent_context.deps.client.long_term.find_potential_duplicates = AsyncMock(
-            side_effect=AttributeError("Method not found")
-        )
+        # No flagged SAME_AS pairs -> the tool falls back to fuzzy Cypher.
+        mock_agent_context.deps.client.long_term.find_potential_duplicates.return_value = []
 
         results = await find_duplicate_entities(mock_agent_context)
 
@@ -519,14 +516,12 @@ class TestFindDuplicateEntities:
     @pytest.mark.asyncio
     async def test_filters_by_entity_type(self, mock_agent_context):
         """Verify entity type filtering."""
-        mock_agent_context.deps.client.long_term.find_potential_duplicates = AsyncMock(
-            side_effect=AttributeError("Method not found")
-        )
-        mock_agent_context.deps.client._client.execute_read = AsyncMock(return_value=[])
+        mock_agent_context.deps.client.long_term.find_potential_duplicates.return_value = []
+        mock_agent_context.deps.client.query.cypher = AsyncMock(return_value=[])
 
         await find_duplicate_entities(mock_agent_context, entity_type="PERSON")
 
-        call_args = mock_agent_context.deps.client._client.execute_read.call_args
+        call_args = mock_agent_context.deps.client.query.cypher.call_args
         params = call_args[0][1]
         assert params["entity_type"] == "PERSON"
 
@@ -547,7 +542,7 @@ class TestGetEntityProvenance:
     @pytest.mark.asyncio
     async def test_returns_entity_sources(self, mock_agent_context):
         """Verify the tool returns provenance information."""
-        mock_agent_context.deps.client._client.execute_read = AsyncMock(
+        mock_agent_context.deps.client.query.cypher = AsyncMock(
             return_value=[
                 {
                     "entity_name": "Airbnb",
@@ -579,7 +574,7 @@ class TestGetEntityProvenance:
     @pytest.mark.asyncio
     async def test_returns_error_for_unknown_entity(self, mock_agent_context):
         """Verify error when entity not found."""
-        mock_agent_context.deps.client._client.execute_read = AsyncMock(return_value=[])
+        mock_agent_context.deps.client.query.cypher = AsyncMock(return_value=[])
 
         result = await get_entity_provenance(mock_agent_context, "Unknown Entity")
 
@@ -657,13 +652,14 @@ class TestGetConversationContext:
     @pytest.mark.asyncio
     async def test_returns_recent_messages(self, mock_agent_context):
         """Verify the tool returns recent conversation messages."""
-        mock_msg = MagicMock()
-        mock_msg.role = "user"
-        mock_msg.content = "What did Brian Chesky say about growth?"
-        mock_msg.metadata = {"timestamp": "2024-01-01T12:00:00"}
-
-        mock_agent_context.deps.client.short_term.get_conversation = AsyncMock(
-            return_value=[mock_msg]
+        mock_agent_context.deps.client.short_term.get_conversation.return_value = Conversation(
+            session_id="test-session",
+            messages=[
+                Message(
+                    role=MessageRole.USER,
+                    content="What did Brian Chesky say about growth?",
+                )
+            ],
         )
         mock_agent_context.deps.session_id = "test-session"
 
@@ -676,13 +672,9 @@ class TestGetConversationContext:
     @pytest.mark.asyncio
     async def test_truncates_long_content(self, mock_agent_context):
         """Verify long content is truncated."""
-        mock_msg = MagicMock()
-        mock_msg.role = "assistant"
-        mock_msg.content = "A" * 600
-        mock_msg.metadata = {}
-
-        mock_agent_context.deps.client.short_term.get_conversation = AsyncMock(
-            return_value=[mock_msg]
+        mock_agent_context.deps.client.short_term.get_conversation.return_value = Conversation(
+            session_id="test-session",
+            messages=[Message(role=MessageRole.ASSISTANT, content="A" * 600)],
         )
         mock_agent_context.deps.session_id = "test-session"
 
@@ -710,7 +702,7 @@ class TestListPodcastSessions:
         mock_agent_context.deps.client.short_term.list_sessions = AsyncMock(
             side_effect=AttributeError("Method not found")
         )
-        mock_agent_context.deps.client._client.execute_read = AsyncMock(
+        mock_agent_context.deps.client.query.cypher = AsyncMock(
             return_value=[
                 {
                     "session_id": "lenny-podcast-brian-chesky",
@@ -725,7 +717,7 @@ class TestListPodcastSessions:
         results = await list_podcast_sessions(mock_agent_context)
 
         # Verify query filters by prefix
-        call_args = mock_agent_context.deps.client._client.execute_read.call_args
+        call_args = mock_agent_context.deps.client.query.cypher.call_args
         query = call_args[0][0]
         assert "lenny-podcast-" in query
 
@@ -752,7 +744,7 @@ class TestGetEpisodeSummary:
         mock_agent_context.deps.client.short_term.get_conversation_summary = AsyncMock(
             side_effect=AttributeError("Method not found")
         )
-        mock_agent_context.deps.client._client.execute_read = AsyncMock(
+        mock_agent_context.deps.client.query.cypher = AsyncMock(
             return_value=[
                 {
                     "title": "Brian Chesky on Leadership",
@@ -776,11 +768,11 @@ class TestGetEpisodeSummary:
         mock_agent_context.deps.client.short_term.get_conversation_summary = AsyncMock(
             side_effect=AttributeError("Method not found")
         )
-        mock_agent_context.deps.client._client.execute_read = AsyncMock(return_value=[])
+        mock_agent_context.deps.client.query.cypher = AsyncMock(return_value=[])
 
         await get_episode_summary(mock_agent_context, "Brian Chesky")
 
-        call_args = mock_agent_context.deps.client._client.execute_read.call_args
+        call_args = mock_agent_context.deps.client.query.cypher.call_args
         params = call_args[0][1]
         assert params["session_id"] == "lenny-podcast-brian-chesky"
 
@@ -790,7 +782,7 @@ class TestGetEpisodeSummary:
         mock_agent_context.deps.client.short_term.get_conversation_summary = AsyncMock(
             side_effect=AttributeError("Method not found")
         )
-        mock_agent_context.deps.client._client.execute_read = AsyncMock(return_value=[])
+        mock_agent_context.deps.client.query.cypher = AsyncMock(return_value=[])
 
         result = await get_episode_summary(mock_agent_context, "Unknown Guest")
 

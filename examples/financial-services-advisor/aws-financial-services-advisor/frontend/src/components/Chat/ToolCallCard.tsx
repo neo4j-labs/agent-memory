@@ -1,33 +1,30 @@
-import { Box, Flex, Text, Badge } from '@chakra-ui/react'
-import { motion } from 'framer-motion'
-import { LuWrench, LuCheck, LuLoader } from 'react-icons/lu'
+import { Badge, Box, Flex, Text } from '@chakra-ui/react'
+import { motion } from 'motion/react'
+import { LuCheck, LuLoader } from 'react-icons/lu'
 
 interface ToolCallCardProps {
   tool: string
   args: Record<string, unknown>
   result?: string
-  color?: string
-}
-
-export const agentColorMap: Record<string, string> = {
-  supervisor: 'blue',
-  kyc: 'teal',
-  kyc_agent: 'teal',
-  aml: 'orange',
-  aml_agent: 'orange',
-  relationship: 'purple',
-  relationship_agent: 'purple',
-  compliance: 'red',
-  compliance_agent: 'red',
+  /** Wall-clock duration reported by the backend's `tool_result` event. */
+  durationMs?: number
+  /** Chakra colour palette of the owning agent. */
+  colorPalette?: string
 }
 
 function formatValue(value: unknown): string {
-  if (typeof value === 'string') return value.length > 40 ? value.slice(0, 40) + '...' : value
+  if (typeof value === 'string') return value.length > 40 ? `${value.slice(0, 40)}…` : value
   if (typeof value === 'number' || typeof value === 'boolean') return String(value)
   return JSON.stringify(value).slice(0, 40)
 }
 
-export default function ToolCallCard({ tool, args, result, color = 'gray' }: ToolCallCardProps) {
+export default function ToolCallCard({
+  tool,
+  args,
+  result,
+  durationMs,
+  colorPalette = 'gray',
+}: ToolCallCardProps) {
   const argEntries = Object.entries(args).slice(0, 3)
 
   return (
@@ -39,27 +36,40 @@ export default function ToolCallCard({ tool, args, result, color = 'gray' }: Too
       <Box
         p={2}
         borderRadius="md"
-        border="1px solid"
-        borderColor={`${color}.200`}
-        bg={`${color}.50`}
+        borderWidth="1px"
+        colorPalette={colorPalette}
+        borderColor="colorPalette.emphasized"
+        bg="colorPalette.subtle"
         fontSize="xs"
       >
         <Flex align="center" gap={1} mb={1}>
           {result ? (
-            <LuCheck size={12} color="green" />
+            <Box color="green.fg">
+              <LuCheck size={12} />
+            </Box>
           ) : (
-            <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}>
+            <motion.div
+              animate={{ rotate: 360 }}
+              transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+            >
               <LuLoader size={12} />
             </motion.div>
           )}
-          <Text fontFamily="mono" fontWeight="semibold">{tool}</Text>
+          <Text fontFamily="mono" fontWeight="semibold">
+            {tool}
+          </Text>
+          {durationMs !== undefined && (
+            <Text color="fg.subtle" fontFamily="mono">
+              {durationMs}ms
+            </Text>
+          )}
         </Flex>
 
         {argEntries.length > 0 && (
           <Flex gap={1} flexWrap="wrap" mb={result ? 1 : 0}>
-            {argEntries.map(([key, val]) => (
+            {argEntries.map(([key, value]) => (
               <Badge key={key} size="sm" variant="outline" fontFamily="mono">
-                {key}={formatValue(val)}
+                {key}={formatValue(value)}
               </Badge>
             ))}
           </Flex>
@@ -67,8 +77,9 @@ export default function ToolCallCard({ tool, args, result, color = 'gray' }: Too
 
         {result && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.1 }}>
-            <Text color="green.600" fontSize="xs" lineClamp={2}>
-              {result.slice(0, 120)}{result.length > 120 ? '...' : ''}
+            <Text color="green.fg" fontSize="xs" lineClamp={2}>
+              {result.slice(0, 120)}
+              {result.length > 120 ? '…' : ''}
             </Text>
           </motion.div>
         )}

@@ -12,88 +12,79 @@ Features:
 
 # ============================================================================
 # IMPORTANT: Warning suppression must happen BEFORE any other imports
-# to catch warnings triggered during module initialization
+# to catch warnings triggered during module initialization.
+#
+# These filters are deliberately NARROW. Suppressing whole categories
+# process-wide (as this script used to do for UserWarning, FutureWarning and
+# DeprecationWarning) also hides the library's own migration notices -- e.g. the
+# `client.graph.execute_read` removal warning -- in the script that runs most
+# often. Keep the message patterns, and scope category filters by module.
 # ============================================================================
 import os
 import warnings
 
-# Suppress all warnings from noisy libraries
-warnings.filterwarnings("ignore", category=UserWarning)
-warnings.filterwarnings("ignore", category=FutureWarning)
-warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", message=".*resume_download.*")
 warnings.filterwarnings("ignore", message=".*byte fallback.*")
 warnings.filterwarnings("ignore", message=".*truncate to max_length.*")
 warnings.filterwarnings("ignore", message=".*no predefined maximum length.*")
 warnings.filterwarnings("ignore", message=".*schema.*shadows.*")
+for _noisy in ("transformers", "huggingface_hub", "spacy", "thinc", "torch"):
+    warnings.filterwarnings("ignore", category=UserWarning, module=_noisy)
+    warnings.filterwarnings("ignore", category=FutureWarning, module=_noisy)
 
 # Disable huggingface progress bars and logging noise
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 
-import argparse
-import asyncio
-import io
-import logging
-import re
-import sys
-import time
-from contextlib import contextmanager
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Callable
+import argparse  # noqa: E402
+import asyncio  # noqa: E402
+import io  # noqa: E402
+import logging  # noqa: E402
+import re  # noqa: E402
+import sys  # noqa: E402
+import time  # noqa: E402
+import unicodedata  # noqa: E402
+from collections.abc import Callable  # noqa: E402
+from contextlib import contextmanager  # noqa: E402
+from dataclasses import dataclass, field  # noqa: E402
+from pathlib import Path  # noqa: E402
 
-from dotenv import load_dotenv
-from pydantic import SecretStr
+sys.path.insert(0, str(Path(__file__).parent))
 
-from neo4j_agent_memory import MemoryClient, MemorySettings, Neo4jConfig
-from neo4j_agent_memory.config.settings import (
+from _common import (  # noqa: E402
+    Colors,
+    add_model_args,
+    add_neo4j_args,
+    build_memory_settings,
+    color,
+    format_duration,
+    load_backend_env,
+)
+
+from neo4j_agent_memory import MemoryClient  # noqa: E402
+from neo4j_agent_memory.config.settings import (  # noqa: E402
     ExtractionConfig,
     ExtractorType,
 )
-from neo4j_agent_memory.graph.schema import SchemaManager
 
-# Optional: StreamingExtractor for memory-efficient processing of very long
-# transcripts (>100K tokens).  Falls back gracefully if the extraction extras
-# are not installed.
-try:
-    from neo4j_agent_memory.extraction import (
-        GLiNEREntityExtractor,
-        create_streaming_extractor,
-    )
+load_backend_env()
 
-    _streaming_available = True
-except ImportError:
-    _streaming_available = False
-
-# Load .env file from backend directory
-load_dotenv(Path(__file__).parent.parent / "backend" / ".env")
+DEFAULT_DATA_DIR = Path(__file__).parent.parent / "data"
+SAMPLE_DATA_DIR = DEFAULT_DATA_DIR / "samples"
 
 
-# ANSI color codes for terminal output
-class Colors:
-    RESET = "\033[0m"
-    BOLD = "\033[1m"
-    DIM = "\033[2m"
-    GREEN = "\033[92m"
-    YELLOW = "\033[93m"
-    RED = "\033[91m"
-    CYAN = "\033[96m"
-    BLUE = "\033[94m"
-    # ANSI escape sequences for cursor control
+class Cursor:
+    """ANSI cursor-control sequences used by the progress bar below.
+
+    Colors themselves come from ``scripts/_common.py`` -- one copy for all five
+    scripts (they used to carry four slightly diverged copies).
+    """
+
     CLEAR_LINE = "\033[2K"
     CURSOR_UP = "\033[1A"
     SAVE_CURSOR = "\033[s"
     RESTORE_CURSOR = "\033[u"
-
-
-def supports_color() -> bool:
-    """Check if terminal supports colors."""
-    return hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
-
-
-USE_COLORS = supports_color()
 
 
 class BufferedLogHandler(logging.Handler):
@@ -174,8 +165,8 @@ def suppress_output_during_progress():
     try:
         yield
     finally:
-        # Restore stderr
-        stderr_content = sys.stderr.getvalue()
+        # Restore stderr (its captured content is intentionally discarded --
+        # the progress bar owns the terminal while this context is active)
         sys.stderr = old_stderr
 
         # Stop buffering
@@ -204,25 +195,7 @@ def flush_buffered_output(progress_bar_active: bool = False) -> list[str]:
     return messages
 
 
-def color(text: str, color_code: str) -> str:
-    """Apply color to text if supported."""
-    if USE_COLORS:
-        return f"{color_code}{text}{Colors.RESET}"
-    return text
-
-
-def format_duration(seconds: float) -> str:
-    """Format duration in human-readable form."""
-    if seconds < 60:
-        return f"{seconds:.1f}s"
-    elif seconds < 3600:
-        mins = int(seconds // 60)
-        secs = int(seconds % 60)
-        return f"{mins}m {secs}s"
-    else:
-        hours = int(seconds // 3600)
-        mins = int((seconds % 3600) // 60)
-        return f"{hours}h {mins}m"
+# ``color`` / ``format_duration`` come from scripts/_common.py.
 
 
 def format_rate(count: int, seconds: float) -> str:
@@ -383,8 +356,12 @@ def parse_transcript(file_path: Path) -> list[SpeakerTurn]:
     guest_name = file_path.stem  # Filename without .txt
 
     # Pattern matches "Speaker Name (HH:MM:SS):" or just "(HH:MM:SS):"
-    # The speaker name is optional (continuation of previous speaker)
-    pattern = r"^(?:([A-Za-z][A-Za-z0-9\s\.\-\']+?)\s+)?\((\d{2}:\d{2}:\d{2})\):$"
+    # The speaker name is optional (continuation of previous speaker).
+    # ``[^\W\d_]`` is a Unicode-aware "letter": the old ``[A-Za-z]`` class made
+    # the whole line fail to match for a speaker such as "Renée Delacroix", so
+    # the turn marker was swallowed as content and attributed to the previous
+    # speaker. Names with diacritics are common in this corpus.
+    pattern = r"^(?:([^\W\d_][^()]*?)\s+)?\((\d{2}:\d{2}:\d{2})\):$"
 
     turns: list[SpeakerTurn] = []
     current_speaker: str | None = None
@@ -433,8 +410,19 @@ def parse_transcript(file_path: Path) -> list[SpeakerTurn]:
 
 
 def slugify(name: str) -> str:
-    """Convert name to URL-friendly slug."""
-    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    """Convert a guest name to the session-id slug.
+
+    Must stay in lockstep with ``_guest_to_session_id`` in
+    ``backend/src/agent/tools.py``: the loader names sessions with this rule and
+    the agent's tools look them up by it. Unicode is folded to ASCII first, so
+    "Tobi Lütke" becomes "tobi-lutke" and not "tobi-l-tke" -- without the fold
+    the two implementations disagree and every guest with a diacritic becomes
+    unreachable from the agent. ``tests/examples/test_lennys_memory_example.py``
+    asserts the two agree.
+    """
+    normalized = unicodedata.normalize("NFD", name)
+    ascii_name = normalized.encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"[^a-z0-9]+", "-", ascii_name.lower()).strip("-")
 
 
 async def check_session_exists(memory: MemoryClient, session_id: str) -> bool:
@@ -470,7 +458,7 @@ async def check_sessions_exist_batch(memory: MemoryClient, session_ids: list[str
     RETURN sid
     """
     try:
-        results = await memory._client.execute_read(query, {"session_ids": session_ids})
+        results = await memory.query.cypher(query, {"session_ids": session_ids})
         return {row["sid"] for row in results}
     except Exception:
         # Fallback to individual checks if batch query fails
@@ -494,8 +482,9 @@ async def setup_database_schema(memory: MemoryClient, verbose: bool = False) -> 
         memory: MemoryClient instance
         verbose: Whether to print status messages
     """
-    schema = SchemaManager(memory._client)
-    await schema.setup_all()
+    # ``connect()`` already ran setup_all(); this makes the step explicit and is
+    # idempotent. ``client.schema`` is the public accessor (bolt only).
+    await memory.schema.setup_all()
 
 
 async def load_transcript(
@@ -576,73 +565,65 @@ async def load_transcript(
     return stats
 
 
-# ---------------------------------------------------------------------------
-# Alternative: Streaming extraction for very long transcripts
-# ---------------------------------------------------------------------------
-# When a single transcript exceeds ~100K tokens, the standard batch extraction
-# can be slow or hit memory limits.  The StreamingExtractor processes the text
-# in overlapping chunks and automatically deduplicates entities across them.
-#
-# Usage (from the CLI):
-#   python load_transcripts.py --streaming-extraction <data_dir>
-#
-# Or call directly:
-#   await streaming_extract_transcript(memory, Path("Brian Chesky.txt"))
-# ---------------------------------------------------------------------------
+def resolve_data_dir(explicit: Path | None) -> Path:
+    """Pick the transcript directory.
 
-
-async def streaming_extract_transcript(
-    memory: MemoryClient,
-    file_path: Path,
-    chunk_size: int = 4000,
-    overlap: int = 200,
-) -> dict:
-    """Extract entities from a transcript using streaming chunked extraction.
-
-    This is an alternative to the built-in per-message extraction used by
-    ``load_transcript``.  It is better suited for very long transcripts because
-    it processes the full text in fixed-size overlapping chunks rather than
-    iterating over individual messages.
-
-    Args:
-        memory: Connected MemoryClient instance.
-        file_path: Path to the transcript text file.
-        chunk_size: Characters per chunk (default 4000).
-        overlap: Character overlap between consecutive chunks (default 200).
-
-    Returns:
-        Dict with extraction statistics (chunks, raw entities, deduplicated).
+    Precedence: an explicit ``--data-dir``, then ``data/`` when it contains
+    ``.txt`` transcripts, then the checked-in ``data/samples/`` fixtures. The
+    real corpus is not redistributable (see ``data/README.md``), so a clean
+    clone must still be able to run the pipeline end to end.
     """
-    if not _streaming_available:
-        raise RuntimeError(
-            "Streaming extraction requires the extraction extras. "
-            "Install with:  uv sync --all-extras"
+    if explicit is not None:
+        return explicit
+    if DEFAULT_DATA_DIR.exists() and any(DEFAULT_DATA_DIR.glob("*.txt")):
+        return DEFAULT_DATA_DIR
+    if SAMPLE_DATA_DIR.exists() and any(SAMPLE_DATA_DIR.glob("*.txt")):
+        print(
+            color(
+                f"No transcripts in {DEFAULT_DATA_DIR}; using the synthetic samples "
+                f"in {SAMPLE_DATA_DIR}.",
+                Colors.YELLOW,
+            )
         )
+        return SAMPLE_DATA_DIR
+    return DEFAULT_DATA_DIR
 
-    # Build a podcast-optimised GLiNER extractor and wrap it for streaming
-    extractor = GLiNEREntityExtractor.for_schema("podcast")
-    streamer = create_streaming_extractor(
-        extractor,
-        chunk_size=chunk_size,
-        overlap=overlap,
+
+async def generate_message_embeddings(
+    memory: MemoryClient,
+    data_dir: Path,
+    sample_size: int | None = None,
+    batch_size: int = 100,
+) -> dict[str, int]:
+    """Fill in message embeddings for already loaded transcripts.
+
+    The counterpart to ``--no-embeddings``: without it, a fast load left every
+    vector search in the app returning nothing with no way back but a reload.
+    Uses ``short_term.generate_embeddings_batch()``.
+    """
+    files = sorted(data_dir.glob("*.txt"))
+    if sample_size:
+        files = files[:sample_size]
+
+    totals = {"sessions": 0, "embedded": 0}
+    for file_path in files:
+        session_id = f"lenny-podcast-{slugify(file_path.stem)}"
+        embedded = await memory.short_term.generate_embeddings_batch(
+            session_id,
+            batch_size=batch_size,
+        )
+        totals["sessions"] += 1
+        totals["embedded"] += embedded
+        print(f"  {file_path.stem}: {embedded} messages embedded")
+
+    print()
+    print(
+        color(
+            f"Embedded {totals['embedded']} messages across {totals['sessions']} sessions.",
+            Colors.GREEN,
+        )
     )
-
-    # Read the full transcript as a single document
-    text = file_path.read_text(encoding="utf-8")
-
-    # Run streaming extraction with automatic cross-chunk deduplication
-    result = await streamer.extract(
-        text,
-        deduplicate=True,
-        on_progress=lambda done, total: None,  # silent; caller can override
-    )
-
-    return {
-        "file": file_path.name,
-        "total_chunks": result.stats.total_chunks,
-        "raw_entities": result.stats.total_entities,
-        "deduplicated_entities": result.stats.deduplicated_entities,
-    }
+    return totals
 
 
 async def extract_entities_from_loaded_sessions(
@@ -751,6 +732,22 @@ async def extract_entities_from_loaded_sessions(
     print(f"  {color('Elapsed time:', Colors.DIM)} {format_duration(elapsed)}")
     print(f"  {color('Throughput:', Colors.DIM)} {format_rate(total_processed, elapsed)}")
     print()
+
+
+def print_dry_run_plan(files: list[Path], sample_size: int | None = None) -> None:
+    """Print what a load would do, without opening a database connection.
+
+    A dry run is a question about the files on disk, so it must not require
+    Neo4j -- the script used to connect first and fail before printing anything.
+    """
+    planned = files[:sample_size] if sample_size else files
+    print(f"\n{color('DRY RUN', Colors.YELLOW)} - Would load {len(planned)} transcript(s):")
+    total_turns = 0
+    for file_path in planned:
+        turns = parse_transcript(file_path)
+        total_turns += len(turns)
+        print(f"  \u2022 {file_path.name}: {len(turns)} turns")
+    print(f"\nTotal: {len(planned)} files, {total_turns} turns")
 
 
 async def load_all_transcripts(
@@ -994,29 +991,17 @@ Performance Tips:
     parser.add_argument(
         "--data-dir",
         type=Path,
-        default=Path(__file__).parent.parent / "data",
-        help="Directory containing transcript .txt files",
+        default=None,
+        help=(
+            "Directory containing transcript .txt files. Defaults to data/ when "
+            "it holds transcripts, otherwise data/samples/ (see data/README.md)."
+        ),
     )
     parser.add_argument(
         "--sample",
         type=int,
         metavar="N",
         help="Load only N transcripts (for testing)",
-    )
-    parser.add_argument(
-        "--neo4j-uri",
-        default=os.getenv("NEO4J_URI", "bolt://localhost:7687"),
-        help="Neo4j connection URI (default: from NEO4J_URI env var)",
-    )
-    parser.add_argument(
-        "--neo4j-user",
-        default=os.getenv("NEO4J_USERNAME", "neo4j"),
-        help="Neo4j username (default: from NEO4J_USERNAME env var)",
-    )
-    parser.add_argument(
-        "--neo4j-password",
-        default=os.getenv("NEO4J_PASSWORD", "password"),
-        help="Neo4j password (default: from NEO4J_PASSWORD env var)",
     )
     parser.add_argument(
         "--no-entities",
@@ -1063,26 +1048,44 @@ Performance Tips:
         help="Only extract entities from already loaded transcripts (run after initial load)",
     )
     parser.add_argument(
+        "--embeddings-only",
+        action="store_true",
+        help=(
+            "Only generate message embeddings for already loaded transcripts. "
+            "The counterpart to --no-embeddings: without this, a load run with "
+            "--no-embeddings could only be fixed by reloading everything."
+        ),
+    )
+    parser.add_argument(
+        "--repair-links",
+        action="store_true",
+        help=(
+            "Rebuild FIRST_MESSAGE/NEXT_MESSAGE chains for conversations loaded "
+            "before sequential linking existed (short_term.migrate_message_links)"
+        ),
+    )
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
         help="Show detailed progress",
     )
+    add_neo4j_args(parser)
+    add_model_args(parser)
 
     args = parser.parse_args()
 
     # Set up logging to prevent disruption of progress bars
     setup_logging(verbose=args.verbose)
 
-    # Validate data directory
-    if not args.data_dir.exists():
-        print(color(f"Error: Data directory not found: {args.data_dir}", Colors.RED))
-        sys.exit(1)
-
-    # Count available files
-    files = list(args.data_dir.glob("*.txt"))
+    # Resolve the data directory. The real 299-episode corpus is not
+    # redistributable, so a fresh clone only has the synthetic fixtures in
+    # data/samples/ -- fall back to those rather than exiting. See data/README.md.
+    args.data_dir = resolve_data_dir(args.data_dir)
+    files = sorted(args.data_dir.glob("*.txt"))
     if not files:
         print(color(f"Error: No .txt files found in {args.data_dir}", Colors.RED))
+        print("See examples/lennys-memory/data/README.md for the expected format.")
         sys.exit(1)
 
     print()
@@ -1121,14 +1124,17 @@ Performance Tips:
         gliner_threshold=0.4,  # Lower threshold to capture more entities
     )
 
-    settings = MemorySettings(
-        neo4j=Neo4jConfig(
-            uri=args.neo4j_uri,
-            username=args.neo4j_user,
-            password=SecretStr(args.neo4j_password),
-        ),
-        extraction=extraction_config,
-    )
+    # The shared builder resolves EMBEDDING_MODEL through from_provider(), so
+    # the loader writes vectors in the same space the backend queries with. The
+    # loader used to build its own MemorySettings with no embedding field at all
+    # and silently fall back to the default OpenAI embedder.
+    settings = build_memory_settings(args, extraction=extraction_config, quiet=True)
+
+    # A dry run without --resume needs no database: answer from the files and
+    # exit before connecting (the resume check is the only DB-dependent part).
+    if args.dry_run and not args.resume:
+        print_dry_run_plan(files, args.sample)
+        return
 
     if not args.dry_run:
         print("Connecting to Neo4j...", end=" ", flush=True)
@@ -1149,6 +1155,24 @@ Performance Tips:
                 await setup_database_schema(memory, verbose=args.verbose)
                 print(color("Done!", Colors.GREEN))
 
+            # Rebuild sequential message links (one-time migration helper)
+            if args.repair_links:
+                print("Rebuilding message links...", end=" ", flush=True)
+                migrated = await memory.short_term.migrate_message_links()
+                print(color(f"{len(migrated)} conversations linked", Colors.GREEN))
+                if not (args.extract_entities_only or args.embeddings_only):
+                    return
+
+            # Handle embeddings-only mode
+            if args.embeddings_only:
+                await generate_message_embeddings(
+                    memory,
+                    args.data_dir,
+                    sample_size=args.sample,
+                    batch_size=args.batch_size,
+                )
+                return
+
             # Handle extract-entities-only mode
             if args.extract_entities_only:
                 await extract_entities_from_loaded_sessions(
@@ -1158,7 +1182,7 @@ Performance Tips:
                     batch_size=args.batch_size,
                     concurrency=args.concurrency,
                 )
-                sys.exit(0)
+                return
 
             stats = await load_all_transcripts(
                 memory,

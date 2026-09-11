@@ -2,8 +2,8 @@
 name = "financial-services-advisor"
 version = "0.1.0"
 description = "Financial Services Advisor - AWS Strands Agents with Neo4j Agent Memory"
-requires-python = ">=3.10"
-license = { text = "MIT" }
+requires-python = ">=3.11"
+license = "Apache-2.0"
 authors = [
     { name = "Neo4j Labs", email = "labs@neo4j.com" }
 ]
@@ -19,39 +19,40 @@ keywords = [
     "compliance",
 ]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 
+# Floors are what the code actually requires, capped at the next major so a
+# fresh install cannot silently resolve a breaking release.
 dependencies = [
-    "fastapi>=0.109.0",
-    "uvicorn[standard]>=0.27.0",
-    "pydantic>=2.5.0",
-    "pydantic-settings>=2.1.0",
-    "strands-agents>=0.1.0",
-    "boto3>=1.34.0",
-    "neo4j-agent-memory>=0.4.0",
-    "neo4j>=5.14.0",
-    "mangum>=0.17.0",
-    "sse-starlette>=1.8.0",
-    "python-dotenv>=1.0.0",
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.32,<1",
+    "pydantic>=2.9,<3",
+    "pydantic-settings>=2.6,<3",
+    # Needs >=1.52 for Agent.invoke_async / stream_async and the tool registry
+    # behaviour this example relies on.
+    "strands-agents>=1.52,<2",
+    "boto3>=1.40,<2",
+    "neo4j-agent-memory>=0.5.0,<0.7",
+    "neo4j>=6.0,<7",
+    "mangum>=0.19,<1",
+    "python-dotenv>=1.0,<2",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.0.0",
-    "pytest-asyncio>=0.23.0",
-    "pytest-cov>=4.1.0",
-    "httpx>=0.26.0",
-    "ruff>=0.1.0",
-    "mypy>=1.8.0",
-    "pre-commit>=3.6.0",
+    "pytest>=8.3,<9",
+    "pytest-asyncio>=0.24,<2",
+    "pytest-cov>=6.0,<8",
+    "httpx>=0.28,<1",
+    "ruff>=0.8",
+    "mypy>=1.13",
 ]
 
 [build-system]
@@ -65,10 +66,10 @@ packages = ["src"]
 package = true
 
 [tool.uv.sources]
-# For local development, use the editable path:
+# Local development resolves the library from this repo checkout, so changes to
+# src/neo4j_agent_memory are picked up without a release. The published pin
+# above is what a standalone copy of this example installs.
 neo4j-agent-memory = { path = "../../../..", editable = true }
-# For deployment/production, use the Git URL:
-# neo4j-agent-memory = { git = "https://github.com/neo4j-labs/agent-memory" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -108,7 +109,7 @@ exclude_lines = [
 ]
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py311"
 line-length = 100
 
 [tool.ruff.lint]
@@ -125,13 +126,16 @@ ignore = [
     "E501",   # line too long (handled by formatter)
     "B008",   # function call in default argument
     "C901",   # too complex
+    # `class X(str, Enum)` stays: switching to StrEnum changes what `str(member)`
+    # returns, which these models' JSON payloads and the frontend depend on.
+    "UP042",
 ]
 
 [tool.ruff.lint.isort]
 known-first-party = ["src"]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true

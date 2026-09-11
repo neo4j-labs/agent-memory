@@ -104,15 +104,11 @@ class RiskService:
 
         if high_risk_found:
             base_score += 60
-            risk_factors.append(
-                f"High-risk jurisdictions: {', '.join(high_risk_found)}"
-            )
+            risk_factors.append(f"High-risk jurisdictions: {', '.join(high_risk_found)}")
 
         if medium_risk_found:
             base_score += 25
-            risk_factors.append(
-                f"Medium-risk jurisdictions: {', '.join(medium_risk_found)}"
-            )
+            risk_factors.append(f"Medium-risk jurisdictions: {', '.join(medium_risk_found)}")
 
         # Primary jurisdiction carries more weight
         if primary_jurisdiction in HIGH_RISK_JURISDICTIONS:
@@ -214,9 +210,7 @@ class RiskService:
                 risk_factors.append(f"Transaction volume {volume_ratio:.1f}x expected")
             elif volume_ratio > 2.0:
                 base_score += 15
-                risk_factors.append(
-                    f"Elevated transaction volume ({volume_ratio:.1f}x expected)"
-                )
+                risk_factors.append(f"Elevated transaction volume ({volume_ratio:.1f}x expected)")
 
         # Cash transaction risk
         if cash_transaction_ratio > 0.5:
@@ -224,9 +218,7 @@ class RiskService:
             risk_factors.append(f"High cash ratio: {cash_transaction_ratio * 100:.0f}%")
         elif cash_transaction_ratio > 0.25:
             base_score += 10
-            risk_factors.append(
-                f"Elevated cash ratio: {cash_transaction_ratio * 100:.0f}%"
-            )
+            risk_factors.append(f"Elevated cash ratio: {cash_transaction_ratio * 100:.0f}%")
 
         # High-risk jurisdiction transactions
         if high_risk_jurisdiction_ratio > 0.3:
@@ -243,21 +235,15 @@ class RiskService:
         # Structuring indicators
         if structuring_indicators > 3:
             base_score += 35
-            risk_factors.append(
-                f"Multiple structuring indicators: {structuring_indicators}"
-            )
+            risk_factors.append(f"Multiple structuring indicators: {structuring_indicators}")
         elif structuring_indicators > 0:
             base_score += 15
-            risk_factors.append(
-                f"Structuring indicators detected: {structuring_indicators}"
-            )
+            risk_factors.append(f"Structuring indicators detected: {structuring_indicators}")
 
         # Rapid movement
         if rapid_movement_count > 5:
             base_score += 25
-            risk_factors.append(
-                f"Frequent rapid fund movements: {rapid_movement_count}"
-            )
+            risk_factors.append(f"Frequent rapid fund movements: {rapid_movement_count}")
         elif rapid_movement_count > 0:
             base_score += 10
             risk_factors.append(f"Some rapid fund movements: {rapid_movement_count}")
@@ -290,9 +276,7 @@ class RiskService:
         # Sanctioned connections are critical
         if sanctioned_connections > 0:
             base_score += 80
-            risk_factors.append(
-                f"Connected to {sanctioned_connections} sanctioned entities"
-            )
+            risk_factors.append(f"Connected to {sanctioned_connections} sanctioned entities")
 
         # PEP connections
         if pep_connections > 2:
@@ -305,14 +289,10 @@ class RiskService:
         # Shell company connections
         if shell_company_connections > 2:
             base_score += 40
-            risk_factors.append(
-                f"Multiple shell company connections: {shell_company_connections}"
-            )
+            risk_factors.append(f"Multiple shell company connections: {shell_company_connections}")
         elif shell_company_connections > 0:
             base_score += 20
-            risk_factors.append(
-                f"Shell company connection(s): {shell_company_connections}"
-            )
+            risk_factors.append(f"Shell company connection(s): {shell_company_connections}")
 
         # High-risk connection ratio
         if total_connections > 0:
@@ -459,9 +439,7 @@ class RiskService:
         if risk_level in (RiskLevel.CRITICAL, RiskLevel.HIGH):
             recommendations.append("Conduct Enhanced Due Diligence (EDD)")
             recommendations.append("Increase transaction monitoring frequency")
-            recommendations.append(
-                "Require senior management approval for relationship"
-            )
+            recommendations.append("Require senior management approval for relationship")
 
         if geo_score > 50:
             recommendations.append("Verify source of funds documentation")

@@ -23,7 +23,15 @@ async def scan_transactions(
     *,
     neo4j_service: Neo4jDomainService,
 ) -> dict[str, Any]:
-    """Scan customer transactions for the specified period."""
+    """Scan customer transactions for the specified period.
+
+    Args:
+        customer_id: Customer whose transactions to scan
+        days: Size of the look-back window in days
+        min_amount: Only return transactions at or above this amount
+        transaction_type: Restrict to one type (deposit, withdrawal, wire_in,
+            wire_out, cash_deposit)
+    """
     logger.info(f"Scanning transactions for customer {customer_id}, last {days} days")
 
     transactions = await neo4j_service.get_transactions(
@@ -67,7 +75,13 @@ async def detect_patterns(
     *,
     neo4j_service: Neo4jDomainService,
 ) -> dict[str, Any]:
-    """Detect suspicious transaction patterns."""
+    """Detect suspicious transaction patterns.
+
+    Args:
+        customer_id: Customer to analyse
+        pattern_types: Subset of ["structuring", "rapid_movement", "layering"]
+            to look for; all three when omitted
+    """
     logger.info(f"Detecting patterns for customer {customer_id}")
 
     transactions = await neo4j_service.get_transactions(customer_id)
@@ -141,15 +155,17 @@ async def flag_suspicious_transaction(
     *,
     neo4j_service: Neo4jDomainService,
 ) -> dict[str, Any]:
-    """Flag a specific transaction as suspicious."""
+    """Flag a specific transaction as suspicious.
+
+    Args:
+        transaction_id: Transaction identifier, e.g. TXN-203
+        reason: Why the transaction is suspicious
+        severity: LOW, MEDIUM, HIGH or CRITICAL
+    """
     logger.info(f"Flagging transaction {transaction_id} as suspicious")
 
-    query = """
-    MATCH (c:Customer)-[:HAS_TRANSACTION]->(t:Transaction {id: $txn_id})
-    RETURN c.id AS customer_id, t {.*} AS transaction
-    """
-    results = await neo4j_service._graph.execute_read(query, {"txn_id": transaction_id})
-    if not results:
+    row = await neo4j_service.get_transaction(transaction_id)
+    if not row:
         return {
             "transaction_id": transaction_id,
             "status": "NOT_FOUND",
@@ -157,7 +173,6 @@ async def flag_suspicious_transaction(
             "timestamp": datetime.now().isoformat(),
         }
 
-    row = results[0]
     customer_id = row["customer_id"]
     txn = row["transaction"]
 
@@ -193,7 +208,12 @@ async def analyze_velocity(
     *,
     neo4j_service: Neo4jDomainService,
 ) -> dict[str, Any]:
-    """Analyze transaction velocity patterns."""
+    """Analyze transaction velocity patterns.
+
+    Args:
+        customer_id: Customer to analyse
+        metric: Which metric to emphasise ("all", "volume" or "count")
+    """
     logger.info(f"Analyzing velocity for customer {customer_id}")
 
     metrics = await neo4j_service.get_velocity_metrics(customer_id)
@@ -207,7 +227,7 @@ async def analyze_velocity(
     type_counts = metrics["transactions_by_type"]
     type_amounts = metrics["volume_by_type"]
 
-    anomalies = []
+    anomalies: list[dict[str, Any]] = []
 
     cash_count = sum(v for k, v in type_counts.items() if "cash" in k)
     if cash_count >= 3:
@@ -229,18 +249,13 @@ async def analyze_velocity(
             }
         )
 
-    large_txns_query = """
-    MATCH (c:Customer {id: $id})-[:HAS_TRANSACTION]->(t:Transaction)
-    WHERE t.amount > 50000
-    RETURN t.id AS id
-    """
-    large_results = await neo4j_service._graph.execute_read(large_txns_query, {"id": customer_id})
-    if large_results:
+    large_txn_ids = await neo4j_service.get_large_transactions(customer_id, threshold=50000)
+    if large_txn_ids:
         anomalies.append(
             {
                 "type": "LARGE_TRANSACTIONS",
-                "description": f"{len(large_results)} transactions over $50,000",
-                "transactions": [r["id"] for r in large_results],
+                "description": f"{len(large_txn_ids)} transactions over $50,000",
+                "transactions": large_txn_ids,
                 "risk_level": "HIGH",
             }
         )

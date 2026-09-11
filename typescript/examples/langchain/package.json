@@ -4,14 +4,24 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "tsx src/index.ts"
+    "start": "tsx --env-file-if-exists=.env src/index.ts",
+    "lint": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
-    "@neo4j-labs/agent-memory": "file:../.."
+    "@langchain/core": "^1.2",
+    "@langchain/openai": "^1.5",
+    "@neo4j-labs/agent-memory": "file:../..",
+    "langchain": "^1.5",
+    "zod": "^4.6"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
+    "@types/node": "^22.0.0",
     "tsx": "^4.0.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

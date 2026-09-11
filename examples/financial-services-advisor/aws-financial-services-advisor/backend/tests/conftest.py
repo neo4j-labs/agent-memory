@@ -6,7 +6,7 @@ import json
 import os
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
@@ -17,10 +17,10 @@ os.environ.setdefault("NEO4J_USER", "neo4j")
 os.environ.setdefault("NEO4J_PASSWORD", "test-password")
 os.environ.setdefault("NEO4J_DATABASE", "neo4j")
 os.environ.setdefault("AWS_REGION", "us-east-1")
-os.environ.setdefault("BEDROCK_MODEL_ID", "anthropic.claude-sonnet-4-20250514-v1:0")
+os.environ.setdefault("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-6")
 os.environ.setdefault("BEDROCK_EMBEDDING_MODEL_ID", "amazon.titan-embed-text-v2:0")
 
-DATA_DIR = Path(__file__).parent.parent.parent / "data"
+DATA_DIR = Path(__file__).resolve().parents[3] / "data"
 
 
 # ── Sample Data Fixtures ──────────────────────────────────────────────
@@ -76,8 +76,18 @@ def customer_john_smith() -> dict[str, Any]:
         "risk_factors": [],
         "kyc_status": "approved",
         "documents": [
-            {"type": "passport", "status": "verified", "expiry_date": "2028-03-15", "submission_date": None},
-            {"type": "utility_bill", "status": "verified", "expiry_date": None, "submission_date": "2024-01-01"},
+            {
+                "type": "passport",
+                "status": "verified",
+                "expiry_date": "2028-03-15",
+                "submission_date": None,
+            },
+            {
+                "type": "utility_bill",
+                "status": "verified",
+                "expiry_date": None,
+                "submission_date": "2024-01-01",
+            },
         ],
     }
 
@@ -93,31 +103,56 @@ def customer_global_holdings() -> dict[str, Any]:
         "risk_factors": ["offshore_jurisdiction", "nominee_directors", "shell_company_indicators"],
         "kyc_status": "under_review",
         "documents": [
-            {"type": "certificate_of_incorporation", "status": "verified", "expiry_date": None, "submission_date": "2015-09-10"},
-            {"type": "register_of_directors", "status": "pending", "expiry_date": None, "submission_date": None},
-            {"type": "proof_of_address", "status": "missing", "expiry_date": None, "submission_date": None},
+            {
+                "type": "certificate_of_incorporation",
+                "status": "verified",
+                "expiry_date": None,
+                "submission_date": "2015-09-10",
+            },
+            {
+                "type": "register_of_directors",
+                "status": "pending",
+                "expiry_date": None,
+                "submission_date": None,
+            },
+            {
+                "type": "proof_of_address",
+                "status": "missing",
+                "expiry_date": None,
+                "submission_date": None,
+            },
         ],
     }
 
 
-# ── Mock Neo4j Graph Client ──────────────────────────────────────────
+# ── Mock MemoryClient ────────────────────────────────────────────────
 
 
 @pytest.fixture
-def mock_graph_client() -> AsyncMock:
-    """Mock Neo4jClient (from MemoryClient.graph)."""
-    client = AsyncMock()
+def mock_memory_client() -> MagicMock:
+    """Mock ``MemoryClient`` shaped the way ``Neo4jDomainService`` uses it.
+
+    Reads go through ``client.query.cypher`` (portable, read-only validated) and
+    writes through ``client.graph.execute_write`` (bolt-only). Both are also
+    exposed as ``execute_read`` / ``execute_write`` so a test can set a return
+    value or assert a call without caring which path the method under test took.
+    """
+    client = MagicMock()
     client.execute_read = AsyncMock(return_value=[])
     client.execute_write = AsyncMock(return_value=[])
+    client.query = MagicMock()
+    client.query.cypher = client.execute_read
+    client.graph = MagicMock()
+    client.graph.execute_write = client.execute_write
     return client
 
 
 @pytest.fixture
-def neo4j_service(mock_graph_client):
-    """Neo4jDomainService with mocked graph client."""
+def neo4j_service(mock_memory_client):
+    """Neo4jDomainService with a mocked MemoryClient."""
     from src.services.neo4j_service import Neo4jDomainService
 
-    return Neo4jDomainService(mock_graph_client)
+    return Neo4jDomainService(mock_memory_client)
 
 
 # ── Mock Memory Service ───────────────────────────────────────────────
@@ -127,8 +162,9 @@ def neo4j_service(mock_graph_client):
 def mock_memory_service():
     """Mock FinancialMemoryService with correct API signatures."""
     service = AsyncMock()
-    service._initialized = True
+    service.connected = True
     service.initialize = AsyncMock()
+    service.ping = AsyncMock(return_value=True)
     service.close = AsyncMock()
 
     # client property
@@ -146,5 +182,13 @@ def mock_memory_service():
     service.add_reasoning_step = AsyncMock(return_value=str(uuid4()))
     service.complete_investigation_trace = AsyncMock()
     service.get_investigation_trace = AsyncMock(return_value=None)
+    service.record_tool_call = AsyncMock()
+    service.audit_trail = AsyncMock(return_value=[])
+
+    # Long-term memory
+    service.record_screening = AsyncMock()
+    service.prior_screenings = AsyncMock(return_value=[])
+    service.set_analyst_preference = AsyncMock()
+    service.analyst_preferences = AsyncMock(return_value=[])
 
     return service

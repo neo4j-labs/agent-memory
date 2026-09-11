@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.examples._manifests import assert_library_pin
+
 EXAMPLES_DIR = Path(__file__).parent.parent.parent / "examples"
 
 
@@ -168,11 +170,13 @@ class TestGoogleCloudFinancialAdvisor:
         for component in expected:
             assert (chat_dir / component).exists(), f"Component not found: {component}"
 
-    def test_frontend_package_has_framer_motion(self, app_dir):
-        """Verify frontend depends on framer-motion."""
+    def test_frontend_package_has_an_animation_library(self, app_dir):
+        """Verify the frontend depends on `motion` (or its predecessor framer-motion)."""
         package_json = app_dir / "frontend" / "package.json"
         content = package_json.read_text(encoding="utf-8")
-        assert "framer-motion" in content, "Frontend should depend on framer-motion"
+        assert '"motion"' in content or '"framer-motion"' in content, (
+            "Frontend should depend on motion"
+        )
 
     def test_backend_chat_has_stream_endpoint(self, app_dir):
         """Verify chat.py has the SSE streaming endpoint."""
@@ -183,12 +187,83 @@ class TestGoogleCloudFinancialAdvisor:
         assert "_sse_event" in content, "chat.py should have _sse_event helper"
         assert "_truncate_result" in content, "chat.py should have _truncate_result helper"
 
-    def test_backend_chat_filters_internal_functions(self, app_dir):
-        """Verify chat.py filters ADK internal transfer functions."""
-        chat = app_dir / "backend" / "src" / "api" / "routes" / "chat.py"
-        content = chat.read_text(encoding="utf-8")
+    def test_backend_has_shared_adk_event_consumer(self, app_dir):
+        """One module owns the ADK Event shape; both chat routes use it."""
+        events = app_dir / "backend" / "src" / "services" / "adk_events.py"
+        assert events.exists(), f"adk_events.py not found: {events}"
+        content = events.read_text(encoding="utf-8")
+        assert "INTERNAL_FUNCTIONS" in content, "Should filter ADK-internal functions"
         assert "transfer_to_agent" in content, "Should reference transfer_to_agent"
-        assert "_internal_fns" in content, "Should have _internal_fns set"
+        assert "async def consume_run" in content, "Should expose consume_run"
+        assert "async def collect_run" in content, "Should expose collect_run"
+
+    def test_backend_has_trace_writer(self, app_dir):
+        """Reasoning traces are recorded with the audit-grade API."""
+        writer = app_dir / "backend" / "src" / "services" / "trace_writer.py"
+        assert writer.exists(), f"trace_writer.py not found: {writer}"
+        content = writer.read_text(encoding="utf-8")
+        for expected in ("triggered_by_message_id", "touched_entities", "TraceOutcome"):
+            assert expected in content, f"trace_writer.py should use {expected}"
+
+    def test_backend_has_its_own_test_suite(self, app_dir):
+        """`make test` must collect something: testpaths = ["tests"]."""
+        tests_dir = app_dir / "backend" / "tests"
+        assert tests_dir.exists(), f"backend/tests not found: {tests_dir}"
+        assert (tests_dir / "conftest.py").exists()
+        assert list(tests_dir.glob("test_*.py")), "backend/tests has no test modules"
+
+    def test_backend_readme_is_not_empty(self, app_dir):
+        """pyproject declares README.md as the package readme."""
+        readme = app_dir / "backend" / "README.md"
+        assert readme.exists()
+        assert len(readme.read_text(encoding="utf-8").strip()) > 200, (
+            "backend/README.md should describe how to run and navigate the backend"
+        )
+
+    def test_image_build_does_not_depend_on_the_editable_path(self, app_dir):
+        """The editable [tool.uv.sources] path lies outside the Docker context."""
+        dockerfile = (app_dir / "backend" / "Dockerfile").read_text(encoding="utf-8")
+        run_lines = [
+            line for line in dockerfile.splitlines() if line.strip().startswith(("RUN", "CMD"))
+        ]
+        assert not any("uv sync" in line for line in run_lines), (
+            "uv sync resolves [tool.uv.sources], whose path is outside the build context"
+        )
+        assert "requirements-docker.txt" in dockerfile
+        assert (app_dir / "backend" / "requirements-docker.txt").exists()
+
+    def test_cloudbuild_uses_the_current_path(self, app_dir):
+        """The example was relocated under financial-services-advisor/."""
+        cloudbuild = (app_dir / "infrastructure" / "cloudbuild.yaml").read_text(encoding="utf-8")
+        assert "examples/financial-services-advisor/google-cloud-financial-advisor" in cloudbuild
+        assert "dir: 'examples/google-cloud-financial-advisor'" not in cloudbuild
+
+    def test_compose_mounts_the_shared_data_directory(self, app_dir):
+        """The sample dataset lives one level up, shared with the AWS sibling."""
+        compose = (app_dir / "docker-compose.yml").read_text(encoding="utf-8")
+        assert "../data:/app" in compose, "data-loader should mount ../data"
+        assert "neo4j:5.26-community" in compose, "pin the Neo4j LTS image"
+
+    def test_no_retired_embedding_model_is_referenced(self, app_dir):
+        """text-embedding-004 was shut down on 2026-01-14."""
+        for relative in (
+            ".env.example",
+            "docker-compose.yml",
+            "backend/src/config.py",
+        ):
+            content = (app_dir / relative).read_text(encoding="utf-8")
+            occurrences = [
+                line
+                for line in content.splitlines()
+                if "text-embedding-004" in line and "retired" not in line.lower()
+            ]
+            assert not occurrences, f"{relative} still uses text-embedding-004: {occurrences}"
+            assert "gemini-embedding-001" in content, f"{relative} should name the current model"
+
+    def test_no_pre_relocation_paths_in_docs(self, app_dir):
+        for relative in ("README.md", "GETTING_STARTED.md"):
+            content = (app_dir / relative).read_text(encoding="utf-8")
+            assert "examples/google-cloud-financial-advisor" not in content, relative
 
     def test_backend_traces_route_exists(self, app_dir):
         """Verify traces.py has expected endpoints."""
@@ -233,7 +308,6 @@ class TestGoogleCloudFinancialAdvisor:
         )
 
     def test_backend_pyproject_has_version_pin(self, app_dir):
-        """Verify backend has version pin for neo4j-agent-memory."""
-        pyproject = app_dir / "backend" / "pyproject.toml"
-        content = pyproject.read_text(encoding="utf-8")
-        assert ">=0.1.0" in content, "Backend should pin neo4j-agent-memory>=0.1.0"
+        """Verify the backend pins a current, capped neo4j-agent-memory range."""
+        pin = assert_library_pin(app_dir / "backend" / "pyproject.toml")
+        assert "google-adk" in pin.extras, "this example needs the [google-adk] extra"

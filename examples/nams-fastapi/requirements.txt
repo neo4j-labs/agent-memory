@@ -1,3 +1,9 @@
-neo4j-agent-memory[nams]>=0.4.0
-fastapi>=0.110.0
-uvicorn>=0.27.0
+# The [nams] extra pulls the hosted-backend HTTP transport (httpx). No Neo4j
+# driver, no embedding provider, no extraction model — the service runs those.
+neo4j-agent-memory[nams]>=0.5.0,<0.7
+fastapi>=0.141,<1
+# [standard] supplies the --reload watcher plus the httptools/uvloop speedups
+# the run command below assumes.
+uvicorn[standard]>=0.52,<1
+# Optional: loads this directory's .env (main.py falls back to a tiny parser).
+python-dotenv>=1.0,<2

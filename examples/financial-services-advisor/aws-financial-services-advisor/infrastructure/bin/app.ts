@@ -42,7 +42,10 @@ const computeStack = new ComputeStack(app, `${projectName}-compute`, {
   projectName,
   vpc: networkStack.vpc,
   documentBucket: dataStack.documentBucket,
+  // Without the secret the function has no Neo4j credentials at all.
+  neo4jSecret: dataStack.neo4jSecret,
 });
+computeStack.addStackDependency(dataStack);
 
 // API Stack - API Gateway, CloudFront
 const apiStack = new ApiStack(app, `${projectName}-api`, {
@@ -50,6 +53,9 @@ const apiStack = new ApiStack(app, `${projectName}-api`, {
   projectName,
   lambdaFunction: computeStack.apiHandler,
   userPool: authStack.userPool,
+  // Set to false when `../frontend/dist` has not been built yet; `cdk synth`
+  // fails on a missing asset directory otherwise.
+  deployFrontend: app.node.tryGetContext('deployFrontend') !== 'false',
 });
 
 // Monitoring Stack - CloudWatch dashboards and alarms

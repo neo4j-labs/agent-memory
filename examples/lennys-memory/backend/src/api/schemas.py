@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # Chat schemas
@@ -134,8 +134,7 @@ class GraphRelationship(BaseModel):
     type: str
     properties: dict[str, Any]
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class MemoryGraph(BaseModel):

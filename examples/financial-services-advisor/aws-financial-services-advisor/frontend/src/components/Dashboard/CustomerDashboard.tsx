@@ -1,43 +1,42 @@
-import { useState } from 'react'
 import {
+  Badge,
   Box,
-  Heading,
-  Text,
-  SimpleGrid,
   Card,
   Flex,
-  Badge,
-  Button,
+  Heading,
   Input,
-  Table,
+  SimpleGrid,
   Spinner,
+  Table,
+  Text,
 } from '@chakra-ui/react'
 import { useQuery } from '@tanstack/react-query'
-import { FiUsers, FiAlertTriangle, FiTrendingUp, FiSearch } from 'react-icons/fi'
-import { customerApi, alertApi } from '../../lib/api'
+import { useState } from 'react'
+import { FiAlertTriangle, FiSearch, FiTrendingUp, FiUsers } from 'react-icons/fi'
+import { alertApi, countByStatus, customerApi } from '../../lib/api'
 
 interface StatCardProps {
   label: string
   value: string | number
   icon: React.ElementType
-  color: string
+  colorPalette: string
 }
 
-function StatCard({ label, value, icon: IconComponent, color }: StatCardProps) {
+function StatCard({ label, value, icon: IconComponent, colorPalette }: StatCardProps) {
   return (
-    <Card.Root>
+    <Card.Root colorPalette={colorPalette}>
       <Card.Body>
         <Flex justify="space-between" align="center">
           <Box>
-            <Text color="gray.500" fontSize="sm" fontWeight="medium">
+            <Text color="fg.muted" fontSize="sm" fontWeight="medium">
               {label}
             </Text>
-            <Text fontSize="2xl" fontWeight="bold" color="gray.800">
+            <Text fontSize="2xl" fontWeight="bold">
               {value}
             </Text>
           </Box>
-          <Box p={3} borderRadius="full" bg={`${color}.100`}>
-            <IconComponent size={24} color={`var(--chakra-colors-${color}-500)`} />
+          <Box p={3} borderRadius="full" bg="colorPalette.muted" color="colorPalette.fg">
+            <IconComponent size={24} />
           </Box>
         </Flex>
       </Card.Body>
@@ -45,7 +44,8 @@ function StatCard({ label, value, icon: IconComponent, color }: StatCardProps) {
   )
 }
 
-function getRiskBadgeColor(riskLevel: string): string {
+/** Risk levels arrive upper-case from the backend; compare case-insensitively. */
+function riskPalette(riskLevel: string): string {
   switch (riskLevel.toLowerCase()) {
     case 'critical':
       return 'red'
@@ -73,29 +73,28 @@ export default function CustomerDashboard() {
     queryFn: () => alertApi.getSummary(),
   })
 
-  const customers = customersData?.customers || []
-  const totalCustomers = customersData?.total || 0
+  const customers = customersData?.customers ?? []
+  const totalCustomers = customersData?.total ?? 0
 
+  const needle = searchQuery.toLowerCase()
   const filteredCustomers = customers.filter(
-    (c) =>
-      c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      c.id.toLowerCase().includes(searchQuery.toLowerCase())
+    (customer) =>
+      customer.name.toLowerCase().includes(needle) || customer.id.toLowerCase().includes(needle),
   )
 
-  const highRiskCount = customers.filter(
-    (c) => c.risk_level === 'high' || c.risk_level === 'critical'
+  const highRiskCount = customers.filter((customer) =>
+    ['high', 'critical'].includes((customer.risk_level ?? '').toLowerCase()),
   ).length
 
   return (
     <Box>
       <Flex justify="space-between" align="center" mb={6}>
         <Box>
-          <Heading size="lg" color="gray.800">
+          <Heading size="lg" fontFamily="heading">
             Dashboard
           </Heading>
-          <Text color="gray.500">Financial compliance overview</Text>
+          <Text color="fg.muted">Financial compliance overview</Text>
         </Box>
-        <Button colorPalette="teal">New Investigation</Button>
       </Flex>
 
       {/* Stats */}
@@ -104,37 +103,34 @@ export default function CustomerDashboard() {
           label="Total Customers"
           value={totalCustomers}
           icon={FiUsers}
-          color="blue"
+          colorPalette="brand"
         />
+        <StatCard label="High Risk" value={highRiskCount} icon={FiTrendingUp} colorPalette="red" />
         <StatCard
-          label="High Risk"
-          value={highRiskCount}
-          icon={FiTrendingUp}
-          color="red"
-        />
-        <StatCard
-          label="Open Alerts"
-          value={alertSummary?.by_status?.new || 0}
+          label="New Alerts"
+          value={countByStatus(alertSummary, 'new')}
           icon={FiAlertTriangle}
-          color="orange"
+          colorPalette="orange"
         />
         <StatCard
-          label="Active Investigations"
-          value={alertSummary?.by_status?.under_review || 0}
+          label="Under Investigation"
+          value={countByStatus(alertSummary, 'investigating')}
           icon={FiSearch}
-          color="purple"
+          colorPalette="purple"
         />
       </SimpleGrid>
 
-      {/* Customer List */}
+      {/* Customer list */}
       <Card.Root>
         <Card.Header>
-          <Flex justify="space-between" align="center">
-            <Heading size="md">Customers</Heading>
+          <Flex justify="space-between" align="center" gap={4} flexWrap="wrap">
+            <Heading size="md" fontFamily="heading">
+              Customers
+            </Heading>
             <Input
-              placeholder="Search customers..."
+              placeholder="Search customers…"
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(event) => setSearchQuery(event.target.value)}
               maxW="300px"
             />
           </Flex>
@@ -142,55 +138,49 @@ export default function CustomerDashboard() {
         <Card.Body>
           {customersLoading ? (
             <Flex justify="center" py={8}>
-              <Spinner size="lg" color="teal.500" />
+              <Spinner size="lg" colorPalette="brand" />
             </Flex>
           ) : filteredCustomers.length === 0 ? (
-            <Text color="gray.500" textAlign="center" py={8}>
-              No customers found. Add customers to get started.
+            <Text color="fg.muted" textAlign="center" py={8}>
+              No customers found. Load the sample data with <code>make load-data</code>.
             </Text>
           ) : (
-            <Table.Root>
-              <Table.Header>
-                <Table.Row>
-                  <Table.ColumnHeader>ID</Table.ColumnHeader>
-                  <Table.ColumnHeader>Name</Table.ColumnHeader>
-                  <Table.ColumnHeader>Type</Table.ColumnHeader>
-                  <Table.ColumnHeader>Jurisdiction</Table.ColumnHeader>
-                  <Table.ColumnHeader>Risk Level</Table.ColumnHeader>
-                  <Table.ColumnHeader>Alerts</Table.ColumnHeader>
-                  <Table.ColumnHeader>Actions</Table.ColumnHeader>
-                </Table.Row>
-              </Table.Header>
-              <Table.Body>
-                {filteredCustomers.map((customer) => (
-                  <Table.Row key={customer.id}>
-                    <Table.Cell fontFamily="mono" fontSize="sm">
-                      {customer.id}
-                    </Table.Cell>
-                    <Table.Cell fontWeight="medium">{customer.name}</Table.Cell>
-                    <Table.Cell textTransform="capitalize">{customer.type}</Table.Cell>
-                    <Table.Cell>{customer.jurisdiction}</Table.Cell>
-                    <Table.Cell>
-                      <Badge colorPalette={getRiskBadgeColor(customer.risk_level)}>
-                        {customer.risk_level}
-                      </Badge>
-                    </Table.Cell>
-                    <Table.Cell>
-                      {customer.alerts_count > 0 ? (
-                        <Badge colorPalette="red">{customer.alerts_count}</Badge>
-                      ) : (
-                        <Text color="gray.400">-</Text>
-                      )}
-                    </Table.Cell>
-                    <Table.Cell>
-                      <Button size="sm" variant="ghost">
-                        View
-                      </Button>
-                    </Table.Cell>
+            <Box overflowX="auto">
+              <Table.Root>
+                <Table.Header>
+                  <Table.Row>
+                    <Table.ColumnHeader>ID</Table.ColumnHeader>
+                    <Table.ColumnHeader>Name</Table.ColumnHeader>
+                    <Table.ColumnHeader>Type</Table.ColumnHeader>
+                    <Table.ColumnHeader>Jurisdiction</Table.ColumnHeader>
+                    <Table.ColumnHeader>Risk Level</Table.ColumnHeader>
+                    <Table.ColumnHeader>Risk Score</Table.ColumnHeader>
+                    <Table.ColumnHeader>KYC</Table.ColumnHeader>
                   </Table.Row>
-                ))}
-              </Table.Body>
-            </Table.Root>
+                </Table.Header>
+                <Table.Body>
+                  {filteredCustomers.map((customer) => (
+                    <Table.Row key={customer.id}>
+                      <Table.Cell fontFamily="mono" fontSize="sm">
+                        {customer.id}
+                      </Table.Cell>
+                      <Table.Cell fontWeight="medium">{customer.name}</Table.Cell>
+                      <Table.Cell textTransform="capitalize">{customer.type}</Table.Cell>
+                      <Table.Cell>{customer.jurisdiction ?? '—'}</Table.Cell>
+                      <Table.Cell>
+                        <Badge colorPalette={riskPalette(customer.risk_level)}>
+                          {customer.risk_level}
+                        </Badge>
+                      </Table.Cell>
+                      <Table.Cell>{customer.risk_score ?? '—'}</Table.Cell>
+                      <Table.Cell textTransform="capitalize">
+                        {customer.kyc_status ?? 'unknown'}
+                      </Table.Cell>
+                    </Table.Row>
+                  ))}
+                </Table.Body>
+              </Table.Root>
+            </Box>
           )}
         </Card.Body>
       </Card.Root>

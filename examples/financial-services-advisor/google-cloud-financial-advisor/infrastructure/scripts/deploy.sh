@@ -48,13 +48,18 @@ if ! gcloud secrets describe neo4j-password --project="$PROJECT_ID" &>/dev/null;
     exit 1
 fi
 
-# Submit Cloud Build
+# Submit Cloud Build from the repository root: cloudbuild.yaml's build steps
+# use `dir: examples/financial-services-advisor/google-cloud-financial-advisor`,
+# which is relative to the uploaded source root.
+APP_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+REPO_ROOT="$(cd "$APP_DIR/../../.." && pwd)"
+
 echo ""
-echo "Starting Cloud Build..."
-cd "$(dirname "$0")/../.."
+echo "Starting Cloud Build from $REPO_ROOT ..."
+cd "$REPO_ROOT"
 
 gcloud builds submit \
-    --config=infrastructure/cloudbuild.yaml \
+    --config="examples/financial-services-advisor/google-cloud-financial-advisor/infrastructure/cloudbuild.yaml" \
     --substitutions="_REGION=$REGION,_REPO_NAME=$REPO_NAME" \
     --project="$PROJECT_ID" \
     .

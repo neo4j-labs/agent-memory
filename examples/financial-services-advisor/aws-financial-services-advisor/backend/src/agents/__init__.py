@@ -1,4 +1,8 @@
-"""Strands Agents for Financial Services Advisor."""
+"""Strands agents for the Financial Services Advisor.
+
+One supervisor builds and delegates to the four specialist sub-agents; their
+system prompts live in :mod:`.prompts`.
+"""
 
 from .supervisor import create_supervisor_agent, get_supervisor_agent, reset_supervisor_agent
 

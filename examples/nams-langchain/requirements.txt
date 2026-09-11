@@ -1,3 +1,10 @@
-neo4j-agent-memory[nams,langchain]>=0.4.0
-langchain>=0.2.0
-langchain-openai>=0.1.0
+# The [langchain-agents] extra pulls langchain-core + langchain (create_agent
+# and the middleware base class); [nams] pulls the hosted-backend transport.
+neo4j-agent-memory[nams,langchain-agents]>=0.5.0,<0.7
+langchain>=1.0,<2
+langchain-core>=1.0,<2
+# Only needed for a real model turn; the script falls back to a scripted
+# offline chat model when OPENAI_API_KEY is unset.
+langchain-openai>=1.0,<2
+# Optional: loads this directory's .env.
+python-dotenv>=1.0,<2

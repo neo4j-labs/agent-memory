@@ -38,14 +38,17 @@ export type {
   EntityCardProps,
 } from "./types";
 
-// Registry utilities
+// Registry: card selection (./cardType) + data extraction (./extractors)
 export {
   getCardTypeForTool,
+  getToolDisplayTitle,
+  hasEntityData,
+  hasLocationData,
   extractLocations,
   extractPathNodes,
   extractGraphData,
   extractStats,
   extractTableData,
   extractEntityData,
-  getToolDisplayTitle,
+  extractMemoryGraphData,
 } from "./toolCardRegistry";

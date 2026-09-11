@@ -1,27 +1,27 @@
-import { useState } from 'react'
 import {
+  Badge,
   Box,
-  Heading,
-  Text,
+  Button,
   Card,
   Flex,
-  Badge,
-  Button,
-  Table,
-  Spinner,
+  Heading,
   SimpleGrid,
+  Spinner,
+  Table,
+  Text,
   VStack,
 } from '@chakra-ui/react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { FiSearch, FiClock, FiCheckCircle, FiPlay } from 'react-icons/fi'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useState } from 'react'
+import { FiCheckCircle, FiClock, FiPlay, FiSearch } from 'react-icons/fi'
 import { investigationApi } from '../../lib/api'
 
-function getStatusColor(status: string): string {
+function statusPalette(status: string): string {
   switch (status.toLowerCase()) {
     case 'pending':
       return 'gray'
     case 'in_progress':
-      return 'blue'
+      return 'brand'
     case 'completed':
       return 'green'
     case 'escalated':
@@ -31,9 +31,10 @@ function getStatusColor(status: string): string {
   }
 }
 
-function getPriorityColor(priority: string): string {
+function priorityPalette(priority: string): string {
   switch (priority.toLowerCase()) {
     case 'high':
+    case 'critical':
       return 'red'
     case 'medium':
       return 'orange'
@@ -44,19 +45,26 @@ function getPriorityColor(priority: string): string {
   }
 }
 
-function formatDate(dateString: string): string {
-  return new Date(dateString).toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  })
+function formatDate(value?: string | null): string {
+  if (!value) return '—'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime())
+    ? '—'
+    : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
+
+const WORKFLOW = [
+  { step: '1. KYC Agent', detail: 'Identity verification and document checking', palette: 'teal' },
+  { step: '2. AML Agent', detail: 'Transaction analysis and pattern detection', palette: 'orange' },
+  { step: '3. Relationship Agent', detail: 'Network analysis over the context graph', palette: 'purple' },
+  { step: '4. Compliance Agent', detail: 'Sanctions/PEP screening and SAR drafting', palette: 'red' },
+]
 
 export default function InvestigationPanel() {
   const [selectedInvestigation, setSelectedInvestigation] = useState<string | null>(null)
   const queryClient = useQueryClient()
 
-  const { data: investigationsData, isLoading } = useQuery({
+  const { data: investigations = [], isLoading } = useQuery({
     queryKey: ['investigations'],
     queryFn: () => investigationApi.list(),
   })
@@ -64,218 +72,183 @@ export default function InvestigationPanel() {
   const startMutation = useMutation({
     mutationFn: (id: string) => investigationApi.start(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['investigations'] })
+      void queryClient.invalidateQueries({ queryKey: ['investigations'] })
     },
   })
 
-  const investigations = investigationsData?.investigations || []
-
-  const pendingCount = investigations.filter((i) => i.status === 'pending').length
-  const inProgressCount = investigations.filter((i) => i.status === 'in_progress').length
-  const completedCount = investigations.filter((i) => i.status === 'completed').length
+  const countByStatus = (status: string) =>
+    investigations.filter((i) => (i.status ?? '').toLowerCase() === status).length
 
   return (
     <Box>
       <Flex justify="space-between" align="center" mb={6}>
         <Box>
-          <Heading size="lg" color="gray.800">
+          <Heading size="lg" fontFamily="heading">
             Investigations
           </Heading>
-          <Text color="gray.500">Compliance investigations with AI-powered analysis</Text>
+          <Text color="fg.muted">Compliance investigations with multi-agent analysis</Text>
         </Box>
-        <Button colorPalette="teal">New Investigation</Button>
       </Flex>
 
-      {/* Summary Stats */}
+      {/* Summary */}
       <SimpleGrid columns={{ base: 1, md: 3 }} gap={6} mb={8}>
-        <Card.Root>
-          <Card.Body>
-            <Flex align="center">
-              <Box p={3} borderRadius="full" bg="gray.100" mr={4}>
-                <FiClock size={24} color="var(--chakra-colors-gray-500)" />
-              </Box>
-              <Box>
-                <Text color="gray.500" fontSize="sm">
-                  Pending
-                </Text>
-                <Text fontSize="2xl" fontWeight="bold">
-                  {pendingCount}
-                </Text>
-              </Box>
-            </Flex>
-          </Card.Body>
-        </Card.Root>
-
-        <Card.Root>
-          <Card.Body>
-            <Flex align="center">
-              <Box p={3} borderRadius="full" bg="blue.100" mr={4}>
-                <FiSearch size={24} color="var(--chakra-colors-blue-500)" />
-              </Box>
-              <Box>
-                <Text color="gray.500" fontSize="sm">
-                  In Progress
-                </Text>
-                <Text fontSize="2xl" fontWeight="bold">
-                  {inProgressCount}
-                </Text>
-              </Box>
-            </Flex>
-          </Card.Body>
-        </Card.Root>
-
-        <Card.Root>
-          <Card.Body>
-            <Flex align="center">
-              <Box p={3} borderRadius="full" bg="green.100" mr={4}>
-                <FiCheckCircle size={24} color="var(--chakra-colors-green-500)" />
-              </Box>
-              <Box>
-                <Text color="gray.500" fontSize="sm">
-                  Completed
-                </Text>
-                <Text fontSize="2xl" fontWeight="bold">
-                  {completedCount}
-                </Text>
-              </Box>
-            </Flex>
-          </Card.Body>
-        </Card.Root>
+        {[
+          { label: 'Pending', value: countByStatus('pending'), icon: FiClock, palette: 'gray' },
+          {
+            label: 'In Progress',
+            value: countByStatus('in_progress'),
+            icon: FiSearch,
+            palette: 'brand',
+          },
+          {
+            label: 'Completed',
+            value: countByStatus('completed'),
+            icon: FiCheckCircle,
+            palette: 'green',
+          },
+        ].map(({ label, value, icon: Icon, palette }) => (
+          <Card.Root key={label} colorPalette={palette}>
+            <Card.Body>
+              <Flex align="center" gap={4}>
+                <Box p={3} borderRadius="full" bg="colorPalette.muted" color="colorPalette.fg">
+                  <Icon size={24} />
+                </Box>
+                <Box>
+                  <Text color="fg.muted" fontSize="sm">
+                    {label}
+                  </Text>
+                  <Text fontSize="2xl" fontWeight="bold">
+                    {value}
+                  </Text>
+                </Box>
+              </Flex>
+            </Card.Body>
+          </Card.Root>
+        ))}
       </SimpleGrid>
 
-      {/* Investigations Table */}
+      {/* Table */}
       <Card.Root>
         <Card.Header>
-          <Heading size="md">All Investigations</Heading>
+          <Heading size="md" fontFamily="heading">
+            All Investigations
+          </Heading>
         </Card.Header>
         <Card.Body>
           {isLoading ? (
             <Flex justify="center" py={8}>
-              <Spinner size="lg" color="teal.500" />
+              <Spinner size="lg" colorPalette="brand" />
             </Flex>
           ) : investigations.length === 0 ? (
             <VStack py={8} gap={4}>
-              <FiSearch size={48} color="var(--chakra-colors-gray-300)" />
-              <Text color="gray.500">No investigations found.</Text>
-              <Button colorPalette="teal">Create First Investigation</Button>
+              <Box color="fg.subtle">
+                <FiSearch size={48} />
+              </Box>
+              <Text color="fg.muted">
+                No investigations yet. Ask the advisor to investigate a customer, or create one
+                through <code>POST /api/investigations</code>.
+              </Text>
             </VStack>
           ) : (
-            <Table.Root>
-              <Table.Header>
-                <Table.Row>
-                  <Table.ColumnHeader>ID</Table.ColumnHeader>
-                  <Table.ColumnHeader>Title</Table.ColumnHeader>
-                  <Table.ColumnHeader>Customer</Table.ColumnHeader>
-                  <Table.ColumnHeader>Status</Table.ColumnHeader>
-                  <Table.ColumnHeader>Priority</Table.ColumnHeader>
-                  <Table.ColumnHeader>Findings</Table.ColumnHeader>
-                  <Table.ColumnHeader>Created</Table.ColumnHeader>
-                  <Table.ColumnHeader>Actions</Table.ColumnHeader>
-                </Table.Row>
-              </Table.Header>
-              <Table.Body>
-                {investigations.map((investigation) => (
-                  <Table.Row
-                    key={investigation.id}
-                    cursor="pointer"
-                    _hover={{ bg: 'gray.50' }}
-                    onClick={() => setSelectedInvestigation(investigation.id)}
-                    bg={selectedInvestigation === investigation.id ? 'teal.50' : undefined}
-                  >
-                    <Table.Cell fontFamily="mono" fontSize="sm">
-                      {investigation.id}
-                    </Table.Cell>
-                    <Table.Cell fontWeight="medium" maxW="250px" truncate>
-                      {investigation.title}
-                    </Table.Cell>
-                    <Table.Cell fontFamily="mono" fontSize="sm">
-                      {investigation.customer_id}
-                    </Table.Cell>
-                    <Table.Cell>
-                      <Badge colorPalette={getStatusColor(investigation.status)}>
-                        {investigation.status.replace(/_/g, ' ')}
-                      </Badge>
-                    </Table.Cell>
-                    <Table.Cell>
-                      <Badge colorPalette={getPriorityColor(investigation.priority)}>
-                        {investigation.priority}
-                      </Badge>
-                    </Table.Cell>
-                    <Table.Cell>
-                      <Badge variant="outline">{investigation.findings_count}</Badge>
-                    </Table.Cell>
-                    <Table.Cell fontSize="sm" color="gray.500">
-                      {formatDate(investigation.created_at)}
-                    </Table.Cell>
-                    <Table.Cell>
-                      <Flex gap={2}>
-                        <Button size="sm" variant="ghost">
-                          View
-                        </Button>
-                        {investigation.status === 'pending' && (
+            <Box overflowX="auto">
+              <Table.Root>
+                <Table.Header>
+                  <Table.Row>
+                    <Table.ColumnHeader>ID</Table.ColumnHeader>
+                    <Table.ColumnHeader>Title</Table.ColumnHeader>
+                    <Table.ColumnHeader>Customer</Table.ColumnHeader>
+                    <Table.ColumnHeader>Status</Table.ColumnHeader>
+                    <Table.ColumnHeader>Priority</Table.ColumnHeader>
+                    <Table.ColumnHeader>Created</Table.ColumnHeader>
+                    <Table.ColumnHeader>Actions</Table.ColumnHeader>
+                  </Table.Row>
+                </Table.Header>
+                <Table.Body>
+                  {investigations.map((investigation) => (
+                    <Table.Row
+                      key={investigation.id}
+                      cursor="pointer"
+                      _hover={{ bg: 'bg.muted' }}
+                      onClick={() => setSelectedInvestigation(investigation.id)}
+                      bg={selectedInvestigation === investigation.id ? 'bg.emphasized' : undefined}
+                    >
+                      <Table.Cell fontFamily="mono" fontSize="sm">
+                        {investigation.id}
+                      </Table.Cell>
+                      <Table.Cell fontWeight="medium" maxW="250px" truncate>
+                        {investigation.title}
+                      </Table.Cell>
+                      <Table.Cell fontFamily="mono" fontSize="sm">
+                        {investigation.customer_id}
+                      </Table.Cell>
+                      <Table.Cell>
+                        <Badge colorPalette={statusPalette(investigation.status)}>
+                          {investigation.status?.replace(/_/g, ' ')}
+                        </Badge>
+                      </Table.Cell>
+                      <Table.Cell>
+                        <Badge colorPalette={priorityPalette(investigation.priority)}>
+                          {investigation.priority}
+                        </Badge>
+                      </Table.Cell>
+                      <Table.Cell fontSize="sm" color="fg.muted">
+                        {formatDate(investigation.created_at)}
+                      </Table.Cell>
+                      <Table.Cell>
+                        {(investigation.status ?? '').toLowerCase() === 'pending' && (
                           <Button
                             size="sm"
-                            colorPalette="teal"
+                            colorPalette="brand"
                             variant="outline"
-                            onClick={(e) => {
-                              e.stopPropagation()
+                            onClick={(event) => {
+                              event.stopPropagation()
                               startMutation.mutate(investigation.id)
                             }}
-                            loading={startMutation.isPending}
+                            loading={
+                              startMutation.isPending && startMutation.variables === investigation.id
+                            }
                           >
                             <FiPlay />
                             Start
                           </Button>
                         )}
-                      </Flex>
-                    </Table.Cell>
-                  </Table.Row>
-                ))}
-              </Table.Body>
-            </Table.Root>
+                      </Table.Cell>
+                    </Table.Row>
+                  ))}
+                </Table.Body>
+              </Table.Root>
+            </Box>
+          )}
+          {startMutation.isError && (
+            <Text mt={3} fontSize="sm" color="fg.error">
+              Could not start the investigation:{' '}
+              {startMutation.error instanceof Error
+                ? startMutation.error.message
+                : 'request failed'}
+            </Text>
           )}
         </Card.Body>
       </Card.Root>
 
-      {/* Agent Workflow Info */}
+      {/* Workflow explainer */}
       <Card.Root mt={6}>
         <Card.Header>
-          <Heading size="md">Multi-Agent Investigation Workflow</Heading>
+          <Heading size="md" fontFamily="heading">
+            Multi-Agent Investigation Workflow
+          </Heading>
         </Card.Header>
         <Card.Body>
           <SimpleGrid columns={{ base: 1, md: 2, lg: 4 }} gap={4}>
-            <Box p={4} bg="blue.50" borderRadius="md">
-              <Text fontWeight="bold" color="blue.700">
-                1. KYC Agent
-              </Text>
-              <Text fontSize="sm" color="blue.600">
-                Identity verification and document checking
-              </Text>
-            </Box>
-            <Box p={4} bg="orange.50" borderRadius="md">
-              <Text fontWeight="bold" color="orange.700">
-                2. AML Agent
-              </Text>
-              <Text fontSize="sm" color="orange.600">
-                Transaction analysis and pattern detection
-              </Text>
-            </Box>
-            <Box p={4} bg="purple.50" borderRadius="md">
-              <Text fontWeight="bold" color="purple.700">
-                3. Relationship Agent
-              </Text>
-              <Text fontSize="sm" color="purple.600">
-                Network analysis using Context Graph
-              </Text>
-            </Box>
-            <Box p={4} bg="teal.50" borderRadius="md">
-              <Text fontWeight="bold" color="teal.700">
-                4. Compliance Agent
-              </Text>
-              <Text fontSize="sm" color="teal.600">
-                Sanctions/PEP screening and reporting
-              </Text>
-            </Box>
+            {WORKFLOW.map(({ step, detail, palette }) => (
+              <Box key={step} p={4} colorPalette={palette} bg="colorPalette.subtle" borderRadius="md">
+                <Text fontWeight="bold" color="colorPalette.fg">
+                  {step}
+                </Text>
+                <Text fontSize="sm" color="fg.muted">
+                  {detail}
+                </Text>
+              </Box>
+            ))}
           </SimpleGrid>
         </Card.Body>
       </Card.Root>

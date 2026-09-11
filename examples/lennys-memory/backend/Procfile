@@ -1,1 +1,4 @@
-web: python -m uvicorn src.main:app --host 0.0.0.0 --port ${PORT:-8000}
+# Heroku-style process file. Railway reads nixpacks.toml [start] instead, and
+# railway.toml's startCommand overrides both when present -- keep the three in
+# sync or delete the ones your platform does not read.
+web: uv run --no-sync python -m uvicorn src.main:app --host 0.0.0.0 --port ${PORT:-8000}

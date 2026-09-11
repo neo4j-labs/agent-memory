@@ -13,21 +13,21 @@ In this tutorial we will stand up an MCP server in ~50 lines of TypeScript, regi
 
 [TIP]
 ====
-**Do you actually need to self-host?** NAMS itself exposes the same 12 tools at `https://memory.neo4jlabs.com/mcp` directly. If you just want to wire Claude Desktop to your memory, point it at that URL with your API key — see xref:tutorials/mcp-server.adoc[the Python MCP-server tutorial]'s "use the hosted MCP endpoint" section.
+**Do you actually need to self-host?** Probably not. NAMS operates its own MCP server at `https://mcp.memory.neo4jlabs.com/mcp`, and it is a *larger* surface than the one you are about to build: 47 scope-gated tools spanning memory, entity review, ontology, workspace administration and Skills, with OAuth 2.0 so no long-lived key ends up in a config file. Adding it as a remote MCP server in your client is zero code — see xref:reference/nams-mcp.adoc[the hosted NAMS MCP server reference].
 
-Self-hosting an MCP server is the right choice when you want to **wrap, filter, or log tool calls** before they hit NAMS — for example, to redact PII, add custom tools alongside the standard 12, or proxy traffic from a network that can't reach `memory.neo4jlabs.com` directly. That's what this tutorial covers.
+Self-hosting is the right choice when you want to **wrap, filter, or log tool calls** before they hit NAMS — to audit every call, expose a restricted subset to a particular client, add custom tools alongside the 12 memory ones, or proxy traffic from a network that can't reach `memory.neo4jlabs.com` directly. That's what this tutorial covers.
 ====
 
 == What You'll Learn
 
-* How to use `@neo4j-labs/agent-memory/mcp` to register the 12 standard memory tools with an MCP server.
+* How to use `@neo4j-labs/agent-memory/mcp/register` to register the 12 standard memory tools on an MCP server in one call.
 * How to wire that server to Claude Desktop via stdio.
 * How to verify memory operations from a Claude chat.
-* How to add a custom tool alongside the standard 12.
+* How to audit and restrict tool calls, and how to add a custom tool alongside the standard 12.
 
 == Prerequisites
 
-* Node.js 20 or later.
+* Node.js 22 or later.
 * Claude Desktop (latest version).
 * `MEMORY_API_KEY` — get one at link:https://memory.neo4jlabs.com[memory.neo4jlabs.com].
 
@@ -41,20 +41,31 @@ About 15 minutes.
 ----
 mkdir my-memory-mcp && cd my-memory-mcp
 npm init -y
-npm install @neo4j-labs/agent-memory @modelcontextprotocol/sdk
+npm install @neo4j-labs/agent-memory @modelcontextprotocol/sdk zod
 npm install --save-dev typescript tsx @types/node
 ----
 
-Add `"type": "module"` and a build script to `package.json`:
+`zod` is what `McpServer` validates tool arguments with; it is an optional peer of the memory SDK and a direct dependency of the MCP SDK.
+
+Add `"type": "module"`, an engine floor and the scripts to `package.json`:
 
 [source,json]
 ----
 {
   "type": "module",
+  "engines": { "node": ">=22.0.0" },
   "scripts": {
-    "start": "tsx src/server.ts"
+    "start": "tsx --env-file-if-exists=.env src/server.ts",
+    "build": "tsc --outDir dist"
   }
 }
+----
+
+`--env-file-if-exists` is what loads `.env`; `tsx` does not read it on its own. Put your key there:
+
+[source,bash]
+----
+echo 'MEMORY_API_KEY=nams_your_key_here' > .env
 ----
 
 == Step 2: Write the MCP server
@@ -63,54 +74,46 @@ Create `src/server.ts`:
 
 [source,typescript]
 ----
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
-import { MemoryClient } from "@neo4j-labs/agent-memory";
-import {
-  createMemoryTools,
-  handleMemoryToolCall,
-} from "@neo4j-labs/agent-memory/mcp";
+import { MemoryClient, VERSION } from "@neo4j-labs/agent-memory";
+import { registerMemoryTools } from "@neo4j-labs/agent-memory/mcp/register";
 
 async function main() {
+  // Fail fast on stderr: thrown later, a missing key looks to the client like
+  // a server that simply never answers.
+  if (!process.env.MEMORY_API_KEY) {
+    console.error("MEMORY_API_KEY is not set (see .env)");
+    process.exit(1);
+  }
+
   // Reads MEMORY_API_KEY from the environment Claude Desktop passes in.
   const memory = new MemoryClient();
 
-  const tools = createMemoryTools();
+  const server = new McpServer({ name: "my-memory-mcp", version: VERSION });
 
-  const server = new Server(
-    { name: "my-memory-mcp", version: "0.1.0" },
-    { capabilities: { tools: {} } },
-  );
-
-  // Tell Claude what tools we expose.
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: tools.map((t) => ({
-      name: t.name,
-      description: t.description,
-      inputSchema: t.inputSchema,
-    })),
-  }));
-
-  // Route every tool call through `handleMemoryToolCall`, which dispatches
-  // to the right MemoryClient method based on the tool name.
-  server.setRequestHandler(CallToolRequestSchema, async (req) => {
-    const result = await handleMemoryToolCall(
-      memory,
-      req.params.name,
-      (req.params.arguments ?? {}) as Record<string, unknown>,
-    );
-    return {
-      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-    };
+  // Registers all 12 memory tools: Zod-validated inputs, read/write
+  // annotations, and dispatch to the matching MemoryClient method.
+  const toolNames = registerMemoryTools(server, memory, {
+    // One audit line per call — tool name and argument *keys*, never values.
+    onCall: ({ tool, argKeys, durationMs, ok }) =>
+      console.error(`[mcp] ${tool} keys=[${argKeys.join(",")}] ${durationMs}ms ok=${ok}`),
   });
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("my-memory-mcp listening on stdio");
+  console.error(`my-memory-mcp listening on stdio with ${toolNames.length} tools`);
+
+  // Ctrl+C should close the MCP session and the memory client, not just die.
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    process.on(signal, () => {
+      void (async () => {
+        await server.close();
+        await memory.close();
+        process.exit(0);
+      })();
+    });
+  }
 }
 
 main().catch((err) => {
@@ -119,18 +122,20 @@ main().catch((err) => {
 });
 ----
 
-That's the whole server. The two `setRequestHandler` calls cover the entire MCP tool protocol; everything memory-specific is inside `handleMemoryToolCall`.
+That's the whole server. `registerMemoryTools` covers the entire memory surface — definitions, schemas, annotations and dispatch — so the only code you own is policy: what to expose, what to log, and what to add.
+
+Two things to note. Everything diagnostic goes to **stderr**: with the stdio transport, stdout is the protocol channel and a stray `console.log` corrupts it. And a dispatch failure comes back as a tool result with `isError: true` rather than a thrown protocol error, so Claude can read what went wrong and retry.
 
 == Step 3: Test the server locally
 
 [source,bash]
 ----
-MEMORY_API_KEY=nams_xxx npm start
+npm start
 ----
 
-The process should print `my-memory-mcp listening on stdio` to stderr and then sit waiting for JSON-RPC over stdin/stdout. Press Ctrl+C to stop it.
+The process should print `my-memory-mcp listening on stdio with 12 tools` to stderr and then sit waiting for JSON-RPC over stdin/stdout. Press Ctrl+C to stop it.
 
-If you see an error from `MemoryClient` about a missing key, double-check the env var.
+If it exits 1 with `MEMORY_API_KEY is not set`, check that `.env` exists and that the `start` script carries `--env-file-if-exists=.env`.
 
 == Step 4: Register the server with Claude Desktop
 
@@ -147,8 +152,9 @@ Add (or merge) the server config:
 {
   "mcpServers": {
     "neo4j-memory": {
-      "command": "npx",
-      "args": ["tsx", "/absolute/path/to/my-memory-mcp/src/server.ts"],
+      "command": "node",
+      "args": ["/absolute/path/to/my-memory-mcp/dist/server.js"],
+      "cwd": "/absolute/path/to/my-memory-mcp",
       "env": {
         "MEMORY_API_KEY": "nams_..."
       }
@@ -157,7 +163,11 @@ Add (or merge) the server config:
 }
 ----
 
-Use the **absolute path** to `src/server.ts`. Relative paths don't work — Claude Desktop launches the process from its own working directory.
+Run `npm run build` first so `dist/server.js` exists. Pointing Desktop at compiled output keeps a TypeScript loader out of the launch path, which is the most common reason a server silently fails to start.
+
+Use **absolute paths**, and set `cwd`. Relative paths don't work — Claude Desktop launches the process from its own working directory, which is also why a bare `tsx` specifier can fail to resolve.
+
+`claude_desktop_config.json` is plaintext and its `env` block is the only way to get a key into a self-hosted stdio server, so use a workspace-scoped data-plane key rather than an admin key, and rotate it with `client.auth.rotateApiKey()` if the file leaks. If you would rather not keep a long-lived key on disk at all, use the hosted MCP server — it supports OAuth and this pattern cannot.
 
 Restart Claude Desktop.
 
@@ -181,11 +191,11 @@ memory_get_trace
 memory_explain_decision
 ----
 
-If the indicator is missing or shows an error, check Claude Desktop's MCP log: **Settings → Developer → Open MCP Logs**. The most common issues:
+If the indicator is missing or shows an error, check Claude Desktop's MCP log: **Settings → Developer → Open MCP Logs** (on macOS the file is `~/Library/Logs/Claude/mcp-server-neo4j-memory.log`). The most common issues:
 
-* Wrong absolute path in `args`.
-* Missing or invalid `MEMORY_API_KEY` in `env`.
-* Node not on the PATH that Claude Desktop sees — try `"command": "/usr/local/bin/node"` (or your Node path) and `"args": ["/path/to/tsx", "..."]` instead.
+* Wrong absolute path in `args`, or `dist/` not built yet.
+* Missing or invalid `MEMORY_API_KEY` in `env` — the server exits 1 and says so in the log.
+* Node not on the PATH that Claude Desktop sees — use the absolute path to the binary, e.g. `"command": "/usr/local/bin/node"`.
 
 == Step 6: Have a memory-aware conversation
 
@@ -228,81 +238,106 @@ Open link:https://memory.neo4jlabs.com[memory.neo4jlabs.com] and navigate to **E
 
 == Step 8: Add a custom tool
 
-The standard 12 tools cover memory, but you can register additional tools that live alongside them. Add a "current time" tool — useful for grounding the assistant when it needs to reason about temporal context:
+The standard 12 tools cover memory, but you can register tools of your own that live alongside them. Add a read-only Cypher console — the single most useful thing a self-hosted server can expose, because it answers aggregate questions (`how many entities of each type?`) that no individual memory tool can:
 
 [source,typescript]
 ----
-// In src/server.ts, replace the ListToolsRequestSchema handler with:
+// In src/server.ts, after registerMemoryTools(...):
 
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [
-    ...tools.map((t) => ({
-      name: t.name,
-      description: t.description,
-      inputSchema: t.inputSchema,
-    })),
-    {
-      name: "current_time",
-      description: "Returns the current UTC time as an ISO 8601 string.",
-      inputSchema: {
-        type: "object",
-        properties: {},
-        required: [],
-      },
+import { z } from "zod";
+
+server.registerTool(
+  "memory_cypher",
+  {
+    description:
+      "Run a read-only Cypher query against the memory graph. Hosted NAMS only; " +
+      "writes are rejected.",
+    inputSchema: {
+      cypher: z.string().describe("A read-only Cypher query."),
+      params: z.record(z.string(), z.unknown()).optional(),
     },
-  ],
-}));
-
-// Update the CallToolRequestSchema handler:
-
-server.setRequestHandler(CallToolRequestSchema, async (req) => {
-  if (req.params.name === "current_time") {
-    return {
-      content: [{ type: "text", text: new Date().toISOString() }],
-    };
-  }
-  const result = await handleMemoryToolCall(
-    memory,
-    req.params.name,
-    (req.params.arguments ?? {}) as Record<string, unknown>,
-  );
-  return {
-    content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-  };
-});
+    annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
+  },
+  async ({ cypher, params }) => {
+    try {
+      const result = await memory.query.cypher({ cypher, params });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { content: [{ type: "text", text: message }], isError: true };
+    }
+  },
+);
 ----
+
+`inputSchema` here is a Zod *raw shape* — a plain object of field schemas, not `z.object({...})`. `McpServer` turns it into the JSON Schema clients see and validates arguments against it before your callback runs, so `cypher` is already a `string` by the time you use it.
+
+Treat this tool as privileged: anything the model writes runs against your graph. `client.query.cypher` rejects writes with HTTP 400, but you should still decide per client whether to register it at all.
 
 Restart Claude Desktop. The tool count should now be 13. Ask Claude:
 
 [listing]
 ----
-What's the current UTC time, and store it as a fact for me.
+How many entities of each type do I have in memory?
 ----
 
-Claude will call `current_time`, get the timestamp, then call `memory_add_entity` (or a fact-storage tool) to persist it. You've just extended the MCP surface without touching the SDK.
+Claude will call `memory_cypher` with something like `MATCH (e:Entity) RETURN e.type AS type, count(*) AS n ORDER BY n DESC` and read the rows back. You've just extended the MCP surface without touching the SDK.
+
+== Step 9: Restrict what a client can reach
+
+`registerMemoryTools` takes an allow-list. Anything not on it is neither advertised in `tools/list` nor callable:
+
+[source,typescript]
+----
+const toolNames = registerMemoryTools(server, memory, {
+  // e.g. MCP_TOOLS=memory_get_context,memory_search_entities
+  only: process.env.MCP_TOOLS?.split(","),
+  onCall: ({ tool, argKeys, durationMs, ok }) =>
+    console.error(`[mcp] ${tool} keys=[${argKeys.join(",")}] ${durationMs}ms ok=${ok}`),
+});
+----
+
+Combined with the audit hook you already wired in Step 2, that is the pair of controls the hosted server cannot give you: a surface you chose, and a log of everything that crossed it.
 
 == What You've Built
 
-* An MCP server that exposes 12 (or 13) tools backed by NAMS memory.
+* An MCP server that exposes 12 (or 13) tools backed by NAMS memory, with validated arguments and read/write annotations.
 * A wired-up Claude Desktop that reads and writes that memory automatically.
-* A pattern for adding custom tools alongside the standard memory surface — useful for redaction, observability, or organization-specific tools.
+* An audit line per call and an allow-list — the two reasons to self-host rather than use the hosted server.
+* A pattern for adding custom tools alongside the standard memory surface.
 
 == Extending the Server
 
-* **Wrap tool calls with logging.** Add a `console.error` (which Claude Desktop captures into its MCP log) before each `handleMemoryToolCall`.
-* **Filter what gets stored.** Inspect the arguments before calling through — e.g., refuse `memory_add_entity` calls whose name looks like a credit card number.
-* **Add per-tenant scoping.** Set `MEMORY_API_KEY` per Claude Desktop profile via different `mcpServers` entries — each profile reads/writes its own subgraph.
-* **Switch to a streamable HTTP transport.** The MCP spec supports a streamable HTTP transport — replace `StdioServerTransport` with `StreamableHTTPServerTransport` to run the server out-of-process (e.g., on Cloud Run) and have multiple clients share it.
+* **Filter what gets stored.** Wrap `registerMemoryTools` with your own `registerTool` for the writes you care about, and reject arguments that look like secrets or card numbers before dispatching.
+* **Add per-tenant scoping.** Set `MEMORY_API_KEY` per Claude Desktop profile via different `mcpServers` entries — each profile reads and writes its own workspace.
+* **Switch to Streamable HTTP.** Replace `StdioServerTransport` with `StreamableHTTPServerTransport` to run the server out-of-process (a sidecar, Cloud Run) and share it between clients:
+
+[source,typescript]
+----
+import { StreamableHTTPServerTransport }
+  from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+
+const transport = new StreamableHTTPServerTransport({
+  sessionIdGenerator: () => crypto.randomUUID(),
+});
+await server.connect(transport);
+
+// Then forward POST / GET / DELETE on your MCP route:
+//   await transport.handleRequest(req, res, body);
+----
+
+The transport does not authenticate callers — put your own auth in front of the route. See xref:how-to/typescript/mcp.adoc[the MCP how-to] for the full listener, and the runnable example below for one you can copy.
 
 == Next Steps
 
 * xref:tutorials/conversation-memory-typescript.adoc[Add Conversation Memory to a Chatbot (TypeScript)] — build an in-app chatbot using the same memory.
 * xref:tutorials/knowledge-graph-typescript.adoc[Build a Knowledge Graph from Documents (TypeScript)] — populate the entity graph that Claude will then search via MCP.
-* xref:how-to/typescript/mcp.adoc[MCP tools how-to] — every option for `createMemoryTools()` and `handleMemoryToolCall()`.
+* xref:how-to/typescript/mcp.adoc[MCP tools how-to] — every option for `registerMemoryTools`, `createMemoryTools()` and `handleMemoryToolCall()`.
 
 == See Also
 
-* xref:reference/mcp-tools.adoc[MCP tools reference] — the 12 standard tool definitions.
+* xref:reference/nams-mcp.adoc[Hosted NAMS MCP server] — the larger, OAuth-capable surface you do not have to run.
+* xref:reference/mcp-tools.adoc[MCP tools reference] — the standard tool definitions.
 * xref:reference/typescript-api.adoc[TypeScript SDK API reference]
 * link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/mcp[Runnable example in `typescript/examples/mcp/`]
 * link:https://modelcontextprotocol.io[Model Context Protocol spec]

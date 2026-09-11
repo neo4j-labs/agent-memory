@@ -1,12 +1,14 @@
 "use client";
 
-import { Box, Flex, Stack, IconButton, Text, Button } from "@chakra-ui/react";
-import { LuPanelLeftClose, LuPanelLeft } from "react-icons/lu";
-import { HiOutlineShare } from "react-icons/hi";
+import { Box, Button, Flex, IconButton, Stack, Text } from "@chakra-ui/react";
 import { useState } from "react";
-import { Sidebar } from "./Sidebar";
-import MemoryGraphView from "@/components/memory/MemoryGraphView";
+import { LuNetwork, LuPanelLeft, LuPanelLeftClose } from "react-icons/lu";
+import { LabsBadge } from "@/components/branding/LabsBadge";
+import { LabsFooter } from "@/components/branding/LabsFooter";
+import { MemoryGraphDialog } from "@/components/memory/MemoryGraphDialog";
+import { ColorModeButton } from "@/components/ui/color-mode";
 import type { Thread } from "@/lib/types";
+import { Sidebar } from "./Sidebar";
 
 interface AppLayoutProps {
   children: React.ReactNode;
@@ -17,6 +19,8 @@ interface AppLayoutProps {
   onDeleteThread: (id: string) => void;
   memoryEnabled: boolean;
   onToggleMemory: (enabled: boolean) => void;
+  /** Bumped after each completed turn so the graph dialog refetches. */
+  memoryVersion?: number;
 }
 
 export function AppLayout({
@@ -28,12 +32,13 @@ export function AppLayout({
   onDeleteThread,
   memoryEnabled,
   onToggleMemory,
+  memoryVersion = 0,
 }: AppLayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [graphViewOpen, setGraphViewOpen] = useState(false);
 
   return (
-    <Flex h="100vh" overflow="hidden" bg="bg.canvas">
+    <Flex h="100dvh" overflow="hidden" bg="bg">
       {/* Sidebar */}
       {sidebarOpen && (
         <Box
@@ -61,13 +66,15 @@ export function AppLayout({
         <Flex
           h="14"
           px="4"
+          gap="3"
           alignItems="center"
           justifyContent="space-between"
           borderBottomWidth="1px"
           borderColor="border.subtle"
           bg="bg.panel"
+          flexShrink={0}
         >
-          <Flex alignItems="center">
+          <Flex alignItems="center" gap="3" minW="0">
             <IconButton
               aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"}
               variant="ghost"
@@ -76,32 +83,38 @@ export function AppLayout({
             >
               {sidebarOpen ? <LuPanelLeftClose /> : <LuPanelLeft />}
             </IconButton>
-            <Text ml="3" fontWeight="medium" color="fg.default">
+            <Text fontWeight="medium" fontFamily="heading" truncate>
               News Research Assistant
             </Text>
+            <LabsBadge />
           </Flex>
 
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => setGraphViewOpen(true)}
-          >
-            <HiOutlineShare />
-            <Text ml="2">View Memory Graph</Text>
-          </Button>
+          <Flex alignItems="center" gap="2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setGraphViewOpen(true)}
+            >
+              <LuNetwork />
+              <Text ml="2">Memory graph</Text>
+            </Button>
+            <ColorModeButton />
+          </Flex>
         </Flex>
 
         {/* Content area */}
         <Box flex="1" overflow="hidden">
           {children}
         </Box>
+
+        <LabsFooter />
       </Stack>
 
-      {/* Memory Graph View Modal */}
-      <MemoryGraphView
+      <MemoryGraphDialog
         isOpen={graphViewOpen}
         onClose={() => setGraphViewOpen(false)}
         threadId={activeThreadId || undefined}
+        memoryVersion={memoryVersion}
       />
     </Flex>
   );

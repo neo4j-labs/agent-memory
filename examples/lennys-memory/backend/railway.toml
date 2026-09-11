@@ -1,2 +1,4 @@
-[deploy]
-startCommand = "python -m uvicorn src.main:app --host 0.0.0.0 --port ${PORT:-8000}"
+# Railway reads nixpacks.toml for build + start. This file only pins the
+# builder; the start command is defined once, in nixpacks.toml [start].
+[build]
+builder = "nixpacks"

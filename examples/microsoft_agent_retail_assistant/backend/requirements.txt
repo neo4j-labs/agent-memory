@@ -1,18 +1,33 @@
-# Microsoft Agent Framework
-agent-framework>=1.0.0b260212
+# Microsoft Agent Framework (1.x GA).
+#   agent-framework-core  -> the `agent_framework` package: Agent, FunctionTool,
+#                            Message, tool, ContextProvider, HistoryProvider
+#   agent-framework-openai -> the OpenAI/Azure-OpenAI chat client that
+#                            `agent_framework.openai` lazily re-exports
+# The `agent-framework` meta-package also works but pulls ~30 provider
+# distributions (it is `agent-framework-core[all]` at GA).
+# The 1.x line renamed BaseContextProvider -> ContextProvider and
+# BaseHistoryProvider -> HistoryProvider, so both bounds matter: an uncapped
+# `>=1.0.0b...` preview floor is how this example came to be broken.
+agent-framework-core>=1.17,<2
+agent-framework-openai>=1.14,<2
 
-# Neo4j Agent Memory
-neo4j-agent-memory[openai,microsoft-agent]>=0.1.0
+# Neo4j Agent Memory.
+#   openai          -> OpenAI embeddings
+#   microsoft-agent -> the Agent Framework integration used by agent.py
+#   extraction      -> spaCy + GLiNER, required by get_extraction_config()
+#   fuzzy           -> rapidfuzz, required by the fuzzy deduplication path
+# After installing, download the spaCy model: python -m spacy download en_core_web_sm
+neo4j-agent-memory[openai,microsoft-agent,extraction,fuzzy]>=0.5.0,<0.7
 
 # Web framework
-fastapi>=0.100.0
-uvicorn[standard]>=0.23.0
-sse-starlette>=1.6.0
+fastapi>=0.115,<1
+uvicorn[standard]>=0.32,<1
+sse-starlette>=3.0,<4
 
-# OpenAI
-openai>=1.0.0
+# OpenAI (embeddings + the data loader)
+openai>=2.0,<4
 
 # Environment
-python-dotenv>=1.0.0
-pydantic>=2.0.0
-pydantic-settings>=2.0.0
+python-dotenv>=1.0,<2
+pydantic>=2.9,<3
+pydantic-settings>=2.6,<3

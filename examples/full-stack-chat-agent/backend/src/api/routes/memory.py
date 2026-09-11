@@ -1,8 +1,15 @@
 """Memory management API endpoints.
 
-Uses neo4j-agent-memory's new features for improved memory operations.
+Reads go through ``client.query.cypher()`` — the supported, backend-portable
+read path (it works on bolt *and* on the hosted NAMS backend) rather than the
+private ``client._client.execute_read``. The one genuine write uses the public
+``client.graph.execute_write``.
+
+The only remaining bolt-only call in this module is ``client.get_graph()``,
+which the NAMS backend does not implement by design.
 """
 
+import logging
 from typing import Any
 from uuid import UUID
 
@@ -22,6 +29,108 @@ from src.api.schemas import (
 from src.memory.client import get_memory_client
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+LIST_PREFERENCES = """
+MATCH (p:Preference)
+WHERE $category IS NULL OR p.category = $category
+RETURN p
+ORDER BY p.created_at DESC
+LIMIT $limit
+"""
+
+# `search_entities()` is pure vector search, so it cannot answer "list the
+# entities" (an empty query embedding matches nothing above the threshold).
+# These two list/scope the entities instead.
+LIST_ENTITIES = """
+MATCH (e:Entity)
+WHERE $type IS NULL OR e.type = $type
+RETURN e
+ORDER BY e.created_at DESC
+LIMIT $limit
+"""
+
+THREAD_ENTITIES = """
+MATCH (:Conversation {session_id: $session_id})-[:HAS_MESSAGE]->(m:Message)-[:MENTIONS]->(e:Entity)
+WITH e, count(m) AS mention_count
+RETURN e, mention_count
+ORDER BY mention_count DESC
+LIMIT $limit
+"""
+
+# TODO(neo4j-agent-memory): replace with long_term.delete_preference() when the
+# library ships it — tracked as a follow-up from the examples review.
+DELETE_PREFERENCE = "MATCH (p:Preference {id: $id}) DETACH DELETE p RETURN p.id AS id"
+
+# list_traces() returns traces *without* steps by design, so step/tool-call
+# counts are aggregated here in one extra round trip rather than N+1
+# get_trace_with_steps() calls.
+TRACE_STEP_COUNTS = """
+MATCH (rt:ReasoningTrace) WHERE rt.id IN $ids
+OPTIONAL MATCH (rt)-[:HAS_STEP]->(s:ReasoningStep)
+OPTIONAL MATCH (s)-[:USES_TOOL]->(tc:ToolCall)
+RETURN rt.id AS id,
+       count(DISTINCT s) AS step_count,
+       count(DISTINCT tc) AS tool_call_count
+"""
+
+NODE_BY_ID = """
+MATCH (n) WHERE n.id = $node_id
+RETURN n.id AS id, labels(n) AS labels, properties(n) AS props
+LIMIT 1
+"""
+
+NEIGHBORS_DEPTH_1 = """
+MATCH (n)-[r]-(neighbor) WHERE n.id = $node_id
+RETURN neighbor.id AS neighbor_id,
+       labels(neighbor) AS neighbor_labels,
+       properties(neighbor) AS neighbor_props,
+       type(r) AS rel_type,
+       elementId(r) AS rel_id,
+       properties(r) AS rel_props,
+       startNode(r).id AS start_id,
+       endNode(r).id AS end_id
+LIMIT $limit
+"""
+
+NEIGHBORS_DEPTH_2 = """
+MATCH path = (n)-[*1..2]-(neighbor) WHERE n.id = $node_id AND neighbor <> n
+WITH neighbor, relationships(path) AS rels
+UNWIND rels AS r
+RETURN DISTINCT neighbor.id AS neighbor_id,
+       labels(neighbor) AS neighbor_labels,
+       properties(neighbor) AS neighbor_props,
+       type(r) AS rel_type,
+       elementId(r) AS rel_id,
+       properties(r) AS rel_props,
+       startNode(r).id AS start_id,
+       endNode(r).id AS end_id
+LIMIT $limit
+"""
+
+
+def _entity_from_node(node: Any) -> Entity:
+    """Build the API Entity schema from a raw Neo4j node map."""
+    data = dict(node)
+    return Entity(
+        id=str(data.get("id", "")),
+        name=data.get("name", ""),
+        type=data.get("type", "UNKNOWN"),
+        subtype=data.get("subtype"),
+        description=data.get("description"),
+    )
+
+
+def _preference_from_node(node: Any) -> LongTermPreference:
+    """Rebuild a Preference model from a raw Neo4j node map."""
+    data = dict(node)
+    return LongTermPreference(
+        id=UUID(data["id"]),
+        category=data.get("category", "general"),
+        preference=data.get("preference", ""),
+        context=data.get("context"),
+        confidence=data.get("confidence", 1.0),
+    )
 
 
 @router.get("/memory/context", response_model=MemoryContext)
@@ -35,10 +144,10 @@ async def get_memory_context(
         thread_id: Optional thread ID to scope the context.
         query: Optional query to find relevant memories.
     """
-    preferences = []
-    entities = []
-    recent_topics = []
-    recent_messages = []
+    preferences: list[Preference] = []
+    entities: list[Entity] = []
+    recent_topics: list[str] = []
+    recent_messages: list[RecentMessage] = []
 
     memory = get_memory_client()
     if memory is None:
@@ -50,7 +159,6 @@ async def get_memory_context(
         )
 
     try:
-        # Get recent messages from short-term memory
         if thread_id:
             conversation = await memory.short_term.get_conversation(
                 session_id=thread_id,
@@ -66,32 +174,11 @@ async def get_memory_context(
                     )
                 )
 
-        # Get preferences
         if query:
             pref_results = await memory.long_term.search_preferences(query, limit=10)
         else:
-            # Get all preferences when no query - use direct database query
-            try:
-                results = await memory._client.execute_read(
-                    "MATCH (p:Preference) RETURN p ORDER BY p.created_at DESC LIMIT 10"
-                )
-                pref_results = []
-                for row in results:
-                    p = dict(row["p"])
-                    pref_results.append(
-                        LongTermPreference(
-                            id=UUID(p["id"]),
-                            category=p.get("category", "general"),
-                            preference=p.get("preference", ""),
-                            context=p.get("context"),
-                            confidence=p.get("confidence", 1.0),
-                        )
-                    )
-            except Exception as e:
-                import logging
-
-                logging.getLogger(__name__).warning(f"Failed to get preferences: {e}")
-                pref_results = []
+            rows = await memory.query.cypher(LIST_PREFERENCES, {"category": None, "limit": 10})
+            pref_results = [_preference_from_node(row["p"]) for row in rows]
 
         for pref in pref_results:
             preferences.append(
@@ -101,32 +188,35 @@ async def get_memory_context(
                     preference=pref.preference,
                     context=pref.context,
                     confidence=pref.confidence,
-                    created_at=getattr(pref, "created_at", None),
+                    created_at=pref.created_at,
                 )
             )
 
-        # Get entities
+        # Scope entities to the thread when we have one (the MENTIONS edges the
+        # extractor wrote), fall back to semantic search for an explicit query,
+        # and to a plain listing otherwise.
         if query:
-            entity_results = await memory.long_term.search_entities(query, limit=10)
-        else:
-            entity_results = await memory.long_term.search_entities("", limit=10)
-
-        for ent in entity_results:
-            entities.append(
+            entities.extend(
                 Entity(
-                    id=ent.id,
+                    id=str(ent.id),
                     name=ent.name,
-                    type=ent.type if isinstance(ent.type, str) else ent.type.value,
-                    subtype=getattr(ent, "subtype", None),
+                    type=ent.type,
+                    subtype=ent.subtype,
                     description=ent.description,
                 )
+                for ent in await memory.long_term.search_entities(query, limit=10)
             )
+        elif thread_id:
+            rows = await memory.query.cypher(
+                THREAD_ENTITIES, {"session_id": thread_id, "limit": 10}
+            )
+            entities.extend(_entity_from_node(row["e"]) for row in rows)
+        else:
+            rows = await memory.query.cypher(LIST_ENTITIES, {"type": None, "limit": 10})
+            entities.extend(_entity_from_node(row["e"]) for row in rows)
 
     except Exception as e:
-        # Return empty context on error
-        import logging
-
-        logging.getLogger(__name__).warning(f"Failed to get memory context: {e}")
+        logger.warning("Failed to get memory context: %s", e)
 
     return MemoryContext(
         preferences=preferences,
@@ -137,50 +227,41 @@ async def get_memory_context(
 
 
 @router.get("/preferences", response_model=list[Preference])
-async def list_preferences(
-    category: str | None = None,
-) -> list[Preference]:
-    """List user preferences, optionally filtered by category."""
-    preferences = []
+async def list_preferences(category: str | None = None) -> list[Preference]:
+    """List user preferences, optionally filtered by category.
 
+    Preferences come from two places: explicit ``POST /api/preferences`` calls
+    and the ``PreferenceDetector`` that ``MemoryIntegration`` runs in the
+    background on every user message (``auto_preferences=True``).
+    """
     memory = get_memory_client()
     if memory is None:
-        return preferences
+        return []
 
     try:
-        # Get preferences via direct query for better reliability
-        if category:
-            query = "MATCH (p:Preference {category: $category}) RETURN p ORDER BY p.created_at DESC LIMIT 50"
-            params = {"category": category}
-        else:
-            query = "MATCH (p:Preference) RETURN p ORDER BY p.created_at DESC LIMIT 50"
-            params = {}
+        rows = await memory.query.cypher(LIST_PREFERENCES, {"category": category, "limit": 50})
+    except Exception as e:
+        logger.warning("Failed to list preferences: %s", e)
+        return []
 
-        results = await memory._client.execute_read(query, params)
-
-        for row in results:
-            p = dict(row["p"])
-            preferences.append(
-                Preference(
-                    id=p["id"],
-                    category=p.get("category", "general"),
-                    preference=p.get("preference", ""),
-                    context=p.get("context"),
-                    confidence=p.get("confidence", 1.0),
-                    created_at=None,  # Neo4j datetime needs conversion
-                )
+    preferences: list[Preference] = []
+    for row in rows:
+        data = dict(row["p"])
+        preferences.append(
+            Preference(
+                id=data["id"],
+                category=data.get("category", "general"),
+                preference=data.get("preference", ""),
+                context=data.get("context"),
+                confidence=data.get("confidence", 1.0),
+                created_at=None,  # Neo4j datetime needs conversion
             )
-
-    except Exception:
-        pass
-
+        )
     return preferences
 
 
 @router.post("/preferences", response_model=Preference)
-async def add_preference(
-    request: PreferenceRequest,
-) -> Preference:
+async def add_preference(request: PreferenceRequest) -> Preference:
     """Add a new user preference."""
     memory = get_memory_client()
     if memory is None:
@@ -192,38 +273,34 @@ async def add_preference(
             preference=request.preference,
             context=request.context or "Added via API",
         )
-
-        return Preference(
-            id=pref.id,
-            category=pref.category,
-            preference=pref.preference,
-            context=pref.context,
-            confidence=pref.confidence,
-            created_at=getattr(pref, "created_at", None),
-        )
-
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+    return Preference(
+        id=str(pref.id),
+        category=pref.category,
+        preference=pref.preference,
+        context=pref.context,
+        confidence=pref.confidence,
+        created_at=pref.created_at,
+    )
 
 
 @router.delete("/preferences/{preference_id}")
-async def delete_preference(
-    preference_id: str,
-) -> dict:
+async def delete_preference(preference_id: str) -> dict[str, object]:
     """Delete a preference by ID."""
     memory = get_memory_client()
     if memory is None:
         raise HTTPException(status_code=503, detail="Memory service unavailable")
 
     try:
-        # Delete via direct query
-        await memory._client.execute_write(
-            "MATCH (p:Preference {id: $id}) DETACH DELETE p",
-            {"id": preference_id},
-        )
-        return {"status": "deleted", "preference_id": preference_id}
+        rows = await memory.graph.execute_write(DELETE_PREFERENCE, {"id": preference_id})
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+    if not rows:
+        raise HTTPException(status_code=404, detail="Preference not found")
+    return {"status": "deleted", "preference_id": preference_id}
 
 
 @router.get("/entities", response_model=list[Entity])
@@ -232,33 +309,34 @@ async def list_entities(
     query: str | None = None,
 ) -> list[Entity]:
     """List extracted entities, optionally filtered by type or search query."""
-    entities = []
-
     memory = get_memory_client()
     if memory is None:
-        return entities
+        return []
 
     try:
-        search_query = query or type or ""
-        results = await memory.long_term.search_entities(search_query, limit=50)
-
-        for ent in results:
-            ent_type = ent.type if isinstance(ent.type, str) else ent.type.value
-            if type is None or ent_type == type:
-                entities.append(
-                    Entity(
-                        id=ent.id,
-                        name=ent.name,
-                        type=ent_type,
-                        subtype=getattr(ent, "subtype", None),
-                        description=ent.description,
-                    )
+        if query:
+            # A query means semantic search over entity embeddings.
+            results = await memory.long_term.search_entities(
+                query,
+                entity_types=[type] if type else None,
+                limit=50,
+            )
+            return [
+                Entity(
+                    id=str(ent.id),
+                    name=ent.name,
+                    type=ent.type,
+                    subtype=ent.subtype,
+                    description=ent.description,
                 )
+                for ent in results
+            ]
+        rows = await memory.query.cypher(LIST_ENTITIES, {"type": type, "limit": 50})
+    except Exception as e:
+        logger.warning("Failed to list entities: %s", e)
+        return []
 
-    except Exception:
-        pass
-
-    return entities
+    return [_entity_from_node(row["e"]) for row in rows]
 
 
 @router.get("/memory/graph", response_model=MemoryGraph)
@@ -268,7 +346,8 @@ async def get_memory_graph(
 ) -> MemoryGraph:
     """Get the memory graph for visualization.
 
-    Uses the new get_graph() API for efficient graph export.
+    Uses the ``get_graph()`` API for efficient graph export. **Bolt only** —
+    the hosted NAMS backend raises ``NotSupportedError`` here by design.
 
     Args:
         session_id: Optional session ID to filter the graph.
@@ -279,44 +358,31 @@ async def get_memory_graph(
         return MemoryGraph(nodes=[], relationships=[])
 
     try:
-        # Use the new get_graph() API
         graph = await memory.get_graph(
             memory_types=["short_term", "long_term", "reasoning"],
             session_id=session_id,
             include_embeddings=include_embeddings,
             limit=500,
         )
-
-        # Convert to response format
-        nodes = []
-        for node in graph.nodes:
-            nodes.append(
-                GraphNode(
-                    id=node.id,
-                    labels=node.labels,
-                    properties=node.properties,
-                )
-            )
-
-        relationships = []
-        for rel in graph.relationships:
-            relationships.append(
-                GraphRelationship(
-                    id=rel.id,
-                    from_node=rel.from_node,
-                    to_node=rel.to_node,
-                    type=rel.type,
-                    properties=rel.properties,
-                )
-            )
-
-        return MemoryGraph(nodes=nodes, relationships=relationships)
-
     except Exception as e:
-        import logging
-
-        logging.getLogger(__name__).warning(f"Error fetching memory graph: {e}")
+        logger.warning("Error fetching memory graph: %s", e)
         return MemoryGraph(nodes=[], relationships=[])
+
+    nodes = [
+        GraphNode(id=node.id, labels=node.labels, properties=node.properties)
+        for node in graph.nodes
+    ]
+    relationships = [
+        GraphRelationship(
+            id=rel.id,
+            from_node=rel.from_node,
+            to_node=rel.to_node,
+            type=rel.type,
+            properties=rel.properties,
+        )
+        for rel in graph.relationships
+    ]
+    return MemoryGraph(nodes=nodes, relationships=relationships)
 
 
 @router.get("/memory/traces")
@@ -324,10 +390,11 @@ async def list_traces(
     session_id: str | None = None,
     success_only: bool | None = None,
     limit: int = 50,
-) -> list[dict]:
+) -> list[dict[str, object]]:
     """List reasoning traces.
 
-    Uses the new list_traces() API for efficient trace listing.
+    ``step_count`` is non-zero because the chat route records one
+    ``ReasoningStep`` per tool call as the stream events arrive.
     """
     memory = get_memory_client()
     if memory is None:
@@ -339,70 +406,65 @@ async def list_traces(
             success_only=success_only,
             limit=limit,
         )
-
-        return [
-            {
-                "id": str(trace.id),
-                "session_id": trace.session_id,
-                "task": trace.task,
-                "success": trace.success,
-                "outcome": trace.outcome,
-                "started_at": trace.started_at.isoformat() if trace.started_at else None,
-                "completed_at": trace.completed_at.isoformat() if trace.completed_at else None,
-                "step_count": len(trace.steps) if trace.steps else 0,
-            }
-            for trace in traces
-        ]
-
+        counts = {
+            row["id"]: row
+            for row in await memory.query.cypher(
+                TRACE_STEP_COUNTS, {"ids": [str(trace.id) for trace in traces]}
+            )
+        }
     except Exception as e:
-        import logging
-
-        logging.getLogger(__name__).warning(f"Error listing traces: {e}")
+        logger.warning("Error listing traces: %s", e)
         return []
+
+    return [
+        {
+            "id": str(trace.id),
+            "session_id": trace.session_id,
+            "task": trace.task,
+            "success": trace.success,
+            "outcome": trace.outcome,
+            "started_at": trace.started_at.isoformat() if trace.started_at else None,
+            "completed_at": trace.completed_at.isoformat() if trace.completed_at else None,
+            "step_count": counts.get(str(trace.id), {}).get("step_count", 0),
+            "tool_call_count": counts.get(str(trace.id), {}).get("tool_call_count", 0),
+        }
+        for trace in traces
+    ]
 
 
 @router.get("/memory/tool-stats")
-async def get_tool_stats() -> list[dict]:
-    """Get tool usage statistics.
-
-    Uses the optimized get_tool_stats() API with pre-aggregated stats.
-    """
+async def get_tool_stats() -> list[dict[str, object]]:
+    """Get tool usage statistics (pre-aggregated on the Tool nodes)."""
     memory = get_memory_client()
     if memory is None:
         return []
 
     try:
-        stats = await memory.reasoning.get_tool_stats()
-
-        return [
-            {
-                "name": stat.name,
-                "description": stat.description,
-                "total_calls": stat.total_calls,
-                "successful_calls": stat.successful_calls,
-                "failed_calls": stat.failed_calls,
-                "success_rate": stat.success_rate,
-                "avg_duration_ms": stat.avg_duration_ms,
-                "last_used_at": stat.last_used_at.isoformat() if stat.last_used_at else None,
-            }
-            for stat in stats
-        ]
-
+        # get_tool_stats() is on the bolt ReasoningMemory but not yet on
+        # ReasoningProtocol — see the follow-up in the examples review.
+        stats = await memory.reasoning.get_tool_stats()  # type: ignore[attr-defined]
     except Exception as e:
-        import logging
-
-        logging.getLogger(__name__).warning(f"Error getting tool stats: {e}")
+        logger.warning("Error getting tool stats: %s", e)
         return []
+
+    return [
+        {
+            "name": stat.name,
+            "description": stat.description,
+            "total_calls": stat.total_calls,
+            "successful_calls": stat.successful_calls,
+            "failed_calls": stat.failed_calls,
+            "success_rate": stat.success_rate,
+            "avg_duration_ms": stat.avg_duration_ms,
+            "last_used_at": stat.last_used_at.isoformat() if stat.last_used_at else None,
+        }
+        for stat in stats
+    ]
 
 
 @router.delete("/memory/messages/{message_id}")
-async def delete_message(
-    message_id: str,
-    cascade: bool = True,
-) -> dict:
+async def delete_message(message_id: str, cascade: bool = True) -> dict[str, object]:
     """Delete a specific message from short-term memory.
-
-    Uses the new delete_message() API.
 
     Args:
         message_id: The ID of the message to delete.
@@ -413,17 +475,16 @@ async def delete_message(
         raise HTTPException(status_code=503, detail="Memory service unavailable")
 
     try:
-        deleted = await memory.short_term.delete_message(message_id, cascade=cascade)
-
-        if deleted:
-            return {"status": "deleted", "message_id": message_id}
-        else:
-            raise HTTPException(status_code=404, detail="Message not found")
-
-    except HTTPException:
-        raise
+        # `cascade` is on the bolt ShortTermMemory but not on ShortTermProtocol.
+        deleted = await memory.short_term.delete_message(  # type: ignore[call-arg]
+            message_id, cascade=cascade
+        )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Message not found")
+    return {"status": "deleted", "message_id": message_id}
 
 
 def serialize_neo4j_value(value: Any) -> Any:
@@ -443,11 +504,9 @@ def serialize_neo4j_value(value: Any) -> Any:
     if hasattr(value, "isoformat"):
         return value.isoformat()
 
-    # Handle lists
     if isinstance(value, list):
         return [serialize_neo4j_value(v) for v in value]
 
-    # Handle dicts
     if isinstance(value, dict):
         return {k: serialize_neo4j_value(v) for k, v in value.items()}
 
@@ -462,9 +521,6 @@ async def get_node_neighbors(
 ) -> MemoryGraph:
     """Get neighbors of a specific node for graph expansion.
 
-    This endpoint allows incremental graph exploration by fetching
-    the neighbors of a specific node.
-
     Args:
         node_id: The ID of the node to expand.
         depth: How many hops away to retrieve (1 or 2). Default is 1.
@@ -478,21 +534,14 @@ async def get_node_neighbors(
     if memory is None:
         return MemoryGraph(nodes=[], relationships=[])
 
+    nodes: list[GraphNode] = []
+    relationships: list[GraphRelationship] = []
+    seen_node_ids: set[str] = set()
+    seen_rel_ids: set[str] = set()
+
     try:
-        # First get the source node with explicit scalar values
-        source_query = """
-        MATCH (n) WHERE n.id = $node_id
-        RETURN n.id AS id, labels(n) AS labels, properties(n) AS props
-        LIMIT 1
-        """
-        source_results = await memory._client.execute_read(source_query, {"node_id": node_id})
+        source_results = await memory.query.cypher(NODE_BY_ID, {"node_id": node_id})
 
-        nodes = []
-        relationships = []
-        seen_node_ids = set()
-        seen_rel_ids = set()
-
-        # Add the source node
         for row in source_results:
             if row["id"] and row["id"] not in seen_node_ids:
                 seen_node_ids.add(row["id"])
@@ -509,43 +558,12 @@ async def get_node_neighbors(
                     )
                 )
 
-        # Now get neighbors and relationships with explicit scalar values
-        if depth == 1:
-            neighbor_query = """
-            MATCH (n)-[r]-(neighbor) WHERE n.id = $node_id
-            RETURN neighbor.id AS neighbor_id,
-                   labels(neighbor) AS neighbor_labels,
-                   properties(neighbor) AS neighbor_props,
-                   type(r) AS rel_type,
-                   elementId(r) AS rel_id,
-                   properties(r) AS rel_props,
-                   startNode(r).id AS start_id,
-                   endNode(r).id AS end_id
-            LIMIT $limit
-            """
-        else:
-            # depth == 2: get 2-hop neighbors
-            neighbor_query = """
-            MATCH path = (n)-[*1..2]-(neighbor) WHERE n.id = $node_id AND neighbor <> n
-            WITH neighbor, relationships(path) AS rels
-            UNWIND rels AS r
-            RETURN DISTINCT neighbor.id AS neighbor_id,
-                   labels(neighbor) AS neighbor_labels,
-                   properties(neighbor) AS neighbor_props,
-                   type(r) AS rel_type,
-                   elementId(r) AS rel_id,
-                   properties(r) AS rel_props,
-                   startNode(r).id AS start_id,
-                   endNode(r).id AS end_id
-            LIMIT $limit
-            """
-
-        neighbor_results = await memory._client.execute_read(
+        neighbor_query = NEIGHBORS_DEPTH_1 if depth == 1 else NEIGHBORS_DEPTH_2
+        neighbor_results = await memory.query.cypher(
             neighbor_query, {"node_id": node_id, "limit": limit}
         )
 
         for row in neighbor_results:
-            # Add neighbor node
             neighbor_id = row["neighbor_id"]
             if neighbor_id and neighbor_id not in seen_node_ids:
                 seen_node_ids.add(neighbor_id)
@@ -562,7 +580,6 @@ async def get_node_neighbors(
                     )
                 )
 
-            # Add relationship
             rel_id = row["rel_id"]
             if rel_id and rel_id not in seen_rel_ids:
                 seen_rel_ids.add(rel_id)
@@ -577,10 +594,8 @@ async def get_node_neighbors(
                     )
                 )
 
-        return MemoryGraph(nodes=nodes, relationships=relationships)
-
     except Exception as e:
-        import logging
-
-        logging.getLogger(__name__).warning(f"Error fetching node neighbors: {e}")
+        logger.warning("Error fetching node neighbors: %s", e)
         return MemoryGraph(nodes=[], relationships=[])
+
+    return MemoryGraph(nodes=nodes, relationships=relationships)

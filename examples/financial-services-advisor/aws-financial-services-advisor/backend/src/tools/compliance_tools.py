@@ -1,7 +1,12 @@
 """Compliance tools for sanctions screening, PEP verification, and reporting.
 
-These tools are used by the Compliance Agent to perform regulatory checks
-and prepare required reports. Sanctions and PEP data is queried from Neo4j.
+These tools are used by the Compliance Agent to perform regulatory checks and
+prepare required reports. Sanctions and PEP data is queried from Neo4j.
+
+Screening outcomes are also written to **long-term memory** as
+``(:Fact {predicate: 'SCREENED_AGAINST'})`` triples and read back on the next
+investigation of the same subject — so the second screening of a customer can
+say "last checked 3 days ago, result CLEAR" instead of starting from nothing.
 """
 
 from __future__ import annotations
@@ -10,9 +15,43 @@ import logging
 from datetime import datetime
 from typing import Any
 
+# Imported at runtime, not under TYPE_CHECKING: Strands' ``@tool`` resolves the
+# function's annotations with ``get_type_hints()`` to build the input schema, so
+# every annotation in a tool signature must exist at runtime.
+from ..services.memory_service import FinancialMemoryService
 from ..services.neo4j_service import Neo4jDomainService
 
 logger = logging.getLogger(__name__)
+
+
+async def _remember_screening(
+    memory_service: FinancialMemoryService | None,
+    subject: str,
+    screened_list: str,
+    result: str,
+    details: dict[str, Any],
+) -> None:
+    """Best-effort long-term write. A memory failure must not fail a screening."""
+    if memory_service is None:
+        return
+    try:
+        await memory_service.record_screening(
+            subject, screened_list, result=result, details=details
+        )
+    except Exception as exc:  # pragma: no cover - depends on the backend
+        logger.warning("Could not record screening fact for %s: %s", subject, exc)
+
+
+async def _recall_screenings(
+    memory_service: FinancialMemoryService | None, subject: str
+) -> list[dict[str, Any]]:
+    if memory_service is None:
+        return []
+    try:
+        return await memory_service.prior_screenings(subject)
+    except Exception as exc:  # pragma: no cover - depends on the backend
+        logger.warning("Could not read prior screenings for %s: %s", subject, exc)
+        return []
 
 
 async def check_sanctions(
@@ -21,10 +60,18 @@ async def check_sanctions(
     include_aliases: bool = True,
     *,
     neo4j_service: Neo4jDomainService,
+    memory_service: FinancialMemoryService | None = None,
 ) -> dict[str, Any]:
-    """Screen an entity against sanctions lists."""
+    """Screen an entity against sanctions lists.
+
+    Args:
+        entity_name: Name of the person or organization to screen
+        lists: Sanctions lists to report as checked
+        include_aliases: Whether to match known aliases as well
+    """
     logger.info(f"Checking sanctions for: {entity_name}")
 
+    prior = await _recall_screenings(memory_service, entity_name)
     results = await neo4j_service.check_sanctions(entity_name, include_aliases=include_aliases)
 
     matches = []
@@ -50,15 +97,25 @@ async def check_sanctions(
         status = "CLEAR"
         risk_level = "LOW"
 
+    lists_checked = lists or ["OFAC SDN", "EU Consolidated", "UN Sanctions"]
+    await _remember_screening(
+        memory_service,
+        entity_name,
+        ", ".join(lists_checked),
+        status,
+        {"matches_found": len(matches), "risk_level": risk_level, "screening": "sanctions"},
+    )
+
     return {
         "entity_name": entity_name,
         "screening_status": status,
-        "lists_checked": lists or ["OFAC SDN", "EU Consolidated", "UN Sanctions"],
+        "lists_checked": lists_checked,
         "matches_found": len(matches),
         "matches": matches,
         "risk_level": risk_level,
         "include_aliases": include_aliases,
         "requires_escalation": status == "HIT",
+        "prior_screenings": prior,
         "timestamp": datetime.now().isoformat(),
     }
 
@@ -69,10 +126,18 @@ async def verify_pep_status(
     include_associates: bool = False,
     *,
     neo4j_service: Neo4jDomainService,
+    memory_service: FinancialMemoryService | None = None,
 ) -> dict[str, Any]:
-    """Verify if a person is a Politically Exposed Person."""
+    """Verify if a person is a Politically Exposed Person.
+
+    Args:
+        person_name: Name of the person to check
+        include_relatives: Whether to match known PEP relatives
+        include_associates: Whether to report close associates as well
+    """
     logger.info(f"Verifying PEP status for: {person_name}")
 
+    prior = await _recall_screenings(memory_service, person_name)
     results = await neo4j_service.check_pep(person_name, include_relatives=include_relatives)
 
     matches = []
@@ -96,10 +161,22 @@ async def verify_pep_status(
     if matches:
         has_direct = any(m["match_type"] == "DIRECT_PEP" for m in matches)
         status = "PEP_CONFIRMED" if has_direct else "PEP_ASSOCIATED" if matches else "CLEAR"
-        risk_level = "HIGH" if has_direct or any(m["match_type"] == "POTENTIAL_PEP" for m in matches) else "MEDIUM"
+        risk_level = (
+            "HIGH"
+            if has_direct or any(m["match_type"] == "POTENTIAL_PEP" for m in matches)
+            else "MEDIUM"
+        )
     else:
         status = "CLEAR"
         risk_level = "LOW"
+
+    await _remember_screening(
+        memory_service,
+        person_name,
+        "PEP register",
+        status,
+        {"matches_found": len(matches), "risk_level": risk_level, "screening": "pep"},
+    )
 
     return {
         "person_name": person_name,
@@ -111,6 +188,7 @@ async def verify_pep_status(
         "include_relatives": include_relatives,
         "include_associates": include_associates,
         "enhanced_due_diligence_required": status != "CLEAR",
+        "prior_screenings": prior,
         "timestamp": datetime.now().isoformat(),
     }
 
@@ -123,7 +201,15 @@ async def generate_sar_report(
     *,
     neo4j_service: Neo4jDomainService,
 ) -> dict[str, Any]:
-    """Generate a Suspicious Activity Report (SAR) draft."""
+    """Generate a Suspicious Activity Report (SAR) draft.
+
+    Args:
+        customer_id: Subject customer identifier
+        suspicious_activity: Activity type (structuring, money_laundering,
+            terrorist_financing, fraud, identity_theft, wire_fraud)
+        transaction_ids: Transactions that evidence the activity
+        narrative: Draft narrative; a placeholder is used when omitted
+    """
     logger.info(f"Generating SAR for customer {customer_id}")
 
     customer = await neo4j_service.get_customer(customer_id)
@@ -189,7 +275,15 @@ async def assess_regulatory_requirements(
     *,
     neo4j_service: Neo4jDomainService,
 ) -> dict[str, Any]:
-    """Assess applicable regulatory requirements for a customer."""
+    """Assess applicable regulatory requirements for a customer.
+
+    Args:
+        customer_id: Customer identifier
+        jurisdictions: ISO country/region codes to assess; inferred from the
+            customer record when omitted
+        transaction_types: Transaction types to assess; read from the
+            customer's history when omitted
+    """
     logger.info(f"Assessing regulatory requirements for {customer_id}")
 
     customer = await neo4j_service.get_customer(customer_id)

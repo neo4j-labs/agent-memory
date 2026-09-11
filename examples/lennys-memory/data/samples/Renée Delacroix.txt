@@ -1,0 +1,26 @@
+Host (00:00:00):
+Today I am joined by Renée Delacroix, founder of Calumet Analytics in Montreal. Renée, welcome.
+
+Renée Delacroix (00:00:14):
+Delighted to be here.
+
+Host (00:00:19):
+You spent six years at a large enterprise before founding Calumet. What transferred and what did not?
+
+Renée Delacroix (00:00:32):
+The operating rigor transferred. The assumption that someone else owns distribution did not. At Calumet I had to learn growth from scratch, and I learned it badly for about a year.
+
+(00:01:02):
+The turning point was hiring a growth lead out of Toronto who insisted we pick one channel. We picked developer content. Everything else got cut.
+
+Host (00:01:30):
+Let's talk about burnout, because you have been candid about it.
+
+Renée Delacroix (00:01:38):
+I was sleeping four hours a night through our Series A. My doctor in Montreal told me plainly that I was trading three years of health for three months of speed. Now I protect Fridays and the company is better for it.
+
+Host (00:02:10):
+What is your framework for deciding what not to build?
+
+Renée Delacroix (00:02:18):
+Three questions. Does it deepen the wedge? Can we be the best in the world at it? Would a customer churn without it? Two yeses are not enough; I want all three.

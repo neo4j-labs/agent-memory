@@ -12,7 +12,6 @@ import {
   Grid,
   Portal,
   CloseButton,
-  Separator,
 } from "@chakra-ui/react";
 import {
   DialogRoot,
@@ -38,8 +37,7 @@ import {
   LuLightbulb,
   LuPackage,
 } from "react-icons/lu";
-import type { ToolCall } from "@/lib/types";
-import type { EntityCardProps, EntityData } from "./types";
+import type { EntityCardProps } from "./types";
 
 /**
  * Get icon for entity type
@@ -414,7 +412,7 @@ export function EntityCard({
                     {mention.speaker || "Unknown Speaker"}
                   </Text>
                   <Text color="fg.muted" lineClamp={3}>
-                    "{mention.content}"
+                    &quot;{mention.content}&quot;
                   </Text>
                   {mention.episode && (
                     <Text fontSize="xs" color="fg.subtle" mt={1}>

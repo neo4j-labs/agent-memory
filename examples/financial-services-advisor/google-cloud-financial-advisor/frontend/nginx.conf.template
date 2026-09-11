@@ -1,0 +1,47 @@
+# Rendered by nginx:alpine's /docker-entrypoint.d/20-envsubst-on-templates.sh
+# at container start-up. Variables:
+#   PORT         - port to listen on (Cloud Run sets this; defaults to 80)
+#   BACKEND_URL  - where to proxy /api (e.g. http://backend:8080 under compose,
+#                  or https://financial-advisor-backend-xxxxx.run.app on Cloud Run)
+#   BACKEND_HOST - Host header and TLS SNI name sent upstream. Must be the
+#                  backend's own hostname when BACKEND_URL is https (Cloud Run
+#                  routes on it); defaults to `backend` for compose.
+server {
+    listen ${PORT};
+    server_name localhost;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Enable gzip compression
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
+
+    # Handle SPA routing
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Proxy API requests to backend
+    location /api {
+        proxy_pass ${BACKEND_URL};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host ${BACKEND_HOST};
+        proxy_ssl_server_name on;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+
+        # SSE support: disable buffering for streaming responses
+        proxy_buffering off;
+        proxy_read_timeout 300s;
+    }
+
+    # Cache static assets
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2)$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+}

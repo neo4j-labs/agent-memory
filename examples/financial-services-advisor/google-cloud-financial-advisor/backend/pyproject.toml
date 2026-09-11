@@ -1,9 +1,9 @@
 [project]
 name = "google-cloud-financial-advisor"
-version = "0.1.0"
+version = "0.2.0"
 description = "AI-powered financial compliance assistant using Google ADK and Neo4j Agent Memory"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = { text = "Apache-2.0" }
 authors = [
     { name = "Neo4j Labs" }
@@ -14,32 +14,26 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
 
 dependencies = [
-    "fastapi>=0.109.0",
-    "uvicorn[standard]>=0.27.0",
-    "python-multipart>=0.0.6",
-    "sse-starlette>=1.8.0",
-    "pydantic>=2.5.0",
-    "pydantic-settings>=2.1.0",
-    "google-adk>=0.3.0",
-    "google-cloud-aiplatform>=1.38.0",
-    "google-genai>=0.3.0",
-    "neo4j-agent-memory[google-adk,vertex-ai]>=0.1.0",
-    "neo4j>=5.14.0",
-    "python-dotenv>=1.0.0",
-    "httpx>=0.26.0",
-]
-
-[project.optional-dependencies]
-dev = [
-    "pytest>=7.4.0",
-    "pytest-asyncio>=0.21.0",
-    "black>=23.0.0",
-    "ruff>=0.1.0",
+    "fastapi>=0.141,<1",
+    "uvicorn[standard]>=0.52,<1",
+    "pydantic>=2.13,<3",
+    "pydantic-settings>=2.12,<3",
+    # google-adk 2.x: Runner(memory_service=...), load_memory, keyword-only
+    # BaseMemoryService contract. The 1.x line is not supported by this app.
+    "google-adk>=2.7,<3",
+    "google-genai>=2.22,<3",
+    # [vertex-ai] supplies google-cloud-aiplatform + google-genai for the
+    # embedder; [litellm] supplies the Gemini LLM route used for entity
+    # extraction (see src/services/memory_service.py).
+    "neo4j-agent-memory[google-adk,vertex-ai,litellm]>=0.5.0,<0.7",
+    "neo4j>=6.3,<7",
+    "python-dotenv>=1.0,<2",
+    "httpx>=0.28,<1",
 ]
 
 [build-system]
@@ -53,29 +47,39 @@ packages = ["src"]
 package = true
 
 [tool.uv.sources]
-# For local development, use the editable path:
+# Local development: resolve the library from the repository checkout.
+# Container builds pass `--no-sources` so the PyPI release is used instead
+# (the editable path lives outside the Docker build context).
 neo4j-agent-memory = { path = "../../../..", editable = true }
-# For deployment (production), use the Git URL:
-# neo4j-agent-memory = { git = "https://github.com/neo4j-labs/agent-memory" }
 
 [dependency-groups]
 dev = [
-    "pytest>=7.4.0",
-    "pytest-asyncio>=0.21.0",
-    "ruff>=0.1.0",
+    "pytest>=8.3,<10",
+    "pytest-asyncio>=1.0,<2",
+    # CI and `make test` run pytest with `--timeout=120`; without the plugin
+    # pytest exits 4 on the unrecognized argument.
+    "pytest-timeout>=2.3,<3",
+    "ruff>=0.14,<1",
 ]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
-ignore = ["E501"]
+ignore = [
+    "E501",
+    # `x: T = Depends(...)` / `Query(...)` is the FastAPI idiom.
+    "B008",
+    # `class X(str, Enum)` keeps the JSON schema stable across pydantic
+    # versions; StrEnum would change `.value` semantics in responses.
+    "UP042",
+]
 
-[tool.black]
-line-length = 100
-target-version = ["py311"]
+[tool.ruff.lint.per-file-ignores]
+# .env must be loaded into os.environ before google-genai / ADK import.
+"src/main.py" = ["E402"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

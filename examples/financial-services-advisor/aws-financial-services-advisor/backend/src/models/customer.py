@@ -46,9 +46,7 @@ class Contact(BaseModel):
     role: str = Field(..., description="Role/title of the contact")
     email: str | None = Field(default=None, description="Contact email")
     phone: str | None = Field(default=None, description="Contact phone number")
-    pep_status: bool = Field(
-        default=False, description="Politically Exposed Person status"
-    )
+    pep_status: bool = Field(default=False, description="Politically Exposed Person status")
 
 
 class Account(BaseModel):
@@ -58,9 +56,7 @@ class Account(BaseModel):
     type: AccountType = Field(..., description="Type of account")
     currency: str = Field(default="USD", description="Account currency")
     status: str = Field(default="active", description="Account status")
-    opened_date: datetime | None = Field(
-        default=None, description="Account opening date"
-    )
+    opened_date: datetime | None = Field(default=None, description="Account opening date")
     balance: float | None = Field(default=None, description="Current balance")
 
 
@@ -73,30 +69,20 @@ class CustomerCreate(BaseModel):
     jurisdiction: str = Field(..., description="Primary jurisdiction (country code)")
     tax_id: str | None = Field(default=None, description="Tax identification number")
     contacts: list[Contact] = Field(default_factory=list, description="Contact persons")
-    accounts: list[Account] = Field(
-        default_factory=list, description="Associated accounts"
-    )
-    metadata: dict[str, Any] = Field(
-        default_factory=dict, description="Additional metadata"
-    )
+    accounts: list[Account] = Field(default_factory=list, description="Associated accounts")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
 
 class Customer(CustomerCreate):
     """Full customer model with computed fields."""
 
     id: str = Field(..., description="Unique customer identifier")
-    risk_level: RiskLevel = Field(
-        default=RiskLevel.UNKNOWN, description="Current risk level"
-    )
+    risk_level: RiskLevel = Field(default=RiskLevel.UNKNOWN, description="Current risk level")
     onboarding_date: datetime = Field(
         default_factory=datetime.utcnow, description="Date customer was onboarded"
     )
-    last_review_date: datetime | None = Field(
-        default=None, description="Last KYC review date"
-    )
-    next_review_date: datetime | None = Field(
-        default=None, description="Next scheduled review"
-    )
+    last_review_date: datetime | None = Field(default=None, description="Last KYC review date")
+    next_review_date: datetime | None = Field(default=None, description="Next scheduled review")
     is_active: bool = Field(default=True, description="Whether customer is active")
     alerts_count: int = Field(default=0, description="Number of active alerts")
 
@@ -106,24 +92,12 @@ class CustomerRisk(BaseModel):
 
     customer_id: str = Field(..., description="Customer identifier")
     overall_risk: RiskLevel = Field(..., description="Overall risk level")
-    risk_score: float = Field(
-        ..., ge=0, le=100, description="Numeric risk score (0-100)"
-    )
-    geographic_risk: float = Field(
-        ..., ge=0, le=100, description="Geographic risk component"
-    )
-    customer_type_risk: float = Field(
-        ..., ge=0, le=100, description="Customer type risk"
-    )
-    transaction_risk: float = Field(
-        ..., ge=0, le=100, description="Transaction pattern risk"
-    )
-    network_risk: float = Field(
-        ..., ge=0, le=100, description="Network/relationship risk"
-    )
-    risk_factors: list[str] = Field(
-        default_factory=list, description="Identified risk factors"
-    )
+    risk_score: float = Field(..., ge=0, le=100, description="Numeric risk score (0-100)")
+    geographic_risk: float = Field(..., ge=0, le=100, description="Geographic risk component")
+    customer_type_risk: float = Field(..., ge=0, le=100, description="Customer type risk")
+    transaction_risk: float = Field(..., ge=0, le=100, description="Transaction pattern risk")
+    network_risk: float = Field(..., ge=0, le=100, description="Network/relationship risk")
+    risk_factors: list[str] = Field(default_factory=list, description="Identified risk factors")
     recommendations: list[str] = Field(
         default_factory=list, description="Risk mitigation recommendations"
     )
@@ -137,12 +111,6 @@ class CustomerNetwork(BaseModel):
 
     customer_id: str = Field(..., description="Central customer identifier")
     depth: int = Field(default=2, description="Network traversal depth")
-    nodes: list[dict[str, Any]] = Field(
-        default_factory=list, description="Network nodes"
-    )
-    edges: list[dict[str, Any]] = Field(
-        default_factory=list, description="Network edges"
-    )
-    risk_summary: dict[str, Any] = Field(
-        default_factory=dict, description="Network risk summary"
-    )
+    nodes: list[dict[str, Any]] = Field(default_factory=list, description="Network nodes")
+    edges: list[dict[str, Any]] = Field(default_factory=list, description="Network edges")
+    risk_summary: dict[str, Any] = Field(default_factory=dict, description="Network risk summary")

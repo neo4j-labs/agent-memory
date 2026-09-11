@@ -10,8 +10,8 @@
     "employer": "Tech Corp Inc",
     "account_opened": "2020-01-15",
     "documents": {
-      "passport": {"status": "verified", "expiry": "2028-03-15"},
-      "utility_bill": {"status": "verified", "date": "2024-01-01"}
+      "passport": {"status": "verified", "expiry_days": 900},
+      "utility_bill": {"status": "verified", "submitted_days_ago": 60}
     },
     "risk_factors": [],
     "kyc_status": "approved"
@@ -27,8 +27,8 @@
     "employer": "Garcia Trading LLC",
     "account_opened": "2019-06-20",
     "documents": {
-      "passport": {"status": "verified", "expiry": "2026-07-22"},
-      "utility_bill": {"status": "pending", "date": null}
+      "passport": {"status": "verified", "expiry_days": 120},
+      "utility_bill": {"status": "pending"}
     },
     "risk_factors": ["high_risk_business", "international_transactions"],
     "kyc_status": "enhanced_due_diligence"
@@ -44,9 +44,9 @@
     "directors": ["Nominee Director Services Ltd"],
     "account_opened": "2021-03-05",
     "documents": {
-      "certificate_of_incorporation": {"status": "verified", "date": "2015-09-10"},
-      "register_of_directors": {"status": "pending", "date": null},
-      "proof_of_address": {"status": "missing", "date": null}
+      "certificate_of_incorporation": {"status": "verified", "submitted_days_ago": 1800},
+      "register_of_directors": {"status": "pending"},
+      "proof_of_address": {"status": "missing"}
     },
     "risk_factors": ["offshore_jurisdiction", "nominee_directors", "shell_company_indicators"],
     "kyc_status": "under_review"
