@@ -4,29 +4,26 @@
  * createNamsMemory(config).wrap(model, scope) returns a LanguageModel that
  * injects relevant memories before every call and persists each turn after.
  * This middleware also underpins provider mode (see vercel-ai-provider.ts).
+ *
+ * No entity extraction here — turns are persisted as short-term messages and
+ * NAMS extracts those server-side. Use tools mode for long-term memory.
  */
 
-import { wrapLanguageModel, type LanguageModel } from 'ai';
+import { wrapLanguageModel } from 'ai';
 import type { LanguageModelV4, LanguageModelV4Middleware } from '@ai-sdk/provider';
 import {
   makeClient,
   getLogger,
   resolveConversation,
   retrieveMemories,
-  reportExtractionFailure,
 } from './vercel-ai-provider-client';
-import { createGraphExtractor, type GraphExtractorOptions } from './vercel-ai-provider-extract';
-import { GraphExtractor, MemoryHit, NamsConfig, NamsScope } from './vercel-ai-provider-types';
+import { MemoryHit, NamsConfig, NamsScope } from './vercel-ai-provider-types';
 
 export interface NamsMemoryConfig extends NamsConfig {
   /** Max memories retrieved and injected into the prompt per turn (default: 6). Does not affect storage. */
   maxMemories?: number;
   /** Persist each turn to NAMS short-term memory (default: true). */
   persistInteractions?: boolean;
-  /** When set, build a real entity graph per stored turn (one extra model call). */
-  extractionModel?: LanguageModel;
-  /** Tunes the extractor built from `extractionModel` (e.g. override the self-referential guard). */
-  extractionOptions?: GraphExtractorOptions;
 }
 
 
@@ -105,7 +102,6 @@ const lastUserText = (prompt: any[]): string => {
 const buildMiddleware = (
   config: NamsMemoryConfig,
   scope: NamsScope,
-  extractor: GraphExtractor | undefined,
   maxMemories: number,
   persist: boolean,
 ): LanguageModelV4Middleware => {
@@ -133,11 +129,6 @@ const buildMiddleware = (
     }
     if (assistantText) await client.shortTerm.addMessage(convId, 'assistant', assistantText)
       .catch(e => log.error('persist assistant message failed', e));
-    if (extractor && (userText || assistantText)) {
-      const combined = `User: ${userText}\nAssistant: ${assistantText}`.trim();
-      await extractor(client, { content: combined, type: 'interaction' })
-        .catch(e => reportExtractionFailure(client, 'turn extraction failed', e));
-    }
   }
 
   return {
@@ -216,15 +207,12 @@ const buildMiddleware = (
  * LanguageModelV4 with transparent memory retrieval and persistence.
  */
 export function createNamsMemory(config: NamsMemoryConfig) {
-  const extractor = config.extractionModel
-    ? createGraphExtractor(config.extractionModel, config.extractionOptions)
-    : undefined;
   const maxMemories = config.maxMemories ?? 6;
   const persist = config.persistInteractions ?? true;
 
   return {
     wrap(model: LanguageModelV4, scope: NamsScope, providerId?: string): LanguageModelV4 {
-      const middleware = buildMiddleware(config, scope, extractor, maxMemories, persist);
+      const middleware = buildMiddleware(config, scope, maxMemories, persist);
       return wrapLanguageModel({ model, middleware, ...(providerId && { providerId }) });
     },
   };

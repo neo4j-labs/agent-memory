@@ -22,7 +22,7 @@ Without this package, every chat session starts fresh — the model has no recol
 `@neo4j-labs/nams-ai-provider` wraps your existing AI model and transparently adds memory to every call:
 
 1. **Before the model responds** — NAMS searches its memory store for facts, preferences, and past interactions relevant to the current message, then injects them into the prompt automatically.
-2. **After the model responds** — NAMS persists the exchange (and optionally extracts entities into a Neo4j knowledge graph) so the next session can recall it.
+2. **After the model responds** — NAMS persists the exchange so the next session can recall it, and extracts entities from those messages into a Neo4j knowledge graph server-side.
 
 The result: your AI remembers users across sessions without you changing your application logic.
 
@@ -42,7 +42,8 @@ User message
              │  response
              ▼
 ┌─────────────────────────────┐
-│  NAMS: persist & extract    │  ← stores turn, builds knowledge graph
+│  NAMS: persist the turn     │  ← stores turn; entities are extracted
+│                             │    from it server-side
 └─────────────────────────────┘
 ```
 
@@ -147,16 +148,21 @@ return createUIMessageStreamResponse({ stream });
 
 ## Usage Modes
 
-There are three ways to integrate NAMS depending on how much control you want:
+There are four ways to integrate NAMS depending on how much control you want:
 
 | Mode | How it works | Best for |
 |------|-------------|----------|
 | **Provider** | Swap your model for a NAMS-wrapped one | Simplest integration, fully transparent |
 | **Middleware** | Wrap an existing model instance | When you already have a model configured |
 | **Tools** | Expose memory as explicit AI SDK tools (optionally merged with tools from an MCP server) | When you want the model to decide when to remember |
+| **Hooks** | The runtime reads/writes the session transcript around every generation via AI SDK hooks — nothing memory-related is shown to the LLM | Production agents that need a deterministic, complete transcript |
 
-Switching modes is purely a code-level choice — all three use the same API key
+Switching modes is purely a code-level choice — all four use the same API key
 and environment variables (see [Environment variables](#environment-variables)).
+To make it a deploy-time choice instead, see
+[`examples/mode-switch-chat.ts`](examples/mode-switch-chat.ts): one agent whose
+mode is selected by `NAMS_MODE=provider|middleware|tools|hooks`, all four
+sharing the same memory backend so memories carry over between runs.
 Middleware and tools modes can also be
 [combined on one agent](#combining-tools-mode-with-middleware-hybrid) —
 injected baseline context plus explicit memory tools.
@@ -422,6 +428,113 @@ for pure tools mode, where the tool call is the *only* retrieval path.
 
 ---
 
+## Hooks Mode (runtime-controlled) ✅ recommended for production session memory
+
+Tools mode is LLM-controlled: the model decides when to query and store, which
+is **not deterministic** — models sometimes skip writes (only part of a turn
+gets persisted) or skip reads (the agent forgets earlier turns).
+`ensureMemoryStored()` and `enforceQueryMemory()` narrow that gap, but the
+transcript is still curated by the model.
+
+Hooks mode removes the model from the loop entirely. Nothing memory-related
+appears in the tool schema; instead the runtime restores the transcript before
+every generation and persists it after. Every user, assistant, and tool turn
+is captured **exactly once per generation**, regardless of what the LLM
+decides.
+
+```ts
+import { createNams } from '@neo4j-labs/nams-ai-provider';
+import { openai } from '@ai-sdk/openai';
+import { ToolLoopAgent, stepCountIs } from 'ai';
+import { z } from 'zod';
+
+const nams    = createNams({ apiKey: process.env.MEMORY_API_KEY! });
+const session = nams.hooks();   // one instance: loadSession + onFinish share a client
+
+const agent = new ToolLoopAgent({
+  model: openai('gpt-5.4-mini'),
+  tools: { /* your domain tools — no memory tools needed */ },
+
+  callOptionsSchema: z.object({
+    userId: z.string(),
+    conversationId: z.string().optional(),
+    prompt: z.string(),
+  }),
+
+  // ── PRE hook: restore history + scope onFinish ─────────────────────────────
+  // Strip `prompt` / `messages` from the incoming settings — the AI SDK
+  // enforces prompt XOR messages, and we're replacing them with the restored
+  // transcript.
+  prepareCall: async ({ options, prompt: _p, messages: _m, ...settings }) => ({
+    ...settings,
+    messages: [
+      ...(await session.loadSession(options)),
+      { role: 'user', content: options!.prompt },
+    ],
+    // Per-call scope flows to the construction-time onFinish below.
+    runtimeContext: options,
+  }),
+
+  // ── POST hook: persist every turn exactly once ─────────────────────────────
+  onFinish: session.onFinish(),
+
+  stopWhen: stepCountIs(10),
+});
+
+// Usage
+await agent.generate({
+  prompt: 'Hi! My name is Alex.',
+  options: { userId: 'alice', prompt: 'Hi! My name is Alex.' },
+});
+```
+
+**What the hooks do:**
+
+| Hook | Method | When it runs | What it does |
+|------|--------|--------------|--------------|
+| Pre  | `session.loadSession({ userId, conversationId? })` | Inside `prepareCall`, before every LLM call | Reads prior turns from NAMS, returns `ModelMessage[]` you prepend to `messages`. Never creates a conversation; returns `[]` for a new user or on backend errors. |
+| Post | `session.onFinish()` | After the full tool loop finishes | Persists the user prompt plus every assistant and tool turn across all steps, in order, in one bulk write. |
+
+`loadSession()` restores user/assistant turns only. Tool turns are stored in
+NAMS as metadata-tagged audit records (searchable, auditable) but are not
+replayed as provider tool-result blocks, because OpenAI Responses and
+Anthropic Messages reject orphan tool results without the matching prior
+assistant tool call.
+
+**Why `runtimeContext`?** `ToolLoopAgent` only accepts `onFinish` at
+construction time, but you still need per-call scope (`userId`,
+`conversationId`, `prompt`). The hook reads those from the generation's
+`runtimeContext`, which you set inside `prepareCall`. With one-shot
+`generateText` / `streamText` you can skip the context and bake the scope in
+as a closure instead:
+
+```ts
+const { text } = await generateText({
+  model: openai('gpt-5.4-mini'),
+  messages: [
+    ...(await session.loadSession({ userId })),
+    { role: 'user', content: prompt },
+  ],
+  onFinish: session.onFinish({ userId, prompt }),
+});
+```
+
+When both are present, `runtimeContext` wins per-call and the closure scope
+back-fills whatever it omits. Set `persistUserPrompt: false` if your API
+handler already stores the user turn itself.
+
+See [`examples/hooks-chat.ts`](examples/hooks-chat.ts) for the full runnable
+example, or run it side by side with the other modes via
+`NAMS_MODE=hooks npx tsx examples/mode-switch-chat.ts`.
+
+> **Note:** Hooks mode replaces only the *session transcript* half of memory.
+> Long-term memory (facts, preferences, patterns, the entity graph) is
+> intentionally left to the other modes — it should be selective and
+> content-dependent, not every-turn. Combine hooks with `nams.tools(scope)`
+> on the same agent for model-driven long-term writes.
+
+---
+
 ## Configuration
 
 ```ts
@@ -437,15 +550,17 @@ createNamsProvider({
   logger?:              NamsLogger, // warn/error sink for non-fatal errors. Default: console
   maxMemories?:         number,   // Max memories retrieved and injected into the prompt per turn (capped at 12). Default: 6
   persistInteractions?: boolean,  // Save each turn. Default: true
-  extractionModel?:     LanguageModel, // Enables graph entity extraction
-  extractionOptions?:   GraphExtractorOptions, // Tunes extraction, e.g. { skipEntity }
 });
 ```
+
+`extractionModel` / `extractionOptions` live on `createNams` and apply to tools
+mode only — see [Graph Extraction](#graph-extraction-tools-mode).
+
 
 ### Environment variables
 
 No environment variable selects or changes the mode — provider, middleware,
-and tools modes are chosen entirely in code, and all three read the same
+tools, and hooks modes are chosen entirely in code, and all four read the same
 variables:
 
 | Variable | Required | Used for |
@@ -457,20 +572,28 @@ variables:
 
 ---
 
-## Graph Extraction (optional)
+## Graph Extraction (tools mode)
 
-Pass `extractionModel` to build a real Neo4j entity graph from memories instead of storing flat text:
+Pass `extractionModel` to build a real Neo4j entity graph from long-term
+memories instead of storing flat text:
 
 ```ts
-const nams = createNamsProvider({
+const nams = createNams({
   apiKey:          process.env.MEMORY_API_KEY!,
-  baseProvider:    openai,
-  scope:           { userId },
   extractionModel: openai('gpt-5.4-mini'),
 });
+
+const tools = nams.tools({ userId });
 ```
 
-`"User is named Alex, works at TechCorp"` becomes `(Alex)-[:WORKS_AT]->(TechCorp)` in the graph.
+A `store_memory` write of type `fact`, `preference`, or `pattern` turns
+`"User is named Alex, works at TechCorp"` into `(Alex)-[:WORKS_AT]->(TechCorp)`
+instead of one sentence-shaped node.
+
+> **Scope:** tools mode only. Middleware, provider, and hooks mode persist
+> turns as short-term messages, which NAMS extracts server-side — extracting
+> again from the client would just duplicate that work. Setting
+> `extractionModel` and using another mode logs a warning.
 
 > **Note:** relationship persistence depends on backend support. Where the
 > NAMS API does not yet expose a relationship endpoint (the hosted REST API
@@ -511,7 +634,7 @@ NAMS searches four sources in parallel per turn:
 
 ```bash
 npm install        # install dev dependencies
-npm test           # run the vitest suite (provider, tools, ProviderV4 surface)
+npm test           # run the vitest suite (provider, middleware, tools, hooks)
 npm run typecheck  # tsc --noEmit
 npm run build      # tsup → dist/
 ```

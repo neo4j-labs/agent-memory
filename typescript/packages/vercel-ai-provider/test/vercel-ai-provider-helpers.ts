@@ -12,6 +12,8 @@ export interface FakeClient {
     createConversation: ReturnType<typeof vi.fn>;
     addMessage: ReturnType<typeof vi.fn>;
     searchMessages: ReturnType<typeof vi.fn>;
+    getConversation: ReturnType<typeof vi.fn>;
+    bulkAddMessages: ReturnType<typeof vi.fn>;
   };
   longTerm: {
     searchEntities: ReturnType<typeof vi.fn>;
@@ -34,6 +36,8 @@ export function makeFakeClient(): FakeClient {
       })),
       addMessage: vi.fn(async () => ({ id: 'msg-1' })),
       searchMessages: vi.fn(async () => []),
+      getConversation: vi.fn(async (id: string) => ({ id, sessionId: id, messages: [] })),
+      bulkAddMessages: vi.fn(async (_id: string, messages: unknown[]) => messages),
     },
     longTerm: {
       searchEntities: vi.fn(async () => []),
