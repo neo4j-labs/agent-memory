@@ -144,6 +144,69 @@ def _deserialize_metadata(metadata_str: str | None) -> dict[str, Any]:
         return {}
 
 
+# Node properties written by ``BackgroundEnrichmentService._update_entity``.
+# They live on the node (not inside the metadata JSON) so Cypher can filter on
+# them; ``_enrichment_metadata`` folds them back into ``Entity.metadata`` so the
+# Python API surfaces them too.
+_ENRICHMENT_NODE_PROPERTIES = (
+    "enriched_description",
+    "enriched_summary",
+    "wikipedia_url",
+    "wikidata_id",
+    "image_url",
+    "enrichment_provider",
+)
+
+# Keys inside the ``enrichment_data`` JSON blob that are renamed on the way out,
+# so ``Entity.metadata`` uses the same names as
+# ``EnrichmentResult.to_entity_attributes()``.
+_ENRICHMENT_DATA_RENAMES = {
+    "description": "enriched_description",
+    "summary": "enriched_summary",
+    "metadata": "enrichment_metadata",
+    "confidence": "enrichment_confidence",
+    "retrieved_at": "enriched_at",
+}
+
+
+def _enrichment_metadata(data: dict[str, Any]) -> dict[str, Any]:
+    """Extract enrichment fields from an entity node into a metadata dict.
+
+    Background enrichment writes its results as node properties plus an
+    ``enrichment_data`` JSON blob (see
+    :meth:`neo4j_agent_memory.enrichment.background.BackgroundEnrichmentService._update_entity`).
+    Without this, every enrichment field was dropped when the node was parsed
+    into an :class:`Entity`, so ``entity.metadata["wikipedia_url"]`` was always
+    missing even after a successful enrichment.
+    """
+    extracted: dict[str, Any] = {}
+
+    raw = data.get("enrichment_data")
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            parsed = None
+        if isinstance(parsed, dict):
+            for raw_key, value in parsed.items():
+                if value is None:
+                    continue
+                key = str(raw_key)
+                extracted[_ENRICHMENT_DATA_RENAMES.get(key, key)] = value
+
+    # Node properties win over the JSON blob: they are what Cypher reads.
+    for prop in _ENRICHMENT_NODE_PROPERTIES:
+        value = data.get(prop)
+        if value is not None:
+            extracted[prop] = value
+
+    enriched_at = data.get("enriched_at")
+    if enriched_at is not None:
+        extracted["enriched_at"] = _to_python_datetime(enriched_at).isoformat()
+
+    return extracted
+
+
 def _to_python_datetime(neo4j_datetime: Any) -> datetime:
     """Convert Neo4j DateTime to Python datetime."""
     if neo4j_datetime is None:
@@ -2092,6 +2155,9 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
         metadata = _deserialize_metadata(data.get("metadata"))
         attributes = metadata.pop("attributes", {})
         aliases = metadata.pop("aliases", [])
+        # Surface background-enrichment results (stored as node properties)
+        # through ``entity.metadata`` — see CLAUDE.md implementation note 22.
+        metadata.update(_enrichment_metadata(data))
 
         return Entity(
             id=UUID(data["id"]),

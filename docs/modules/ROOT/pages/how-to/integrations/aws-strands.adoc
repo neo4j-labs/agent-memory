@@ -24,7 +24,9 @@ together on the same agent:
 | `Neo4jMemoryStore` on `MemoryManager(stores=[...])`: long-term recall
   (entities, preferences, facts) injected into the agent loop, plus writes
   that feed server-side extraction.
-| The preferred way to give an agent memory. Requires `strands-agents>=1.44.0`.
+| The preferred way to give an agent memory. Needs `strands.memory`, which
+  arrived in `strands-agents` 1.44 — and the `[strands]` extra floors at 1.52,
+  so it is always available.
 
 | *Session manager* (push-based)
 | `Neo4jSessionManager` on `Agent(session_manager=...)`: every turn is
@@ -35,8 +37,9 @@ together on the same agent:
 | *Memory tools* (pull-based)
 | `@tool` functions the agent calls on its own judgment: search memories,
   explore the entity graph, store facts, read preferences.
-| Deep graph queries the store doesn't cover, or `strands-agents<1.44`
-  (no `MemoryStore`).
+| Deep graph queries the store doesn't cover — or a `strands-agents<1.44`
+  pin of your own, below the `[strands]` extra's floor, where there is no
+  `MemoryStore` at all.
 |===
 
 [[_overview]]
@@ -57,6 +60,36 @@ every other agent can retrieve (see <<_the_shared_brain_pattern>>).
 pip install neo4j-agent-memory[aws,strands]
 ----
 
+The extra resolves `strands-agents>=1.52,<2`. Both adapters are tested against
+1.52 and 1.55.1.
+
+[[_model_ids]]
+=== Bedrock model ids
+
+Current-generation Claude models on Bedrock are invoked through a *cross-region
+inference profile* — a `<prefix>.anthropic.…` id such as
+`us.anthropic.claude-sonnet-4-6`, not the bare foundation-model id. Which
+prefixes (`us`, `eu`, `apac`, `global`) and which models your account can
+invoke is region- and account-specific, so the snippets below resolve the id
+rather than hard-coding one:
+
+[source,python]
+----
+from neo4j_agent_memory.integrations.strands import (
+    bedrock_embedding_model,
+    bedrock_llm_model,
+)
+
+bedrock_llm_model()                  # us.anthropic.claude-sonnet-4-6
+bedrock_llm_model("claude-opus")     # us.anthropic.claude-opus-5
+bedrock_embedding_model()            # amazon.titan-embed-text-v2:0
+----
+
+`BEDROCK_MODEL_ID` overrides the resolved LLM id verbatim,
+`BEDROCK_INFERENCE_PROFILE_PREFIX` swaps just the prefix, and
+`BEDROCK_EMBEDDING_MODEL_ID` overrides the embedding id. Confirm an id with
+`aws bedrock list-inference-profiles` before deploying.
+
 == Quick Start
 
 `Neo4jMemoryStore` is the preferred way to give a Strands agent memory —
@@ -68,7 +101,11 @@ from strands import Agent
 from strands.memory import ExtractionConfig, InvocationTrigger, MemoryManager
 
 from neo4j_agent_memory import MemorySettings
-from neo4j_agent_memory.integrations.strands import Neo4jMemoryStore, Neo4jMemoryStoreConfig
+from neo4j_agent_memory.integrations.strands import (
+    Neo4jMemoryStore,
+    Neo4jMemoryStoreConfig,
+    bedrock_llm_model,
+)
 
 settings = MemorySettings(
     neo4j={"uri": "neo4j+s://xxx.databases.neo4j.io", "password": "your-password"},
@@ -83,7 +120,7 @@ store = Neo4jMemoryStore(
 )
 
 agent = Agent(
-    model="anthropic.claude-sonnet-4-20250514-v1:0",
+    model=bedrock_llm_model(),  # cross-region inference-profile id
     memory_manager=MemoryManager(stores=[store]),
 )
 
@@ -105,6 +142,7 @@ combine on one agent:
 ----
 from neo4j_agent_memory.integrations.strands import (
     Neo4jSessionManager,
+    bedrock_llm_model,
     context_graph_tools,
 )
 
@@ -122,7 +160,7 @@ store = Neo4jMemoryStore(
 manager = Neo4jSessionManager("support-42", settings=settings, extract_entities=True)
 
 agent = Agent(
-    model="anthropic.claude-sonnet-4-20250514-v1:0",
+    model=bedrock_llm_model(),  # cross-region inference-profile id
     tools=tools,
     session_manager=manager,
     memory_manager=MemoryManager(stores=[store]),
@@ -465,7 +503,10 @@ export AWS_REGION=us-east-1
 
 === Pass-Through Your Strands Model
 
-Strands agents typically use Bedrock model strings (e.g. `"anthropic.claude-sonnet-4-20250514-v1:0"`). `llm_provider_from_strands` accepts either a bare string or a model object and prepends `bedrock/` when no provider prefix is present:
+Strands agents typically use Bedrock model strings (e.g.
+`"us.anthropic.claude-sonnet-4-6"`). `llm_provider_from_strands` accepts either
+a bare string or a model object and prepends `bedrock/` when no provider prefix
+is present:
 
 [source,python]
 ----
@@ -475,7 +516,7 @@ from neo4j_agent_memory.integrations.strands import (
 )
 
 provider = llm_provider_from_strands(
-    "anthropic.claude-sonnet-4-20250514-v1:0",
+    "us.anthropic.claude-sonnet-4-6",
 )
 
 settings = MemorySettings(
@@ -576,7 +617,7 @@ Guide your agent to use memory effectively:
 [source,python]
 ----
 agent = Agent(
-    model="anthropic.claude-sonnet-4-20250514-v1:0",
+    model=bedrock_llm_model(),  # cross-region inference-profile id
     tools=tools,
     system_prompt="""You are an assistant with persistent memory.
 
@@ -681,8 +722,9 @@ For new code, `MemoryManager` injection (via `Neo4jMemoryStore`, see
 <<_memory_store>>) supersedes `Neo4jRetrievalConfig`. Both together inject
 memory twice; the session manager logs a warning when it detects the
 combination. `Neo4jRetrievalConfig` remains fully supported — it is the only
-injection path on `strands-agents<1.44` and configures its sources
-declaratively rather than through a store.
+injection path on a self-pinned `strands-agents<1.44` (below the `[strands]`
+extra's floor) and configures its sources declaratively rather than through a
+store.
 ====
 
 When a `Neo4jRetrievalConfig` is supplied, each user message triggers
@@ -795,9 +837,15 @@ retrieval_config = Neo4jRetrievalConfig(
   `user_id` scopes *writes* (multi-tenant), not searches — the search APIs
   take no user filter.
 
-* **One agent per session manager instance.** Pass multiple agents their
-  own managers (the shared-brain pattern). Strands Graph/Swarm
-  orchestration persistence is not supported in v1.
+* **One `Agent` per session manager instance; no Graph/Swarm or bidirectional
+  persistence.** Strands' `SessionManager` base class registers multi-agent and
+  `BidiAgent` hooks unconditionally, and its implementations of them raise
+  `NotImplementedError` — so attaching `Neo4jSessionManager` to a Graph, a
+  Swarm, or a `BidiAgent` fails at the first dispatch, naming the class in the
+  error. Those topologies want one of Strands' own repository-backed managers
+  (`FileSessionManager`, `S3SessionManager`, `RepositorySessionManager`). The
+  shared-brain pattern below is N independent agents, each with its own
+  manager, over one graph — not a Strands multi-agent orchestrator.
 
 * **Loop-bound transports.** Pass `settings=` (or an *unconnected*
   `memory_client=`). A client already connected on another event loop
@@ -822,7 +870,7 @@ argument on each call; the session manager takes `user_id` at construction
 # The agent passes user_id with each tool call
 
 agent = Agent(
-    model="anthropic.claude-sonnet-4-20250514-v1:0",
+    model=bedrock_llm_model(),  # cross-region inference-profile id
     tools=tools,
     session_manager=Neo4jSessionManager(
         f"support-{user_id}",
@@ -874,7 +922,7 @@ manager_b = Neo4jSessionManager(
 )
 ----
 
-See `examples/strands-session-manager/` for a runnable three-phase demo that
+See `examples/strands-session-manager/` for a runnable four-phase demo (persist, inject, restore, reasoning/tool-call mirror) that
 requires no LLM or API key.
 
 == See Also

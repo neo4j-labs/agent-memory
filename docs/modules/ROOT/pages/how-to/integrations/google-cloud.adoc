@@ -11,7 +11,7 @@ Neo4j Agent Memory provides comprehensive Google Cloud integration, including Ve
 | Feature | Description | Status
 
 | Vertex AI Embeddings
-| Generate embeddings using Google's text-embedding-004 model
+| Generate embeddings using Google's `gemini-embedding-001` model
 | Production Ready
 
 | Google ADK
@@ -19,7 +19,7 @@ Neo4j Agent Memory provides comprehensive Google Cloud integration, including Ve
 | Production Ready
 
 | MCP Server
-| Model Context Protocol server with 5 memory tools
+| Model Context Protocol server — 6 core / 16 extended memory tools
 | Production Ready
 
 | Cloud Run
@@ -40,8 +40,8 @@ pip install neo4j-agent-memory[google-adk]
 # MCP server
 pip install neo4j-agent-memory[mcp]
 
-# All Google Cloud features
-pip install neo4j-agent-memory[google,mcp]
+# All Google Cloud features ([google] is Vertex AI only)
+pip install "neo4j-agent-memory[google,google-adk,mcp]"
 ----
 
 == Pass-through your Google ADK / Gemini model
@@ -60,7 +60,7 @@ provider = llm_provider_from_google_adk("gemini-2.5-flash")
 settings = MemorySettings(
     neo4j={"password": "p"},
     llm=provider,
-    embedding="vertex_ai/text-embedding-004",     # Vertex AI embeddings
+    embedding="vertex_ai/gemini-embedding-001",   # Vertex AI embeddings
 )
 ----
 
@@ -89,12 +89,13 @@ You need a running Neo4j instance. Options:
 
 [source,bash]
 ----
-# Local Docker for development
+# Local Docker for development (matches what CI runs)
 docker run -d \
   --name neo4j \
   -p 7474:7474 -p 7687:7687 \
   -e NEO4J_AUTH=neo4j/password \
-  neo4j:5-enterprise
+  -e NEO4J_PLUGINS='["apoc"]' \
+  neo4j:5.26-community
 ----
 
 == Vertex AI Embeddings
@@ -107,9 +108,8 @@ Generate high-quality text embeddings using Google's Vertex AI models.
 ----
 from neo4j_agent_memory.embeddings.vertex_ai import VertexAIEmbedder
 
-# Create embedder
+# Create embedder (gemini-embedding-001 is the default model)
 embedder = VertexAIEmbedder(
-    model="text-embedding-004",
     project_id="your-gcp-project",  # or set GOOGLE_CLOUD_PROJECT
     location="us-central1",
 )
@@ -118,7 +118,9 @@ embedder = VertexAIEmbedder(
 embedding = await embedder.embed("Hello, world!")
 print(f"Dimensions: {len(embedding)}")  # 768
 
-# Batch embedding (up to 250 texts per batch)
+# Batch embedding. gemini-embedding-001 accepts one text per request, so the
+# embedder issues one call per text; text-embedding-005 and
+# text-multilingual-embedding-002 batch up to 250 per request.
 embeddings = await embedder.embed_batch([
     "First text",
     "Second text",
@@ -126,24 +128,61 @@ embeddings = await embedder.embed_batch([
 ])
 ----
 
+[[vertex-ai-embedding-dimensions]]
+=== Output dimensionality
+
+`gemini-embedding-001` emits 3072 dimensions natively and supports Matryoshka
+truncation to 1536 or 768. The embedder defaults to `output_dimensionality=768`:
+
+[source,python]
+----
+# Default: 768 dimensions, compatible with indexes created for the
+# retired text-embedding-004 model.
+embedder = VertexAIEmbedder()
+
+# Native 3072 dimensions -- best retrieval quality, but the Neo4j vector
+# indexes must be created at 3072 (they cannot be resized afterwards).
+embedder = VertexAIEmbedder(output_dimensionality=None)
+
+# Middle ground
+embedder = VertexAIEmbedder(output_dimensionality=1536)
+----
+
+The trade-off: Neo4j vector index dimensionality is fixed when the index is
+created, and `MemoryClient` sizes its indexes from `embedder.dimensions`.
+Keeping the default 768 means an existing database keeps working after the
+model change with no re-embedding. Raising it on an existing database means
+dropping the `Message`, `Entity`, `Preference` and `ReasoningTrace` vector
+indexes, recreating them at the new size, and re-embedding every node, so
+choose 1536 or 3072 at the start of a new project rather than later.
+
+[[vertex-ai-embedding-models]]
 === Supported Models
 
 [cols="2,1,2", options="header"]
 |===
-| Model | Dimensions | Notes
+| Model | Native dimensions | Notes
 
-| `text-embedding-004`
-| 768
-| Recommended for most use cases
+| `gemini-embedding-001`
+| 3072
+| Default. Truncatable to 1536 or 768; one text per request
 
-| `textembedding-gecko@003`
+| `text-embedding-005`
 | 768
-| Legacy model
+| English and code, task-specific; up to 250 texts per request
 
-| `textembedding-gecko-multilingual@001`
+| `text-multilingual-embedding-002`
 | 768
-| Multilingual support
+| Multilingual; up to 250 texts per request
 |===
+
+[IMPORTANT]
+====
+`text-embedding-004` (shut down 2026-01-14) and the `textembedding-gecko*`
+family (shut down 2025-04-09) no longer serve requests. Passing either id to
+`VertexAIEmbedder` or to `EmbeddingConfig(provider=VERTEX_AI, ...)` raises an
+error naming the replacement rather than failing at request time.
+====
 
 === Task Types
 
@@ -153,13 +192,13 @@ Vertex AI supports different task types for optimized embeddings:
 ----
 # For indexing documents
 doc_embedder = VertexAIEmbedder(
-    model="text-embedding-004",
+    model="gemini-embedding-001",
     task_type="RETRIEVAL_DOCUMENT",
 )
 
 # For search queries
 query_embedder = VertexAIEmbedder(
-    model="text-embedding-004",
+    model="gemini-embedding-001",
     task_type="RETRIEVAL_QUERY",
 )
 ----
@@ -177,11 +216,8 @@ Available task types:
 [source,python]
 ----
 from neo4j_agent_memory import MemoryClient, MemorySettings
-from neo4j_agent_memory.config.settings import (
-    EmbeddingConfig,
-    EmbeddingProvider,
-    Neo4jConfig,
-)
+from neo4j_agent_memory.config.settings import Neo4jConfig
+from neo4j_agent_memory.llm.adapters.vertex_ai import VertexAIEmbeddingProvider
 from pydantic import SecretStr
 
 settings = MemorySettings(
@@ -189,11 +225,11 @@ settings = MemorySettings(
         uri="bolt://localhost:7687",
         password=SecretStr("password"),
     ),
-    embedding=EmbeddingConfig(
-        provider=EmbeddingProvider.VERTEX_AI,
-        model="text-embedding-004",
+    embedding=VertexAIEmbeddingProvider(
+        "vertex_ai/gemini-embedding-001",
         project_id="your-gcp-project",
         location="us-central1",
+        dimensions=768,
     ),
 )
 
@@ -236,15 +272,26 @@ async with MemoryClient(settings) as client:
     }
     await memory_service.add_session_to_memory(session)
 
-    # Search across all memory types
-    results = await memory_service.search_memory(
+    # Search across all memory types. search_memory() returns an ADK
+    # SearchMemoryResponse — iterate response.memories, not the response.
+    response = await memory_service.search_memory(
         query="user preferences",
         limit=10,
     )
 
-    for entry in results:
-        print(f"[{entry.memory_type}] {entry.content}")
+    for entry in response.memories:
+        # entry.content is a google.genai.types.Content (a list of parts),
+        # and the memory type lives in custom_metadata.
+        text = "".join(part.text or "" for part in entry.content.parts)
+        kind = (entry.custom_metadata or {}).get("memory_type")
+        print(f"[{kind}/{entry.author}] {text}")
 ----
+
+TIP: The runnable version of this wiring — a real `Runner`, ADK's `load_memory`
+tool, and two turns across two sessions — is
+https://github.com/neo4j-labs/agent-memory/tree/main/examples/google_adk_demo[`examples/google_adk_demo/`].
+It runs without Google credentials by driving the same loop with a scripted
+model.
 
 === API Reference
 
@@ -267,17 +314,26 @@ await memory_service.add_session_to_memory(
 
 ==== search_memory
 
-Semantic search across all memory types.
+Semantic search across all memory types. Returns an ADK `SearchMemoryResponse`.
 
 [source,python]
 ----
-results = await memory_service.search_memory(
+response = await memory_service.search_memory(
     query="search query",
-    app_name="my-app",      # Optional app filter
-    user_id="user-id",      # Optional user filter
+    app_name="my-app",      # Accepted for ADK contract parity
+    user_id="user-id",      # Accepted for ADK contract parity
+    session_id="session-1", # Scopes message search (required on hosted NAMS)
     limit=10,
 )
+
+for entry in response.memories:
+    text = "".join(part.text or "" for part in entry.content.parts)
+    metadata = entry.custom_metadata or {}
+    print(entry.author, metadata.get("memory_type"), metadata.get("score"), text)
 ----
+
+Entity and preference recall is workspace-wide; only message search is scoped by
+`session_id`.
 
 ==== get_memories_for_session
 
@@ -317,42 +373,65 @@ await memory_service.clear_session(session_id="session-id")
 
 === Integration with ADK Agents
 
+Memory is a **`Runner`-level service** in Google ADK 2.x: pass it as
+`Runner(memory_service=...)`. `LlmAgent` has no `memory=` parameter, and there is
+no `@agent.tool` decorator — give the agent ADK's built-in `load_memory` tool
+(or `preload_memory`) and it reads from Neo4j.
+
 [source,python]
 ----
-from google.adk import Agent
+import os
+
+from google.adk.agents import LlmAgent
+from google.adk.runners import Runner
+from google.adk.sessions import InMemorySessionService
+from google.adk.tools import load_memory
+from google.genai import types
+
 from neo4j_agent_memory import MemoryClient, MemorySettings
 from neo4j_agent_memory.integrations.google_adk import Neo4jMemoryService
 
-# Initialize memory
-settings = MemorySettings(...)
-memory_client = MemoryClient(settings)
-await memory_client.connect()
+APP, USER, SID = "my-app", "user-123", "session-1"
+settings = MemorySettings()
 
-# Create memory service
-memory_service = Neo4jMemoryService(
-    memory_client=memory_client,
-    user_id="user-123",
-)
+async with MemoryClient(settings) as client:
+    session_service = InMemorySessionService()
+    memory_service = Neo4jMemoryService(memory_client=client, user_id=USER)
 
-# Use with ADK Agent
-agent = Agent(
-    name="my-agent",
-    memory=memory_service,
-)
+    runner = Runner(
+        app_name=APP,
+        agent=LlmAgent(
+            name="my-agent",
+            model=os.environ.get("ADK_MODEL", "gemini-2.5-flash"),
+            instruction="Call load_memory to recall anything the user told you before.",
+            tools=[load_memory],
+        ),
+        session_service=session_service,
+        memory_service=memory_service,
+    )
 
-# Create custom tools using memory
-@agent.tool
-async def remember_fact(fact: str) -> str:
-    """Store a fact for later recall."""
-    await memory_service.add_memory(content=fact, memory_type="message")
-    return f"Remembered: {fact}"
+    await session_service.create_session(app_name=APP, user_id=USER, session_id=SID)
 
-@agent.tool
-async def recall_memories(query: str) -> list[str]:
-    """Search memories for relevant information."""
-    results = await memory_service.search_memory(query, limit=5)
-    return [entry.content for entry in results]
+    # run_async() is an async generator — iterate it, never await it.
+    async for event in runner.run_async(
+        user_id=USER,
+        session_id=SID,
+        new_message=types.Content(
+            role="user", parts=[types.Part(text="I work on Project Alpha")]
+        ),
+    ):
+        pass
+
+    # Commit the finished ADK session to Neo4j so later sessions can recall it.
+    await memory_service.add_session_to_memory(
+        await session_service.get_session(app_name=APP, user_id=USER, session_id=SID)
+    )
+    await runner.close()
 ----
+
+To persist only the latest turn instead of re-ingesting the whole session, use
+the ADK 2.x delta API, `add_events_to_memory(app_name=..., user_id=...,
+events=[...], session_id=...)`.
 
 === Domain Data Access via MemoryClient.graph
 
@@ -381,7 +460,7 @@ async with MemoryClient(settings) as client:
     )
 ----
 
-This pattern is used in the **Financial Advisor example** (`examples/google-cloud-financial-advisor/`), where a `Neo4jDomainService` wraps `client.graph` to provide typed query methods for customers, transactions, alerts, sanctions screening, and network analysis.
+This pattern is used in the **Financial Advisor example** (`examples/financial-services-advisor/google-cloud-financial-advisor/`), where a `Neo4jDomainService` wraps `client.graph` to provide typed query methods for customers, transactions, alerts, sanctions screening, and network analysis.
 
 See xref:../../reference/api/memory-client.adoc#graph[MemoryClient.graph reference] for details.
 
@@ -427,8 +506,9 @@ The **extended** profile adds 10 more tools for conversation history, session li
 # stdio transport (for local MCP clients like Claude Desktop)
 neo4j-agent-memory mcp serve
 
-# SSE transport (for Cloud Run/HTTP deployment)
-neo4j-agent-memory mcp serve --transport sse --port 8080
+# Streamable HTTP transport (for Cloud Run/HTTP deployment).
+# Serves the MCP endpoint at POST/GET /mcp/.
+neo4j-agent-memory mcp serve --transport http --host 0.0.0.0 --port 8080
 
 # With custom Neo4j connection
 neo4j-agent-memory mcp serve \
@@ -469,8 +549,8 @@ async with MemoryClient(settings) as client:
     # stdio transport
     await server.run()
 
-    # Or SSE for HTTP
-    await server.run_sse(host="0.0.0.0", port=8080)
+    # Or Streamable HTTP
+    await server.run_http(host="0.0.0.0", port=8080)
 ----
 
 === Tool Schemas
@@ -534,7 +614,8 @@ WORKDIR /app
 COPY . .
 RUN pip install neo4j-agent-memory[google,mcp]
 EXPOSE 8080
-CMD ["neo4j-agent-memory", "mcp", "serve", "--transport", "sse", "--port", "8080"]
+CMD ["neo4j-agent-memory", "mcp", "serve", \
+     "--transport", "http", "--host", "0.0.0.0", "--port", "8080"]
 ----
 
 === Secret Manager Integration
@@ -594,10 +675,13 @@ See `deploy/cloudrun/service.yaml` for the full Cloud Run service configuration 
 
 Comprehensive examples are available in `examples/google_cloud_integration/`:
 
-* `vertex_ai_embeddings.py` - Vertex AI embedding generation
-* `adk_memory_service.py` - Google ADK integration patterns
-* `mcp_server_demo.py` - MCP server tools demonstration
-* `full_pipeline.py` - End-to-end demo combining all features
+* `vertex_ai_embeddings.py` - Vertex AI embedding generation and multi-tenant writes
+* `adk_memory_service.py` - entity-extraction and preference narratives through the ADK adapter
+* `mcp_server_demo.py` - MCP server tool profiles and live tool calls
+* `full_pipeline.py` - end-to-end demo: Vertex AI, ADK, MCP, a reasoning-trace audit query, buffered writes, consolidation
+
+The smaller ADK on-ramp — a real `Runner` loop with `load_memory` — is
+`examples/google_adk_demo/`.
 
 [source,bash]
 ----
@@ -607,7 +691,7 @@ python full_pipeline.py
 
 === Financial Advisor (Full Application)
 
-A complete multi-agent compliance investigation app in `examples/google-cloud-financial-advisor/`:
+A complete multi-agent compliance investigation app in `examples/financial-services-advisor/google-cloud-financial-advisor/`:
 
 * **Multi-agent architecture**: Supervisor + 4 specialist agents (KYC, AML, Relationship, Compliance)
 * **Neo4j domain data**: All customer, transaction, organization, sanctions, and PEP data stored and queried from Neo4j via `MemoryClient.graph`
@@ -616,7 +700,7 @@ A complete multi-agent compliance investigation app in `examples/google-cloud-fi
 
 [source,bash]
 ----
-cd examples/google-cloud-financial-advisor
+cd examples/financial-services-advisor/google-cloud-financial-advisor
 cp .env.example .env  # Set GOOGLE_API_KEY, NEO4J_URI, NEO4J_PASSWORD
 make install && make load-data && make dev
 ----

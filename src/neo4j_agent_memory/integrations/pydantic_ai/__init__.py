@@ -16,15 +16,22 @@ def llm_provider_from_pydantic_ai(model: Any) -> LLMProvider:
     """Translate a Pydantic AI ``Model`` into an :class:`LLMProvider`.
 
     Pydantic AI Models expose ``model_name``; class names like
-    ``OpenAIModel`` / ``AnthropicModel`` provide the provider prefix::
+    ``OpenAIChatModel`` / ``AnthropicModel`` / ``GoogleModel`` (the 2.x
+    names — ``OpenAIModel`` and ``GeminiModel`` are gone) provide the
+    provider prefix::
 
-        from pydantic_ai.models.anthropic import AnthropicModel
+        import os
+
+        from pydantic_ai.models.openai import OpenAIChatModel
         from neo4j_agent_memory.integrations.pydantic_ai import (
             llm_provider_from_pydantic_ai,
         )
 
-        model = AnthropicModel("claude-3-5-sonnet-latest")
+        model = OpenAIChatModel(os.getenv("OPENAI_MODEL", "gpt-5-mini"))
         provider = llm_provider_from_pydantic_ai(model)
+
+    The same model instance can then back both the agent and memory's
+    entity extraction, so you configure credentials once.
     """
     return _passthrough(model)
 

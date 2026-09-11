@@ -438,7 +438,7 @@ TypeDoc: link:{attachmentsdir}/api/typescript/classes/index.MemoryError.html[`Me
 
 == Subpath exports
 
-The package exposes six subpath exports beyond the root. Each is independently importable to keep tree-shaking honest on edge runtimes.
+The package exposes seven subpath exports beyond the root. Each is independently importable to keep tree-shaking honest on edge runtimes.
 
 [cols="2,3,3", options="header"]
 |===
@@ -450,11 +450,15 @@ The package exposes six subpath exports beyond the root. Each is independently i
 
 |`@neo4j-labs/agent-memory/middleware/vercel-ai`
 |`agentMemoryMiddleware`, `AgentMemoryLanguageModelMiddleware`
-|Wire memory into a Vercel AI SDK `generateText` / `streamText` call. See xref:how-to/typescript/vercel-ai.adoc[Vercel AI SDK middleware].
+|Wire memory into a Vercel AI SDK `generateText` / `streamText` call. Implements specification v4 (`ai` 7.x). See xref:how-to/typescript/vercel-ai.adoc[Vercel AI SDK middleware].
 
 |`@neo4j-labs/agent-memory/mcp`
-|`createMemoryTools`, `handleMemoryToolCall`, `McpToolDefinition`
-|Register the 12 standard memory tools with an MCP server. See xref:how-to/typescript/mcp.adoc[MCP tools].
+|`createMemoryTools`, `handleMemoryToolCall`, `McpToolDefinition`, `McpToolAnnotations`, `READ_ONLY_MEMORY_TOOLS`, `memoryToolAnnotations`
+|The 12-tool memory surface as JSON Schema plus a dispatcher, for the low-level MCP `Server` API. See xref:how-to/typescript/mcp.adoc[MCP tools].
+
+|`@neo4j-labs/agent-memory/mcp/register`
+|`registerMemoryTools`, `memoryToolShapes`, `MemoryToolCallAudit`
+|Register the same 12 tools on a high-level `McpServer` (Zod input schemas, annotations, optional allow-list and audit hook). Requires the optional `zod` peer.
 
 |`@neo4j-labs/agent-memory/integrations/langchain`
 |`Neo4jChatMessageHistory`, `Neo4jEntityRetriever`
@@ -462,10 +466,10 @@ The package exposes six subpath exports beyond the root. Each is independently i
 
 |`@neo4j-labs/agent-memory/integrations/mastra`
 |`Neo4jMastraMemory`
-|Mastra agent framework. See xref:how-to/typescript/mastra.adoc[Mastra].
+|A thin thread-and-message-history adapter in Mastra's vocabulary — not a Mastra `Memory` or storage adapter. See xref:how-to/typescript/mastra.adoc[Mastra].
 
 |`@neo4j-labs/agent-memory/integrations/strands`
-|`Neo4jSessionStorage`, `Neo4jConversationManager`, `registerReasoningHooks`, `connectMemoryToAgent`
+|`Neo4jSessionStorage`, `Neo4jConversationManager`, `registerReasoningHooks`, `connectMemoryToAgent`, `Neo4jMemoryStore`
 |AWS Strands Agents SDK (JS). See xref:how-to/typescript/strands.adoc[Strands].
 
 |`@neo4j-labs/agent-memory/testing`

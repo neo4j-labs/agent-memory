@@ -255,8 +255,10 @@ class TestEntityResolutionEdgeCases:
         )
 
         assert result.canonical_name == "Brand New Entity"
-        # When no existing entities, returns itself as canonical with "exact" match type
-        assert result.match_type == "exact"
+        # With no existing entities there is nothing to match: the entity is its
+        # own canonical form and the match type is "none" (only a real hit
+        # reports "exact").
+        assert result.match_type == "none"
 
     @pytest.mark.asyncio
     async def test_resolution_special_characters(self, memory_client):

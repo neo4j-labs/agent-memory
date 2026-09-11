@@ -35,7 +35,7 @@ In Strands' own vocabulary: the session storage restores sessions, the
 memory store feeds the agent loop.
 
 A runnable example lives at
-link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/strands[`clients/typescript/examples/strands`].
+link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/strands[`typescript/examples/strands`].
 
 == Quick Start
 
@@ -183,11 +183,16 @@ import { MemoryClient } from "@neo4j-labs/agent-memory";
 import { connectMemoryToAgent } from "@neo4j-labs/agent-memory/integrations/strands";
 
 const memory = new MemoryClient();
-const conv = await memory.shortTerm.createConversation({ userId: "alice" });
+
+// Resume rather than restart: both session storage and context injection are
+// conversation-scoped, so recall across runs needs the same conversation id.
+const userId = "alice";
+const previous = (await memory.shortTerm.listConversations({ userId, limit: 1 }))[0];
+const conv = previous ?? (await memory.shortTerm.createConversation({ userId }));
 
 const agent = new Agent({
   ...await connectMemoryToAgent(memory, { conversationId: conv.id }),
-  model: new OpenAIModel({ modelId: "gpt-4o-mini" }),
+  model: new OpenAIModel({ modelId: process.env.OPENAI_MODEL ?? "gpt-5-mini" }),
   tools: [/* ... */],
 });
 
@@ -197,6 +202,18 @@ await agent.invoke("Tell me about graph databases.");
 The factory returns `{ sessionManager, conversationManager }` — spread it
 into `new Agent({...})`. Reasoning hooks attach automatically when the
 conversation manager's `initAgent` runs.
+
+[NOTE]
+====
+The spread needs **one resolved copy** of `@strands-agents/sdk` in the
+dependency tree. Strands' `ConversationManager` carries protected fields, so two
+copies (the usual outcome of a symlinked local checkout — `npm link`, or a
+`file:` dependency installed with the default `install-links=false`) make the
+same class nominally distinct and TypeScript rejects the config. Installing
+`@neo4j-labs/agent-memory` from npm gives you one copy; a local checkout needs
+`install-links=true` (see `typescript/examples/strands/.npmrc`) or an npm
+workspace.
+====
 
 == Individual pieces (advanced)
 
@@ -302,13 +319,28 @@ in. An auth failure surfaces as `AuthenticationError` from
 
 == Version compatibility
 
-We test against `@strands-agents/sdk@^1.2.0`. Strands' v1 API is stable
-under semver — the integration should track v1 minor releases without
-adjustment. We will not break the integration API across minor releases
-of `@neo4j-labs/agent-memory` without a CHANGELOG callout.
+Verified against `@strands-agents/sdk` 1.17 (declared floor: `>=1.16 <2`) and
+Node.js 22, with `@neo4j-labs/agent-memory` 0.5.0-dev — 2026-09. Strands' v1 API
+is stable under semver, and `typescript/test/unit/strands/type-compatibility.test.ts`
+asserts each of our classes still satisfies the interface it implements, so an
+`npm install` that reshapes one of them fails a test rather than drifting
+silently. We will not break the integration API across minor releases of
+`@neo4j-labs/agent-memory` without a CHANGELOG callout.
 
 `Neo4jMemoryStore` needs `@strands-agents/sdk >= 1.6.0`, the release that
 introduced `MemoryManager`/`MemoryStore`.
+
+=== A note on `SnapshotStorage` vs the unified `Storage`
+
+Strands 1.16 introduced a unified `Storage` interface (`write`/`read`/`delete`/
+`list` over opaque `Uint8Array` values) and marked the snapshot-shaped
+`{ snapshot: SnapshotStorage }` form of `SessionManagerConfig.storage`
+deprecated. `Neo4jSessionStorage` deliberately stays on the snapshot form,
+which Strands still accepts: a byte-blob backend would reduce a NAMS
+conversation to one opaque value, losing entity extraction, message search and
+graph traversal over the transcript — the reasons to persist a session into a
+graph at all. If Strands removes the snapshot form, the integration will move to
+a unified `Storage` that keeps the hybrid message mapping behind it.
 
 == See also
 

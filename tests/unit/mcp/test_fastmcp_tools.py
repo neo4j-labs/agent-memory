@@ -102,6 +102,92 @@ class TestToolRegistration:
             assert len(tools) == 16
 
 
+class TestToolAnnotations:
+    """Tool hints must survive the MCP SDK 2 snake_case field rename.
+
+    ``READ_ANNOTATIONS`` / ``WRITE_ANNOTATIONS`` are plain dicts handed to
+    ``@mcp.tool(annotations=...)``; these tests assert they actually land on the
+    advertised ``ToolAnnotations`` rather than being silently dropped by a
+    key-name mismatch.
+    """
+
+    READ_ONLY_TOOLS = {
+        "memory_search",
+        "memory_get_context",
+        "memory_get_conversation",
+        "memory_list_sessions",
+        "memory_get_entity",
+        "memory_export_graph",
+        "memory_get_observations",
+        "graph_query",
+    }
+
+    WRITE_TOOLS = {
+        "memory_store_message",
+        "memory_add_entity",
+        "memory_add_preference",
+        "memory_add_fact",
+        "memory_create_relationship",
+        "memory_start_trace",
+        "memory_record_step",
+        "memory_complete_trace",
+    }
+
+    @pytest.mark.asyncio
+    async def test_every_tool_advertises_annotations(self):
+        server = create_tool_server(make_mock_client(), profile="extended")
+        async with Client(server) as client:
+            tools = await client.list_tools()
+        for tool in tools:
+            assert tool.annotations is not None, f"{tool.name} has no annotations"
+            assert tool.annotations.read_only_hint is not None, tool.name
+            assert tool.annotations.destructive_hint is False, tool.name
+
+    @pytest.mark.asyncio
+    async def test_read_tools_are_read_only_and_idempotent(self):
+        server = create_tool_server(make_mock_client(), profile="extended")
+        async with Client(server) as client:
+            tools = {t.name: t for t in await client.list_tools()}
+        for name in self.READ_ONLY_TOOLS:
+            annotations = tools[name].annotations
+            assert annotations.read_only_hint is True, name
+            assert annotations.idempotent_hint is True, name
+
+    @pytest.mark.asyncio
+    async def test_write_tools_are_not_read_only(self):
+        server = create_tool_server(make_mock_client(), profile="extended")
+        async with Client(server) as client:
+            tools = {t.name: t for t in await client.list_tools()}
+        for name in self.WRITE_TOOLS:
+            annotations = tools[name].annotations
+            assert annotations.read_only_hint is False, name
+            assert annotations.idempotent_hint is False, name
+
+    def test_annotation_dicts_use_sdk2_field_names(self):
+        """The dicts key on the SDK 2 field names, not the legacy camelCase aliases.
+
+        FastMCP 4 still bridges camelCase through a compatibility shim that can be
+        switched off (``fastmcp.settings.mcp_camelcase_compat``), so keying on the
+        native names keeps these hints working either way.
+        """
+        from mcp_types import ToolAnnotations
+
+        from neo4j_agent_memory.mcp._tools import READ_ANNOTATIONS, WRITE_ANNOTATIONS
+
+        fields = set(ToolAnnotations.model_fields)
+        for dictionary in (READ_ANNOTATIONS, WRITE_ANNOTATIONS):
+            assert set(dictionary) <= fields, (
+                f"annotation keys {set(dictionary) - fields} are not ToolAnnotations field names"
+            )
+
+        read = ToolAnnotations.model_validate(READ_ANNOTATIONS)
+        write = ToolAnnotations.model_validate(WRITE_ANNOTATIONS)
+        assert (read.read_only_hint, read.idempotent_hint) == (True, True)
+        assert (write.read_only_hint, write.idempotent_hint) == (False, False)
+        assert read.destructive_hint is False
+        assert write.destructive_hint is False
+
+
 class TestCoreToolParameters:
     """Tests that core tools have correct required parameters."""
 
@@ -118,21 +204,21 @@ class TestCoreToolParameters:
         async with Client(server) as client:
             tools = await client.list_tools()
             tool = next(t for t in tools if t.name == "memory_search")
-            assert "query" in tool.inputSchema.get("required", [])
+            assert "query" in tool.input_schema.get("required", [])
 
     @pytest.mark.asyncio
     async def test_memory_store_message_requires_content(self, server):
         async with Client(server) as client:
             tools = await client.list_tools()
             tool = next(t for t in tools if t.name == "memory_store_message")
-            assert "content" in tool.inputSchema.get("required", [])
+            assert "content" in tool.input_schema.get("required", [])
 
     @pytest.mark.asyncio
     async def test_memory_add_entity_requires_name_and_type(self, server):
         async with Client(server) as client:
             tools = await client.list_tools()
             tool = next(t for t in tools if t.name == "memory_add_entity")
-            required = tool.inputSchema.get("required", [])
+            required = tool.input_schema.get("required", [])
             assert "name" in required
             assert "entity_type" in required
 
@@ -141,7 +227,7 @@ class TestCoreToolParameters:
         async with Client(server) as client:
             tools = await client.list_tools()
             tool = next(t for t in tools if t.name == "memory_add_preference")
-            required = tool.inputSchema.get("required", [])
+            required = tool.input_schema.get("required", [])
             assert "category" in required
             assert "preference" in required
 
@@ -150,7 +236,7 @@ class TestCoreToolParameters:
         async with Client(server) as client:
             tools = await client.list_tools()
             tool = next(t for t in tools if t.name == "memory_add_fact")
-            required = tool.inputSchema.get("required", [])
+            required = tool.input_schema.get("required", [])
             assert "subject" in required
             assert "predicate" in required
             assert "object_value" in required

@@ -209,18 +209,105 @@ def build_nams_settings(
 
 # ---------------------------------------------------------------------------
 # Default Bedrock models for different use cases
+#
+# Model ids rot. Both maps below are *defaults*, not a catalogue: resolve them
+# through `bedrock_llm_model()` / `bedrock_embedding_model()` so a deployment can
+# override the id from the environment without a library release.
+#
+# Verification source for the Claude ids: the Bedrock section of
+# `strands.models._defaults._CONTEXT_WINDOW_LIMITS` plus
+# `strands.models.bedrock.DEFAULT_BEDROCK_MODEL_ID`, read from the
+# strands-agents release this package pins (1.55.1). Those are the ids the SDK
+# we hand them to treats as known-good. What a *specific AWS account and
+# region* can invoke is narrower and not checkable from here — confirm with
+# `aws bedrock list-inference-profiles` / `aws bedrock list-foundation-models`
+# before relying on a default.
 # ---------------------------------------------------------------------------
 
-# Default Bedrock models for different use cases
+#: Env var overriding the resolved Bedrock LLM id (see `bedrock_llm_model`).
+BEDROCK_MODEL_ID_ENV = "BEDROCK_MODEL_ID"
+
+#: Env var overriding the resolved Bedrock embedding id.
+BEDROCK_EMBEDDING_MODEL_ID_ENV = "BEDROCK_EMBEDDING_MODEL_ID"
+
+#: Env var overriding the cross-region inference-profile prefix.
+BEDROCK_INFERENCE_PROFILE_PREFIX_ENV = "BEDROCK_INFERENCE_PROFILE_PREFIX"
+
+#: Cross-region inference-profile prefix applied to the Claude ids below.
+#: Current-generation Claude models on Bedrock are invoked through a
+#: cross-region inference profile — a ``<prefix>.anthropic.…`` id — rather than
+#: the bare foundation-model id. Valid prefixes are region-dependent ("us",
+#: "eu", "apac", "global"); strands' own default model id uses "global".
+DEFAULT_BEDROCK_INFERENCE_PROFILE_PREFIX = "us"
+
+#: Unprefixed Claude ids by family alias. Keys are stable; values track the
+#: current generation and are expected to change between releases.
+BEDROCK_CLAUDE_BASE_MODELS = {
+    # strands' own DEFAULT_BEDROCK_MODEL_ID family, hence the safest default.
+    "claude-sonnet": "anthropic.claude-sonnet-4-6",
+    "claude-opus": "anthropic.claude-opus-5",
+    "claude-haiku": "anthropic.claude-haiku-4-5-20251001-v1:0",
+}
+
+#: Bedrock embedding ids by alias. Only the payload shapes
+#: ``neo4j_agent_memory.embeddings.bedrock.BedrockEmbedder`` knows how to build
+#: are listed — Titan text and Cohere embed v3. Amazon's Nova multimodal
+#: embedding models use a different request/response body and are deliberately
+#: absent: listing one here would hand callers an id the embedder cannot drive.
 BEDROCK_EMBEDDING_MODELS = {
     "titan-v2": "amazon.titan-embed-text-v2:0",  # Recommended, 1024 dimensions
-    "titan-v1": "amazon.titan-embed-text-v1",  # 1536 dimensions
+    "titan-v1": "amazon.titan-embed-text-v1",  # Legacy (v1 generation), 1536 dimensions
     "cohere-english": "cohere.embed-english-v3",  # 1024 dimensions
     "cohere-multilingual": "cohere.embed-multilingual-v3",  # 1024 dimensions
 }
 
+#: Default Bedrock LLM ids, inference-profile-prefixed with
+#: ``DEFAULT_BEDROCK_INFERENCE_PROFILE_PREFIX``. Prefer `bedrock_llm_model()`,
+#: which honours the environment overrides above.
 BEDROCK_LLM_MODELS = {
-    "claude-sonnet": "anthropic.claude-sonnet-4-20250514-v1:0",
-    "claude-haiku": "anthropic.claude-3-haiku-20240307-v1:0",
-    "claude-opus": "anthropic.claude-3-opus-20240229-v1:0",
+    alias: f"{DEFAULT_BEDROCK_INFERENCE_PROFILE_PREFIX}.{base}"
+    for alias, base in BEDROCK_CLAUDE_BASE_MODELS.items()
 }
+
+
+def bedrock_llm_model(alias: str = "claude-sonnet") -> str:
+    """Resolve a Bedrock Claude inference-profile id.
+
+    Precedence: ``BEDROCK_MODEL_ID`` (used verbatim, prefix included), then the
+    ``BEDROCK_INFERENCE_PROFILE_PREFIX``-prefixed default for ``alias``.
+
+    Args:
+        alias: Key in :data:`BEDROCK_CLAUDE_BASE_MODELS`.
+
+    Raises:
+        KeyError: If ``alias`` is unknown and no ``BEDROCK_MODEL_ID`` is set.
+    """
+    override = os.environ.get(BEDROCK_MODEL_ID_ENV)
+    if override:
+        return override
+    base = BEDROCK_CLAUDE_BASE_MODELS[alias]
+    prefix = (
+        os.environ.get(BEDROCK_INFERENCE_PROFILE_PREFIX_ENV)
+        or DEFAULT_BEDROCK_INFERENCE_PROFILE_PREFIX
+    )
+    return f"{prefix}.{base}"
+
+
+def bedrock_embedding_model(alias: str = "titan-v2") -> str:
+    """Resolve a Bedrock embedding model id.
+
+    Precedence: ``BEDROCK_EMBEDDING_MODEL_ID``, then the default for ``alias``.
+    Embedding models are not invoked through inference profiles, so no prefix is
+    applied.
+
+    Args:
+        alias: Key in :data:`BEDROCK_EMBEDDING_MODELS`.
+
+    Raises:
+        KeyError: If ``alias`` is unknown and no ``BEDROCK_EMBEDDING_MODEL_ID``
+            is set.
+    """
+    override = os.environ.get(BEDROCK_EMBEDDING_MODEL_ID_ENV)
+    if override:
+        return override
+    return BEDROCK_EMBEDDING_MODELS[alias]

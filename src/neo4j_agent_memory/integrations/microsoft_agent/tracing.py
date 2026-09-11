@@ -37,8 +37,8 @@ try:
         that can be retrieved for similar future tasks.
 
         .. note::
-            Microsoft Agent Framework API - may change before GA.
-            Currently targets v1.0.0b260212.
+            Targets the Microsoft Agent Framework 1.x GA line
+            (``agent-framework-core>=1.13,<2``).
 
         Args:
             memory: The Neo4jMicrosoftMemory instance.

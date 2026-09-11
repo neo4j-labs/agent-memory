@@ -1,4 +1,4 @@
-"""Microsoft Agent Framework BaseHistoryProvider implementation.
+"""Microsoft Agent Framework HistoryProvider implementation.
 
 Provides Neo4j-backed persistent chat history storage for
 Microsoft Agent Framework agents.
@@ -18,13 +18,13 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 try:
-    from agent_framework import BaseHistoryProvider, Message
+    from agent_framework import HistoryProvider, Message
 
-    class Neo4jChatMessageStore(BaseHistoryProvider):
+    class Neo4jChatMessageStore(HistoryProvider):
         """
         Neo4j-backed implementation of chat history storage.
 
-        Extends BaseHistoryProvider to integrate directly into the agent's
+        Extends HistoryProvider to integrate directly into the agent's
         context provider pipeline. The agent automatically loads history
         before invocation and saves after via before_run/after_run.
 
@@ -103,15 +103,23 @@ try:
             """Get the underlying memory client."""
             return self._client
 
-        async def get_messages(self, session_id: str | None = None, **kwargs: Any) -> list[Message]:
+        async def get_messages(
+            self,
+            session_id: str | None = None,
+            *,
+            state: dict[str, Any] | None = None,
+            **kwargs: Any,
+        ) -> list[Message]:
             """
             Retrieve messages from Neo4j in chronological order.
 
-            Called by BaseHistoryProvider.before_run() to load conversation
+            Called by HistoryProvider.before_run() to load conversation
             history before agent invocation.
 
             Args:
                 session_id: Session ID (uses self._session_id if None).
+                state: Provider-scoped session state supplied by the framework.
+                    Unused — history lives in Neo4j, not in session state.
                 **kwargs: Additional arguments.
 
             Returns:
@@ -136,17 +144,21 @@ try:
             self,
             session_id: str | None,
             messages: Sequence[Message],
+            *,
+            state: dict[str, Any] | None = None,
             **kwargs: Any,
         ) -> None:
             """
             Save messages to Neo4j storage.
 
-            Called by BaseHistoryProvider.after_run() to persist messages
+            Called by HistoryProvider.after_run() to persist messages
             after agent invocation.
 
             Args:
                 session_id: Session ID (uses self._session_id if None).
                 messages: Sequence of Message objects to store.
+                state: Provider-scoped session state supplied by the framework.
+                    Unused — history lives in Neo4j, not in session state.
                 **kwargs: Additional arguments.
             """
             if not messages:

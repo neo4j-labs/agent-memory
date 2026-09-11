@@ -279,7 +279,7 @@ def test_from_provider_vertex_ai_embedding_hint_suggests_vertex_extra(monkeypatc
 
     monkeypatch.setattr(factory, "_has", lambda _extra: False)
     with pytest.raises(ImportError) as excinfo:
-        from_provider("vertex_ai/text-embedding-004", kind="embedding")
+        from_provider("vertex_ai/gemini-embedding-001", kind="embedding")
     msg = str(excinfo.value)
     assert "vertex-ai" in msg
 

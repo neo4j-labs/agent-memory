@@ -31,14 +31,20 @@ class ExactMatchResolver(BaseResolver):
         *,
         existing_entities: list[str] | None = None,
     ) -> ResolvedEntity:
-        """Resolve entity using exact matching."""
+        """Resolve entity using exact matching.
+
+        ``match_type`` is ``"exact"`` only when a candidate actually matched;
+        the two non-matching paths report ``"none"`` (the same sentinel
+        :class:`~neo4j_agent_memory.resolution.composite.CompositeResolver`
+        uses), so callers can read the field instead of re-comparing names.
+        """
         if not existing_entities:
             return ResolvedEntity(
                 original_name=entity_name,
                 canonical_name=entity_name,
                 entity_type=entity_type,
                 confidence=1.0,
-                match_type="exact",
+                match_type="none",
             )
 
         normalized = self._normalize(entity_name) if not self._case_sensitive else entity_name
@@ -63,7 +69,7 @@ class ExactMatchResolver(BaseResolver):
             canonical_name=entity_name,
             entity_type=entity_type,
             confidence=1.0,
-            match_type="exact",
+            match_type="none",
         )
 
     async def find_matches(

@@ -23,7 +23,7 @@ class TestResourceRegistration:
         async with Client(server) as client:
             templates = await client.list_resource_templates()
             assert len(templates) == 1
-            assert templates[0].uriTemplate == "memory://context/{session_id}"
+            assert templates[0].uri_template == "memory://context/{session_id}"
 
     @pytest.mark.asyncio
     async def test_extended_profile_resource_templates(self):
@@ -60,7 +60,7 @@ class TestResourceRegistration:
             templates = await client.list_resource_templates()
             for template in templates:
                 assert template.description, (
-                    f"Resource template {template.uriTemplate} has no description"
+                    f"Resource template {template.uri_template} has no description"
                 )
             resources = await client.list_resources()
             for resource in resources:

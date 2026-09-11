@@ -2,41 +2,115 @@
 :toc: left
 :source-highlighter: rouge
 
-The `@neo4j-labs/agent-memory/mcp` subpath ships the 12 standard
-neo4j-agent-memory tool definitions plus a dispatcher. Use it to register
-the same tool surface on your own MCP server, or to programmatically
-invoke tools against a `MemoryClient`.
+The `@neo4j-labs/agent-memory/mcp` subpath ships 12 neo4j-agent-memory tool
+definitions plus a dispatcher, and `@neo4j-labs/agent-memory/mcp/register`
+registers them on a high-level `McpServer` in one call. Use either to stand up
+your own MCP server, or to invoke tools programmatically against a
+`MemoryClient`.
 
 A runnable example lives at
-link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/mcp[`clients/typescript/examples/mcp`].
+link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/mcp[`typescript/examples/mcp`].
 
 == When to self-host MCP
 
-Most users don't need to. The hosted service already exposes the same 12
-tools at `https://memory.neo4jlabs.com/mcp`. Reach for self-hosting when
-you want to add a logging layer, filter or rewrite tool calls, or run an
-MCP server inside a corporate boundary.
+Most users don't need to. The hosted NAMS MCP server at
+`mcp.memory.neo4jlabs.com` exposes a much larger, scope-gated surface
+(ontology, Skills, administration) and supports OAuth — see
+xref:reference/nams-mcp.adoc[Reference: the hosted NAMS MCP server].
+
+What this subpath gives you is the 12-tool subset that maps one-to-one onto this
+client's methods, which is what you want when you need to wrap, log or filter
+tool calls, expose a restricted surface, or run an MCP server inside a boundary
+that cannot reach the hosted server.
 
 == The 12 tools
 
 [options="header"]
 |===
-| Tool | Wraps
-| `memory_create_conversation` | `shortTerm.createConversation`
-| `memory_add_messages` | `shortTerm.addMessage` (bulk-aware)
-| `memory_get_context` | `shortTerm.getContext`
-| `memory_search_messages` | `shortTerm.searchMessages`
-| `memory_search_entities` | `longTerm.searchEntities`
-| `memory_get_entity` | `longTerm.getEntity`
-| `memory_add_entity` | `longTerm.addEntity`
-| `memory_get_entity_history` | `longTerm.getEntityHistory`
-| `memory_record_step` | `reasoning.recordStep`
-| `memory_record_tool_call` | `reasoning.recordToolCall`
-| `memory_get_trace` | `reasoning.getTraceByConversation`
-| `memory_explain_decision` | `reasoning.explainStep`
+| Tool | Wraps | Annotations
+| `memory_create_conversation` | `shortTerm.createConversation` | write
+| `memory_add_messages` | `shortTerm.addMessage` (bulk-aware) | write
+| `memory_get_context` | `shortTerm.getContext` | read-only, idempotent
+| `memory_search_messages` | `shortTerm.searchMessages` | read-only, idempotent
+| `memory_search_entities` | `longTerm.searchEntities` | read-only, idempotent
+| `memory_get_entity` | `longTerm.getEntity` | read-only, idempotent
+| `memory_add_entity` | `longTerm.addEntity` | write
+| `memory_get_entity_history` | `longTerm.getEntityHistory` | read-only, idempotent
+| `memory_record_step` | `reasoning.recordStep` | write
+| `memory_record_tool_call` | `reasoning.recordToolCall` | write
+| `memory_get_trace` | `reasoning.getTraceByConversation` | read-only, idempotent
+| `memory_explain_decision` | `reasoning.explainStep` | read-only, idempotent
 |===
 
-== Registering with an MCP server
+No memory tool is marked destructive. The read/write split is exported as
+`READ_ONLY_MEMORY_TOOLS` and `memoryToolAnnotations(name)` so a server can apply
+the same policy to tools it adds.
+
+== Registering on an `McpServer` (recommended)
+
+`McpServer.registerTool` validates arguments, which means its `inputSchema` must
+be a Zod shape rather than the JSON Schema the low-level API takes.
+`registerMemoryTools` carries that Zod half and does the registration:
+
+[source,typescript]
+----
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { MemoryClient, VERSION } from "@neo4j-labs/agent-memory";
+import { registerMemoryTools } from "@neo4j-labs/agent-memory/mcp/register";
+
+const memory = new MemoryClient();
+const server = new McpServer({ name: "my-memory-server", version: VERSION });
+
+registerMemoryTools(server, memory, {
+  // optional: expose a subset
+  only: process.env.MCP_TOOLS?.split(","),
+  // optional: one audit line per call — tool name and argument *keys* only
+  onCall: ({ tool, argKeys, durationMs, ok }) =>
+    console.error(`[mcp] ${tool} keys=${argKeys.join(",")} ${durationMs}ms ok=${ok}`),
+});
+
+await server.connect(new StdioServerTransport());
+----
+
+Keep diagnostics on `stderr`: with the stdio transport, `stdout` is the
+protocol channel.
+
+A dispatch failure comes back as a tool result with `isError: true` and the
+message as text — the MCP convention — rather than as a thrown protocol error,
+so the model can see what went wrong. Malformed arguments are rejected by the
+server's own schema validation before the dispatcher runs.
+
+Tool results are one JSON `text` block. No `outputSchema` is declared: several
+tools resolve to arrays, which `structuredContent` cannot carry without
+re-shaping the payload.
+
+== Streamable HTTP
+
+The same registration works over HTTP — only the transport changes:
+
+[source,typescript]
+----
+import { StreamableHTTPServerTransport }
+  from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+
+const transport = new StreamableHTTPServerTransport({
+  sessionIdGenerator: () => crypto.randomUUID(),
+});
+await server.connect(transport);
+
+// In your HTTP handler, forward POST / GET / DELETE on the MCP route:
+//   await transport.handleRequest(req, res, body);
+----
+
+Use Streamable HTTP when the client is not co-located with the server (a
+container, a sidecar, a network boundary). Put authentication in front of the
+route — the transport does not authenticate callers for you.
+
+== Registering with the low-level `Server`
+
+If you already use the low-level API, `createMemoryTools()` emits JSON Schema
+plus annotations directly:
 
 [source,typescript]
 ----
@@ -53,17 +127,27 @@ const server = new Server({ name: "...", version: "..." }, { capabilities: { too
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: tools.map((t) => ({
-    name: t.name, description: t.description, inputSchema: t.inputSchema,
+    name: t.name,
+    description: t.description,
+    inputSchema: t.inputSchema,
+    annotations: t.annotations,
   })),
 }));
 
 server.setRequestHandler(CallToolRequestSchema, async (req) => {
-  const result = await handleMemoryToolCall(
-    memory, req.params.name, (req.params.arguments ?? {}) as Record<string, unknown>,
-  );
-  return { content: [{ type: "text", text: JSON.stringify(result) }] };
+  try {
+    const result = await handleMemoryToolCall(
+      memory, req.params.name, (req.params.arguments ?? {}) as Record<string, unknown>,
+    );
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+  } catch (e) {
+    return { isError: true, content: [{ type: "text", text: String(e) }] };
+  }
 });
 ----
+
+This path does not validate arguments — the dispatcher casts them — so prefer
+`registerMemoryTools` for anything a model drives.
 
 == Programmatic dispatch
 
@@ -83,6 +167,15 @@ Argument keys use snake_case (matching the JSON schema published by
 
 == Deprecated tool names
 
-A few `memory.<verb>` aliases from earlier drafts are still accepted and
-forward to the new names with a warning. Migrate to the
-`memory_<noun>_<verb>` form when you can.
+Five `memory.<verb>` aliases from v0.1 are still accepted and forward to the new
+names with a warning: `memory.addMessage`, `memory.getConversation`,
+`memory.searchMessages`, `memory.addEntity`, `memory.searchEntities`. They are
+scheduled for removal in 1.0 — migrate to the `memory_<noun>_<verb>` form.
+
+== Compatibility
+
+Verified against `@neo4j-labs/agent-memory` 0.5.0-dev,
+`@modelcontextprotocol/sdk` 1.30, `zod` 4.6, Node.js 22 — 2026-09.
+`@modelcontextprotocol/sdk` and `zod` are optional peer dependencies; they are
+required only by the `./mcp/register` subpath (the MCP SDK already depends on
+`zod`).

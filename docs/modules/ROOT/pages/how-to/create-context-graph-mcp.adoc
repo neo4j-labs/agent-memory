@@ -44,13 +44,29 @@ Add a convenient target to your project's `Makefile`:
 [source,makefile]
 ----
 .PHONY: mcp-server
-mcp-server:  ## Start MCP server for Claude Desktop
+mcp-server:  ## Start MCP server for Claude Desktop (stdio)
 	neo4j-agent-memory mcp serve \
 		--uri $(NEO4J_URI) \
 		--user $(NEO4J_USER) \
 		--password $(NEO4J_PASSWORD) \
 		--profile extended
+
+.PHONY: mcp-server-http
+mcp-server-http:  ## Start MCP server over Streamable HTTP on :8080 (/mcp/)
+	neo4j-agent-memory mcp serve \
+		--uri $(NEO4J_URI) \
+		--user $(NEO4J_USER) \
+		--password $(NEO4J_PASSWORD) \
+		--profile extended \
+		--transport http --host 0.0.0.0 --port 8080
 ----
+
+The `stdio` target is what Claude Desktop launches. The HTTP target is for the
+case where the scaffolded web app and an MCP host need to share one running
+server -- it serves Streamable HTTP at http://localhost:8080/mcp/. The
+`[mcp]` extra installs FastMCP 4, which dropped the legacy HTTP+SSE transport in
+favour of Streamable HTTP; see
+xref:../reference/mcp-tools.adoc#_transports[Transports].
 
 == Step 3: Generate Claude Desktop Configuration
 

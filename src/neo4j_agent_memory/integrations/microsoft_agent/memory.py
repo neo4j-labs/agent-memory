@@ -1,6 +1,6 @@
 """Microsoft Agent Framework unified memory interface.
 
-Provides a convenience class that combines BaseContextProvider and BaseHistoryProvider
+Provides a convenience class that combines ContextProvider and HistoryProvider
 for easy integration with Microsoft Agent Framework agents.
 """
 
@@ -31,7 +31,7 @@ try:
         """
         Unified memory interface for Microsoft Agent Framework.
 
-        Combines BaseContextProvider and BaseHistoryProvider functionality into
+        Combines ContextProvider and HistoryProvider functionality into
         a single convenient interface. Provides direct access to all three
         memory types (short-term, long-term, reasoning) and GDS algorithms.
 

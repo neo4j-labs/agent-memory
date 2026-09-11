@@ -6,7 +6,15 @@ This guide explains how to use Neo4j Agent Memory with Microsoft Agent Framework
 
 [NOTE]
 ====
-This integration targets Microsoft Agent Framework v1.0.0b260212. The framework has reached GA; check the https://github.com/microsoft/agent-framework[Microsoft Agent Framework releases] for the latest version and any API changes.
+This integration targets the Microsoft Agent Framework 1.x GA line (`>=1.13,<2`), verified against 1.18.0. Check the https://github.com/microsoft/agent-framework[Microsoft Agent Framework releases] for the latest version.
+
+Upgrading from the `1.0.0b260212` public preview? The GA line renamed the two provider base classes (`BaseContextProvider` -> `ContextProvider`, `BaseHistoryProvider` -> `HistoryProvider`), so the preview pin no longer imports. The library handles the rename internally; your own code only needs the dependency bump. The `before_run` / `after_run` hook signatures are unchanged.
+====
+
+[TIP]
+====
+A runnable full-stack example lives in the repository at
+https://github.com/neo4j-labs/agent-memory/tree/main/examples/microsoft_agent_retail_assistant[examples/microsoft_agent_retail_assistant] — a FastAPI retail shopping assistant using `Neo4jMicrosoftMemory`, `create_memory_tools` and the GDS recommendation path over a Neo4j product graph.
 ====
 
 == Overview
@@ -34,8 +42,17 @@ pip install neo4j-agent-memory[microsoft-agent]
 
 This installs:
 
-* `agent-framework>=1.0.0b` - Microsoft Agent Framework
+* `agent-framework-core>=1.13,<2` — the distribution that ships the `agent_framework` package this integration imports
 * Required Neo4j dependencies
+
+Add the chat client you intend to use — the extra deliberately does not pull every provider:
+
+[source,bash]
+----
+pip install agent-framework-azure-ai   # Azure OpenAI clients
+pip install agent-framework-openai     # OpenAI clients
+pip install agent-framework            # everything (the meta-package)
+----
 
 == Pass-through your Agent Framework client
 
@@ -43,6 +60,8 @@ The Microsoft Agent Framework wraps Azure OpenAI and OpenAI clients. `llm_provid
 
 [source,python]
 ----
+import os
+
 from agent_framework.azure import AzureOpenAIResponsesClient
 
 from neo4j_agent_memory import MemoryClient, MemorySettings
@@ -51,7 +70,7 @@ from neo4j_agent_memory.integrations.microsoft_agent import (
 )
 
 chat_client = AzureOpenAIResponsesClient(
-    deployment_name="gpt-4o-mini-prod",
+    deployment_name=os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5-mini"),
     api_key="...",
 )
 
@@ -72,9 +91,12 @@ The `Neo4jContextProvider` automatically injects relevant memory context before 
 
 [source,python]
 ----
+import os
+
+from agent_framework.azure import AzureOpenAIResponsesClient
+
 from neo4j_agent_memory import MemoryClient, MemorySettings
 from neo4j_agent_memory.integrations.microsoft_agent import Neo4jContextProvider
-from agent_framework.azure import AzureOpenAIResponsesClient
 
 settings = MemorySettings(
     neo4j={"uri": "bolt://localhost:7687", "username": "neo4j", "password": "password"},
@@ -92,7 +114,7 @@ async with MemoryClient(settings) as client:
     )
 
     # Create agent with memory
-    chat_client = AzureOpenAIResponsesClient(model="gpt-4")
+    chat_client = AzureOpenAIResponsesClient(model=os.getenv("OPENAI_MODEL", "gpt-5-mini"))
     agent = chat_client.as_agent(
         name="assistant",
         instructions="You are a helpful assistant.",
@@ -390,6 +412,8 @@ Here's a complete shopping assistant example. With callable `FunctionTool` insta
 [source,python]
 ----
 import asyncio
+import os
+
 from agent_framework import Message
 from agent_framework.azure import AzureOpenAIResponsesClient
 
@@ -425,7 +449,7 @@ async def main():
         )
 
         # Create chat client
-        chat_client = AzureOpenAIResponsesClient(model="gpt-4")
+        chat_client = AzureOpenAIResponsesClient(model=os.getenv("OPENAI_MODEL", "gpt-5-mini"))
 
         # Create memory tools bound to the memory instance
         tools = create_memory_tools(memory, include_gds_tools=True)
@@ -480,10 +504,10 @@ if __name__ == "__main__":
 
 This integration targets:
 
-* **Package**: `agent-framework`
-* **Version**: `1.0.0b260212`
-* **Status**: Public Preview
-* **GA Target**: Q1 2026
+* **Package**: `agent-framework-core` (pulled by the `[microsoft-agent]` extra; also installed by the `agent-framework` meta-package)
+* **Version range**: `>=1.13,<2`
+* **Verified against**: 1.18.0
+* **Status**: GA
 
 === Version Matrix
 
@@ -491,9 +515,13 @@ This integration targets:
 |===
 | neo4j-agent-memory | agent-framework | Status
 
-| 0.1.x
-| 1.0.0b260212
+| 0.6.x
+| >=1.13,<2 (GA)
 | Current
+
+| 0.1.x - 0.5.x
+| 1.0.0b260212 (preview)
+| Superseded — does not import on the GA line
 |===
 
 === APIs Used
@@ -502,17 +530,23 @@ This integration targets:
 |===
 | API | Import Path
 
-| `BaseContextProvider`
-| `agent_framework.BaseContextProvider`
+| `ContextProvider`
+| `agent_framework.ContextProvider`
 
-| `BaseHistoryProvider`
-| `agent_framework.BaseHistoryProvider`
+| `HistoryProvider`
+| `agent_framework.HistoryProvider`
+
+| `SessionContext`, `AgentSession`, `SupportsAgentRun`
+| `agent_framework`
 
 | `Message`
 | `agent_framework.Message`
 
+| `FunctionTool`, `tool`
+| `agent_framework`
+
 | `AzureOpenAIResponsesClient`
-| `agent_framework.azure.AzureOpenAIResponsesClient`
+| `agent_framework.azure.AzureOpenAIResponsesClient` (separate distribution)
 |===
 
 === Breaking Change Detection
@@ -533,7 +567,18 @@ Install the Microsoft Agent Framework package:
 ----
 pip install neo4j-agent-memory[microsoft-agent]
 # or
-pip install agent-framework>=1.0.0b
+pip install "agent-framework-core>=1.13,<2"
+----
+
+=== ImportError: cannot import name 'BaseContextProvider'
+
+You are on an older `neo4j-agent-memory` (0.5.x or earlier) together with a GA
+`agent-framework`. The GA line renamed that class to `ContextProvider`.
+Upgrade the library:
+
+[source,bash]
+----
+pip install -U "neo4j-agent-memory[microsoft-agent]"
 ----
 
 === GDS Not Available Warning

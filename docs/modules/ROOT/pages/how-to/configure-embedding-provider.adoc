@@ -131,12 +131,22 @@ from neo4j_agent_memory.llm.adapters.vertex_ai import VertexAIEmbeddingProvider
 settings = MemorySettings(
     neo4j={"password": "p"},
     embedding=VertexAIEmbeddingProvider(
-        "vertex_ai/text-embedding-004",
+        "vertex_ai/gemini-embedding-001",
         project_id="my-gcp-project",
         location="us-central1",
+        dimensions=768,
     ),
 )
 ----
+
+`gemini-embedding-001` is the current Vertex AI embedding model; `text-embedding-004`
+and the `textembedding-gecko*` family were retired by Google and now raise an error
+naming the replacement.
+The underlying `VertexAIEmbedder` truncates to 768 dimensions by default (the model
+emits 3072 natively) so that vector indexes created against the previous default keep
+working -- pass `dimensions=` here to match whatever you configure there. See
+xref:how-to/integrations/google-cloud.adoc#vertex-ai-embedding-models[the Vertex AI
+model table] for the trade-off.
 
 Vertex AI as a *chat* provider routes through LiteLLM (no native LLM adapter). Embeddings are native because the existing Vertex AI embedder predates the Protocol and is well-tested.
 

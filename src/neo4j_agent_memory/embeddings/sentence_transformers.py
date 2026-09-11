@@ -23,6 +23,23 @@ MODEL_DIMENSIONS = {
 }
 
 
+def _embedding_dimension(model: object) -> int | None:
+    """Read a loaded model's embedding width across sentence-transformers majors.
+
+    sentence-transformers 6.0 renamed ``get_sentence_embedding_dimension()`` to
+    ``get_embedding_dimension()``; the old name still works but is deprecated and
+    will go away. The declared floor is 3.0, so both names have to be tolerated —
+    and neither may be referenced statically, or the deprecated-attribute
+    diagnostic fires on whichever name is older than the installed version.
+    """
+    for attribute in ("get_embedding_dimension", "get_sentence_embedding_dimension"):
+        getter = getattr(model, attribute, None)
+        if callable(getter):
+            dimension = getter()
+            return int(dimension) if dimension is not None else None
+    return None
+
+
 class SentenceTransformerEmbedder(BaseEmbedder):
     """Local sentence-transformers embedding provider."""
 
@@ -55,8 +72,7 @@ class SentenceTransformerEmbedder(BaseEmbedder):
                     "Install with: pip install neo4j-agent-memory[sentence-transformers]"
                 )
             self._model = SentenceTransformer(self._model_name, device=self._device)
-            # Get actual dimensions from model
-            self._dimensions = self._model.get_sentence_embedding_dimension()
+            self._dimensions = _embedding_dimension(self._model)
         return self._model
 
     @property

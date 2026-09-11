@@ -1,8 +1,23 @@
-"""Pydantic AI integration for neo4j-agent-memory."""
+"""Pydantic AI integration for neo4j-agent-memory.
+
+Targets PydanticAI 2.x (``pydantic-ai-slim>=2.0,<3``, installed by the
+``[pydantic-ai]`` extra). The 2.x shapes used here:
+
+* ``AgentRunResult.output`` — ``.data`` was removed.
+* ``AgentRunResult.usage`` / ``.response`` — properties, not methods.
+* Plain ``async def`` tools (no leading ``RunContext``) are still valid
+  ``Agent(tools=...)`` members, so :func:`create_memory_tools` returns
+  plain callables; wrap them in a
+  :class:`pydantic_ai.toolsets.FunctionToolset` when you want to pass
+  them via ``toolsets=``.
+* ``@agent.instructions`` is the preferred dynamic-prompt hook.
+"""
 
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar
+
+from neo4j_agent_memory.schema.models import TraceOutcome
 
 if TYPE_CHECKING:
     from pydantic_ai.agent import AgentRunResult
@@ -22,24 +37,29 @@ class MemoryDependency:
     memory capabilities.
 
     Example:
-        from pydantic_ai import Agent
+        import os
+
+        from pydantic_ai import Agent, RunContext
+        from pydantic_ai.models.openai import OpenAIChatModel
+
         from neo4j_agent_memory import MemoryClient, MemorySettings
         from neo4j_agent_memory.integrations.pydantic_ai import MemoryDependency
 
-        agent = Agent(
-            'openai:gpt-4o',
-            deps_type=MemoryDependency,
-            system_prompt=dynamic_system_prompt,
-        )
+        model = OpenAIChatModel(os.getenv("OPENAI_MODEL", "gpt-5-mini"))
+        agent = Agent(model, deps_type=MemoryDependency)
 
-        async def dynamic_system_prompt(ctx: RunContext[MemoryDependency]) -> str:
-            memory = ctx.deps
-            context = await memory.get_context(ctx.messages[-1].content)
+        # ``instructions`` is the PydanticAI 2.x dynamic-prompt hook;
+        # ``ctx.prompt`` is the user message for this run.
+        @agent.instructions
+        async def memory_context(ctx: RunContext[MemoryDependency]) -> str:
+            context = await ctx.deps.get_context(str(ctx.prompt))
             return f"You are a helpful assistant.\\n\\nContext:\\n{context}"
 
         async with MemoryClient(settings) as client:
             deps = MemoryDependency(client=client, session_id="user-123")
             result = await agent.run("Find me a restaurant", deps=deps)
+            print(result.output)
+            await deps.save_interaction("Find me a restaurant", str(result.output))
     """
 
     client: "MemoryClient"
@@ -137,13 +157,27 @@ def create_memory_tools(memory: "MemoryClient") -> list[Callable[..., Any]]:
     - save_preference: Save a user preference
     - recall_preferences: Get user preferences for a topic
 
+    The tools are plain ``async def`` functions without a leading
+    ``RunContext`` parameter — PydanticAI 2.x accepts those directly in
+    ``Agent(tools=...)``. Pass them as a toolset instead when you want
+    one named, reusable bundle.
+
     Example:
         from pydantic_ai import Agent
+        from pydantic_ai.models.openai import OpenAIChatModel
+        from pydantic_ai.toolsets import FunctionToolset
+
         from neo4j_agent_memory.integrations.pydantic_ai import create_memory_tools
 
         async with MemoryClient(settings) as client:
             tools = create_memory_tools(client)
-            agent = Agent('openai:gpt-4o', tools=tools)
+
+            # Either register them directly ...
+            agent = Agent(OpenAIChatModel("gpt-5-mini"), tools=tools)
+
+            # ... or bundle them as a 2.x toolset.
+            memory_toolset = FunctionToolset(tools, id="memory")
+            agent = Agent(OpenAIChatModel("gpt-5-mini"), toolsets=[memory_toolset])
     """
 
     async def search_memory(
@@ -237,16 +271,18 @@ async def record_agent_trace(
     generate_embeddings: bool = False,
 ) -> "ReasoningTrace":
     """
-    Record a reasoning trace from a PydanticAI RunResult.
+    Record a reasoning trace from a PydanticAI ``AgentRunResult``.
 
     This function extracts tool calls and their results from a completed
     PydanticAI agent run and records them as a reasoning trace in reasoning
-    memory.
+    memory. The trace is completed with a :class:`TraceOutcome` whose
+    metrics carry the run's token usage (``AgentRunResult.usage`` is a
+    property in PydanticAI 2.x).
 
     Args:
         reasoning_memory: The reasoning memory instance to record to
         session_id: Session ID for the trace
-        result: The RunResult from a PydanticAI agent run
+        result: The ``AgentRunResult`` from a PydanticAI agent run
         task: Optional task description (defaults to extracting from messages)
         include_tool_calls: Whether to record individual tool calls
         generate_embeddings: Whether to generate embeddings for steps
@@ -256,9 +292,11 @@ async def record_agent_trace(
 
     Example:
         from pydantic_ai import Agent
+        from pydantic_ai.models.openai import OpenAIChatModel
+
         from neo4j_agent_memory.integrations.pydantic_ai import record_agent_trace
 
-        agent = Agent('openai:gpt-4o')
+        agent = Agent(OpenAIChatModel("gpt-5-mini"))
         result = await agent.run("Find restaurants near me")
 
         # Record the trace
@@ -301,7 +339,7 @@ async def record_agent_trace(
         task=task,
         metadata={
             "source": "pydantic_ai",
-            "model": getattr(result, "model", None),
+            "model": _run_model_name(result),
         },
     )
 
@@ -362,16 +400,47 @@ async def record_agent_trace(
                 error=str(tool_result) if is_error else None,
             )
 
-    # Complete the trace with the final output
-    final_output = str(result.data) if hasattr(result, "data") else None
+    # Complete the trace with the final output. PydanticAI 2.x exposes the
+    # run output as ``result.output`` (``.data`` was removed in 1.0) and the
+    # run usage as a property.
+    output = getattr(result, "output", None)
+    final_output = str(output) if output is not None else None
     completed_trace = await reasoning_memory.complete_trace(
         trace.id,
-        outcome=final_output[:1000] if final_output else "Completed",
-        success=True,
+        outcome=TraceOutcome(
+            success=True,
+            summary=final_output[:1000] if final_output else "Completed",
+            metrics=_usage_metrics(result),
+        ),
         generate_step_embeddings=generate_embeddings,
     )
 
     return completed_trace
+
+
+def _run_model_name(result: Any) -> str | None:
+    """Model name for a finished run.
+
+    ``AgentRunResult.response`` (PydanticAI 2.x) is the final
+    ``ModelResponse``; it raises when the history holds no response.
+    """
+    try:
+        return str(result.response.model_name)
+    except Exception:
+        return None
+
+
+def _usage_metrics(result: Any) -> dict[str, float]:
+    """Token/request counters from ``AgentRunResult.usage`` (a 2.x property)."""
+    usage = getattr(result, "usage", None)
+    if usage is None:
+        return {}
+    metrics: dict[str, float] = {}
+    for field in ("input_tokens", "output_tokens", "requests", "tool_calls"):
+        value = getattr(usage, field, None)
+        if isinstance(value, (int, float)):
+            metrics[field] = float(value)
+    return metrics
 
 
 def _format_tool_result(result: Any) -> str:
@@ -431,12 +500,17 @@ def nams_memory_tools(memory: "MemoryClient") -> list[Callable[..., Any]]:
     Example::
 
         from pydantic_ai import Agent
+        from pydantic_ai.models.openai import OpenAIChatModel
+
         from neo4j_agent_memory.integrations.pydantic_ai import (
             nams_memory_tools,
         )
 
         async with MemoryClient(MemorySettings(backend="nams", ...)) as c:
-            agent = Agent("openai:gpt-4o", tools=nams_memory_tools(c))
+            agent = Agent(
+                OpenAIChatModel("gpt-5-mini"),
+                tools=nams_memory_tools(c),
+            )
 
     Returns the base tools followed by the four Platinum tools.
     """

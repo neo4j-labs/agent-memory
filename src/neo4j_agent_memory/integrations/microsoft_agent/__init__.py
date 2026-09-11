@@ -4,6 +4,12 @@ This module provides memory integration for Microsoft's Agent Framework,
 enabling persistent conversation history, entity knowledge, graph-enhanced
 context retrieval, and reasoning trace recording.
 
+Requires the Microsoft Agent Framework 1.x GA line. Install the adapter's
+dependency with ``pip install neo4j-agent-memory[microsoft-agent]`` (which
+pulls ``agent-framework-core``) plus whichever chat client you use — e.g.
+``agent-framework-openai``, ``agent-framework-azure-ai``, or the
+``agent-framework`` meta-package.
+
 Example:
     from neo4j_agent_memory import MemoryClient, MemorySettings
     from neo4j_agent_memory.integrations.microsoft_agent import (
@@ -52,9 +58,15 @@ from neo4j_agent_memory.integrations._passthrough import (
 if TYPE_CHECKING:
     from neo4j_agent_memory.llm import LLMProvider
 
-# Target API version - document for compatibility tracking
-MICROSOFT_AGENT_FRAMEWORK_VERSION = "1.0.0b260212"
-MICROSOFT_AGENT_FRAMEWORK_MIN_VERSION = "1.0.0b260212"
+# Target API version - document for compatibility tracking.
+#
+# The 1.x GA line renamed the two provider base classes this adapter extends
+# (`BaseContextProvider` -> `ContextProvider`, `BaseHistoryProvider` ->
+# `HistoryProvider`); the keyword-only `before_run` / `after_run` signatures are
+# unchanged from the 1.0.0b2 preview. 1.13 is the floor because it is the first
+# GA release carrying the renamed names that we pin against in `pyproject.toml`.
+MICROSOFT_AGENT_FRAMEWORK_VERSION = "1.18.0"
+MICROSOFT_AGENT_FRAMEWORK_MIN_VERSION = "1.13.0"
 
 
 def llm_provider_from_microsoft_agent(model: Any) -> LLMProvider:
@@ -102,7 +114,8 @@ except ImportError as e:
     import warnings
 
     warnings.warn(
-        f"Microsoft Agent Framework integration requires the 'agent-framework' package. "
+        f"Microsoft Agent Framework integration requires the 'agent-framework-core' "
+        f"package at version {MICROSOFT_AGENT_FRAMEWORK_MIN_VERSION} or newer. "
         f"Install with: pip install neo4j-agent-memory[microsoft-agent] "
         f"(Import error: {e})",
         ImportWarning,

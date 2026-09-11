@@ -1,4 +1,28 @@
-"""LangChain integration for neo4j-agent-memory."""
+"""LangChain 1.x integration for neo4j-agent-memory.
+
+Three adapters, each implementing a contract that exists in the installed
+LangChain, plus a pass-through helper:
+
+``Neo4jAgentMemory``
+    ``langchain_core.chat_history.BaseChatMessageHistory`` — drop it into
+    ``RunnableWithMessageHistory`` (or call its context-assembly methods
+    directly). Needs ``langchain-core``: ``pip install
+    neo4j-agent-memory[langchain]``.
+``Neo4jMemoryRetriever``
+    ``langchain_core.retrievers.BaseRetriever`` over all three memory layers.
+    Needs ``langchain-core``.
+``Neo4jMemoryMiddleware``
+    ``langchain.agents.middleware.AgentMiddleware`` for
+    :func:`langchain.agents.create_agent`. Needs the ``langchain``
+    distribution: ``pip install neo4j-agent-memory[langchain-agents]``.
+``llm_provider_from_langchain``
+    Reuse an already-configured LangChain chat model for memory's own LLM work.
+    No LangChain import required.
+
+Nothing here targets ``langchain_core.memory.BaseMemory`` or
+``langchain.chains.ConversationChain``: langchain-core 1.x dropped the former
+and moved the latter to ``langchain-classic``.
+"""
 
 from __future__ import annotations
 
@@ -7,10 +31,14 @@ from typing import TYPE_CHECKING, Any
 from neo4j_agent_memory.integrations._passthrough import (
     llm_provider_from_framework_model as _passthrough,
 )
-from neo4j_agent_memory.integrations.langchain.memory import Neo4jAgentMemory
 
 if TYPE_CHECKING:
     from neo4j_agent_memory.llm import LLMProvider
+
+#: Minimum langchain-core the adapters are written against (1.x ABCs).
+LANGCHAIN_CORE_MIN_VERSION = "1.0"
+#: Minimum `langchain` distribution for `Neo4jMemoryMiddleware`.
+LANGCHAIN_MIN_VERSION = "1.0"
 
 
 def llm_provider_from_langchain(model: Any) -> LLMProvider:
@@ -18,12 +46,14 @@ def llm_provider_from_langchain(model: Any) -> LLMProvider:
 
     Lets users pass through their already-configured LangChain model::
 
-        from langchain_anthropic import ChatAnthropic
+        import os
+
+        from langchain_openai import ChatOpenAI
         from neo4j_agent_memory.integrations.langchain import (
             llm_provider_from_langchain,
         )
 
-        chat = ChatAnthropic(model_name="claude-3-5-sonnet-latest")
+        chat = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-5-mini"))
         provider = llm_provider_from_langchain(chat)
         # Wire provider into MemorySettings(llm=provider) or
         # MemoryClient(... llm_provider=provider)
@@ -37,17 +67,23 @@ def llm_provider_from_langchain(model: Any) -> LLMProvider:
     return _passthrough(model)
 
 
-try:
+__all__ = [
+    "LANGCHAIN_CORE_MIN_VERSION",
+    "LANGCHAIN_MIN_VERSION",
+    "llm_provider_from_langchain",
+]
+
+try:  # langchain-core: the chat-history and retriever adapters
+    from neo4j_agent_memory.integrations.langchain.memory import Neo4jAgentMemory
     from neo4j_agent_memory.integrations.langchain.retriever import Neo4jMemoryRetriever
 
-    __all__ = [
-        "Neo4jAgentMemory",
-        "Neo4jMemoryRetriever",
-        "llm_provider_from_langchain",
-    ]
-except ImportError:
-    # langchain_core not installed for retriever
-    __all__ = [
-        "Neo4jAgentMemory",
-        "llm_provider_from_langchain",
-    ]
+    __all__ += ["Neo4jAgentMemory", "Neo4jMemoryRetriever"]
+except ImportError:  # pragma: no cover - depends on the installed extras
+    pass
+
+try:  # `langchain` (create_agent + middleware): the agent middleware
+    from neo4j_agent_memory.integrations.langchain.middleware import Neo4jMemoryMiddleware
+
+    __all__ += ["Neo4jMemoryMiddleware"]
+except ImportError:  # pragma: no cover - depends on the installed extras
+    pass

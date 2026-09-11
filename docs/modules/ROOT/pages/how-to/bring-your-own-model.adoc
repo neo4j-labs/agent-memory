@@ -54,7 +54,7 @@ Embedding-only providers:
 | Provider                 | Example model string                  | Extra                     | Dimensions
 | OpenAI                   | `openai/text-embedding-3-small`       | `[openai]`                | 1536
 | OpenAI (large)           | `openai/text-embedding-3-large`       | `[openai]`                | 3072
-| Vertex AI                | `vertex_ai/text-embedding-004`        | `[vertex-ai]`             | 768
+| Vertex AI                | `vertex_ai/gemini-embedding-001`      | `[vertex-ai]`             | 768 (3072 native, truncated by default)
 | Bedrock Titan            | `bedrock/amazon.titan-embed-text-v2:0`| `[bedrock]`               | 1024
 | sentence-transformers    | `BAAI/bge-small-en-v1.5`              | `[sentence-transformers]` | 384
 | sentence-transformers    | `BAAI/bge-large-en-v1.5`              | `[sentence-transformers]` | 1024

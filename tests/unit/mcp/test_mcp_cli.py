@@ -61,8 +61,9 @@ class TestMCPServeOptions:
     def test_transport_choices(self, runner):
         result = runner.invoke(cli, ["mcp", "serve", "--help"])
         assert "stdio" in result.output
+        assert "streamable-http" in result.output
+        # Deprecated but still accepted so existing launch configs keep working.
         assert "sse" in result.output
-        assert "http" in result.output
 
     def test_session_strategy_choices(self, runner):
         result = runner.invoke(cli, ["mcp", "serve", "--help"])
@@ -113,5 +114,48 @@ class TestMCPServeExecution:
         result = runner.invoke(
             cli,
             ["mcp", "serve", "--password", "pw", "--session-strategy", "per_day"],
+        )
+        assert result.exit_code == 0
+
+
+class TestDeprecatedSSETransport:
+    """`--transport sse` is accepted but warns and serves Streamable HTTP."""
+
+    @patch("neo4j_agent_memory.cli.main.asyncio")
+    @patch("neo4j_agent_memory.mcp.server.run_server", new_callable=AsyncMock)
+    def test_sse_warns_on_stderr(self, mock_run_server, mock_asyncio, runner):
+        mock_asyncio.run = lambda _coro: None
+
+        result = runner.invoke(
+            cli,
+            ["mcp", "serve", "--password", "pw", "--transport", "sse"],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0
+        assert "deprecated" in result.output.lower()
+        assert "streamable http" in result.output.lower()
+
+    @patch("neo4j_agent_memory.cli.main.asyncio")
+    @patch("neo4j_agent_memory.mcp.server.run_server", new_callable=AsyncMock)
+    def test_http_does_not_warn(self, mock_run_server, mock_asyncio, runner):
+        mock_asyncio.run = lambda _coro: None
+
+        result = runner.invoke(
+            cli,
+            ["mcp", "serve", "--password", "pw", "--transport", "http"],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0
+        assert "deprecated" not in result.output.lower()
+
+    @patch("neo4j_agent_memory.cli.main.asyncio")
+    @patch("neo4j_agent_memory.mcp.server.run_server", new_callable=AsyncMock)
+    def test_streamable_http_is_accepted(self, mock_run_server, mock_asyncio, runner):
+        mock_asyncio.run = lambda _coro: None
+
+        result = runner.invoke(
+            cli,
+            ["mcp", "serve", "--password", "pw", "--transport", "streamable-http"],
+            catch_exceptions=False,
         )
         assert result.exit_code == 0

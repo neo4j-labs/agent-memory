@@ -2,28 +2,53 @@
 :toc: left
 :source-highlighter: rouge
 
-The TypeScript client ships a `LanguageModelV1`-shaped middleware that
-auto-injects context and persists messages around any Vercel AI SDK call.
-This page covers the wiring; a runnable example lives at
-link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/vercel-ai[`clients/typescript/examples/vercel-ai`].
+The TypeScript client ships a language-model middleware that auto-injects
+context and persists messages around any Vercel AI SDK call. It implements
+specification **v4** (`LanguageModelV4Middleware` from `@ai-sdk/provider` 4.x),
+which is the provider specification `ai` 7.x uses. This page covers the wiring;
+a runnable example lives at
+link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/vercel-ai[`typescript/examples/vercel-ai`].
+
+[NOTE]
+====
+`ai` 7 requires Node.js 22 or newer, and so does this client.
+====
+
+[TIP]
+====
+This page covers the low-level middleware. For a provider wrapper, ready-made
+memory tools and a Next.js route handler built on the same service, see
+link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/packages/vercel-ai-provider[`@neo4j-labs/nams-ai-provider`],
+which uses the same NAMS backend at a higher level of abstraction.
+====
 
 == What the middleware does
 
 For every model invocation:
 
 1. Fetches three-tier context for the conversation (reflections,
-   observations, recent messages) and prepends it to the prompt.
-2. Persists the user's input message before generation.
-3. Persists the assistant's response after generation.
+   observations, recent messages) and prepends it to the prompt —
+   reflections and observations as one `system` message, recent messages
+   replayed as `user`/`assistant` turns with `{ type: "text" }` parts.
+2. Persists the user's input message before generation. A multi-part user
+   message (text interleaved with files) is flattened to its text parts.
+3. Persists the assistant's response after generation — for `generateText`
+   via `wrapGenerate`, and for `streamText` via `wrapStream`, which
+   accumulates the text deltas and writes once the stream finishes.
 
 If three-tier context is unavailable (bridge transport, or a service
-error), the middleware falls back to flat conversation history.
+error), the middleware falls back to flat conversation history. Every
+persistence failure is non-fatal: the model call still returns.
+
+In a tool-calling loop `transformParams` runs once per step with the same user
+turn still last in the prompt; the middleware writes that turn once, not once
+per step.
 
 == Basic wiring
 
 [source,typescript]
 ----
-import { generateText, experimental_wrapLanguageModel as wrapModel } from "ai";
+import { generateText, wrapLanguageModel } from "ai";
 import { openai } from "@ai-sdk/openai";
 import { MemoryClient } from "@neo4j-labs/agent-memory";
 import { agentMemoryMiddleware } from "@neo4j-labs/agent-memory/middleware/vercel-ai";
@@ -31,14 +56,14 @@ import { agentMemoryMiddleware } from "@neo4j-labs/agent-memory/middleware/verce
 const memory = new MemoryClient();
 const conv = await memory.shortTerm.createConversation({ userId: "alice" });
 
-const model = wrapModel({
-  model: openai("gpt-4o-mini"),
+const model = wrapLanguageModel({
+  model: openai(process.env.OPENAI_MODEL ?? "gpt-5-mini"),
   middleware: agentMemoryMiddleware(memory, { conversationId: conv.id }),
 });
 
 const { text } = await generateText({
   model,
-  messages: [{ role: "user", content: "Hello!" }],
+  prompt: "Hello!",
 });
 ----
 
@@ -60,11 +85,57 @@ agentMemoryMiddleware(client, {
 when the id is derived from request state (e.g., from `req.user.id` in a
 Next.js route handler).
 
+== Resuming instead of always creating
+
+Memory is only visible across sessions if the next process reaches for the same
+conversation. Resolve the id before wiring the middleware — `createConversation`
+on every run gives every run an empty graph:
+
+[source,typescript]
+----
+const userId = process.env.DEMO_USER_ID ?? "alice";
+
+// Prefer an explicit id, else the newest conversation for this user, else create.
+const requested = process.env.CONVERSATION_ID;
+const existing = requested
+  ? await memory.shortTerm.getConversationMetadata(requested)
+  : (await memory.shortTerm.listConversations({ userId }))[0];
+
+const conv =
+  existing ??
+  (await memory.shortTerm.createConversation({ userId, metadata: { source: "my-app" } }));
+
+console.log(existing ? `Resumed ${conv.id}` : `Created ${conv.id}`);
+----
+
+In a server, the id normally comes from the request (a thread id in your own
+schema); the env-var form above is what a script uses.
+
 == Streaming
 
-The same middleware works with `streamText` because Vercel AI handles
-streaming via the wrapped model — the middleware's `wrapGenerate` is
-called once the stream completes.
+`streamText` is persisted too. `wrapStream` pipes the provider's stream
+through a transform that accumulates every `text-delta` and writes one
+assistant message when the `finish` part arrives (or when the consumer
+cancels early), so nothing is lost and the consumer sees every part
+unchanged:
+
+[source,typescript]
+----
+const { textStream } = streamText({ model, prompt: "Explain graph memory." });
+for await (const chunk of textStream) process.stdout.write(chunk);
+// the assembled response is now a Message node on the conversation
+----
+
+The write is fire-and-forget — the stream is never held open waiting on
+the memory service.
+
+== Types
+
+`agentMemoryMiddleware` returns `LanguageModelV4Middleware`, so
+`wrapLanguageModel` accepts it with no cast. `@ai-sdk/provider` is an
+optional peer dependency of this package: anything that has `ai` 7
+installed already has it, and a project that does not use this middleware
+does not need it.
 
 == Edge runtimes
 
@@ -82,3 +153,8 @@ export default {
 ----
 
 See link:edge-runtime.adoc[How-to: deploy to edge runtimes] for details.
+
+== Compatibility
+
+Verified against `@neo4j-labs/agent-memory` 0.5.0-dev, `ai` 7.0,
+`@ai-sdk/provider` 4.0, Node.js 22 — 2026-09.

@@ -8,6 +8,20 @@
 
 How to integrate neo4j-agent-memory with PydanticAI agents to build memory-enabled applications with a persistent context graph.
 
+[NOTE]
+====
+**Supported PydanticAI range: 2.x** (`pydantic-ai-slim>=2.0,<3`, installed by
+the `[pydantic-ai]` extra). Every snippet on this page uses the 2.x API:
+`output_type=` (not `result_type=`), `result.output` (not `result.data`),
+`instructions` (not `system_prompt`), and the current model classes
+`OpenAIChatModel` / `AnthropicModel` / `GoogleModel` (`OpenAIModel` and
+`GeminiModel` were removed).
+
+In 2.x the `"openai:"` model-string prefix selects the Responses API and
+`"openai-chat:"` selects Chat Completions, so these examples build a model
+instance instead — it is unambiguous and reusable.
+====
+
 == Overview
 
 PydanticAI is a Python agent framework that provides type-safe tools, dependency injection, and structured outputs. Integrating with neo4j-agent-memory adds persistent memory capabilities, enabling agents to remember past interactions and build knowledge over time.
@@ -49,18 +63,23 @@ a|
 == Prerequisites
 
 * Python 3.10+
-* `neo4j-agent-memory` and `pydantic-ai` installed
+* `neo4j-agent-memory` and PydanticAI 2.x installed
 * Neo4j database running
 * OpenAI API key (or other LLM provider)
 
 [source,bash]
 ----
-pip install neo4j-agent-memory pydantic-ai
+pip install "neo4j-agent-memory[pydantic-ai]"
 ----
+
+The extra installs `pydantic-ai-slim[openai]>=2.0,<3` — the same
+`pydantic_ai` import package as the `pydantic-ai` meta-package, minus the ~20
+provider SDKs this adapter never imports. Installing it alongside `[mcp]`
+(FastMCP 4) is fine: both resolve to the same `fastmcp-slim` 4.x distribution.
 
 == Pass-through your PydanticAI model
 
-PydanticAI models expose `model_name` and a provider-specific class (`OpenAIModel`, `AnthropicModel`, `GeminiModel`, …). `llm_provider_from_pydantic_ai` converts a configured model directly into an `LLMProvider` so the same model is used by both your agent and the memory client:
+PydanticAI models expose `model_name` and a provider-specific class (`OpenAIChatModel`, `AnthropicModel`, `GoogleModel`, …). `llm_provider_from_pydantic_ai` converts a configured model directly into an `LLMProvider` so the same model is used by both your agent and the memory client:
 
 [source,python]
 ----
@@ -73,7 +92,7 @@ from neo4j_agent_memory.integrations.pydantic_ai import (
 )
 
 # One model, used by both the agent and memory.
-model = AnthropicModel("claude-3-5-sonnet-latest")
+model = AnthropicModel("claude-sonnet-4-5")
 agent = Agent(model, deps_type=AgentDeps)
 
 settings = MemorySettings(
@@ -83,9 +102,97 @@ settings = MemorySettings(
 )
 ----
 
-The helper introspects the model — class name `AnthropicModel` triggers the `anthropic/` prefix, `model_name` becomes the model id. `OpenAIModel` resolves to `OpenAIProvider`, and so on.
+The helper introspects the model — class name `AnthropicModel` triggers the `anthropic/` prefix, `model_name` becomes the model id. `OpenAIChatModel` resolves to the OpenAI provider, and so on.
 
 For the equivalent pattern across other integrations, see xref:how-to/migrate-to-providers.adoc[Migrate to Pluggable Providers — Pattern 5].
+
+[#shipped-adapters]
+== Shortcut: the shipped adapters
+
+Before hand-rolling a dependency class and tools, reach for the three adapters the
+package already ships. They cover the common case in a dozen lines:
+
+`MemoryDependency`:: a ready-made `deps_type` with `get_context()`,
+`save_interaction()`, `add_preference()` and `search_preferences()`.
+`create_memory_tools()`:: plain `async def` tools — `search_memory`,
+`save_preference`, `recall_preferences` — that PydanticAI 2.x accepts directly in
+`Agent(tools=...)`. On the hosted backend, `nams_memory_tools()` returns the same
+three plus the NAMS Platinum tools (entity feedback, history, provenance, Cypher).
+`record_agent_trace()`:: turns a finished `AgentRunResult` into a reasoning trace —
+one step per tool call, with a `ToolCall` node attached and the run's token usage in
+the trace outcome.
+
+[source,python]
+----
+import os
+
+from pydantic_ai import Agent, RunContext
+from pydantic_ai.models.openai import OpenAIChatModel
+
+from neo4j_agent_memory import MemoryClient
+from neo4j_agent_memory.config.settings import BoltSettings
+from neo4j_agent_memory.integrations.pydantic_ai import (
+    MemoryDependency,
+    create_memory_tools,
+    llm_provider_from_pydantic_ai,
+    record_agent_trace,
+)
+
+SESSION_ID = "pydantic-ai-demo"
+
+model = OpenAIChatModel(os.getenv("OPENAI_MODEL", "gpt-5-mini"))
+
+# BoltSettings pins the backend: plain MemorySettings flips to the hosted NAMS
+# backend whenever MEMORY_API_KEY happens to be exported.
+settings = BoltSettings(
+    neo4j={"password": "password"},
+    embedding="openai/text-embedding-3-small",
+    llm=llm_provider_from_pydantic_ai(model),
+)
+
+USER_INPUT = "Find me a good restaurant for dinner tonight."
+
+
+async def main() -> None:
+    async with MemoryClient(settings) as memory:
+        tools = create_memory_tools(memory)
+        agent = Agent(model, deps_type=MemoryDependency, tools=tools, output_type=str)
+
+        @agent.instructions
+        async def memory_instructions(ctx: RunContext[MemoryDependency]) -> str:
+            # Re-rendered for every model request; `ctx.prompt` is this run's user
+            # message, so the retrieved context is turn-specific.
+            context = await ctx.deps.get_context(str(ctx.prompt))
+            base = "You are a restaurant recommendation assistant."
+            return f"{base}\n\nContext from memory:\n{context}" if context else base
+
+        deps = MemoryDependency(client=memory, session_id=SESSION_ID)
+        result = await agent.run(USER_INPUT, deps=deps)
+        print(result.output)  # 2.x: `.output`, not `.data`
+
+        # Short-term memory: persist both sides so the next turn sees this one.
+        await deps.save_interaction(USER_INPUT, str(result.output))
+
+        # Reasoning memory: record the run, then read it back.
+        trace = await record_agent_trace(
+            memory.reasoning,
+            session_id=SESSION_ID,
+            result=result,
+            task="Find restaurant recommendation",
+        )
+        stored = await memory.reasoning.get_trace_with_steps(trace.id)
+        tool_calls = sum(len(step.tool_calls) for step in stored.steps)
+        print(f"{len(stored.steps)} step(s), {tool_calls} tool call(s)")
+----
+
+`examples/pydantic_ai_agent.py` is this flow as a runnable script, with a second
+turn that proves the agent sees the first. It runs without an API key by swapping
+in `pydantic_ai.models.test.TestModel` and a local sentence-transformers embedder,
+so the graph writes and the trace read-back are real while the model is stubbed.
+
+The rest of this page builds the same capabilities by hand, which is what you want
+when the dependency needs extra fields (a `user_id`, a current trace id) or the
+tools need to expose domain queries the adapters do not.
 
 == Basic Integration
 
@@ -111,12 +218,15 @@ class AgentDeps:
 
 [source,python]
 ----
+import os
+
 from pydantic_ai import Agent, RunContext
+from pydantic_ai.models.openai import OpenAIChatModel
 
 agent = Agent(
-    "openai:gpt-4o",
+    OpenAIChatModel(os.getenv("OPENAI_MODEL", "gpt-5-mini")),
     deps_type=AgentDeps,
-    system_prompt="""
+    instructions="""
     You are a helpful shopping assistant. Use the available tools to:
     1. Search for products matching customer requests
     2. Retrieve customer preferences to personalize recommendations
@@ -193,15 +303,17 @@ async def search_entities(
     ])
 ----
 
-=== Dynamic System Prompt with Memory
+=== Dynamic Instructions with Memory
 
-Inject memory context into the system prompt:
+Inject memory context with the `instructions` hook — the PydanticAI 2.x
+replacement for `system_prompt`. It is re-rendered on every model request,
+so the context stays current within a run:
 
 [source,python]
 ----
-@agent.system_prompt
+@agent.instructions
 async def add_memory_context(ctx: RunContext[AgentDeps]) -> str:
-    """Dynamically add memory context to system prompt."""
+    """Dynamically add memory context to the agent instructions."""
     parts = []
 
     # Add user preferences
@@ -272,11 +384,11 @@ async def main():
     await memory_client.short_term.add_message(
         session_id=session_id,
         role="assistant",
-        content=result.data,
+        content=result.output,
         metadata={"user_id": user_id},
     )
 
-    print(result.data)
+    print(result.output)
 
 if __name__ == "__main__":
     import asyncio
@@ -292,8 +404,10 @@ A complete example of a memory-enabled shopping assistant:
 from dataclasses import dataclass, field
 from datetime import datetime
 import json
+import os
 
 from pydantic_ai import Agent, RunContext
+from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic import BaseModel
 from neo4j_agent_memory import MemoryClient, MemorySettings
 
@@ -320,10 +434,10 @@ class ShoppingDeps:
 # --- Agent Definition ---
 
 shopping_agent = Agent(
-    "openai:gpt-4o",
+    OpenAIChatModel(os.getenv("OPENAI_MODEL", "gpt-5-mini")),
     deps_type=ShoppingDeps,
-    result_type=ProductRecommendation,
-    system_prompt="""
+    output_type=ProductRecommendation,
+    instructions="""
     You are a personal shopping assistant for an online retailer.
 
     Your goals:
@@ -467,9 +581,9 @@ async def get_similar_recommendations(
 
 # --- System Prompt Enhancement ---
 
-@shopping_agent.system_prompt
+@shopping_agent.instructions
 async def inject_customer_context(ctx: RunContext[ShoppingDeps]) -> str:
-    """Inject customer context into system prompt."""
+    """Inject customer context into the agent instructions."""
 
     # Get preferences
     prefs = await ctx.deps.memory_client.long_term.get_preferences(
@@ -538,9 +652,9 @@ async def run_shopping_assistant():
 
             # Format response
             response = f"Here are my recommendations:\n\n"
-            for i, product in enumerate(result.data.products, 1):
+            for i, product in enumerate(result.output.products, 1):
                 response += f"{i}. {product['name']} - ${product.get('price', 'N/A')}\n"
-            response += f"\n{result.data.reasoning}"
+            response += f"\n{result.output.reasoning}"
 
             print(f"\nAssistant: {response}\n")
 
@@ -556,8 +670,8 @@ async def run_shopping_assistant():
                 trace_id=trace.id,
                 outcome="success",
                 result={
-                    "products": result.data.products,
-                    "personalization": result.data.personalization_used,
+                    "products": result.output.products,
+                    "personalization": result.output.personalization_used,
                 },
             )
 
@@ -582,8 +696,11 @@ Example for a financial services use case:
 
 [source,python]
 ----
+import os
 from dataclasses import dataclass
+
 from pydantic_ai import Agent, RunContext
+from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic import BaseModel
 from neo4j_agent_memory import MemoryClient, MemorySettings
 
@@ -606,10 +723,10 @@ class AdvisoryDeps:
 
 
 advisory_agent = Agent(
-    "openai:gpt-4o",
+    OpenAIChatModel(os.getenv("OPENAI_MODEL", "gpt-5-mini")),
     deps_type=AdvisoryDeps,
-    result_type=InvestmentRecommendation,
-    system_prompt="""
+    output_type=InvestmentRecommendation,
+    instructions="""
     You are a financial advisory assistant helping wealth managers serve their clients.
 
     Important guidelines:
@@ -735,7 +852,7 @@ async def record_compliance_note(
     return f"Recorded compliance note: {category}"
 
 
-@advisory_agent.system_prompt
+@advisory_agent.instructions
 async def inject_client_context(ctx: RunContext[AdvisoryDeps]) -> str:
     """Inject client investment profile into system prompt."""
 
@@ -794,7 +911,7 @@ result = await agent.run(user_input, deps=deps)
 await memory_client.short_term.add_message(
     session_id=session_id,
     role="assistant",
-    content=result.data,
+    content=result.output,
 )
 ----
 
@@ -814,7 +931,7 @@ try:
     await memory_client.reasoning.complete_trace(
         trace_id=trace.id,
         outcome="success",
-        result={"response": result.data},
+        result={"response": result.output},
     )
 except Exception as e:
     await memory_client.reasoning.complete_trace(
@@ -825,13 +942,13 @@ except Exception as e:
     raise
 ----
 
-=== 4. Leverage Dynamic System Prompts
+=== 4. Leverage Dynamic Instructions
 
 Inject relevant context automatically:
 
 [source,python]
 ----
-@agent.system_prompt
+@agent.instructions
 async def dynamic_context(ctx: RunContext[AgentDeps]) -> str:
     # Only fetch what's relevant to current query
     if "preference" in ctx.deps.current_query.lower():
@@ -842,6 +959,7 @@ async def dynamic_context(ctx: RunContext[AgentDeps]) -> str:
 
 == See Also
 
+* `examples/pydantic_ai_agent.py` — the <<shipped-adapters,adapter flow>> above as a runnable script
 * xref:how-to/integrations/langchain.adoc[Use with LangChain]
 * xref:how-to/reasoning-traces.adoc[Record and Query Reasoning Traces]
 * xref:tutorials/conversation-memory.adoc[Tutorial: Add Conversation Memory]

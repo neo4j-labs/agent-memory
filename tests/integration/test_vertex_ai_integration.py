@@ -63,7 +63,7 @@ class TestVertexAIEmbedderIntegration:
         from neo4j_agent_memory.embeddings.vertex_ai import VertexAIEmbedder
 
         embedder = VertexAIEmbedder(
-            model="text-embedding-004",
+            model="gemini-embedding-001",
             project_id=GCP_PROJECT,
             location="us-central1",
         )
@@ -80,7 +80,7 @@ class TestVertexAIEmbedderIntegration:
         from neo4j_agent_memory.embeddings.vertex_ai import VertexAIEmbedder
 
         embedder = VertexAIEmbedder(
-            model="text-embedding-004",
+            model="gemini-embedding-001",
             project_id=GCP_PROJECT,
         )
 
@@ -102,7 +102,7 @@ class TestVertexAIEmbedderIntegration:
         from neo4j_agent_memory.embeddings.vertex_ai import VertexAIEmbedder
 
         embedder = VertexAIEmbedder(
-            model="text-embedding-004",
+            model="gemini-embedding-001",
             project_id=GCP_PROJECT,
         )
 
@@ -115,7 +115,7 @@ class TestVertexAIEmbedderIntegration:
         from neo4j_agent_memory.embeddings.vertex_ai import VertexAIEmbedder
 
         embedder = VertexAIEmbedder(
-            model="text-embedding-004",
+            model="gemini-embedding-001",
             project_id=GCP_PROJECT,
             task_type="RETRIEVAL_QUERY",
         )
@@ -130,7 +130,7 @@ class TestVertexAIEmbedderIntegration:
         from neo4j_agent_memory.embeddings.vertex_ai import VertexAIEmbedder
 
         embedder = VertexAIEmbedder(
-            model="text-embedding-004",
+            model="gemini-embedding-001",
             project_id=GCP_PROJECT,
             task_type="SEMANTIC_SIMILARITY",
         )
@@ -156,25 +156,50 @@ class TestVertexAIEmbedderIntegration:
         from neo4j_agent_memory.embeddings.vertex_ai import VertexAIEmbedder
 
         embedder = VertexAIEmbedder(
-            model="text-embedding-004",
+            model="gemini-embedding-001",
             project_id=GCP_PROJECT,
         )
 
         assert embedder.dimensions == 768
 
     @pytest.mark.asyncio
-    async def test_gecko_model(self):
-        """Test with textembedding-gecko model."""
+    async def test_text_embedding_005_model(self):
+        """Test with the task-specific text-embedding-005 model."""
         from neo4j_agent_memory.embeddings.vertex_ai import VertexAIEmbedder
 
         embedder = VertexAIEmbedder(
-            model="textembedding-gecko@003",
+            model="text-embedding-005",
             project_id=GCP_PROJECT,
         )
 
-        embedding = await embedder.embed("Test with gecko model")
+        embedding = await embedder.embed("Test with text-embedding-005")
 
         assert len(embedding) == 768
+
+    @pytest.mark.asyncio
+    async def test_native_dimensionality(self):
+        """gemini-embedding-001 returns 3072 dimensions when untruncated."""
+        from neo4j_agent_memory.embeddings.vertex_ai import VertexAIEmbedder
+
+        embedder = VertexAIEmbedder(
+            model="gemini-embedding-001",
+            project_id=GCP_PROJECT,
+            output_dimensionality=None,
+        )
+
+        embedding = await embedder.embed("Test native dimensionality")
+
+        assert embedder.dimensions == 3072
+        assert len(embedding) == 3072
+
+    @pytest.mark.asyncio
+    async def test_retired_model_rejected(self):
+        """The retired text-embedding-004 id fails fast instead of 404ing."""
+        from neo4j_agent_memory.core.exceptions import EmbeddingError
+        from neo4j_agent_memory.embeddings.vertex_ai import VertexAIEmbedder
+
+        with pytest.raises(EmbeddingError, match="retired"):
+            VertexAIEmbedder(model="text-embedding-004", project_id=GCP_PROJECT)
 
 
 @pytest.mark.integration
@@ -191,7 +216,7 @@ class TestVertexAIWithMemoryClientIntegration:
         from neo4j_agent_memory.memory.short_term import MessageRole
 
         embedder = VertexAIEmbedder(
-            model="text-embedding-004",
+            model="gemini-embedding-001",
             project_id=GCP_PROJECT,
         )
 
@@ -226,7 +251,7 @@ class TestVertexAIWithMemoryClientIntegration:
         from neo4j_agent_memory.memory.short_term import MessageRole
 
         embedder = VertexAIEmbedder(
-            model="text-embedding-004",
+            model="gemini-embedding-001",
             project_id=GCP_PROJECT,
         )
 

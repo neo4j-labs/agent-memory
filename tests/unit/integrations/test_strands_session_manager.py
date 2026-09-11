@@ -944,3 +944,88 @@ class TestRestoreLimit:
             assert client.short_term.add_message_calls[0]["content"] == "x"
         finally:
             manager.close()
+
+
+class TestStrandsBaseClassContract:
+    """Pins the strands>=1.52 SessionManager surface this adapter builds on.
+
+    These assert facts about the installed strands-agents, not about our code:
+    they are the tripwire for a strands upgrade that moves the contract out from
+    under Neo4jSessionManager.
+    """
+
+    def test_base_registers_multi_agent_and_bidi_hooks_unconditionally(self) -> None:
+        from strands.experimental.hooks.events import (
+            BidiAfterInvocationEvent,
+            BidiAgentInitializedEvent,
+            BidiMessageAddedEvent,
+        )
+        from strands.hooks.events import (
+            AfterMultiAgentInvocationEvent,
+            AfterNodeCallEvent,
+            MultiAgentInitializedEvent,
+        )
+
+        manager, _ = _make_manager()
+        try:
+            registry = FakeRegistry()
+            manager.register_hooks(registry)
+            event_types = {et for et, _ in registry.callbacks}
+            for event_type in (
+                MultiAgentInitializedEvent,
+                AfterNodeCallEvent,
+                AfterMultiAgentInvocationEvent,
+                BidiAgentInitializedEvent,
+                BidiMessageAddedEvent,
+                BidiAfterInvocationEvent,
+            ):
+                assert event_type in event_types, event_type.__name__
+        finally:
+            manager.close()
+
+    @pytest.mark.parametrize(
+        ("method", "args"),
+        [
+            ("sync_multi_agent", (SimpleNamespace(),)),
+            ("initialize_multi_agent", (SimpleNamespace(),)),
+            ("initialize_bidi_agent", (SimpleNamespace(),)),
+            ("append_bidi_message", ({"role": "user", "content": []}, SimpleNamespace())),
+            ("sync_bidi_agent", (SimpleNamespace(),)),
+        ],
+    )
+    def test_multi_agent_and_bidi_persistence_is_unsupported_and_says_so(
+        self, method: str, args: tuple[object, ...]
+    ) -> None:
+        """Documented limitation: one manager per Agent, no Graph/Swarm/Bidi.
+
+        The inherited implementations raise, and the message names this class —
+        so the adapter needs no override of its own.
+        """
+        manager, _ = _make_manager()
+        try:
+            with pytest.raises(NotImplementedError, match="Neo4jSessionManager"):
+                getattr(manager, method)(*args)
+        finally:
+            manager.close()
+
+    def test_hook_registry_still_takes_our_bare_add_callback_calls(self) -> None:
+        """`order` gained a keyword-only default; positional calls must still work."""
+        import inspect
+
+        from strands.hooks.registry import HookRegistry
+
+        signature = inspect.signature(HookRegistry.add_callback)
+        order = signature.parameters.get("order")
+        assert order is not None
+        assert order.kind is inspect.Parameter.KEYWORD_ONLY
+        assert order.default is not inspect.Parameter.empty
+
+    def test_store_mirrors_strands_default_search_limit(self) -> None:
+        """`_DEFAULT_MAX_SEARCH_RESULTS` copies a strands constant; keep them equal."""
+        from strands.memory.memory_manager import DEFAULT_MAX_SEARCH_RESULTS
+
+        from neo4j_agent_memory.integrations.strands.memory_store import (
+            _DEFAULT_MAX_SEARCH_RESULTS,
+        )
+
+        assert _DEFAULT_MAX_SEARCH_RESULTS == DEFAULT_MAX_SEARCH_RESULTS
