@@ -1,133 +1,154 @@
-"""Supervisor Agent for orchestrating financial compliance investigations.
+"""Supervisor agent for financial compliance investigations.
 
-Uses AWS Strands Agents with Neo4j-backed tools via the bind_tool pattern.
-The supervisor delegates to specialized sub-agents (KYC, AML, Relationship,
-Compliance) which all query real data from Neo4j.
+Builds one Strands ``Agent`` per chat session. The supervisor delegates to four
+specialist sub-agents (KYC, AML, Relationship, Compliance) whose 16 tools all
+read real data from Neo4j through :class:`Neo4jDomainService`, and it also gets
+the library's own Context Graph tools from
+``neo4j_agent_memory.integrations.strands``.
+
+Why per-session and not one global agent: a Strands ``Agent`` owns its
+``messages`` history, and ``Agent.stream_async`` takes a non-blocking lock that
+raises ``ConcurrencyException`` on a second concurrent invocation. A single
+shared instance therefore merges every user's transcript *and* fails the second
+concurrent request.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+import time
+from collections import OrderedDict
+from typing import TYPE_CHECKING, Any
 
 from strands import Agent, tool
 from strands.models import BedrockModel
 
-from ..config import get_settings
+from ..config import Settings, get_settings
 from ..services.neo4j_service import Neo4jDomainService
 from ..tools import bind_tool
-from ..tools.aml_tools import analyze_velocity, detect_patterns, flag_suspicious_transaction, scan_transactions
+from ..tools.aml_tools import (
+    analyze_velocity,
+    detect_patterns,
+    flag_suspicious_transaction,
+    scan_transactions,
+)
 from ..tools.compliance_tools import (
     assess_regulatory_requirements,
     check_sanctions,
     generate_sar_report,
     verify_pep_status,
 )
-from ..tools.kyc_tools import assess_customer_risk, check_adverse_media, check_documents, verify_identity
+from ..tools.kyc_tools import (
+    assess_customer_risk,
+    check_adverse_media,
+    check_documents,
+    verify_identity,
+)
 from ..tools.relationship_tools import (
     analyze_network_risk,
     detect_shell_companies,
     find_connections,
     map_beneficial_ownership,
 )
-from .prompts import SUPERVISOR_SYSTEM_PROMPT
+from .prompts import (
+    AML_AGENT_SYSTEM_PROMPT,
+    COMPLIANCE_AGENT_SYSTEM_PROMPT,
+    KYC_AGENT_SYSTEM_PROMPT,
+    RELATIONSHIP_AGENT_SYSTEM_PROMPT,
+    SUPERVISOR_SYSTEM_PROMPT,
+)
+
+if TYPE_CHECKING:
+    from strands.types.tools import AgentTool
 
 logger = logging.getLogger(__name__)
 
-# Global agent instance
-_supervisor_agent: Agent | None = None
+#: Bounded per-session agent cache: session_id -> (agent, last_used_epoch).
+_AGENT_CACHE: OrderedDict[str, tuple[Agent, float]] = OrderedDict()
+_CACHE_MAX_SESSIONS = 64
+_CACHE_TTL_SECONDS = 60 * 60
 
 
 def _truncate(value: Any, max_len: int = 500) -> str:
-    """Truncate a value to a string for logging/SSE."""
-    if isinstance(value, (dict, list)):
-        text = json.dumps(value, default=str)
-    else:
-        text = str(value)
+    """Truncate a value to a string for logging and SSE payloads."""
+    text = json.dumps(value, default=str) if isinstance(value, (dict, list)) else str(value)
     return text[:max_len] + "..." if len(text) > max_len else text
 
 
-def _create_sub_agent(
-    name: str,
-    system_prompt: str,
-    tools: list,
-    settings=None,
-) -> Agent:
-    """Create a sub-agent with Bedrock model."""
-    if settings is None:
-        settings = get_settings()
+def _bedrock_model(settings: Settings) -> BedrockModel:
+    """Build the Bedrock model both the supervisor and sub-agents use.
+
+    ``settings.bedrock.model_id`` defaults to the cross-region
+    inference-profile id resolved by the library's
+    ``integrations.strands.bedrock_llm_model()`` helper — current Claude models
+    on Bedrock are invoked through an inference profile, not the bare
+    foundation-model id.
+    """
+    return BedrockModel(model_id=settings.bedrock.model_id, region_name=settings.aws.region)
+
+
+def _sub_agent(system_prompt: str, tools: list[AgentTool], settings: Settings) -> Agent:
+    # `Agent(tools=...)` is annotated with an invariant list type, so a
+    # list[AgentTool] is rejected even though every element is accepted.
     return Agent(
-        model=BedrockModel(
-            model_id=settings.bedrock.model_id,
-            region_name=settings.aws.region,
-        ),
-        tools=tools,
+        model=_bedrock_model(settings),
+        tools=list(tools),  # type: ignore[arg-type]
         system_prompt=system_prompt,
     )
 
 
-def create_supervisor_agent(neo4j_service: Neo4jDomainService) -> Agent:
-    """Create the Supervisor Agent that orchestrates investigations.
+def create_supervisor_agent(
+    neo4j_service: Neo4jDomainService,
+    *,
+    settings: Settings | None = None,
+) -> Agent:
+    """Build a supervisor agent wired to the Neo4j-backed specialist agents."""
+    settings = settings or get_settings()
 
-    Args:
-        neo4j_service: Neo4jDomainService for domain data queries
-
-    Returns:
-        Configured Strands Agent for supervision
-    """
-    settings = get_settings()
-
-    # Import sub-agent prompts
-    from .prompts import (
-        AML_AGENT_SYSTEM_PROMPT as AML_SYSTEM_PROMPT,
-        COMPLIANCE_AGENT_SYSTEM_PROMPT as COMPLIANCE_SYSTEM_PROMPT,
-        KYC_AGENT_SYSTEM_PROMPT as KYC_SYSTEM_PROMPT,
-        RELATIONSHIP_AGENT_SYSTEM_PROMPT as RELATIONSHIP_SYSTEM_PROMPT,
+    kyc_agent = _sub_agent(
+        KYC_AGENT_SYSTEM_PROMPT,
+        [
+            bind_tool(verify_identity, neo4j_service),
+            bind_tool(check_documents, neo4j_service),
+            bind_tool(assess_customer_risk, neo4j_service),
+            bind_tool(check_adverse_media, neo4j_service),
+        ],
+        settings,
+    )
+    aml_agent = _sub_agent(
+        AML_AGENT_SYSTEM_PROMPT,
+        [
+            bind_tool(scan_transactions, neo4j_service),
+            bind_tool(detect_patterns, neo4j_service),
+            bind_tool(flag_suspicious_transaction, neo4j_service),
+            bind_tool(analyze_velocity, neo4j_service),
+        ],
+        settings,
+    )
+    relationship_agent = _sub_agent(
+        RELATIONSHIP_AGENT_SYSTEM_PROMPT,
+        [
+            bind_tool(find_connections, neo4j_service),
+            bind_tool(analyze_network_risk, neo4j_service),
+            bind_tool(detect_shell_companies, neo4j_service),
+            bind_tool(map_beneficial_ownership, neo4j_service),
+        ],
+        settings,
+    )
+    compliance_agent = _sub_agent(
+        COMPLIANCE_AGENT_SYSTEM_PROMPT,
+        [
+            bind_tool(check_sanctions, neo4j_service),
+            bind_tool(verify_pep_status, neo4j_service),
+            bind_tool(generate_sar_report, neo4j_service),
+            bind_tool(assess_regulatory_requirements, neo4j_service),
+        ],
+        settings,
     )
 
-    # Create bound tools for each sub-agent
-    kyc_tools = [
-        bind_tool(verify_identity, neo4j_service),
-        bind_tool(check_documents, neo4j_service),
-        bind_tool(assess_customer_risk, neo4j_service),
-        bind_tool(check_adverse_media, neo4j_service),
-    ]
-
-    aml_tools = [
-        bind_tool(scan_transactions, neo4j_service),
-        bind_tool(detect_patterns, neo4j_service),
-        bind_tool(flag_suspicious_transaction, neo4j_service),
-        bind_tool(analyze_velocity, neo4j_service),
-    ]
-
-    relationship_tools = [
-        bind_tool(find_connections, neo4j_service),
-        bind_tool(analyze_network_risk, neo4j_service),
-        bind_tool(detect_shell_companies, neo4j_service),
-        bind_tool(map_beneficial_ownership, neo4j_service),
-    ]
-
-    compliance_tools = [
-        bind_tool(check_sanctions, neo4j_service),
-        bind_tool(verify_pep_status, neo4j_service),
-        bind_tool(generate_sar_report, neo4j_service),
-        bind_tool(assess_regulatory_requirements, neo4j_service),
-    ]
-
-    # Create sub-agents
-    kyc_agent = _create_sub_agent("kyc", KYC_SYSTEM_PROMPT, kyc_tools, settings)
-    aml_agent = _create_sub_agent("aml", AML_SYSTEM_PROMPT, aml_tools, settings)
-    relationship_agent = _create_sub_agent(
-        "relationship", RELATIONSHIP_SYSTEM_PROMPT, relationship_tools, settings
-    )
-    compliance_agent = _create_sub_agent(
-        "compliance", COMPLIANCE_SYSTEM_PROMPT, compliance_tools, settings
-    )
-
-    # Delegation tools for the supervisor
     @tool
-    def delegate_to_kyc_agent(
+    async def delegate_to_kyc_agent(
         customer_id: str,
         task: str,
         context: str | None = None,
@@ -145,7 +166,7 @@ def create_supervisor_agent(neo4j_service: Neo4jDomainService) -> Agent:
         prompt = f"Perform KYC task for customer {customer_id}: {task}"
         if context:
             prompt += f"\nContext: {context}"
-        result = kyc_agent(prompt)
+        result = await kyc_agent.invoke_async(prompt)
         return {
             "agent": "kyc",
             "customer_id": customer_id,
@@ -155,7 +176,7 @@ def create_supervisor_agent(neo4j_service: Neo4jDomainService) -> Agent:
         }
 
     @tool
-    def delegate_to_aml_agent(
+    async def delegate_to_aml_agent(
         customer_id: str,
         task: str,
         time_period_days: int = 90,
@@ -172,10 +193,13 @@ def create_supervisor_agent(neo4j_service: Neo4jDomainService) -> Agent:
             time_period_days: Number of days of history to analyze
             context: Additional context for the task
         """
-        prompt = f"Perform AML task for customer {customer_id}: {task}. Time period: last {time_period_days} days."
+        prompt = (
+            f"Perform AML task for customer {customer_id}: {task}. "
+            f"Time period: last {time_period_days} days."
+        )
         if context:
             prompt += f"\nContext: {context}"
-        result = aml_agent(prompt)
+        result = await aml_agent.invoke_async(prompt)
         return {
             "agent": "aml",
             "customer_id": customer_id,
@@ -185,7 +209,7 @@ def create_supervisor_agent(neo4j_service: Neo4jDomainService) -> Agent:
         }
 
     @tool
-    def delegate_to_relationship_agent(
+    async def delegate_to_relationship_agent(
         customer_id: str,
         task: str,
         depth: int = 2,
@@ -205,7 +229,7 @@ def create_supervisor_agent(neo4j_service: Neo4jDomainService) -> Agent:
         prompt = f"Analyze relationships for {customer_id}: {task}. Network depth: {depth} hops."
         if context:
             prompt += f"\nContext: {context}"
-        result = relationship_agent(prompt)
+        result = await relationship_agent.invoke_async(prompt)
         return {
             "agent": "relationship",
             "customer_id": customer_id,
@@ -215,7 +239,7 @@ def create_supervisor_agent(neo4j_service: Neo4jDomainService) -> Agent:
         }
 
     @tool
-    def delegate_to_compliance_agent(
+    async def delegate_to_compliance_agent(
         customer_id: str,
         task: str,
         report_type: str | None = None,
@@ -236,7 +260,7 @@ def create_supervisor_agent(neo4j_service: Neo4jDomainService) -> Agent:
             prompt += f" Report type: {report_type}."
         if context:
             prompt += f"\nContext: {context}"
-        result = compliance_agent(prompt)
+        result = await compliance_agent.invoke_async(prompt)
         return {
             "agent": "compliance",
             "customer_id": customer_id,
@@ -262,15 +286,13 @@ def create_supervisor_agent(neo4j_service: Neo4jDomainService) -> Agent:
             relationship_findings: Findings from Relationship agent
             compliance_findings: Findings from Compliance agent
         """
-        combined = ""
-        if kyc_findings:
-            combined += f"## KYC Findings\n{kyc_findings}\n\n"
-        if aml_findings:
-            combined += f"## AML Findings\n{aml_findings}\n\n"
-        if relationship_findings:
-            combined += f"## Relationship Analysis\n{relationship_findings}\n\n"
-        if compliance_findings:
-            combined += f"## Compliance Findings\n{compliance_findings}\n\n"
+        sections = [
+            ("## KYC Findings", kyc_findings),
+            ("## AML Findings", aml_findings),
+            ("## Relationship Analysis", relationship_findings),
+            ("## Compliance Findings", compliance_findings),
+        ]
+        combined = "".join(f"{heading}\n{body}\n\n" for heading, body in sections if body)
 
         lower = combined.lower()
         if "critical" in lower or "sanctions" in lower:
@@ -286,19 +308,18 @@ def create_supervisor_agent(neo4j_service: Neo4jDomainService) -> Agent:
             "summary": combined,
             "agents_consulted": [
                 name
-                for name, f in [
+                for name, findings in [
                     ("kyc", kyc_findings),
                     ("aml", aml_findings),
                     ("relationship", relationship_findings),
                     ("compliance", compliance_findings),
                 ]
-                if f
+                if findings
             ],
             "status": "synthesized",
         }
 
-    # Combine all tools
-    all_tools = [
+    all_tools: list[Any] = [
         delegate_to_kyc_agent,
         delegate_to_aml_agent,
         delegate_to_relationship_agent,
@@ -306,35 +327,56 @@ def create_supervisor_agent(neo4j_service: Neo4jDomainService) -> Agent:
         summarize_investigation,
     ]
 
-    # Optionally add context graph memory tools
+    # The library's own Strands tools: semantic search over the Context Graph,
+    # entity/fact writes, and graph traversal. Already @tool-decorated.
     try:
         from neo4j_agent_memory.integrations.strands import StrandsConfig, context_graph_tools
 
         config = StrandsConfig.from_env()
-        memory_tools = context_graph_tools(**config.to_dict())
-        all_tools.extend(memory_tools)
-    except Exception as e:
-        logger.warning(f"Could not load context graph tools: {e}")
+        all_tools.extend(context_graph_tools(**config.to_dict()))
+    except Exception as exc:  # pragma: no cover - depends on the environment
+        logger.warning("Context Graph tools unavailable: %s", exc)
 
     return Agent(
-        model=BedrockModel(
-            model_id=settings.bedrock.model_id,
-            region_name=settings.aws.region,
-        ),
+        model=_bedrock_model(settings),
         tools=all_tools,
         system_prompt=SUPERVISOR_SYSTEM_PROMPT,
     )
 
 
-def get_supervisor_agent(neo4j_service: Neo4jDomainService) -> Agent:
-    """Get or create the global Supervisor Agent instance."""
-    global _supervisor_agent
-    if _supervisor_agent is None:
-        _supervisor_agent = create_supervisor_agent(neo4j_service)
-    return _supervisor_agent
+def get_supervisor_agent(
+    neo4j_service: Neo4jDomainService,
+    session_id: str,
+    *,
+    settings: Settings | None = None,
+) -> Agent:
+    """Return the agent for ``session_id``, building it on first use.
+
+    The cache is bounded (LRU, :data:`_CACHE_MAX_SESSIONS`) and entries expire
+    after :data:`_CACHE_TTL_SECONDS`, so a long-running process does not grow
+    without limit. Each session gets its own conversation history and its own
+    concurrency lock.
+    """
+    now = time.monotonic()
+    for stale in [
+        sid for sid, (_, seen) in _AGENT_CACHE.items() if now - seen > _CACHE_TTL_SECONDS
+    ]:
+        _AGENT_CACHE.pop(stale, None)
+
+    cached = _AGENT_CACHE.get(session_id)
+    if cached is not None:
+        _AGENT_CACHE[session_id] = (cached[0], now)
+        _AGENT_CACHE.move_to_end(session_id)
+        return cached[0]
+
+    agent = create_supervisor_agent(neo4j_service, settings=settings)
+    _AGENT_CACHE[session_id] = (agent, now)
+    _AGENT_CACHE.move_to_end(session_id)
+    while len(_AGENT_CACHE) > _CACHE_MAX_SESSIONS:
+        _AGENT_CACHE.popitem(last=False)
+    return agent
 
 
 def reset_supervisor_agent() -> None:
-    """Reset the global supervisor agent (for lifespan cleanup)."""
-    global _supervisor_agent
-    _supervisor_agent = None
+    """Drop every cached agent (lifespan startup/shutdown, and tests)."""
+    _AGENT_CACHE.clear()

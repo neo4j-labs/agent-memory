@@ -1,0 +1,21 @@
+# Next.js
+/.next/
+/out/
+
+# Dependencies
+/node_modules/
+
+# Build artifacts
+*.tsbuildinfo
+
+# Chakra CLI output
+/.chakra/
+
+# Next 16 writes these on `next dev`; this repo keeps its agent
+# instructions at the repository root (disabled via next.config.mjs).
+/AGENTS.md
+/CLAUDE.md
+
+# Local env (see .env.example)
+.env
+.env.local

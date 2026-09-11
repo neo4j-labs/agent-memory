@@ -2,7 +2,23 @@
  * API client for Google Cloud Financial Advisor backend.
  */
 
-const API_BASE = "/api";
+import {
+  createSseParserState,
+  flushSseParser,
+  pushSseChunk,
+  type SseFrame,
+} from "./sse";
+
+/**
+ * Base URL for the backend API.
+ *
+ * Defaults to the relative `/api` path, which works with the Vite dev proxy
+ * (see `vite.config.ts`) and with the nginx reverse proxy in the container
+ * image. Set `VITE_API_BASE_URL` at build time (see `.env.example`) to point a
+ * standalone SPA deployment at a remote backend, e.g.
+ * `VITE_API_BASE_URL=https://financial-advisor-backend-xxxx.run.app/api`.
+ */
+export const API_BASE: string = import.meta.env.VITE_API_BASE_URL ?? "/api";
 
 export interface Customer {
   id: string;
@@ -20,20 +36,6 @@ export interface Customer {
   risk_level: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
   risk_score: number;
   risk_factors: string[];
-}
-
-export interface CustomerRisk {
-  customer_id: string;
-  customer_name: string;
-  risk_score: number;
-  risk_level: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
-  contributing_factors: Array<{
-    factor: string;
-    weight: number;
-    description: string;
-  }>;
-  kyc_status: string;
-  recommendation: string;
 }
 
 export interface Alert {
@@ -77,63 +79,10 @@ export interface Investigation {
   completed_at?: string;
 }
 
-export interface ChatMessage {
-  role: "user" | "assistant";
-  content: string;
-  timestamp?: string;
-}
-
-export interface ChatResponse {
-  session_id: string;
-  message: ChatMessage;
-  agents_consulted: string[];
-  tool_calls: Array<{
-    tool_name: string;
-    agent?: string;
-  }>;
-  response_time_ms?: number;
-}
-
-export interface NetworkData {
-  nodes: Array<{
-    id: string;
-    label: string;
-    type: string;
-    isRoot?: boolean;
-  }>;
-  edges: Array<{
-    from: string;
-    to: string;
-    relationship: string;
-  }>;
-  total_connections: number;
-}
-
 // Customer API
 export async function getCustomers(): Promise<Customer[]> {
   const res = await fetch(`${API_BASE}/customers`);
   if (!res.ok) throw new Error("Failed to fetch customers");
-  return res.json();
-}
-
-export async function getCustomer(id: string): Promise<Customer> {
-  const res = await fetch(`${API_BASE}/customers/${id}`);
-  if (!res.ok) throw new Error("Failed to fetch customer");
-  return res.json();
-}
-
-export async function getCustomerRisk(id: string): Promise<CustomerRisk> {
-  const res = await fetch(`${API_BASE}/customers/${id}/risk`);
-  if (!res.ok) throw new Error("Failed to fetch customer risk");
-  return res.json();
-}
-
-export async function getCustomerNetwork(
-  id: string,
-  depth = 2,
-): Promise<NetworkData> {
-  const res = await fetch(`${API_BASE}/customers/${id}/network?depth=${depth}`);
-  if (!res.ok) throw new Error("Failed to fetch customer network");
   return res.json();
 }
 
@@ -239,48 +188,28 @@ export async function getAuditTrail(investigationId: string): Promise<
 }
 
 // Chat API
-export async function sendChatMessage(data: {
-  message: string;
-  session_id?: string;
-  customer_id?: string;
-  investigation_id?: string;
-}): Promise<ChatResponse> {
-  const res = await fetch(`${API_BASE}/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
-  });
-  if (!res.ok) throw new Error("Failed to send message");
-  return res.json();
+
+export interface StoredChatMessage {
+  role: "user" | "assistant" | "system";
+  content: string;
+  timestamp?: string;
 }
 
-export async function getChatHistory(sessionId: string): Promise<{
-  session_id: string;
-  messages: ChatMessage[];
-}> {
-  const res = await fetch(`${API_BASE}/chat/history/${sessionId}`);
+/**
+ * Replay a conversation that is already stored in Neo4j.
+ *
+ * The backend writes every turn through `MemoryClient.short_term`, so reopening
+ * the app (or hitting reload) can restore the conversation from the graph
+ * instead of losing it with the browser tab.
+ */
+export async function getChatHistory(
+  sessionId: string,
+  limit = 50,
+): Promise<{ session_id: string; messages: StoredChatMessage[] }> {
+  const res = await fetch(
+    `${API_BASE}/chat/history/${encodeURIComponent(sessionId)}?limit=${limit}`,
+  );
   if (!res.ok) throw new Error("Failed to fetch chat history");
-  return res.json();
-}
-
-export async function searchMemory(
-  query: string,
-  limit = 10,
-): Promise<{
-  query: string;
-  results: Array<{
-    content: string;
-    type: string;
-    score?: number;
-  }>;
-  total: number;
-}> {
-  const res = await fetch(`${API_BASE}/chat/search`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query, limit }),
-  });
-  if (!res.ok) throw new Error("Failed to search memory");
   return res.json();
 }
 
@@ -330,6 +259,34 @@ export type AgentEvent =
     }
   | { type: "error"; message: string };
 
+/** Known agent event names, used to skip frames we do not model. */
+const AGENT_EVENT_TYPES = new Set<AgentEvent["type"]>([
+  "agent_start",
+  "agent_delegate",
+  "agent_complete",
+  "thinking",
+  "tool_call",
+  "tool_result",
+  "memory_access",
+  "response",
+  "trace_saved",
+  "done",
+  "error",
+]);
+
+/** Turn one SSE frame into a typed `AgentEvent`, or null if unrecognised. */
+export function toAgentEvent(frame: SseFrame): AgentEvent | null {
+  if (!AGENT_EVENT_TYPES.has(frame.event as AgentEvent["type"])) return null;
+  let payload: unknown;
+  try {
+    payload = JSON.parse(frame.data);
+  } catch {
+    return null;
+  }
+  if (typeof payload !== "object" || payload === null) return null;
+  return { type: frame.event, ...payload } as AgentEvent;
+}
+
 export async function streamChatMessage(
   data: {
     message: string;
@@ -346,41 +303,31 @@ export async function streamChatMessage(
   });
 
   if (!res.ok) throw new Error("Failed to start stream");
+  if (!res.body) throw new Error("Stream response had no body");
 
-  const reader = res.body!.getReader();
+  const reader = res.body.getReader();
   const decoder = new TextDecoder();
-  let buffer = "";
+  const parser = createSseParserState();
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-
-    // Parse SSE events from buffer
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || ""; // Keep incomplete last line
-
-    let eventType = "";
-    let eventData = "";
-
-    for (const line of lines) {
-      if (line.startsWith("event: ")) {
-        eventType = line.slice(7).trim();
-      } else if (line.startsWith("data: ")) {
-        eventData = line.slice(6);
-      } else if (line === "" && eventType && eventData) {
-        // Empty line signals end of SSE event
-        try {
-          const parsed = JSON.parse(eventData);
-          onEvent({ type: eventType, ...parsed } as AgentEvent);
-        } catch {
-          // Skip malformed events
-        }
-        eventType = "";
-        eventData = "";
-      }
+  const dispatch = (frames: SseFrame[]) => {
+    for (const frame of frames) {
+      const event = toAgentEvent(frame);
+      if (event) onEvent(event);
     }
+  };
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      dispatch(pushSseChunk(parser, decoder.decode(value, { stream: true })));
+    }
+    // Flush any multi-byte character left in the decoder, then any event that
+    // was not terminated by a blank line before the stream ended.
+    dispatch(pushSseChunk(parser, decoder.decode()));
+    dispatch(flushSseParser(parser));
+  } finally {
+    reader.releaseLock();
   }
 }
 
@@ -430,14 +377,108 @@ export async function getTraceDetail(traceId: string): Promise<ReasoningTrace> {
   return res.json();
 }
 
+
 // Graph API
-export async function getGraphStats(): Promise<{
+
+export interface GraphNode {
+  id: string;
+  /** Neo4j element id — stable even when a node has no `id` property. */
+  element_id?: string;
+  label: string | null;
+  labels: string[];
+  properties: Record<string, unknown>;
+}
+
+export interface GraphRelationship {
+  id: string;
+  from: string;
+  to: string;
+  type: string;
+}
+
+export interface GraphPayload {
+  nodes: GraphNode[];
+  relationships: GraphRelationship[];
+}
+
+/**
+ * Fetch the Context Graph for visualization.
+ *
+ * `sessionId` scopes the graph to one conversation so the view shows the memory
+ * a chat turn just produced (`GET /api/graph/memory?session_id=...`).
+ */
+export async function getMemoryGraph(params?: {
+  sessionId?: string;
+  limit?: number;
+}): Promise<GraphPayload> {
+  const searchParams = new URLSearchParams();
+  searchParams.set("limit", String(params?.limit ?? 500));
+  if (params?.sessionId) searchParams.set("session_id", params.sessionId);
+
+  const res = await fetch(`${API_BASE}/graph/memory?${searchParams}`);
+  if (!res.ok) throw new Error("Failed to load graph");
+  return res.json();
+}
+
+export interface NeighborsPayload {
+  entity_id: string;
+  depth: number;
+  nodes: Array<{
+    id: string;
+    label: string | null;
+    type: string;
+    isRoot: boolean;
+  }>;
+  edges: Array<{ from: string; to: string; relationship: string }>;
   total_nodes: number;
-  total_relationships: number;
-  nodes_by_label: Record<string, number>;
-  relationships_by_type: Record<string, number>;
+  total_edges: number;
+}
+
+export async function getGraphNeighbors(
+  nodeId: string,
+  params?: { depth?: number; limit?: number },
+): Promise<NeighborsPayload> {
+  const searchParams = new URLSearchParams({
+    depth: String(params?.depth ?? 1),
+    limit: String(params?.limit ?? 20),
+  });
+  const res = await fetch(
+    `${API_BASE}/graph/neighbors/${encodeURIComponent(nodeId)}?${searchParams}`,
+  );
+  if (!res.ok) throw new Error("Failed to expand node");
+  return res.json();
+}
+
+/** One reasoning step that touched an entity, via `(:ReasoningStep)-[:TOUCHED]->(:Entity)`. */
+export interface AuditTrailStep {
+  entity_name: string;
+  trace_id: string | null;
+  session_id: string | null;
+  task: string | null;
+  outcome: string | null;
+  step_id: string | null;
+  step_number: number | null;
+  thought: string | null;
+  action: string | null;
+  tools: string[];
+}
+
+/**
+ * "Which reasoning steps touched this entity, and via which tool?" — the
+ * one-hop audit query that `record_tool_call(touched_entities=…)` makes
+ * possible, and the proof point a compliance reviewer actually needs.
+ */
+export async function getEntityAuditTrail(
+  entityName: string,
+  limit = 50,
+): Promise<{
+  entity_name: string;
+  steps: AuditTrailStep[];
+  total: number;
 }> {
-  const res = await fetch(`${API_BASE}/graph/stats`);
-  if (!res.ok) throw new Error("Failed to fetch graph stats");
+  const res = await fetch(
+    `${API_BASE}/graph/audit-trail/${encodeURIComponent(entityName)}?limit=${limit}`,
+  );
+  if (!res.ok) throw new Error("Failed to load audit trail");
   return res.json();
 }

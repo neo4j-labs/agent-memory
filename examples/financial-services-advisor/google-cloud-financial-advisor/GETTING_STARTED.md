@@ -8,11 +8,11 @@ This guide walks you through setting up and running the Google Cloud Financial A
 
 | Requirement | Version | Notes |
 |------------|---------|-------|
-| **Python** | 3.11+ | 3.12 recommended |
+| **Python** | 3.12+ | The backend declares `requires-python = ">=3.12"` |
 | **uv** | Latest | [Install](https://docs.astral.sh/uv/getting-started/installation/) |
-| **Node.js** | 18+ | For the frontend |
-| **Google Cloud CLI** | Latest | [Install gcloud](https://cloud.google.com/sdk/docs/install) |
-| **Neo4j** | 5.x | Aura Free or local Docker |
+| **Node.js** | 20+ | For the frontend |
+| **Google Cloud CLI** | Latest | Only for the Vertex AI path and Cloud Run — [install gcloud](https://cloud.google.com/sdk/docs/install) |
+| **Neo4j** | 5.26 LTS or Aura | Aura Free or `neo4j:5.26-community` with APOC |
 
 ### Google Cloud Setup
 
@@ -53,25 +53,39 @@ cd neo4j-agent-memory/examples/financial-services-advisor/google-cloud-financial
 ### Option B: Local Docker
 
 ```bash
-docker run -d --name neo4j -p 7687:7687 -p 7474:7474 -e NEO4J_AUTH=neo4j/your-password neo4j:5
+docker run -d --name neo4j \
+  -p 7687:7687 -p 7474:7474 \
+  -e NEO4J_AUTH=neo4j/password \
+  -e NEO4J_PLUGINS='["apoc"]' \
+  neo4j:5.26-community
 ```
+
+This matches [`docker-compose.yml`](docker-compose.yml), which can bring up
+Neo4j, the backend and the frontend together with `docker compose up -d`.
 
 ---
 
 ## Step 3: Configure Environment
 
+`.env` lives in **this directory** (the app root):
+
 ```bash
-cp .env.example backend/.env
+cp .env.example .env
 ```
 
-Edit `backend/.env`:
+Edit `.env`:
 
 ```bash
-# Google Cloud
-GOOGLE_API_KEY=your-api-key              # From AI Studio
-# Or for Vertex AI:
-# GOOGLE_CLOUD_PROJECT=your-project-id
-# VERTEX_AI_LOCATION=us-central1
+# Gemini — pick ONE path
+GOOGLE_API_KEY=your-api-key              # Option A: AI Studio
+# GOOGLE_CLOUD_PROJECT=your-project-id   # Option B: Vertex AI
+# GOOGLE_GENAI_USE_VERTEXAI=true
+
+# Models
+VERTEX_AI_LOCATION=us-central1
+VERTEX_AI_MODEL_ID=gemini-2.5-flash
+VERTEX_AI_EMBEDDING_MODEL=gemini-embedding-001
+VERTEX_AI_EMBEDDING_DIMENSIONS=768
 
 # Neo4j
 NEO4J_URI=neo4j+s://xxxx.databases.neo4j.io
@@ -83,7 +97,10 @@ CORS_ORIGINS=http://localhost:5173,http://localhost:3000
 LOG_LEVEL=INFO
 ```
 
-The app also checks `../.env` and `../../.env` as fallbacks.
+`backend/.env` is loaded afterwards as an optional developer override, so you
+can keep a local Neo4j there without touching the shared file. Embeddings always
+go through Vertex AI, so semantic search needs a GCP project with the Vertex AI
+API enabled even on Option A.
 
 ---
 
@@ -190,22 +207,35 @@ ADK's `Runner.run_async()` yields real-time events as each agent executes, enabl
 | `/api/traces/detail/{trace_id}` | GET | Trace with steps/tool calls |
 | `/api/graph/stats` | GET | Neo4j graph statistics |
 | `/api/graph/neighbors/{entity_id}` | GET | Entity neighborhood |
-| `/api/graph/query` | POST | Read-only Cypher |
+| `/api/graph/query` | POST | Read-only Cypher (validated by `client.query.cypher`) |
+| `/api/graph/memory` | GET | Domain + memory subgraph, optionally scoped to `session_id` |
+| `/api/graph/audit-trail/{entity_name}` | GET | Reasoning steps that `TOUCHED` an entity |
+| `/api/investigations` | GET/POST | Persisted investigations |
+| `/api/investigations/{id}/start` | POST | Run the multi-agent investigation |
+| `/api/investigations/{id}/audit-trail` | GET | Audit trail projected from the reasoning trace |
 | `/health` | GET | Health check |
 
 ---
 
 ## Deployment (Cloud Run)
 
+The supported path is Cloud Build, which builds both images and deploys them:
+
 ```bash
-# Build and deploy
-gcloud run deploy neo4j-financial-advisor \
-  --source . \
-  --region us-central1 \
-  --set-env-vars NEO4J_URI=neo4j+s://...,NEO4J_USER=neo4j,NEO4J_PASSWORD=...
+make setup-secrets     # store NEO4J_URI / NEO4J_PASSWORD in Secret Manager
+make deploy            # infrastructure/scripts/deploy.sh → Cloud Build → Cloud Run
 ```
 
-See `infrastructure/` for full deployment scripts.
+To build the backend image by itself:
+
+```bash
+make docker-build      # re-exports requirements-docker.txt, then docker build ./backend
+```
+
+`gcloud run deploy --source backend` also works, but re-export
+`requirements-docker.txt` first (`make docker-requirements`) — the image installs
+from that file rather than from `pyproject.toml`, whose `[tool.uv.sources]`
+editable path points outside the build context.
 
 ---
 
@@ -216,8 +246,13 @@ See `infrastructure/` for full deployment scripts.
 - For Vertex AI: ensure `GOOGLE_CLOUD_PROJECT` is set and `aiplatform.googleapis.com` is enabled
 
 ### "Could not initialize memory service"
-- Check `NEO4J_URI` and `NEO4J_PASSWORD` in `backend/.env`
+- Check `NEO4J_URI` and `NEO4J_PASSWORD` in `.env`
 - For Aura: use `neo4j+s://` (not `bolt://`)
+
+### No entities in the graph
+- Read the startup line `Financial Memory Service initialized (extractor=...)`.
+  `NoOpExtractor`, or a warning that extraction is disabled, means no Gemini
+  credential was found.
 
 ### "Neo4j service not available" (503 errors)
 - The domain routes require Neo4j. Check backend startup logs for connection errors
@@ -235,3 +270,8 @@ See `infrastructure/` for full deployment scripts.
 ## Comparison with AWS Example
 
 See [../COMPARISON.md](../COMPARISON.md) for a detailed side-by-side comparison. The key difference is the streaming model: this example uses ADK's native async event generator for real-time sub-agent visibility, while the AWS version uses post-completion SSE.
+
+
+---
+
+_Verified against `neo4j-agent-memory` 0.6.0-dev (PyPI floor `>=0.5.0,<0.7`), google-adk 2.9.0, google-genai 2.23.0, FastAPI 0.141.1, neo4j 6.3.0 on Python 3.12 — 2026-09-10._

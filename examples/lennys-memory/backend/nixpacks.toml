@@ -1,8 +1,18 @@
+# Railway / nixpacks build. Installs from the committed uv.lock so a deploy
+# resolves exactly what local development resolves (`uv sync --frozen` fails
+# loudly if pyproject.toml and uv.lock have drifted apart).
+#
+# The start command lives here only. Procfile and railway.toml defer to it --
+# see the comments in those files for which platform reads which.
 [phases.setup]
 nixPkgs = ["python312"]
+nixpkgsArchive = "nixos-24.11"
 
 [phases.install]
-cmds = ["pip install --upgrade pip", "pip install -r requirements.txt"]
+cmds = [
+  "pip install --upgrade pip uv",
+  "uv sync --frozen --no-dev",
+]
 
 [start]
-cmd = "python -m uvicorn src.main:app --host 0.0.0.0 --port ${PORT:-8000}"
+cmd = "uv run --no-sync python -m uvicorn src.main:app --host 0.0.0.0 --port ${PORT:-8000}"

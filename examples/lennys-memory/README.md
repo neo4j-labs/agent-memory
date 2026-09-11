@@ -4,15 +4,13 @@
 ![Status: Beta](https://img.shields.io/badge/Status-Beta-6366F1)
 ![Community Supported](https://img.shields.io/badge/Support-Community-6B7280)
 
-A full-stack AI agent application that transforms 299 episodes of Lenny's Podcast into a searchable knowledge graph with conversational AI, interactive graph visualization, geospatial analysis, and Wikipedia-enriched entity cards -- all powered by [neo4j-agent-memory](https://github.com/neo4j-labs/agent-memory).
+A full-stack AI agent application that turns a podcast transcript corpus (the original ran on 299 episodes of Lenny's Podcast) into a searchable knowledge graph with conversational AI, interactive graph visualization, geospatial analysis, and Wikipedia-enriched entity cards -- all powered by [neo4j-agent-memory](https://github.com/neo4j-labs/agent-memory).
 
 **[Try the live demo →](https://lennys-memory.vercel.app)**
 
-<!-- TODO: Add screenshot of the main app interface -->
-![App Screenshot](docs/images/app-screenshot.png)
-
-<!-- TODO: Add screenshot of the Neo4j data model -->
-![Data Model](docs/images/data-model.png)
+<!-- TODO: capture a screenshot of the running app and a data-model diagram.
+     Until then there is nothing to link: `docs/images/` does not exist in this
+     example (the architecture diagram below is `img/architecture.png`). -->
 
 > ⚠️ **Neo4j Labs Project**
 >
@@ -67,7 +65,7 @@ This example showcases several features from neo4j-agent-memory:
 - **`ExtractionConfig`** with `gliner_schema="podcast"` -- uses the podcast-optimized domain schema for entity extraction
 - **`DeduplicationConfig`** -- auto-merges entities at 95%+ similarity, flags for review at 85%+, with fuzzy string matching
 - **Observability** -- optional `get_tracer()` integration for OpenTelemetry/Opik tracing of extraction pipelines
-- **Streaming extraction** -- `StreamingExtractor` for memory-efficient processing of long podcast transcripts
+- **Batch ingest** -- `short_term.add_messages_batch()` with `batch_size`, `generate_embeddings`, `extract_entities` and a progress callback, plus `extract_entities_from_session()` and `generate_embeddings_batch()` for the two post-processing passes
 - **Provenance tracking** -- `link_entity_to_message()` and `link_entity_to_extractor()` for tracing entity origins
 
 ## v2.0 Features
@@ -93,7 +91,6 @@ Tool outputs are now displayed as rich, interactive cards directly in the chat:
 | Other tools | **RawJsonCard** | Collapsible JSON viewer for debugging |
 
 <!-- TODO: Add screenshot showing tool call cards in action -->
-![Tool Call Cards](docs/images/tool-call-cards.png)
 
 ### Onboarding & Education
 - **WelcomeModal**: First-time user introduction explaining memory types
@@ -108,7 +105,7 @@ Tool outputs are now displayed as rich, interactive cards directly in the chat:
 
 ### Agent Configuration Panel
 The right sidebar displays static agent configuration info:
-- **Available Tools**: All 19 agent tools organized by category
+- **Available Tools**: All 28 agent tools organized by category
 - **Agent Capabilities**: Multi-step reasoning, conversation memory, preference learning, knowledge graph
 - **Tool Call Cards**: Documentation of all 7 card types with descriptions and triggering tools
 
@@ -177,12 +174,19 @@ cp .env.example .env
 
 ### 4. Load Podcast Transcripts
 
-Load a sample (5 transcripts) for quick testing:
+> **Where does the data come from?** Episode transcripts are not redistributable,
+> so `data/` ships empty and `data/samples/` ships three short **synthetic**
+> transcripts instead. `make load-sample` works on a clean clone against those.
+> See [`data/README.md`](data/README.md) for the file format and how to supply
+> your own corpus.
+
+Load a few transcripts for quick testing (uses `data/` if it has transcripts,
+otherwise `data/samples/`):
 ```bash
 make load-sample
 ```
 
-Or load the full dataset (299 transcripts):
+Or load everything in `data/`:
 ```bash
 make load-full
 ```
@@ -220,6 +224,15 @@ make enrich
 
 # Check enrichment progress
 make enrich-status
+
+# Embed messages loaded with --no-embeddings (pairs with make load-fast)
+make backfill-message-embeddings
+
+# Rebuild FIRST_MESSAGE/NEXT_MESSAGE chains (short_term.migrate_message_links)
+make repair-links
+
+# Generate entity embeddings so entity vector search works
+make backfill-embeddings
 ```
 
 The loader shows real-time progress with ETA:
@@ -299,7 +312,7 @@ The MCP server provides 16 tools (or 6 in core profile) for searching, storing, 
 │  ┌─────────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────────┐ │
 │  │ PydanticAI  │  │ Memory   │  │  Entity  │  │  Location        │ │
 │  │ Agent       │  │ Context  │  │  Routes  │  │  Routes          │ │
-│  │ (19 tools)  │  │ Routes   │  │          │  │  (geospatial)    │ │
+│  │ (28 tools)  │  │ Routes   │  │          │  │  (geospatial)    │ │
 │  └──────┬──────┘  └────┬─────┘  └────┬─────┘  └────┬─────────────┘ │
 └─────────┼───────────────┼─────────────┼─────────────┼───────────────┘
           │               │             │             │
@@ -386,9 +399,9 @@ This enables the agent to:
 - **Track tool performance** (success rates, latency)
 - **Improve over time** by learning which tool sequences work best
 
-### Agent Tool Suite (19 Tools)
+### Agent Tool Suite (28 Tools)
 
-The PydanticAI agent has access to 19 specialized tools organized into categories:
+The PydanticAI agent has access to 28 specialized tools organized into categories (`tests/examples/test_lennys_memory_example.py` asserts this count against the registered `@agent.tool` functions):
 
 #### Podcast Content Search
 
@@ -737,7 +750,7 @@ The map visualization supports advanced geospatial exploration:
 
 A persistent side panel (or bottom sheet on mobile) showing static agent configuration:
 
-- **Available Tools**: All 19 agent tools organized by category (Podcast Search, Entity Queries, Location Analysis, Memory & Preferences)
+- **Available Tools**: All 28 agent tools organized by category (Podcast Search, Entity Queries, Location Analysis, Memory & Preferences)
 - **Agent Capabilities**: Descriptions of multi-step reasoning, conversation memory, preference learning, and knowledge graph capabilities
 - **Tool Call Cards**: Documentation of all 7 visualization card types (MapCard, DataCard, StatsCard, EntityCard, GraphCard, MemoryGraphCard, RawJsonCard) with descriptions and the tools that trigger each card type
 
@@ -778,6 +791,17 @@ Here are questions that showcase different capabilities:
 
 ## API Reference
 
+> **Reachability.** `POST /api/chat` and the `/api/threads*` routes are on the
+> chat path and exercised on every turn. The rest of the surface below is live
+> and has a typed function in `frontend/src/lib/api.ts`, but not every route is
+> rendered by a component today -- several were written for panels (map view,
+> entity browser, trace inspector) that the simplified UI no longer mounts.
+> Deciding per route between re-wiring and retiring is an open maintainer call;
+> until then the routes stay. The ones that were silently broken
+> (`/locations/nearby`, `/locations/bounds`, `DELETE /preferences/{id}`) are
+> fixed and now covered by route tests in
+> `backend/tests/test_correctness_regressions.py`.
+
 ### Chat
 
 | Method | Endpoint | Description |
@@ -798,7 +822,7 @@ Here are questions that showcase different capabilities:
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/memory/context` | Get thread-scoped entities, preferences, recent messages |
+| GET | `/api/memory/context` | Thread-scoped entities, preferences, recent messages |
 | GET | `/api/memory/graph` | Export memory graph with optional `episode_session_ids` param for podcast data |
 | GET | `/api/memory/graph/neighbors/{node_id}` | Get neighbors for incremental graph exploration |
 | GET | `/api/memory/traces` | List reasoning traces |
@@ -821,7 +845,7 @@ Here are questions that showcase different capabilities:
 |--------|----------|-------------|
 | GET | `/api/preferences` | List preferences (category filtering) |
 | POST | `/api/preferences` | Add a preference |
-| DELETE | `/api/preferences/{id}` | Delete a preference |
+| DELETE | `/api/preferences/{id}` | Delete a preference (implemented; previously a stub that reported success) |
 
 ### Locations
 
@@ -855,21 +879,34 @@ The `scripts/load_transcripts.py` script processes podcast transcripts with:
 - **Detailed statistics**: Files, turns, speakers, and throughput on completion
 
 ```bash
-# Usage
-python scripts/load_transcripts.py --data-dir data
+# Usage (with no --data-dir it resolves data/, then data/samples/)
+python scripts/load_transcripts.py
 
 # Options
+--data-dir PATH         Transcript directory (default: data/ or data/samples/)
 --sample N              Load only N transcripts (for testing)
 --no-entities           Skip entity extraction (faster loading)
 --no-embeddings         Skip embedding generation
+--extract-entities-only Extract entities from already loaded sessions
+--embeddings-only       Embed messages loaded with --no-embeddings
+--repair-links          Rebuild FIRST_MESSAGE/NEXT_MESSAGE chains
 --resume                Skip already-loaded transcripts
---dry-run               Preview what would be loaded
+--dry-run               Preview what would be loaded (no database needed)
 --batch-size N          Messages per batch (default: 100)
 --concurrency N         Concurrent transcript loaders (default: 3)
---extract-entities-only Extract entities from already loaded sessions
 --skip-schema-setup     Skip database schema setup
+--neo4j-uri / --neo4j-user / --neo4j-password / --neo4j-database
+--embedding-model STR   Embedding provider string (default: $EMBEDDING_MODEL)
+--llm-model STR         LLM provider string (default: $LLM_MODEL)
 -v, --verbose           Show detailed progress
 ```
+
+`--no-entities` pairs with `--extract-entities-only`, and `--no-embeddings`
+pairs with `--embeddings-only`, so a fast ingest can always be completed later
+instead of requiring a full reload. All five scripts share
+`scripts/_common.py`, which resolves `EMBEDDING_MODEL` / `LLM_MODEL` through
+`from_provider()` -- the pipeline and the running backend therefore write and
+query the *same* embedding space. Use the same `EMBEDDING_MODEL` for both.
 
 ### Geocoding Locations
 
@@ -883,7 +920,11 @@ python scripts/geocode_locations.py
 --provider nominatim|google  Geocoding provider (default: nominatim)
 --api-key KEY               Google Maps API key
 --batch-size N              Batch processing size (default: 50)
---skip-existing             Skip locations with existing coordinates
+--skip-existing             Skip locations with existing coordinates (default)
+--no-skip-existing          Forwarded to the library; note that
+                            geocode_locations() currently only ever selects
+                            locations with no coordinates, so re-geocoding a
+                            bad hit still requires clearing `e.location`
 -v, --verbose               Show detailed progress
 ```
 
@@ -1021,7 +1062,8 @@ Server-Sent Events are simpler than WebSockets for this use case:
 
 ```
 lennys-memory/
-├── data/                          # Podcast transcript files (299 .txt files)
+├── data/                          # Your transcripts (untracked) -- see data/README.md
+│   └── samples/                   # 3 synthetic transcripts, tracked, used by load-sample
 ├── scripts/
 │   ├── load_transcripts.py        # Data loading with entity extraction
 │   └── geocode_locations.py       # Geocoding for Location entities
@@ -1034,7 +1076,7 @@ lennys-memory/
 │       ├── agent/
 │       │   ├── agent.py           # PydanticAI agent + system prompt
 │       │   ├── dependencies.py    # Agent dependency injection
-│       │   └── tools.py           # 19 agent tools
+│       │   └── tools.py           # 28 agent tools
 │       ├── api/
 │       │   ├── schemas.py         # Pydantic request/response models
 │       │   └── routes/
@@ -1141,7 +1183,7 @@ This application can be deployed to Railway (backend) and Vercel (frontend).
 4. Select your forked repository
 5. **Important**: Set the **Root Directory** to:
    ```
-   neo4j-agent-memory/examples/lennys-memory/backend
+   examples/lennys-memory/backend
    ```
 
 #### 3. Configure Environment Variables in Railway
@@ -1178,7 +1220,7 @@ Expected response:
 2. Import your GitHub repository
 3. Set the **Root Directory** to:
    ```
-   neo4j-agent-memory/examples/lennys-memory/frontend
+   examples/lennys-memory/frontend
    ```
 4. Framework preset should auto-detect as "Next.js"
 
@@ -1236,11 +1278,35 @@ export NEO4J_PASSWORD="your-password"
 export OPENAI_API_KEY="sk-..."
 
 # Load sample data (5 transcripts)
-python ../scripts/load_transcripts.py --data-dir ../data --sample 5
+python ../scripts/load_transcripts.py --sample 5
 
-# Or load full dataset
-python ../scripts/load_transcripts.py --data-dir ../data
+# Or load everything in ../data
+python ../scripts/load_transcripts.py
 ```
+
+---
+
+## Known limitations
+
+- **Threads are not scoped per visitor.** Chat threads are stored as
+  `(:Conversation {session_id: "chat-<uuid>"})` nodes, so they survive restarts
+  and work behind several uvicorn workers -- but `GET /api/threads` returns every
+  visitor's threads. The fix is the library's multi-tenant mode
+  (`MemorySettings.memory.multi_tenant=True` plus `user_identifier=` from a
+  signed cookie, with `client.users`); it needs a visitor identity the frontend
+  does not send yet.
+- **Part of the REST surface has no rendered UI caller** (see the note in
+  [API Reference](#api-reference)) -- the retire-or-rewire decision per route is
+  still open.
+- **`--no-skip-existing` on the geocoder cannot force a re-geocode** --
+  `long_term.geocode_locations()` only selects locations with no coordinates.
+- **Bolt only.** The ingest pipeline and several routes use Cypher that the
+  hosted NAMS backend does not expose (geocoding point writes, the graph-export
+  queries). The reads were moved to `client.query.cypher()`, which is portable,
+  so a NAMS path is now a smaller change than it was -- but it is not done.
+- **`MemorySettings` has no deduplication field**, so
+  `backend/src/memory/client.py` still assigns `long_term._deduplication`
+  directly. Tracked as a library follow-up.
 
 ---
 
@@ -1256,4 +1322,13 @@ This example is part of the [neo4j-agent-memory](https://github.com/neo4j-labs/a
 
 ---
 
-_Verified against `neo4j-agent-memory` v0.1.2 / v0.2-dev on 2026-05-03 (current PyPI release: v0.4.x with NAMS support). During this verification pass, two phantom-method calls in `scripts/load_transcripts.py` (`get_messages` → `get_conversation`) and `backend/src/api/routes/threads.py` (`delete_conversation` → `clear_session`) were corrected. Full UI/end-to-end smoke not re-run; library-side wiring is current._
+_Verified against `neo4j-agent-memory` 0.6.0-dev (editable checkout; manifest pins `>=0.5.0,<0.7`), PydanticAI 2.42, FastAPI 0.141, sse-starlette 3.4, Neo4j driver 6.1, Neo4j 5.26, on 2026-09-10._
+
+_What was exercised in this pass: the backend's 77 unit tests (including new
+regression tests for the four broken agent tools, the two empty location routes
+and the preference-delete stub); `load_transcripts.py` ingest +
+`--embeddings-only` + `--repair-links`, `backfill_embeddings.py`,
+`enrich_entities.py` and `geocode_locations.py` against a throwaway Neo4j 5.26;
+`uv lock --check` in `backend/`. Not re-run: the Next.js frontend end-to-end, a
+live chat turn against a real LLM, `backfill_relationships.py`'s GLiREL
+inference (its `--status` path was verified), and the full 299-episode load._

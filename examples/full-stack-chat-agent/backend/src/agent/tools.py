@@ -1,26 +1,94 @@
-"""News graph tools for the chat agent."""
+"""News graph tools for the chat agent.
 
-from datetime import date, datetime
+Every tool in this module reads the *news* graph — a separate, read-only Neo4j
+database from the memory graph. Two rules hold throughout:
+
+1. **Reads go through a managed read transaction** (``session.execute_read``).
+   That is a server-enforced boundary: Neo4j answers a write inside a read
+   transaction with ``Neo.ClientError.Statement.AccessMode``. String scanning
+   for ``CREATE``/``SET`` is only a friendly pre-check, never the boundary.
+2. **No provider credential ever travels to the database.** Embeddings are
+   computed in the application and only the resulting vector is passed as a
+   Cypher parameter.
+"""
+
+import asyncio
+import functools
+import logging
 from typing import Any
 
+from neo4j import AsyncManagedTransaction
 from pydantic_ai import RunContext
 
+from neo4j_agent_memory.core.query import is_read_only_query
+from neo4j_agent_memory.llm import from_provider
+from neo4j_agent_memory.llm.protocol import EmbeddingProvider
 from src.agent.dependencies import AgentDeps
+from src.config import get_settings
+
+logger = logging.getLogger(__name__)
+
+# Hard ceiling on rows returned to the model, whatever a tool's `limit` says.
+# Keeps a runaway agent query out of the context window.
+MAX_ROWS = 200
 
 
 async def _run_query(
     ctx: RunContext[AgentDeps],
     query: str,
     params: dict[str, Any] | None = None,
+    *,
+    max_rows: int = MAX_ROWS,
+    timeout: float | None = None,
 ) -> list[dict[str, Any]]:
-    """Execute a Cypher query against the news graph."""
-    if ctx.deps.news_driver is None:
-        return [{"error": "News graph driver not configured"}]
+    """Execute a read-only Cypher query against the news graph.
 
-    async with ctx.deps.news_driver.session(database=ctx.deps.news_database) as session:
-        result = await session.run(query, params or {})
-        records = await result.data()
-        return records
+    Runs inside ``session.execute_read`` so the server rejects any write, caps
+    the rows fetched, and bounds the wall-clock time.
+    """
+    if ctx.deps.news_driver is None:
+        return [{"error": "News graph driver not configured (check NEWS_GRAPH_URI)"}]
+
+    settings = get_settings()
+    limit = min(max_rows, MAX_ROWS)
+
+    async def read(tx: AsyncManagedTransaction) -> list[dict[str, Any]]:
+        result = await tx.run(query, params or {})
+        records = await result.fetch(limit)
+        await result.consume()  # discard anything beyond the cap
+        return [record.data() for record in records]
+
+    try:
+        async with ctx.deps.news_driver.session(database=ctx.deps.news_database) as session:
+            return await asyncio.wait_for(
+                session.execute_read(read),
+                timeout=timeout if timeout is not None else settings.cypher_timeout_seconds,
+            )
+    except asyncio.TimeoutError:
+        return [{"error": "Query timed out. Narrow the query or lower the limit."}]
+    except Exception as e:  # surfaced to the model so it can correct itself
+        logger.warning("News graph query failed: %s", e)
+        return [{"error": f"{type(e).__name__}: {e}"}]
+
+
+@functools.lru_cache(maxsize=1)
+def _news_embedder() -> EmbeddingProvider:
+    """The embedding provider used for news vector search (cached).
+
+    Resolved from ``NEWS_EMBEDDING_MODEL`` through the library's provider
+    factory — the same code path the memory graph uses — so there is no second
+    OpenAI client and no private attribute access.
+    """
+    settings = get_settings()
+    kwargs: dict[str, Any] = {}
+    if settings.openai_api_key.get_secret_value():
+        kwargs["api_key"] = settings.openai_api_key.get_secret_value()
+    return from_provider(settings.news_embedding_model, kind="embedding", **kwargs)
+
+
+async def embed_query(text: str) -> list[float]:
+    """Embed a search string application-side. Never sends a key to Neo4j."""
+    return await _news_embedder().embed_one(text)
 
 
 async def search_news(
@@ -38,8 +106,8 @@ async def search_news(
     Returns:
         List of matching articles with title, abstract, and published date.
     """
-    # Use CONTAINS for text matching since fulltext index may not exist
-    # Split query into words for better matching
+    # CONTAINS rather than a fulltext index, so the tool works against a graph
+    # that has no `article_fulltext` index provisioned.
     cypher = """
     MATCH (a:Article)
     WHERE toLower(a.title) CONTAINS toLower($query)
@@ -51,7 +119,7 @@ async def search_news(
     ORDER BY a.published DESC
     LIMIT $limit
     """
-    return await _run_query(ctx, cypher, {"query": query, "limit": limit})
+    return await _run_query(ctx, cypher, {"query": query, "limit": limit}, max_rows=limit)
 
 
 async def vector_search_news(
@@ -61,6 +129,10 @@ async def vector_search_news(
 ) -> list[dict[str, Any]]:
     """Search news articles using semantic vector similarity.
 
+    The query embedding is computed in the application; only the vector
+    reaches Neo4j. The model must match the one the ``article_embeddings``
+    index was built with — see ``NEWS_EMBEDDING_MODEL``.
+
     Args:
         ctx: The agent run context.
         query: The search query for semantic matching.
@@ -69,12 +141,21 @@ async def vector_search_news(
     Returns:
         List of semantically similar articles.
     """
+    try:
+        query_vector = await embed_query(query)
+    except Exception as e:
+        logger.warning("Embedding the news query failed: %s", e)
+        return [
+            {
+                "error": (
+                    f"Could not embed the query ({type(e).__name__}). "
+                    "Check OPENAI_API_KEY / NEWS_EMBEDDING_MODEL, or use search_news."
+                )
+            }
+        ]
+
     cypher = """
-    WITH genai.vector.encode($query, "OpenAI", {
-        token: $openai_key,
-        model: "text-embedding-ada-002"
-    }) AS queryVector
-    CALL db.index.vector.queryNodes("article_embeddings", $limit, queryVector)
+    CALL db.index.vector.queryNodes("article_embeddings", $limit, $queryVector)
     YIELD node, score
     RETURN node.title AS title,
            node.abstract AS abstract,
@@ -82,17 +163,11 @@ async def vector_search_news(
            node.url AS url,
            score
     """
-    from src.config import get_settings
-
-    settings = get_settings()
     return await _run_query(
         ctx,
         cypher,
-        {
-            "query": query,
-            "limit": limit,
-            "openai_key": settings.openai_api_key.get_secret_value(),
-        },
+        {"limit": limit, "queryVector": query_vector},
+        max_rows=limit,
     )
 
 
@@ -121,7 +196,7 @@ async def get_recent_news(
     ORDER BY a.published DESC
     LIMIT $limit
     """
-    return await _run_query(ctx, cypher, {"limit": limit, "days": days})
+    return await _run_query(ctx, cypher, {"limit": limit, "days": days}, max_rows=limit)
 
 
 async def get_news_by_topic(
@@ -150,7 +225,7 @@ async def get_news_by_topic(
     ORDER BY a.published DESC
     LIMIT $limit
     """
-    return await _run_query(ctx, cypher, {"topic": topic, "limit": limit})
+    return await _run_query(ctx, cypher, {"topic": topic, "limit": limit}, max_rows=limit)
 
 
 async def get_topics(ctx: RunContext[AgentDeps]) -> list[dict[str, Any]]:
@@ -168,7 +243,7 @@ async def get_topics(ctx: RunContext[AgentDeps]) -> list[dict[str, Any]]:
     ORDER BY article_count DESC
     LIMIT 50
     """
-    return await _run_query(ctx, cypher, {})
+    return await _run_query(ctx, cypher, {}, max_rows=50)
 
 
 async def search_news_by_location(
@@ -197,7 +272,7 @@ async def search_news_by_location(
     ORDER BY a.published DESC
     LIMIT $limit
     """
-    return await _run_query(ctx, cypher, {"location": location, "limit": limit})
+    return await _run_query(ctx, cypher, {"location": location, "limit": limit}, max_rows=limit)
 
 
 async def search_news_multi_topic(
@@ -217,28 +292,37 @@ async def search_news_multi_topic(
     Returns:
         List of articles matching any of the topics.
     """
-    # Build a dynamic WHERE clause for multiple topics
+    # Matches the title/abstract text *and* every neighbour label, so the tool
+    # does what its docstring promises ("subjects, people, or events").
     cypher = """
     MATCH (a:Article)
     OPTIONAL MATCH (a)-[:HAS_TOPIC]->(t:Topic)
     OPTIONAL MATCH (a)-[:ABOUT_PERSON]->(p:Person)
-    WITH a, collect(DISTINCT t.name) AS topics, collect(DISTINCT p.name) AS people
+    OPTIONAL MATCH (a)-[:ABOUT_ORGANIZATION]->(o:Organization)
+    OPTIONAL MATCH (a)-[:ABOUT_GEO]->(g:Geo)
+    WITH a,
+         collect(DISTINCT t.name) AS topics,
+         collect(DISTINCT p.name) AS people,
+         collect(DISTINCT o.name) AS organizations,
+         collect(DISTINCT g.name) AS locations
     WHERE any(topic IN $topics WHERE
         toLower(a.title) CONTAINS toLower(topic) OR
         toLower(a.abstract) CONTAINS toLower(topic) OR
-        any(t IN topics WHERE toLower(t) CONTAINS toLower(topic)) OR
-        any(person IN people WHERE toLower(person) CONTAINS toLower(topic))
+        any(name IN topics + people + organizations + locations
+            WHERE toLower(toString(name)) CONTAINS toLower(topic))
     )
     RETURN DISTINCT a.title AS title,
            a.abstract AS abstract,
            a.published AS published,
            a.url AS url,
            topics,
-           people
+           people,
+           organizations,
+           locations
     ORDER BY a.published DESC
     LIMIT $limit
     """
-    return await _run_query(ctx, cypher, {"topics": topics, "limit": limit})
+    return await _run_query(ctx, cypher, {"topics": topics, "limit": limit}, max_rows=limit)
 
 
 async def search_news_by_date_range(
@@ -270,7 +354,10 @@ async def search_news_by_date_range(
     LIMIT $limit
     """
     return await _run_query(
-        ctx, cypher, {"start_date": start_date, "end_date": end_date, "limit": limit}
+        ctx,
+        cypher,
+        {"start_date": start_date, "end_date": end_date, "limit": limit},
+        max_rows=limit,
     )
 
 
@@ -284,25 +371,31 @@ async def get_database_schema(ctx: RunContext[AgentDeps]) -> dict[str, Any]:
         Dictionary describing the database schema including node labels,
         relationship types, and their properties.
     """
-    # Get node labels and their properties
+    # apoc.meta.* is optional: fall back to plain db.labels() when the plugin
+    # is not installed on the news graph.
     labels_query = """
     CALL db.labels() YIELD label
-    CALL apoc.meta.nodeTypeProperties({labels: [label]}) YIELD nodeLabels, propertyName, propertyTypes
+    CALL apoc.meta.nodeTypeProperties({labels: [label]}) YIELD propertyName, propertyTypes
     RETURN label, collect({property: propertyName, types: propertyTypes}) AS properties
     """
-
-    # Get relationship types
+    fallback_labels_query = "CALL db.labels() YIELD label RETURN label, [] AS properties"
     rels_query = """
     CALL db.relationshipTypes() YIELD relationshipType
     RETURN collect(relationshipType) AS relationships
     """
 
-    labels_result = await _run_query(ctx, labels_query, {})
-    rels_result = await _run_query(ctx, rels_query, {})
+    labels_result = await _run_query(ctx, labels_query, {}, max_rows=50)
+    if labels_result and "error" in labels_result[0]:
+        labels_result = await _run_query(ctx, fallback_labels_query, {}, max_rows=50)
+    rels_result = await _run_query(ctx, rels_query, {}, max_rows=1)
 
     return {
         "node_labels": labels_result,
-        "relationships": rels_result[0]["relationships"] if rels_result else [],
+        "relationships": (
+            rels_result[0]["relationships"]
+            if rels_result and "relationships" in rels_result[0]
+            else []
+        ),
         "description": """
 News Graph Schema:
 - Article: News articles with title, abstract, published date, url, embedding
@@ -322,48 +415,23 @@ Relationships:
     }
 
 
-async def text2cypher(
-    ctx: RunContext[AgentDeps],
-    question: str,
-) -> dict[str, str]:
-    """Generate a Cypher query from a natural language question.
-
-    Uses the LLM to convert a question into a valid Cypher query
-    for the news graph database.
-
-    Args:
-        ctx: The agent run context.
-        question: Natural language question to convert.
-
-    Returns:
-        Dictionary with the generated Cypher query.
-    """
-    schema = await get_database_schema(ctx)
-
-    prompt = f"""Given the following Neo4j graph database schema:
-{schema["description"]}
-
-Generate a Cypher query to answer this question: {question}
-
-Return only the Cypher query, no explanation.
-The query should be read-only (no CREATE, DELETE, SET, MERGE operations).
-"""
-
-    # This is a simplified implementation - in production you might
-    # use a separate LLM call or a specialized text-to-cypher model
-    return {
-        "question": question,
-        "generated_query": f"// TODO: Implement text2cypher with LLM\n// Question: {question}",
-        "note": "Use execute_cypher to run a specific query instead",
-    }
-
-
 async def execute_cypher(
     ctx: RunContext[AgentDeps],
     query: str,
     params: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Execute a read-only Cypher query against the news graph.
+
+    Two layers, in order:
+
+    1. :func:`neo4j_agent_memory.core.query.is_read_only_query` — the library's
+       shared validator. A *friendly* pre-check that gives the model a usable
+       error message instead of a driver exception. It is word-boundary aware,
+       so ``RETURN a.created`` and ``MATCH (n:Asset)`` are not false positives
+       the way a plain substring scan was.
+    2. ``session.execute_read`` in :func:`_run_query` — the actual boundary.
+       Anything that slips past step 1 is rejected by the **server** with
+       ``Neo.ClientError.Statement.AccessMode``.
 
     Args:
         ctx: The agent run context.
@@ -373,11 +441,15 @@ async def execute_cypher(
     Returns:
         Query results as a list of dictionaries.
     """
-    # Validate query is read-only
-    query_upper = query.upper()
-    write_keywords = ["CREATE", "DELETE", "SET", "MERGE", "REMOVE", "DROP"]
-    for keyword in write_keywords:
-        if keyword in query_upper:
-            return [{"error": f"Write operations not allowed: {keyword} found in query"}]
+    if not is_read_only_query(query):
+        return [
+            {
+                "error": (
+                    "Only read-only Cypher is allowed on the news graph "
+                    "(no CREATE/MERGE/DELETE/SET/REMOVE/DROP/LOAD CSV/CALL {...})."
+                )
+            }
+        ]
 
-    return await _run_query(ctx, query, params)
+    settings = get_settings()
+    return await _run_query(ctx, query, params, max_rows=settings.cypher_max_rows)

@@ -1,10 +1,10 @@
 """Tests for the entity enrichment script."""
 
-import pytest
+import os
+import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import sys
-import os
+import pytest
 
 # Add scripts to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "scripts"))
@@ -65,14 +65,14 @@ class TestFormatTime:
         """Short durations should show seconds."""
         from enrich_entities import format_time
 
-        assert format_time(30) == "30s"
-        assert format_time(59) == "59s"
+        assert format_time(30) == "30.0s"
+        assert format_time(59) == "59.0s"
 
     def test_format_minutes(self):
         """Medium durations should show minutes and seconds."""
         from enrich_entities import format_time
 
-        assert format_time(60) == "1m 0s"
+        assert format_time(60) == "1m 00s"
         assert format_time(90) == "1m 30s"
         assert format_time(3599) == "59m 59s"
 
@@ -80,9 +80,9 @@ class TestFormatTime:
         """Long durations should show hours and minutes."""
         from enrich_entities import format_time
 
-        assert format_time(3600) == "1h 0m"
-        assert format_time(3660) == "1h 1m"
-        assert format_time(7200) == "2h 0m"
+        assert format_time(3600) == "1h 00m 00s"
+        assert format_time(3660) == "1h 01m 00s"
+        assert format_time(7200) == "2h 00m 00s"
 
 
 class TestColor:
@@ -90,19 +90,19 @@ class TestColor:
 
     def test_color_with_colors_disabled(self):
         """Should return plain text when colors disabled."""
-        from enrich_entities import color, Colors
+        from enrich_entities import Colors, color
 
         # Patch USE_COLORS to False
-        with patch("enrich_entities.USE_COLORS", False):
+        with patch("_common.USE_COLORS", False):
             result = color("test", Colors.GREEN)
             assert result == "test"
             assert "\033[" not in result
 
     def test_color_with_colors_enabled(self):
         """Should return colored text when colors enabled."""
-        from enrich_entities import color, Colors
+        from enrich_entities import Colors, color
 
-        with patch("enrich_entities.USE_COLORS", True):
+        with patch("_common.USE_COLORS", True):
             result = color("test", Colors.GREEN)
             assert Colors.GREEN in result
             assert Colors.RESET in result
@@ -118,7 +118,7 @@ class TestGetUnenrichedEntities:
         from enrich_entities import get_unenriched_entities
 
         mock_client = MagicMock()
-        mock_client._client.execute_read = AsyncMock(
+        mock_client.query.cypher = AsyncMock(
             return_value=[
                 {"id": "1", "name": "John Doe", "type": "PERSON", "description": None},
                 {"id": "2", "name": "Acme Corp", "type": "ORGANIZATION", "description": None},
@@ -136,28 +136,29 @@ class TestGetUnenrichedEntities:
         from enrich_entities import get_unenriched_entities
 
         mock_client = MagicMock()
-        mock_client._client.execute_read = AsyncMock(return_value=[])
+        mock_client.query.cypher = AsyncMock(return_value=[])
 
-        await get_unenriched_entities(mock_client, entity_types=["PERSON", "ORGANIZATION"])
+        await get_unenriched_entities(mock_client, entity_types=["person", "organization"])
 
-        # Check that the query includes the type filter
-        call_args = mock_client._client.execute_read.call_args
-        query = call_args[0][0]
-        assert "'PERSON'" in query
-        assert "'ORGANIZATION'" in query
+        # Types are passed as a PARAMETER, never interpolated into the query.
+        call_args = mock_client.query.cypher.call_args
+        query, params = call_args[0][0], call_args[0][1]
+        assert "'PERSON'" not in query
+        assert params["types"] == ["PERSON", "ORGANIZATION"]
 
     async def test_respects_limit(self):
         """Should include LIMIT clause when specified."""
         from enrich_entities import get_unenriched_entities
 
         mock_client = MagicMock()
-        mock_client._client.execute_read = AsyncMock(return_value=[])
+        mock_client.query.cypher = AsyncMock(return_value=[])
 
         await get_unenriched_entities(mock_client, limit=10)
 
-        call_args = mock_client._client.execute_read.call_args
-        query = call_args[0][0]
-        assert "LIMIT 10" in query
+        call_args = mock_client.query.cypher.call_args
+        query, params = call_args[0][0], call_args[0][1]
+        assert "LIMIT $limit" in query
+        assert params["limit"] == 10
 
 
 @pytest.mark.asyncio
@@ -169,10 +170,8 @@ class TestGetEnrichmentStatus:
         from enrich_entities import get_enrichment_status
 
         mock_client = MagicMock()
-        mock_client._client.execute_read = AsyncMock(
-            return_value=[
-                {"total": 100, "enriched": 50, "pending": 40, "errors": 10}
-            ]
+        mock_client.query.cypher = AsyncMock(
+            return_value=[{"total": 100, "enriched": 50, "pending": 40, "errors": 10}]
         )
 
         result = await get_enrichment_status(mock_client)
@@ -187,7 +186,7 @@ class TestGetEnrichmentStatus:
         from enrich_entities import get_enrichment_status
 
         mock_client = MagicMock()
-        mock_client._client.execute_read = AsyncMock(return_value=[])
+        mock_client.query.cypher = AsyncMock(return_value=[])
 
         result = await get_enrichment_status(mock_client)
 
@@ -206,7 +205,7 @@ class TestUpdateEntityEnrichment:
         from enrich_entities import update_entity_enrichment
 
         mock_client = MagicMock()
-        mock_client._client.execute_write = AsyncMock()
+        mock_client.graph.execute_write = AsyncMock()
 
         enrichment_data = {
             "description": "A famous person",
@@ -217,8 +216,8 @@ class TestUpdateEntityEnrichment:
 
         await update_entity_enrichment(mock_client, "entity-123", enrichment_data)
 
-        mock_client._client.execute_write.assert_called_once()
-        call_args = mock_client._client.execute_write.call_args
+        mock_client.graph.execute_write.assert_called_once()
+        call_args = mock_client.graph.execute_write.call_args
         params = call_args[0][1]
 
         assert params["id"] == "entity-123"
@@ -238,12 +237,12 @@ class TestMarkEntityNotFound:
         from enrich_entities import mark_entity_not_found
 
         mock_client = MagicMock()
-        mock_client._client.execute_write = AsyncMock()
+        mock_client.graph.execute_write = AsyncMock()
 
         await mark_entity_not_found(mock_client, "entity-123", "Not found in Wikipedia")
 
-        mock_client._client.execute_write.assert_called_once()
-        call_args = mock_client._client.execute_write.call_args
+        mock_client.graph.execute_write.assert_called_once()
+        call_args = mock_client.graph.execute_write.call_args
         params = call_args[0][1]
 
         assert params["id"] == "entity-123"
@@ -259,25 +258,25 @@ class TestEnrichEntities:
         from enrich_entities import enrich_entities
 
         mock_client = MagicMock()
-        mock_client._client.execute_read = AsyncMock(
+        mock_client.query.cypher = AsyncMock(
             return_value=[
                 {"id": "1", "name": "John Doe", "type": "PERSON", "description": None},
             ]
         )
-        mock_client._client.execute_write = AsyncMock()
+        mock_client.graph.execute_write = AsyncMock()
 
         stats = await enrich_entities(mock_client, dry_run=True)
 
         assert stats.total == 1
         # No writes should occur in dry run
-        mock_client._client.execute_write.assert_not_called()
+        mock_client.graph.execute_write.assert_not_called()
 
     async def test_returns_zero_stats_when_no_entities(self):
         """Should return zero stats when no entities to enrich."""
         from enrich_entities import enrich_entities
 
         mock_client = MagicMock()
-        mock_client._client.execute_read = AsyncMock(return_value=[])
+        mock_client.query.cypher = AsyncMock(return_value=[])
 
         stats = await enrich_entities(mock_client)
 
@@ -288,19 +287,20 @@ class TestEnrichEntities:
 
     async def test_respects_rate_limit(self):
         """Should respect rate limit between API calls."""
-        from enrich_entities import enrich_entities, EnrichmentStats
-        from neo4j_agent_memory.enrichment.base import EnrichmentStatus, EnrichmentResult
-        import asyncio
         import time
 
+        from enrich_entities import enrich_entities
+
+        from neo4j_agent_memory.enrichment.base import EnrichmentResult, EnrichmentStatus
+
         mock_client = MagicMock()
-        mock_client._client.execute_read = AsyncMock(
+        mock_client.query.cypher = AsyncMock(
             return_value=[
                 {"id": "1", "name": "Entity 1", "type": "PERSON", "description": None},
                 {"id": "2", "name": "Entity 2", "type": "PERSON", "description": None},
             ]
         )
-        mock_client._client.execute_write = AsyncMock()
+        mock_client.graph.execute_write = AsyncMock()
 
         # Mock the WikimediaProvider
         mock_result = EnrichmentResult(
@@ -312,10 +312,10 @@ class TestEnrichEntities:
             wikipedia_url="https://wikipedia.org/test",
         )
 
-        with patch("enrich_entities.WikimediaProvider") as MockProvider:
+        with patch("enrich_entities.build_provider") as mock_build:
             mock_provider = MagicMock()
             mock_provider.enrich = AsyncMock(return_value=mock_result)
-            MockProvider.return_value = mock_provider
+            mock_build.return_value = mock_provider
 
             start_time = time.time()
             stats = await enrich_entities(mock_client, rate_limit=0.1)  # 0.1s rate limit

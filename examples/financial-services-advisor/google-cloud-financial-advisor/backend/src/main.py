@@ -8,17 +8,45 @@ system powered by Google ADK and Neo4j Agent Memory.
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 # Load .env into process environment so ADK/genai can find GOOGLE_API_KEY etc.
-# Check parent dir first (project root), then current dir (backend/)
+# The app root .env is the documented location; backend/.env is an optional
+# developer override loaded second.
 _env_file = Path(__file__).resolve().parent.parent.parent / ".env"
 if _env_file.exists():
     load_dotenv(_env_file)
 load_dotenv()  # also load backend/.env if present (overrides)
+
+
+def _bootstrap_google_genai_env() -> None:
+    """Select the Vertex AI path for google-genai / ADK when appropriate.
+
+    google-genai (and therefore every ADK ``LlmAgent``) chooses between Google
+    AI Studio and Vertex AI from its own environment variables, not from this
+    app's settings. With no ``GOOGLE_API_KEY`` but a project configured, opt
+    into Vertex AI and mirror the project/location under the names google-genai
+    actually reads — this is what makes the README's "Option B: Vertex AI"
+    path work instead of silently having no credentials at all.
+    """
+    if os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY"):
+        return
+    project = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("VERTEX_AI_PROJECT_ID")
+    if not project:
+        return
+    os.environ.setdefault("GOOGLE_GENAI_USE_VERTEXAI", "true")
+    os.environ.setdefault("GOOGLE_CLOUD_PROJECT", project)
+    os.environ.setdefault(
+        "GOOGLE_CLOUD_LOCATION",
+        os.environ.get("VERTEX_AI_LOCATION", "us-central1"),
+    )
+
+
+_bootstrap_google_genai_env()
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -51,8 +79,9 @@ async def lifespan(app: FastAPI):
         await memory_service.initialize()
         logger.info("Memory service initialized")
 
-        # Create domain data service using the same Neo4j connection
-        neo4j_service = Neo4jDomainService(memory_service.client.graph)
+        # Create domain data service on the same MemoryClient: domain reads go
+        # through client.query.cypher, agent memory through the memory layers.
+        neo4j_service = Neo4jDomainService(memory_service.client)
         app.state.neo4j_service = neo4j_service
         logger.info("Neo4j domain service initialized")
 
@@ -83,7 +112,7 @@ AI-powered financial compliance assistant using Google ADK and Neo4j Agent Memor
 ## Features
 - **Multi-Agent System**: Coordinated KYC, AML, Relationship, and Compliance agents
 - **Context Graph Intelligence**: Neo4j-powered relationship analysis
-- **Vertex AI Integration**: Gemini for reasoning, text-embedding-004 for search
+- **Vertex AI Integration**: Gemini for reasoning, gemini-embedding-001 for search
 - **Explainable AI**: Full audit trails for regulatory compliance
 
 ## Agents

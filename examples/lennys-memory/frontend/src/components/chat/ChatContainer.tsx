@@ -136,7 +136,7 @@ export function ChatContainer({
                   fontWeight="semibold"
                   fontFamily="heading"
                 >
-                  Ask about Lenny's Podcast
+                  Ask about Lenny&apos;s Podcast
                 </Text>
                 <Text
                   color="fg.muted"
@@ -257,7 +257,7 @@ export function ChatContainer({
         <PromptInput
           onSend={onSendMessage}
           isLoading={isStreaming}
-          placeholder="Ask about Lenny's Podcast..."
+          placeholder="Ask about Lenny&apos;s Podcast..."
         />
       </Box>
     </Flex>

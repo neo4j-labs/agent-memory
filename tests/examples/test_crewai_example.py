@@ -6,9 +6,12 @@ from pathlib import Path
 
 import pytest
 
-# Check if CrewAI is available
+# Check if CrewAI is available. Import the base class from the same module path
+# the adapter uses (`crewai.memory.memory`): crewai 1.x no longer re-exports
+# `Memory` from the `crewai.memory` package, so probing the package would skip
+# every test below even with crewai installed.
 try:
-    from crewai.memory import Memory
+    from crewai.memory.memory import Memory
 
     CREWAI_AVAILABLE = True
 except ImportError:

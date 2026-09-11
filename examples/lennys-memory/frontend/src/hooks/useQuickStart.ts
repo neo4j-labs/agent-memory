@@ -1,75 +1,85 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useMemo } from "react";
 import type { QuickStartSuggestion } from "@/lib/types";
-import { api } from "@/lib/api";
 
 /**
- * Hook to fetch quick-start suggestions from previous conversations.
- * Returns the first user message from each thread as a suggestion.
+ * Curated quick-start suggestions.
+ *
+ * These used to be read back from `GET /api/threads`, which meant a first-time
+ * visitor's landing page was populated with whatever other visitors of the
+ * public demo had typed (the backend thread registry is process-global), at the
+ * cost of 1 + N sequential requests on first paint. A static list is faster,
+ * deterministic, survives a backend restart and leaks nothing.
+ *
+ * Keep this list in sync with the "Example Questions" section of the example
+ * README - each entry should exercise a different tool group.
+ */
+export const SUGGESTED_QUERIES: readonly QuickStartSuggestion[] = [
+  {
+    id: "semantic-search",
+    category: "Semantic search",
+    firstMessage: "What did Brian Chesky say about product management?",
+  },
+  {
+    id: "cross-episode",
+    category: "Cross-episode comparison",
+    firstMessage: "Compare what Brian Chesky and Andy Johns said about growth",
+  },
+  {
+    id: "entity-graph",
+    category: "Entity knowledge graph",
+    firstMessage:
+      "Who are the most frequently mentioned people across all episodes?",
+  },
+  {
+    id: "entity-context",
+    category: "Entity knowledge graph",
+    firstMessage: "Tell me about Y Combinator - what do guests say about it?",
+  },
+  {
+    id: "geospatial",
+    category: "Geospatial analysis",
+    firstMessage: "What locations are mentioned in the Brian Chesky episode?",
+  },
+  {
+    id: "geospatial-near",
+    category: "Geospatial analysis",
+    firstMessage: "Find cities mentioned within 100km of San Francisco",
+  },
+  {
+    id: "preferences",
+    category: "Personalization",
+    firstMessage: "I prefer detailed answers with direct quotes from guests",
+  },
+  {
+    id: "reasoning",
+    category: "Reasoning memory",
+    firstMessage: "What similar questions have been asked before?",
+  },
+  {
+    id: "stats",
+    category: "Memory stats",
+    firstMessage: "How much is in your memory right now?",
+  },
+];
+
+/**
+ * Hook returning the curated quick-start suggestions.
+ *
+ * Kept as a hook (rather than importing the constant directly) so the call
+ * sites stay unchanged if per-visitor history is reintroduced later - that
+ * requires backend multi-tenancy so one visitor never sees another's threads.
  */
 export function useQuickStart(limit: number = 10) {
-  const [suggestions, setSuggestions] = useState<QuickStartSuggestion[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const fetchSuggestions = useCallback(async () => {
-    const controller = new AbortController();
-
-    setIsLoading(true);
-    setError(null);
-
-    try {
-      // Fetch thread list
-      const threads = await api.threads.list();
-
-      // Get first user message from each thread (up to limit)
-      const suggestionsWithMessages: QuickStartSuggestion[] = [];
-
-      for (const thread of threads.slice(0, limit)) {
-        try {
-          const threadData = await api.threads.get(thread.id);
-          const firstUserMessage = threadData.messages?.find(
-            (m) => m.role === "user"
-          );
-          if (firstUserMessage) {
-            suggestionsWithMessages.push({
-              id: thread.id,
-              firstMessage: firstUserMessage.content,
-              timestamp: firstUserMessage.timestamp,
-            });
-          }
-        } catch {
-          // Skip threads that fail to load
-        }
-      }
-
-      if (!controller.signal.aborted) {
-        setSuggestions(suggestionsWithMessages);
-      }
-    } catch (err) {
-      if (!controller.signal.aborted) {
-        setError(
-          err instanceof Error ? err.message : "Failed to fetch suggestions"
-        );
-      }
-    } finally {
-      if (!controller.signal.aborted) {
-        setIsLoading(false);
-      }
-    }
-
-    return () => controller.abort();
-  }, [limit]);
-
-  useEffect(() => {
-    fetchSuggestions();
-  }, [fetchSuggestions]);
+  const suggestions = useMemo(
+    () => SUGGESTED_QUERIES.slice(0, limit),
+    [limit],
+  );
 
   return {
     suggestions,
-    isLoading,
-    error,
-    refresh: fetchSuggestions,
+    isLoading: false,
+    error: null as string | null,
   };
 }

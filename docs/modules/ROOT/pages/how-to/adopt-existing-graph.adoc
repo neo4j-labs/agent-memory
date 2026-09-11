@@ -6,8 +6,8 @@
 include::partial$backend-bolt-only.adoc[]
 
 How to layer `neo4j-agent-memory` on top of a Neo4j graph that already
-exists in production, so that library writes (entity extraction, MENTIONS
-edges, relation writes) link to your existing nodes instead of creating
+exists in production, so that library writes (MENTIONS edges, relation
+writes, entity upserts) link to your existing nodes instead of creating
 duplicates.
 
 [.lead]
@@ -122,27 +122,69 @@ already-adopted count for the rest.
 == Verification
 
 After adoption, library writes that MERGE on `(:Entity {name, type})`
-should link to your existing nodes:
+land on your existing nodes. Name the entities explicitly so the write is
+deterministic — automatic NER extraction does not link to adopted nodes
+(see <<Limitations>>):
 
 [source,python]
 ----
-# Add a message that names someone in the existing graph.
+from neo4j_agent_memory.schema.models import EntityRef
+
+# Add a message that names people and movies in the existing graph.
 await client.short_term.add_message(
-    "demo", "user", "Have you seen Inception? Bob Singh directed it."
+    "demo",
+    "user",
+    "Have you seen Inception? Bob Singh directed it.",
+    extraction_mode="explicit",
+    explicit_mentions=[
+        EntityRef(name="Inception", type="MOVIE"),
+        EntityRef(name="Bob Singh", type="PERSON"),
+    ],
 )
 
-# Verify there's still exactly one node per name in the graph.
-rows = await client.graph.execute_read(
+# Count every node the library could have created, across *all* labels —
+# a duplicate shows up as a second label set such as ["Entity", "Object"].
+# `client.query.cypher` is the portable read accessor (it works on NAMS
+# too); `client.graph` remains for write Cypher on bolt.
+rows = await client.query.cypher(
     """
     UNWIND ['Bob Singh', 'Inception'] AS target
-    MATCH (n {name: target})
-    WHERE n:Person OR n:Movie
-    RETURN target, count(n) AS count
+    MATCH (n) WHERE n.name = target
+    RETURN target, count(n) AS total, collect(DISTINCT labels(n)) AS label_sets
+    ORDER BY target
     """
 )
 for row in rows:
-    print(f"{row['target']}: {row['count']} (expect 1)")
+    print(f"{row['target']}: {row['total']} (expect 1) {row['label_sets']}")
+
+# Adoption writes no embedding, so backfill before semantic search.
+await client.long_term.add_entity(
+    "Inception", "MOVIE", resolve=False, deduplicate=False
+)
+movies = await client.long_term.search_entities(
+    "science fiction film", entity_types=["MOVIE"]
+)
 ----
+
+[[Limitations]]
+== Limitations
+
+Verified against v0.5.0 on bolt:
+
+* **Automatic extraction does not link to adopted nodes.** The NER
+extractors map their labels through POLE+O, so a `MOVIE` mention arrives
+typed `OBJECT` and MERGEs a second `:Entity:Object` node; give the
+extractor a `label_mapping` that preserves `MOVIE` and the MERGE finds the
+adopted node but no `MENTIONS` edge is written, because the link step looks
+the entity up by the id it generated rather than the id the MERGE returned.
+Use `extraction_mode="explicit"` with `EntityRef` instead.
+* **`SchemaConfig.strict_types` is not forwarded.** `MemoryClient` does not
+pass `schema_config` to `LongTermMemory`, so out-of-schema types are not
+rejected today.
+* **Adopted ids must be UUID-shaped for the read helpers.** Nodes adopted
+without a pre-existing `id` get a deterministic `<label_lc>:<name>` id;
+helpers that hydrate `Entity.id` as a `UUID` (such as `search_entities()`)
+raise `ValueError` on those rows. Read them with `client.query.cypher`.
 
 == Edge cases
 

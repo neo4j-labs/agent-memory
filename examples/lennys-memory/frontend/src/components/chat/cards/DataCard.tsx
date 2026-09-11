@@ -23,7 +23,7 @@ import {
 import { LuChevronRight } from "react-icons/lu";
 import { BaseCard } from "./BaseCard";
 import { LuTable } from "react-icons/lu";
-import type { DataCardProps, ColumnDef } from "./types";
+import type { DataCardProps } from "./types";
 
 /**
  * Format a cell value for display

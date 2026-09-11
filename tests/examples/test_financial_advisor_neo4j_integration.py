@@ -14,8 +14,10 @@ All example app modules are loaded via importlib to avoid relative import issues
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import inspect
+import json
 import sys
 import types
 from datetime import datetime
@@ -28,6 +30,13 @@ import pytest
 EXAMPLES_DIR = Path(__file__).parent.parent.parent / "examples"
 APP_DIR = EXAMPLES_DIR / "financial-services-advisor" / "google-cloud-financial-advisor"
 BACKEND_SRC = APP_DIR / "backend" / "src"
+
+# Synthetic package name for the backend modules loaded below. Deliberately
+# NOT "src": the repository root, every full-stack backend and the lennys
+# backend each have a ``src`` directory, so squatting on that name in
+# ``sys.modules`` at import time shadowed it for the whole session and broke
+# ``import src.agent.tools`` in tests/examples/test_lennys_memory_example.py.
+PKG = "gcp_fsa_backend"
 
 
 # ============================================================================
@@ -42,12 +51,12 @@ def _setup_backend_package_hierarchy():
     to resolve when loading individual modules from the example app.
     """
     src_dir = BACKEND_SRC
-    # Register 'src' as the top-level package
-    if "src" not in sys.modules:
-        src_pkg = types.ModuleType("src")
+    # Register the synthetic top-level package
+    if PKG not in sys.modules:
+        src_pkg = types.ModuleType(PKG)
         src_pkg.__path__ = [str(src_dir)]
-        src_pkg.__package__ = "src"
-        sys.modules["src"] = src_pkg
+        src_pkg.__package__ = PKG
+        sys.modules[PKG] = src_pkg
 
     # Register sub-packages
     sub_packages = [
@@ -59,7 +68,7 @@ def _setup_backend_package_hierarchy():
         "api.routes",
     ]
     for sub in sub_packages:
-        full_name = f"src.{sub}"
+        full_name = f"{PKG}.{sub}"
         if full_name not in sys.modules:
             pkg = types.ModuleType(full_name)
             pkg.__path__ = [str(src_dir / sub.replace(".", "/"))]
@@ -85,9 +94,9 @@ _setup_backend_package_hierarchy()
 
 # Pre-load neo4j_service.py (no problematic relative imports — only uses stdlib)
 _neo4j_service_mod = _load_module(
-    "src.services.neo4j_service",
+    f"{PKG}.services.neo4j_service",
     BACKEND_SRC / "services" / "neo4j_service.py",
-    package="src.services",
+    package=f"{PKG}.services",
 )
 Neo4jDomainService = _neo4j_service_mod.Neo4jDomainService
 
@@ -98,22 +107,34 @@ Neo4jDomainService = _neo4j_service_mod.Neo4jDomainService
 
 
 def _make_graph_client(**overrides) -> AsyncMock:
-    """Create a mock Neo4j graph client (Neo4jClient)."""
-    graph = AsyncMock()
-    graph.execute_read = AsyncMock(return_value=[])
-    graph.execute_write = AsyncMock(return_value=[])
+    """Create a mock ``MemoryClient`` for ``Neo4jDomainService``.
+
+    The service takes the ``MemoryClient`` itself and splits reads from writes:
+    reads go through ``client.query.cypher`` (portable, read-only validated),
+    writes through ``client.graph.execute_write`` (bolt-only). Both are wired to
+    the same mocks here, and ``execute_read``/``execute_write`` are kept as
+    aliases so the assertions in this module read the same either way.
+    """
+    client = AsyncMock()
+    read = AsyncMock(return_value=[])
+    write = AsyncMock(return_value=[])
+    client.query.cypher = read
+    client.graph.execute_read = read
+    client.graph.execute_write = write
+    client.execute_read = read
+    client.execute_write = write
     for key, val in overrides.items():
-        setattr(graph, key, val)
-    return graph
+        setattr(client, key, val)
+    return client
 
 
 def _load_tool_module(filename: str) -> types.ModuleType:
     """Load a tool module with proper package context for relative imports."""
     basename = filename.replace(".py", "")
-    mod_name = f"src.tools.{basename}"
+    mod_name = f"{PKG}.tools.{basename}"
     # Remove cached version if reloading
     sys.modules.pop(mod_name, None)
-    return _load_module(mod_name, BACKEND_SRC / "tools" / filename, package="src.tools")
+    return _load_module(mod_name, BACKEND_SRC / "tools" / filename, package=f"{PKG}.tools")
 
 
 SAMPLE_CUSTOMER = {
@@ -635,8 +656,9 @@ class TestToolFunctions:
         svc.trace_ownership = AsyncMock(
             return_value={"entity_id": "E1", "ownership_chains": [], "ubo_identified": False}
         )
-        svc._graph = AsyncMock()
-        svc._graph.execute_read = AsyncMock(return_value=[])
+        # A few tool functions own one-off queries and call the service's public
+        # read() helper (which forwards to client.query.cypher).
+        svc.read = AsyncMock(return_value=[])
         return svc
 
     # -- KYC tools -----------------------------------------------------------
@@ -746,7 +768,7 @@ class TestToolFunctions:
     @pytest.mark.asyncio
     async def test_flag_suspicious_transaction_success(self, neo4j_service):
         mod = _load_tool_module("aml_tools.py")
-        neo4j_service._graph.execute_read.return_value = [
+        neo4j_service.read.return_value = [
             {
                 "customer_id": "CUST-003",
                 "transaction": {"id": "TXN-010", "amount": 9500, "type": "cash_deposit"},
@@ -819,7 +841,7 @@ class TestToolFunctions:
     @pytest.mark.asyncio
     async def test_find_connections_found(self, neo4j_service):
         mod = _load_tool_module("relationship_tools.py")
-        neo4j_service._graph.execute_read.return_value = [
+        neo4j_service.read.return_value = [
             {"entity": {"id": "CUST-003", "name": "Global Holdings", "type": "corporate"}}
         ]
         neo4j_service.find_connections.return_value = {
@@ -859,36 +881,23 @@ class TestToolFunctions:
 
 
 class TestAgentWiring:
-    """Test bind_tool function — loaded directly from agents/__init__.py."""
+    """Test ``bind_tool``, imported from the module that actually defines it.
+
+    Previously this class re-``exec``'d the function body extracted from the
+    source text, which cannot catch an import-time or attribute error. Now the
+    real ``src/agents/_base.py`` is loaded (it imports google-adk, which the
+    repo's dev environment provides via the ``[google-adk]`` extra).
+    """
 
     def _get_bind_tool(self):
-        """Extract bind_tool from agents/__init__.py without triggering ADK imports."""
-        # Read the source and extract just the bind_tool function
-        source = (BACKEND_SRC / "agents" / "__init__.py").read_text(encoding="utf-8")
-        # Build a minimal module with just bind_tool
-        code = """
-import inspect
-from functools import wraps
-
-"""
-        # Extract the function definition
-        lines = source.split("\n")
-        in_func = False
-        func_lines = []
-        for line in lines:
-            if line.startswith("def bind_tool("):
-                in_func = True
-            if in_func:
-                func_lines.append(line)
-                if line and not line[0].isspace() and len(func_lines) > 1:
-                    # End of function (next top-level definition)
-                    func_lines.pop()
-                    break
-        code += "\n".join(func_lines)
-
-        ns: dict[str, Any] = {}
-        exec(code, ns)
-        return ns["bind_tool"]
+        """Import the real ``bind_tool`` from ``src/agents/_base.py``."""
+        pytest.importorskip("google.adk", reason="needs the [google-adk] extra")
+        module = sys.modules.get(f"{PKG}.agents._base") or _load_module(
+            f"{PKG}.agents._base",
+            BACKEND_SRC / "agents" / "_base.py",
+            package=f"{PKG}.agents",
+        )
+        return module.bind_tool
 
     def test_bind_tool_removes_neo4j_service_from_signature(self):
         _bind_tool = self._get_bind_tool()
@@ -1064,32 +1073,41 @@ class TestMemoryClientGraphProperty:
 
 
 class TestSSEHelpers:
-    """Test SSE helper functions from chat.py."""
+    """Test the SSE frame formatter and the tool-result renderer.
+
+    ``truncate_result`` now lives in ``src/services/adk_events.py`` (shared by
+    the streaming and non-streaming routes) and is imported as a real module.
+    ``_sse_event`` is genuinely local to ``chat.py`` and is still extracted from
+    its source, since importing that module requires google-adk *and* the
+    library's optional extras.
+    """
 
     @pytest.fixture(autouse=True)
     def _load(self):
-        """Extract _sse_event and _truncate_result from chat.py."""
-        source = (BACKEND_SRC / "api" / "routes" / "chat.py").read_text(encoding="utf-8")
-        code = "import json\n\n"
+        module = sys.modules.get(f"{PKG}.services.adk_events") or _load_module(
+            f"{PKG}.services.adk_events",
+            BACKEND_SRC / "services" / "adk_events.py",
+            package=f"{PKG}.services",
+        )
+        self._truncate_result = module.truncate_result
 
-        # Extract _sse_event
+        source = (BACKEND_SRC / "api" / "routes" / "chat.py").read_text(encoding="utf-8")
         lines = source.split("\n")
-        for func_name in ("_sse_event", "_truncate_result"):
-            in_func = False
-            func_lines = []
-            for line in lines:
-                if line.startswith(f"def {func_name}("):
-                    in_func = True
-                elif in_func and line and not line[0].isspace() and line.strip():
-                    break
-                if in_func:
-                    func_lines.append(line)
-            code += "\n".join(func_lines) + "\n\n"
+        code = "import json\n\n"
+        in_func = False
+        func_lines: list[str] = []
+        for line in lines:
+            if line.startswith("def _sse_event("):
+                in_func = True
+            elif in_func and line and not line[0].isspace() and line.strip():
+                break
+            if in_func:
+                func_lines.append(line)
+        code += "\n".join(func_lines) + "\n"
 
         ns: dict[str, Any] = {}
         exec(code, ns)
         self._sse_event = ns["_sse_event"]
-        self._truncate_result = ns["_truncate_result"]
 
     def test_sse_event_format(self):
         result = self._sse_event("agent_start", {"agent": "kyc_agent"})
@@ -1220,11 +1238,11 @@ class TestNewFileStructure:
             )
 
     def test_agent_files_have_bind_tool(self, app_dir):
-        # bind_tool is now imported from the agents package __init__.py
+        # bind_tool lives in agents/_base.py and is re-exported from the package.
         init_content = (app_dir / "backend" / "src" / "agents" / "__init__.py").read_text(
             encoding="utf-8"
         )
-        assert "def bind_tool(" in init_content, "__init__.py missing bind_tool"
+        assert "bind_tool" in init_content, "__init__.py should re-export bind_tool"
 
         for agent_file in [
             "kyc_agent.py",
@@ -1235,7 +1253,12 @@ class TestNewFileStructure:
             content = (app_dir / "backend" / "src" / "agents" / agent_file).read_text(
                 encoding="utf-8"
             )
-            assert "bind_tool" in content, f"{agent_file} missing bind_tool import"
+            assert "create_specialist_agent" in content, (
+                f"{agent_file} should build its agent through the shared factory"
+            )
+        base = (app_dir / "backend" / "src" / "agents" / "_base.py").read_text(encoding="utf-8")
+        assert "def bind_tool(" in base, "_base.py should define bind_tool"
+        assert "load_memory" in base, "specialists should use ADK's load_memory for reads"
 
     def test_main_initializes_neo4j_service(self, app_dir):
         content = (app_dir / "backend" / "src" / "main.py").read_text(encoding="utf-8")
@@ -1264,22 +1287,81 @@ class TestNewFileStructure:
         assert "text/event-stream" in content, "chat.py should use SSE content type"
 
     def test_chat_records_reasoning_traces(self, app_dir):
-        content = (app_dir / "backend" / "src" / "api" / "routes" / "chat.py").read_text(
+        """Trace recording moved into services/trace_writer.py, shared by both routes."""
+        chat = (app_dir / "backend" / "src" / "api" / "routes" / "chat.py").read_text(
             encoding="utf-8"
         )
-        assert "start_trace" in content, "chat.py should call start_trace"
-        assert "add_step" in content, "chat.py should call add_step"
-        assert "record_tool_call" in content, "chat.py should call record_tool_call"
-        assert "complete_trace" in content, "chat.py should call complete_trace"
-        assert "ToolCallStatus" in content, "chat.py should import ToolCallStatus"
+        assert "TraceWriter" in chat, "chat.py should record a trace"
+
+        writer = (app_dir / "backend" / "src" / "services" / "trace_writer.py").read_text(
+            encoding="utf-8"
+        )
+        for expected in (
+            "start_trace",
+            "add_step",
+            "record_tool_call",
+            "complete_trace",
+            "ToolCallStatus",
+            # audit-grade additions
+            "triggered_by_message_id",
+            "touched_entities",
+            "TraceOutcome",
+            "EntityRef",
+        ):
+            assert expected in writer, f"trace_writer.py should use {expected}"
 
     def test_chat_filters_internal_adk_functions(self, app_dir):
-        content = (app_dir / "backend" / "src" / "api" / "routes" / "chat.py").read_text(
+        """Delegation functions are surfaced as agent_delegate, never as tool calls."""
+        events = (app_dir / "backend" / "src" / "services" / "adk_events.py").read_text(
             encoding="utf-8"
         )
-        assert "_internal_fns" in content, "chat.py should define _internal_fns set"
-        assert '"transfer_to_agent"' in content, "Should filter transfer_to_agent"
-        assert '"transfer"' in content, "Should filter transfer"
+        assert "INTERNAL_FUNCTIONS" in events, "adk_events.py should define INTERNAL_FUNCTIONS"
+        assert '"transfer_to_agent"' in events, "Should filter transfer_to_agent"
+        assert '"transfer"' in events, "Should filter transfer"
+
+    def test_adk_event_shape_lives_in_one_module(self, app_dir):
+        """Only services/adk_events.py may read the ADK Event surface."""
+        routes = app_dir / "backend" / "src" / "api" / "routes"
+        for module in sorted(routes.glob("*.py")):
+            content = module.read_text(encoding="utf-8")
+            assert "get_function_calls" not in content, module.name
+            assert "get_function_responses" not in content, module.name
+            # The attributes the old loops guessed at do not exist on Event.
+            assert "event.tool_calls" not in content, module.name
+            assert "event.agent_name" not in content, module.name
+
+    def test_runners_receive_the_memory_service(self, app_dir):
+        """Runner(memory_service=...) is what gives the agents ADK's load_memory."""
+        for route_file in ("chat.py", "investigations.py"):
+            content = (app_dir / "backend" / "src" / "api" / "routes" / route_file).read_text(
+                encoding="utf-8"
+            )
+            assert "memory_service=memory_service.adk_memory_service" in content, route_file
+
+    def test_investigations_are_persisted_not_in_a_dict(self, app_dir):
+        content = (app_dir / "backend" / "src" / "api" / "routes" / "investigations.py").read_text(
+            encoding="utf-8"
+        )
+        assert "_investigations: dict" not in content, "process-local investigation store removed"
+        assert "neo4j_service.list_investigations" in content
+        assert "neo4j_service.update_investigation" in content
+        assert "get_trace_with_steps" in content, "audit trail comes from the reasoning trace"
+
+    def test_domain_reads_use_the_portable_query_accessor(self, app_dir):
+        content = (app_dir / "backend" / "src" / "services" / "neo4j_service.py").read_text(
+            encoding="utf-8"
+        )
+        assert "self._client.query.cypher" in content, "reads should use client.query.cypher"
+        assert "execute_read" not in content, "client.graph.execute_read is deprecated"
+
+    def test_memory_graph_includes_memory_labels(self, app_dir):
+        content = (app_dir / "backend" / "src" / "services" / "neo4j_service.py").read_text(
+            encoding="utf-8"
+        )
+        for label in ("Conversation", "Message", "Entity", "ReasoningTrace", "ToolCall"):
+            assert label in content, f"get_memory_graph should be able to return :{label}"
+        assert "$session_id" in content, "get_memory_graph should honour session_id"
+        assert "TOUCHED" in content, "the audit edge should be queryable"
 
     def test_traces_route_has_endpoints(self, app_dir):
         content = (app_dir / "backend" / "src" / "api" / "routes" / "traces.py").read_text(
@@ -1376,7 +1458,228 @@ class TestNewFileStructure:
         assert "getSessionTraces" in content, "api.ts should have getSessionTraces"
         assert "AgentEvent" in content, "api.ts should define AgentEvent type"
 
-    def test_frontend_package_has_framer_motion(self):
+    def test_frontend_package_has_an_animation_library(self):
+        """`motion` is the current package name; `framer-motion` was its predecessor."""
         pkg = APP_DIR / "frontend" / "package.json"
         content = pkg.read_text(encoding="utf-8")
-        assert "framer-motion" in content, "package.json should include framer-motion"
+        assert '"motion"' in content or '"framer-motion"' in content, (
+            "package.json should include motion (or legacy framer-motion)"
+        )
+
+
+# ============================================================================
+# Shared sample data (consumed by BOTH the AWS and GCP apps)
+#
+# One dataset, one loader, two backends. These assertions pin the invariants
+# the demo's narrative depends on — remove the 4x $9,500 cash deposits and the
+# structuring walkthrough has nothing to find — plus the two loader properties
+# that were outright bugs: an unconditional `MATCH (n) DETACH DELETE n`, and
+# transaction dates stored as strings so every 90-day AML window came back
+# empty.
+# ============================================================================
+
+SHARED_DATA_DIR = EXAMPLES_DIR / "financial-services-advisor" / "data"
+LOADER = SHARED_DATA_DIR / "load_sample_data.py"
+
+
+def _shared_json(name: str):
+    return json.loads((SHARED_DATA_DIR / name).read_text(encoding="utf-8"))
+
+
+class TestSharedSampleDataShape:
+    """Every fixture file parses and carries the fields the loader reads."""
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "customers.json",
+            "organizations.json",
+            "transactions.json",
+            "sanctions.json",
+            "pep.json",
+            "alerts.json",
+        ],
+    )
+    def test_fixture_parses(self, name):
+        assert _shared_json(name)
+
+    def test_customers(self):
+        customers = _shared_json("customers.json")
+        assert len(customers) == 3
+        assert {c["id"] for c in customers} == {"CUST-001", "CUST-002", "CUST-003"}
+        for customer in customers:
+            assert {"id", "name", "type", "documents", "kyc_status"} <= customer.keys()
+            assert customer["type"] in {"individual", "corporate"}
+
+    def test_document_dates_are_relative_not_absolute(self):
+        """A shipped fixture with absolute expiry dates ages into "everything
+        expired". Expiries are offsets from the load date."""
+        for customer in _shared_json("customers.json"):
+            for doc_type, info in customer["documents"].items():
+                assert "expiry" not in info, f"{customer['id']}/{doc_type} has an absolute expiry"
+                if "expiry_days" in info:
+                    assert info["expiry_days"] > 0
+
+    def test_transactions_use_relative_offsets(self):
+        """``days_ago`` rather than a 2024 date, so the AML windows keep matching."""
+        transactions = _shared_json("transactions.json")
+        assert len(transactions) == 16
+        for txn in transactions:
+            assert "days_ago" in txn, f"{txn['id']} still carries an absolute date"
+            assert isinstance(txn["days_ago"], int)
+
+    def test_newest_transaction_is_inside_a_90_day_window(self):
+        """The acceptance criterion for the temporal fix: ``get_transactions``
+        defaults to ``days=90``, so the fixture must have rows inside it."""
+        offsets = [txn["days_ago"] for txn in _shared_json("transactions.json")]
+        assert min(offsets) < 90
+        assert max(offsets) < 90, "some transactions fall outside every default window"
+
+    def test_structuring_pattern_survives(self):
+        """Four cash deposits in [9000, 10000) for CUST-003 — the sub-$10K CTR
+        threshold pattern ``detect_structuring`` looks for."""
+        deposits = [
+            txn
+            for txn in _shared_json("transactions.json")
+            if txn["customer_id"] == "CUST-003"
+            and txn["type"] == "cash_deposit"
+            and 9000 <= txn["amount"] < 10000
+        ]
+        assert len(deposits) == 4
+        # Consecutive days, which is what makes it a pattern rather than a coincidence.
+        offsets = sorted(txn["days_ago"] for txn in deposits)
+        assert offsets == list(range(offsets[0], offsets[0] + 4))
+
+    def test_rapid_movement_pair_within_two_days(self):
+        """``detect_rapid_movement`` correlates a wire_in with a wire_out of
+        90-100% of the amount inside two days."""
+        transactions = _shared_json("transactions.json")
+        pairs = [
+            (wire_in, wire_out)
+            for wire_in in transactions
+            for wire_out in transactions
+            if wire_in["customer_id"] == wire_out["customer_id"]
+            and wire_in["type"] == "wire_in"
+            and wire_out["type"] == "wire_out"
+            and 0 <= wire_in["days_ago"] - wire_out["days_ago"] <= 2
+            and wire_in["amount"] * 0.9 <= wire_out["amount"] <= wire_in["amount"]
+        ]
+        assert pairs, "no wire-in/wire-out pair inside the two-day window"
+
+    def test_offshore_counterparties_exist_for_layering(self):
+        counterparties = " ".join(
+            str(txn.get("counterparty", "")) for txn in _shared_json("transactions.json")
+        )
+        assert any(
+            token in counterparties
+            for token in ("Cayman", "Seychelles", "Panama", "Offshore", "Shell Corp")
+        )
+
+    def test_at_least_one_organization_has_shell_indicators(self):
+        orgs = _shared_json("organizations.json")
+        assert [org for org in orgs if org.get("shell_indicators")]
+
+    def test_alert_transaction_ids_resolve(self):
+        """A dangling transaction_id means an alert renders with no evidence."""
+        known = {txn["id"] for txn in _shared_json("transactions.json")}
+        for alert in _shared_json("alerts.json"):
+            for txn_id in alert.get("transaction_ids", []):
+                assert txn_id in known, f"{alert['id']} references unknown {txn_id}"
+
+    def test_alert_customer_ids_resolve(self):
+        known = {customer["id"] for customer in _shared_json("customers.json")}
+        for alert in _shared_json("alerts.json"):
+            assert alert["customer_id"] in known
+
+    def test_alert_evidence_has_no_absolute_dates(self):
+        """Evidence strings used to quote 2024 dates the loader no longer writes."""
+        for alert in _shared_json("alerts.json"):
+            for line in alert.get("evidence", []):
+                assert "2024-" not in line, f"{alert['id']} evidence quotes a stale date: {line}"
+
+    def test_pep_relatives_point_at_a_known_pep(self):
+        data = _shared_json("pep.json")
+        names = {pep["name"] for pep in data["peps"]}
+        assert len(names) >= 3
+        for relative in data.get("pep_relatives", []):
+            assert relative["pep"] in names
+
+
+class TestSharedLoaderSafety:
+    """Static guards on the loader. The behavioural versions live in the AWS
+    backend's ``tests/test_integration.py``, which runs it against Neo4j."""
+
+    def test_loader_exists_and_parses(self):
+        ast.parse(LOADER.read_text(encoding="utf-8"))
+
+    def test_loader_never_deletes_the_whole_database(self):
+        """It used to run ``MATCH (n) DETACH DELETE n`` unconditionally, on every
+        load, destroying every :Conversation / :Message / :Entity /
+        :ReasoningTrace the library had written."""
+        source = LOADER.read_text(encoding="utf-8")
+        assert "MATCH (n) DETACH DELETE n" not in source
+        assert "--reset" in source, "the destructive path must be behind an explicit flag"
+
+    def test_reset_is_scoped_to_the_demo_labels(self):
+        source = LOADER.read_text(encoding="utf-8")
+        assert "DEMO_LABELS" in source
+        for label in ("Customer", "Transaction", "Alert", "Organization"):
+            assert f'"{label}"' in source
+        # ...and nothing the library owns.
+        for label in ("Conversation", "Message", "ReasoningTrace", "ToolCall"):
+            assert f'"{label}"' not in source, f"{label} must never be in the delete scope"
+
+    def test_loader_is_idempotent_by_construction(self):
+        """Every write is a MERGE, so a second run changes nothing. The old
+        loader used CREATE and silently duplicated on a re-run."""
+        source = LOADER.read_text(encoding="utf-8")
+        assert "MERGE (c:Customer" in source
+        assert "MERGE (t:Transaction" in source
+        assert "MERGE (a:Alert" in source
+        assert "CREATE (t:Transaction" not in source
+        assert "CREATE (s:SanctionedEntity" not in source
+
+    def test_loader_stores_dates_as_dates(self):
+        """String dates made ``t.date >= date() - duration(...)`` evaluate to null."""
+        source = LOADER.read_text(encoding="utf-8")
+        assert "t.date = date(row.date)" in source
+
+    def test_loader_batches_instead_of_looping_round_trips(self):
+        source = LOADER.read_text(encoding="utf-8")
+        assert source.count("UNWIND $rows AS row") >= 8
+        assert "execute_write" in source, "the load should be one transaction, not autocommit"
+
+    def test_loader_does_not_interpolate_labels_from_data(self):
+        """``CREATE (c:Customer:{label} ...)`` took its label from a JSON field."""
+        source = LOADER.read_text(encoding="utf-8")
+        assert "Customer:{label}" not in source
+
+    def test_loader_accepts_both_credential_spellings(self):
+        source = LOADER.read_text(encoding="utf-8")
+        assert "NEO4J_USERNAME" in source and "NEO4J_USER" in source
+
+    def test_loader_refuses_to_guess_a_password(self):
+        source = LOADER.read_text(encoding="utf-8")
+        assert 'os.environ.get("NEO4J_PASSWORD", "password")' not in source
+        assert "No Neo4j password" in source
+
+    def test_loader_offers_the_adoption_phase(self):
+        """``adopt_existing_graph`` is the feature this dataset exists to show:
+        a pre-existing domain graph becoming long-term memory."""
+        source = LOADER.read_text(encoding="utf-8")
+        assert "adopt_existing_graph" in source
+        assert "SchemaModel.CUSTOM" in source
+        assert "AdoptionReport" in source or "report.total_migrated" in source
+
+    def test_loader_marks_every_node_with_the_compliance_label(self):
+        """The marker keeps the domain namespace apart from the ``:Entity``
+        nodes extraction writes, which land on ``:Person`` / ``:Organization``
+        too."""
+        source = LOADER.read_text(encoding="utf-8")
+        assert 'MARKER = "Compliance"' in source
+        assert source.count("{MARKER}") >= 8
+
+    def test_loader_is_annotated(self):
+        """It sits in the mypy/ty target list now, so `main()` needs a return type."""
+        source = LOADER.read_text(encoding="utf-8")
+        assert "def main() -> None:" in source

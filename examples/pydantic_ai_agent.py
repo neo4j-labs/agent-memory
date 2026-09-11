@@ -1,212 +1,339 @@
 #!/usr/bin/env python3
-"""
-Pydantic AI integration example for neo4j-agent-memory.
+"""PydanticAI + `neo4j-agent-memory`: an agent that remembers, end to end.
 
-This example shows how to use Neo4j Agent Memory with Pydantic AI:
-- Using MemoryDependency for context injection
-- Using memory tools for agent memory operations
+Six numbered sections, each printing its own banner:
+
+    1. Seed long-term memory — the preferences a returning user already has
+    2. `MemoryDependency` — context injection, add/search preferences
+    3. `create_memory_tools()` — the three tools the model can call itself
+    4. Turn 1 — run the agent, persist the exchange, record a reasoning trace
+    5. Turn 2 — prove the second turn sees the first through memory
+    6. Recap — what the two turns left in the graph
+
+Written against PydanticAI 2.x (`pydantic-ai-slim>=2.0,<3`, installed by the
+`[pydantic-ai]` extra): the agent takes a *model instance*, the memory tools are
+registered on the agent, the dynamic prompt uses the `instructions` hook, and the
+run result exposes `.output` (`.data` was removed in 1.0).
+
+Runs with or without an API key:
+
+* with `OPENAI_API_KEY` — a real `OpenAIChatModel` answers, and the same model
+  instance is handed to memory for entity extraction via
+  `llm_provider_from_pydantic_ai()`, so credentials are configured once
+* without a key — `pydantic_ai.models.test.TestModel` answers offline (canned
+  output, tools called with placeholder arguments) and a local
+  sentence-transformers embedder replaces OpenAI embeddings. The graph writes,
+  the reasoning trace and the memory read-back are all real.
+
+Bolt-only: it pins `BoltSettings` so exporting `MEMORY_API_KEY` cannot silently
+retarget the hosted backend. For the hosted path use `nams_memory_tools()` (the
+NAMS counterpart of `create_memory_tools()`) — see `examples/nams-quickstart/`.
 
 Requirements:
-    - Neo4j running (or set NEO4J_URI in .env)
-    - pip install neo4j-agent-memory[pydantic-ai,openai]
-    - OPENAI_API_KEY environment variable set (or in .env)
+    - A Neo4j to talk to: `make neo4j-start` (or set NEO4J_URI / NEO4J_PASSWORD)
+    - `uv sync --extra pydantic-ai --extra sentence-transformers` (keyless), or
+      add `--extra openai` plus OPENAI_API_KEY for the OpenAI path
 
-Environment variables can be set in examples/.env file.
+Configuration comes from `examples/.env` — copy `examples/.env.example`.
+
+Run:
+    uv run python examples/pydantic_ai_agent.py
 """
 
-import asyncio
-import os
-from pathlib import Path
+from __future__ import annotations
 
+import os
+from typing import Any, cast
+
+from _env import NEO4J_PASSWORD, NEO4J_URI, NEO4J_USERNAME, OPENAI_API_KEY
 from pydantic import SecretStr
 
+from neo4j_agent_memory import (
+    ExtractionConfig,
+    ExtractorType,
+    MemoryClient,
+    Neo4jConfig,
+    ReasoningMemory,
+)
+from neo4j_agent_memory.config.settings import BoltSettings
+from neo4j_agent_memory.integrations.pydantic_ai import (
+    MemoryDependency,
+    create_memory_tools,
+    llm_provider_from_pydantic_ai,
+    record_agent_trace,
+)
 
-def load_env_files() -> None:
-    """Load environment variables from .env files."""
-    try:
-        from dotenv import load_dotenv
+PYDANTIC_AI_INSTALLED = True
+try:
+    from pydantic_ai import Agent, RunContext
+    from pydantic_ai.agent import AgentRunResult
+    from pydantic_ai.models import Model
+    from pydantic_ai.models.openai import OpenAIChatModel
+    from pydantic_ai.models.test import TestModel
+except ImportError:  # pragma: no cover - exercised only without the extra
+    PYDANTIC_AI_INSTALLED = False
 
-        env_file = Path(__file__).parent / ".env"
-        if env_file.exists():
-            load_dotenv(env_file)
-            print(f"Loaded environment from {env_file}")
-
-        parent_env = Path(__file__).parent.parent / ".env"
-        if parent_env.exists():
-            load_dotenv(parent_env)
-    except ImportError:
-        env_file = Path(__file__).parent / ".env"
-        if env_file.exists():
-            with open(env_file) as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith("#") and "=" in line:
-                        key, _, value = line.partition("=")
-                        key = key.strip()
-                        value = value.strip().strip("\"'")
-                        if key and key not in os.environ:
-                            os.environ[key] = value
-            print(f"Loaded environment from {env_file}")
-
-
-load_env_files()
-
-from neo4j_agent_memory import MemoryClient, MemorySettings, Neo4jConfig
+SESSION_ID = "pydantic-ai-demo"
+TOTAL_SECTIONS = 6
+FIRST_TURN = "Find me a good restaurant for dinner tonight."
+SECOND_TURN = "What did I ask you about a moment ago, and what should I order there?"
 
 
-async def main() -> None:
-    # v0.3+: when you have a PydanticAI model already configured for your
-    # agent, hand it to memory via llm_provider_from_pydantic_ai. The
-    # extractor will use the same provider for entity extraction.
-    llm_provider = None
-    try:
-        from pydantic_ai.models.openai import OpenAIChatModel
+def section(number: int, title: str) -> None:
+    print(f"\n[{number}/{TOTAL_SECTIONS}] {title}")
+    print("-" * 60)
 
-        from neo4j_agent_memory.integrations.pydantic_ai import (
-            llm_provider_from_pydantic_ai,
+
+# =====================================================================
+# Configuration
+# =====================================================================
+def build_model() -> tuple[Model, Any]:
+    """Return `(model, llm_provider)` for the agent and for memory extraction.
+
+    With a key the *same* `OpenAIChatModel` instance backs both the agent and
+    memory's entity extraction. Without one, `TestModel` keeps the whole script
+    runnable offline and `None` turns LLM extraction off.
+    """
+    if OPENAI_API_KEY:
+        # In PydanticAI 2.x the `"openai:"` model-string prefix means the
+        # Responses API and `"openai-chat:"` means Chat Completions, so a model
+        # instance is the unambiguous (and reusable) form.
+        model: Model = OpenAIChatModel(os.getenv("OPENAI_MODEL", "gpt-5-mini"))
+        print(f"Model: {type(model).__name__}({model.model_name}) | memory extraction: LLM")
+        return model, llm_provider_from_pydantic_ai(model)
+
+    # `call_tools` keeps the stub read-only: TestModel would otherwise call
+    # every registered tool, including `save_preference`, with placeholder args.
+    stub = TestModel(call_tools=["search_memory", "recall_preferences"])
+    print("Model: TestModel (no OPENAI_API_KEY — canned output) | memory extraction: off")
+    return stub, None
+
+
+def build_settings(llm_provider: Any) -> BoltSettings | None:
+    """Build `BoltSettings`, or return `None` when no embedder is available."""
+    if OPENAI_API_KEY:
+        embedding_model = os.getenv("EMBEDDING_MODEL", "openai/text-embedding-3-small")
+        extraction = ExtractionConfig(extractor_type=ExtractorType.LLM)
+    else:
+        try:
+            import sentence_transformers  # noqa: F401
+        except ImportError:
+            print("ERROR: no embedding provider available. Either:")
+            print("  1. set OPENAI_API_KEY (see examples/.env.example), or")
+            print("  2. uv sync --extra sentence-transformers")
+            return None
+        embedding_model = os.getenv(
+            "LOCAL_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
         )
+        extraction = ExtractionConfig(extractor_type=ExtractorType.NONE)
+    print(f"Embeddings: {embedding_model}")
 
-        agent_model = OpenAIChatModel("gpt-4o-mini")
-        llm_provider = llm_provider_from_pydantic_ai(agent_model)
-        print("Using shared PydanticAI model for memory extraction")
-    except ImportError:
-        # pydantic-ai not installed; fall through to the legacy default.
-        pass
-
-    settings = MemorySettings(
+    # BoltSettings pins the backend: plain MemorySettings would flip to the
+    # hosted NAMS backend whenever MEMORY_API_KEY happens to be exported.
+    return BoltSettings(
         neo4j=Neo4jConfig(
-            uri=os.getenv("NEO4J_URI", "bolt://localhost:7687"),
-            password=SecretStr(os.getenv("NEO4J_PASSWORD", "password")),
+            uri=NEO4J_URI,
+            username=NEO4J_USERNAME,
+            password=SecretStr(NEO4J_PASSWORD),
         ),
-        embedding="openai/text-embedding-3-small",
+        embedding=embedding_model,
+        extraction=extraction,
         llm=llm_provider,
     )
 
-    async with MemoryClient(settings) as client:
-        # Pre-populate some memories
-        session_id = "pydantic-ai-demo"
 
-        await client.long_term.add_preference("communication", "Prefers concise responses")
-        await client.long_term.add_preference("food", "Vegetarian, loves Indian cuisine")
+# =====================================================================
+# The agent
+# =====================================================================
+def build_agent(model: Model, tools: list[Any]) -> Agent[MemoryDependency, str]:
+    """Build the memory-enabled agent: tools registered, instructions dynamic."""
+    agent = Agent(
+        model,
+        deps_type=MemoryDependency,
+        tools=tools,
+        output_type=str,
+    )
 
-        print("=" * 60)
-        print("Neo4j Agent Memory - Pydantic AI Integration Demo")
-        print("=" * 60)
-
-        # Import Pydantic AI integration
-        from neo4j_agent_memory.integrations.pydantic_ai import (
-            MemoryDependency,
-            create_memory_tools,
+    @agent.instructions
+    async def memory_instructions(ctx: RunContext[MemoryDependency]) -> str:
+        # `instructions` is the 2.x dynamic-prompt hook (it replaced
+        # `system_prompt`) and is re-rendered for every model request, so the
+        # injected context tracks the conversation instead of being frozen at
+        # construction time. `ctx.prompt` is this run's user message, which is
+        # what makes the retrieval query turn-specific.
+        context = await ctx.deps.get_context(str(ctx.prompt))
+        base = (
+            "You are a restaurant recommendation assistant. Use the memory "
+            "tools to look up or save what you learn about the user."
         )
+        if context:
+            return f"{base}\n\nContext from memory:\n{context}"
+        return base
 
-        # =================================================================
-        # Using MemoryDependency
-        # =================================================================
-        print("\n📝 Using MemoryDependency...")
+    return agent
 
-        deps = MemoryDependency(client=client, session_id=session_id)
 
-        # Get context
-        context = await deps.get_context("restaurant recommendation")
-        print("Context for LLM:")
-        print("-" * 40)
-        print(context if context else "(no relevant context found)")
-        print("-" * 40)
+async def run_turn(
+    memory: MemoryClient,
+    agent: Agent[MemoryDependency, str],
+    deps: MemoryDependency,
+    user_input: str,
+    *,
+    task: str,
+) -> AgentRunResult[str]:
+    """Run one turn and leave all three memory layers updated."""
+    print(f"user: {user_input}")
+    result = await agent.run(user_input, deps=deps)
+    # 2.x: `.output` (`.data` was removed); `.usage` is a property.
+    print(f"agent: {result.output}")
 
-        # Save a preference
-        await deps.add_preference(
-            category="location",
-            preference="Prefers restaurants in downtown area",
+    # Short-term memory: persist both sides of the exchange so the next turn
+    # (and any later session) can retrieve it.
+    await deps.save_interaction(user_input, str(result.output))
+
+    # Reasoning memory: turn the finished run into a trace. Every tool call the
+    # model made becomes a step with a ToolCall node attached.
+    # The cast is a typing-only detail: `record_agent_trace` is annotated against
+    # the concrete bolt `ReasoningMemory`, while a protocol-typed `MemoryClient`
+    # exposes `reasoning` as `ReasoningProtocol`. Both satisfy it at runtime.
+    trace = await record_agent_trace(
+        cast("ReasoningMemory", memory.reasoning),
+        session_id=deps.session_id,
+        result=result,
+        task=task,
+    )
+
+    # Read it back so the graph write is visible rather than assumed.
+    stored = await memory.reasoning.get_trace_with_steps(trace.id)
+    if stored is None:
+        print(f"trace {trace.id}: not found on read-back")
+    else:
+        tool_calls = sum(len(step.tool_calls) for step in stored.steps)
+        print(
+            f"trace {stored.id}: {len(stored.steps)} step(s), "
+            f"{tool_calls} tool call(s), success={stored.success}"
         )
-        print("\n✅ Added location preference")
+        for step in stored.steps:
+            names = ", ".join(call.tool_name for call in step.tool_calls) or "(no tool)"
+            print(f"   step {step.step_number}: {names}")
+    return result
 
-        # Search preferences
-        prefs = await deps.search_preferences("food")
-        print(f"\n🔍 Found {len(prefs)} food-related preferences:")
-        for p in prefs:
-            print(f"   [{p['category']}] {p['preference']}")
 
-        # =================================================================
-        # Using Memory Tools
-        # =================================================================
-        print("\n⚙️  Creating memory tools...")
+# =====================================================================
+# Sections
+# =====================================================================
+async def seed_long_term_memory(memory: MemoryClient) -> None:
+    section(1, "Long-term memory: the preferences a returning user already has")
+    for category, preference in (
+        ("communication", "Prefers concise responses"),
+        ("food", "Vegetarian, loves Indian cuisine"),
+    ):
+        await memory.long_term.add_preference(category, preference)
+        print(f"   [{category}] {preference}")
 
-        tools = create_memory_tools(client)
-        print(f"Created {len(tools)} tools:")
-        for tool in tools:
-            print(f"   - {getattr(tool, '__name__', str(tool))}")
 
-        # Use the search_memory tool
-        search_result = await tools[0]("vegetarian food")
-        print(f"\n🔍 Search result for 'vegetarian food':")
-        print(search_result)
+async def memory_dependency(memory: MemoryClient) -> MemoryDependency:
+    section(2, "MemoryDependency: context injection and preference writes")
+    deps = MemoryDependency(client=memory, session_id=SESSION_ID)
 
-        # Use the save_preference tool
-        save_result = await tools[1]("cuisine", "Also enjoys Mediterranean food")
-        print(f"\n✅ {save_result}")
+    context = await deps.get_context("restaurant recommendation")
+    print("Context the agent would receive:")
+    print(context if context else "(no relevant context found)")
 
-        # Use the recall_preferences tool
-        recall_result = await tools[2]("food")
-        print(f"\n📋 Recalled preferences for 'food':")
-        print(recall_result)
+    await deps.add_preference(
+        category="location",
+        preference="Prefers restaurants in downtown area",
+    )
+    print("\nAdded a location preference through the dependency")
 
-        # =================================================================
-        # Example with Pydantic AI Agent (if installed)
-        # =================================================================
-        try:
-            from pydantic_ai import Agent, RunContext
+    prefs = await deps.search_preferences("food")
+    print(f"Found {len(prefs)} food-related preference(s):")
+    for pref in prefs:
+        print(f"   [{pref['category']}] {pref['preference']}")
+    return deps
 
-            print("\n🤖 Creating Pydantic AI agent with memory...")
 
-            agent = Agent(
-                "openai:gpt-4o-mini",
-                deps_type=MemoryDependency,
-            )
+async def memory_tools(memory: MemoryClient) -> list[Any]:
+    section(3, "create_memory_tools(): the tools the model can call itself")
+    tools = create_memory_tools(memory)
+    # Look tools up by name, never by list position: the order is an
+    # implementation detail of the library, the names are the contract.
+    by_name = {getattr(tool, "__name__", ""): tool for tool in tools}
+    print(f"Created {len(tools)} tools: {', '.join(sorted(by_name))}")
 
-            @agent.system_prompt
-            async def system_prompt(ctx: RunContext[MemoryDependency]) -> str:
-                # This would be called with the user's input
-                context = await ctx.deps.get_context("restaurant")
-                base_prompt = "You are a helpful restaurant recommendation assistant."
-                if context:
-                    return f"{base_prompt}\n\nContext from memory:\n{context}"
-                return base_prompt
+    print("\nsearch_memory('vegetarian food'):")
+    print(await by_name["search_memory"]("vegetarian food"))
 
-            print("✅ Agent created with dynamic memory-aware system prompt")
+    print("\nsave_preference('cuisine', ...):")
+    print(await by_name["save_preference"]("cuisine", "Also enjoys Mediterranean food"))
 
-            # Note: To actually run the agent, you would do:
-            # result = await agent.run("Find me a good restaurant", deps=deps)
+    print("\nrecall_preferences('food'):")
+    print(await by_name["recall_preferences"]("food"))
+    return tools
 
-        except ImportError:
-            print("\n⚠️  Pydantic AI not fully installed for agent demo")
-            print("   Install with: pip install pydantic-ai")
 
-        # =================================================================
-        # NEW FEATURE: record_agent_trace()
-        # =================================================================
-        print("\n📊 Demonstrating record_agent_trace()...")
-        print("   This function automatically records a PydanticAI RunResult as a reasoning trace.")
-        print("   Example usage:")
-        print("   ")
-        print("   from neo4j_agent_memory.integrations.pydantic_ai import record_agent_trace")
-        print("   ")
-        print("   result = await agent.run('Find me a restaurant', deps=deps)")
-        print("   trace = await record_agent_trace(")
-        print("       client.reasoning,")
-        print("       session_id='user-123',")
-        print("       result=result,")
-        print("       task='Find restaurant recommendation',")
-        print("   )")
-        print("   ")
-        print("   # The trace now contains all tool calls from the agent run!")
+async def second_turn_sees_the_first(
+    memory: MemoryClient,
+    agent: Agent[MemoryDependency, str],
+    deps: MemoryDependency,
+) -> None:
+    section(5, "Turn 2: the injected context now contains turn 1")
+    context = await memory.get_context(SECOND_TURN, session_id=SESSION_ID)
+    first_turn_recalled = FIRST_TURN.rstrip(".") in context
+    print(f"Turn 1 present in the retrieved context: {first_turn_recalled}")
+    print(context if context else "(no relevant context found)")
+    print()
+    await run_turn(memory, agent, deps, SECOND_TURN, task="Follow-up on the recommendation")
 
-        # Import to show it's available
-        from neo4j_agent_memory.integrations.pydantic_ai import record_agent_trace  # noqa: F401
 
-        print("\n✅ record_agent_trace() is available for automatic trace recording")
+async def recap(memory: MemoryClient) -> None:
+    section(6, "Recap: what the two turns left in the graph")
+    conversation = await memory.short_term.get_conversation(SESSION_ID)
+    messages = conversation.messages
+    print(f"Messages in session {SESSION_ID!r}: {len(messages)}")
+    for message in messages[-4:]:
+        print(f"   [{message.role.value}] {message.content[:70]}")
 
-        print("\n✅ Demo complete!")
+    traces = await memory.reasoning.get_session_traces(SESSION_ID)
+    print(f"Reasoning traces for this session: {len(traces)}")
+    for trace in traces:
+        print(f"   {trace.task} (success={trace.success})")
+
+
+# =====================================================================
+# Entry point
+# =====================================================================
+async def main() -> None:
+    print("=" * 60)
+    print("Neo4j Agent Memory — PydanticAI integration")
+    print("=" * 60)
+
+    if not PYDANTIC_AI_INSTALLED:
+        print("ERROR: PydanticAI is not installed. Install it with:")
+        print("  uv sync --extra pydantic-ai    # or: pip install 'pydantic-ai>=2,<3'")
+        return
+
+    model, llm_provider = build_model()
+    settings = build_settings(llm_provider)
+    if settings is None:
+        return
+
+    async with MemoryClient(settings) as memory:
+        await seed_long_term_memory(memory)
+        deps = await memory_dependency(memory)
+        tools = await memory_tools(memory)
+
+        section(4, "Turn 1: run the agent, persist the exchange, record the trace")
+        agent = build_agent(model, tools)
+        await run_turn(memory, agent, deps, FIRST_TURN, task="Find restaurant recommendation")
+
+        await second_turn_sees_the_first(memory, agent, deps)
+        await recap(memory)
+
+    print("\nDemo complete!")
 
 
 if __name__ == "__main__":
+    import asyncio
+
     asyncio.run(main())

@@ -1,5 +1,5 @@
 import { HStack, Text, Badge } from '@chakra-ui/react'
-import { motion } from 'framer-motion'
+import { motion } from 'motion/react'
 import { LuDatabase, LuSearch, LuSave } from 'react-icons/lu'
 
 interface MemoryAccessIndicatorProps {

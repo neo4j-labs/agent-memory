@@ -32,7 +32,7 @@ async def find_connections(
     RETURN n {.id, .name, .type} AS entity
     LIMIT 1
     """
-    results = await neo4j_service._graph.execute_read(query, {"id": entity_id})
+    results = await neo4j_service.read(query, {"id": entity_id})
     if not results:
         return {
             "entity_id": entity_id,
@@ -89,7 +89,7 @@ async def analyze_network_risk(
     RETURN n.name AS name
     LIMIT 1
     """
-    results = await neo4j_service._graph.execute_read(query, {"id": entity_id})
+    results = await neo4j_service.read(query, {"id": entity_id})
     entity_name = results[0]["name"] if results else entity_id
 
     return {
@@ -128,7 +128,7 @@ async def detect_shell_companies(
     RETURN n {.id, .name, .type, .shell_indicators} AS entity
     LIMIT 1
     """
-    results = await neo4j_service._graph.execute_read(query, {"id": entity_id})
+    results = await neo4j_service.read(query, {"id": entity_id})
     if not results:
         return {
             "entity_id": entity_id,
@@ -208,7 +208,7 @@ async def map_beneficial_ownership(
     RETURN n {.id, .name, .type} AS entity
     LIMIT 1
     """
-    results = await neo4j_service._graph.execute_read(query, {"id": entity_id})
+    results = await neo4j_service.read(query, {"id": entity_id})
     if not results:
         return {
             "entity_id": entity_id,

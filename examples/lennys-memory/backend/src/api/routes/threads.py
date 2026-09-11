@@ -1,10 +1,25 @@
-"""Thread management API endpoints."""
+"""Thread management API endpoints.
 
+Threads are stored where everything else in this demo is stored: as
+``(:Conversation)`` nodes in the memory graph, under a ``chat-`` session-id
+prefix so they can be told apart from the ``lenny-podcast-*`` sessions created
+by ``scripts/load_transcripts.py``. That means threads survive a restart and
+behave correctly behind more than one uvicorn worker -- neither of which was
+true of the module-level dict this router used to keep.
+
+Known gap (see the README "Known limitations"): threads are not scoped per
+visitor. Every caller sees every chat thread. The library's multi-tenant mode
+(``MemorySettings.memory.multi_tenant=True`` plus ``user_identifier=``) is the
+fix; it needs a visitor identity the frontend does not yet send.
+"""
+
+import logging
 import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 
+from neo4j_agent_memory import MemoryClient
 from src.api.schemas import (
     ChatMessage,
     CreateThreadRequest,
@@ -14,32 +29,59 @@ from src.api.schemas import (
 from src.memory.client import get_memory_client
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
-# In-memory thread storage (replace with database in production)
-_threads: dict[str, dict] = {}
+# Session-id prefix for user-created chat threads. Podcast transcripts use
+# "lenny-podcast-<guest-slug>" and are data sources, not user threads.
+THREAD_PREFIX = "chat-"
 
-
-def _get_thread_or_404(thread_id: str) -> dict:
-    """Get thread by ID or raise 404."""
-    if thread_id not in _threads:
-        raise HTTPException(status_code=404, detail="Thread not found")
-    return _threads[thread_id]
+DEFAULT_TITLE = "New Conversation"
 
 
-def update_thread_activity(thread_id: str, increment_messages: int = 0) -> None:
-    """Update thread's updated_at timestamp and optionally increment message count.
+def _require_memory() -> MemoryClient:
+    memory = get_memory_client()
+    if memory is None:
+        raise HTTPException(status_code=503, detail="Memory service unavailable")
+    return memory
 
-    Called by the chat endpoint when messages are added to a thread.
 
-    Args:
-        thread_id: The thread to update
-        increment_messages: Number of messages to add to the count (default 0)
-    """
-    if thread_id in _threads:
-        _threads[thread_id]["updated_at"] = datetime.now(timezone.utc)
-        if increment_messages > 0:
-            current_count = _threads[thread_id].get("message_count", 0)
-            _threads[thread_id]["message_count"] = current_count + increment_messages
+async def _load_thread(memory: MemoryClient, thread_id: str) -> dict | None:
+    """Return stored thread metadata, or None when the conversation is absent."""
+    rows = await memory.query.cypher(
+        """
+        MATCH (c:Conversation {session_id: $session_id})
+        OPTIONAL MATCH (c)-[:HAS_MESSAGE]->(m:Message)
+        RETURN c.title AS title,
+               c.created_at AS created_at,
+               c.updated_at AS updated_at,
+               count(m) AS message_count
+        """,
+        {"session_id": thread_id},
+    )
+    if not rows:
+        return None
+    row = rows[0]
+    created = row.get("created_at")
+    updated = row.get("updated_at")
+    return {
+        "id": thread_id,
+        "title": row.get("title") or DEFAULT_TITLE,
+        "created_at": _to_datetime(created),
+        "updated_at": _to_datetime(updated) or _to_datetime(created),
+        "message_count": row.get("message_count") or 0,
+    }
+
+
+def _to_datetime(value: object) -> datetime | None:
+    """Convert a neo4j DateTime (or datetime) to an aware Python datetime."""
+    if value is None:
+        return None
+    to_native = getattr(value, "to_native", None)
+    if callable(to_native):
+        value = to_native()
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    return None
 
 
 @router.get("/threads", response_model=list[ThreadSummary])
@@ -49,28 +91,30 @@ async def list_threads(
 ) -> list[ThreadSummary]:
     """List user-created conversation threads.
 
-    Only returns threads created via the API (stored in-memory).
-    Podcast transcripts stored in Neo4j are data sources, not user threads.
-    This avoids the slow list_sessions() query that loads all podcast data.
+    Backed by ``short_term.list_sessions(prefix="chat-")``, so podcast sessions
+    are excluded without loading them.
     """
-    summaries = []
+    memory = get_memory_client()
+    if memory is None:
+        return []
 
-    # Only return user-created threads (in-memory)
-    # Podcast sessions in Neo4j are data, not user threads
-    for thread_id, thread_data in _threads.items():
-        summaries.append(
-            ThreadSummary(
-                id=thread_id,
-                title=thread_data.get("title", "Untitled"),
-                created_at=thread_data.get("created_at", datetime.now(timezone.utc)),
-                updated_at=thread_data.get("updated_at", datetime.now(timezone.utc)),
-                message_count=thread_data.get("message_count", 0),
-            )
+    sessions = await memory.short_term.list_sessions(
+        prefix=THREAD_PREFIX,
+        limit=limit,
+        offset=offset,
+        order_by="updated_at",
+        order_dir="desc",
+    )
+    return [
+        ThreadSummary(
+            id=session.session_id,
+            title=session.title or session.first_message_preview or DEFAULT_TITLE,
+            created_at=session.created_at,
+            updated_at=session.updated_at or session.created_at,
+            message_count=session.message_count,
         )
-
-    # Sort by updated_at descending
-    summaries.sort(key=lambda x: x.updated_at, reverse=True)
-    return summaries[offset : offset + limit]
+        for session in sessions
+    ]
 
 
 @router.post("/threads", response_model=ThreadSummary)
@@ -78,23 +122,25 @@ async def create_thread(
     request: CreateThreadRequest,
 ) -> ThreadSummary:
     """Create a new conversation thread."""
-    thread_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc)
+    memory = _require_memory()
 
-    thread_data = {
-        "id": thread_id,
-        "title": request.title or "New Conversation",
-        "created_at": now,
-        "updated_at": now,
-    }
+    thread_id = f"{THREAD_PREFIX}{uuid.uuid4()}"
+    title = request.title or DEFAULT_TITLE
 
-    _threads[thread_id] = thread_data
+    conversation = await memory.short_term.create_conversation(thread_id)
+    # ``create_conversation`` does not take a title; set it on the node so the
+    # sidebar can show something other than the session id.
+    await memory.graph.execute_write(
+        "MATCH (c:Conversation {session_id: $session_id}) SET c.title = $title",
+        {"session_id": thread_id, "title": title},
+    )
 
+    created = conversation.created_at or datetime.now(timezone.utc)
     return ThreadSummary(
         id=thread_id,
-        title=thread_data["title"],
-        created_at=now,
-        updated_at=now,
+        title=title,
+        created_at=created,
+        updated_at=created,
         message_count=0,
     )
 
@@ -105,56 +151,32 @@ async def get_thread(
 ) -> Thread:
     """Get a thread with its messages.
 
-    First checks in-memory storage, then falls back to Neo4j sessions
-    (e.g., loaded podcast transcripts).
+    Works for chat threads and for loaded podcast sessions alike -- both are
+    ``(:Conversation)`` nodes. Returns 404 when no such conversation exists.
     """
-    memory = get_memory_client()
-    thread_data = _threads.get(thread_id)
+    memory = _require_memory()
 
-    # If not in local storage, try to get from Neo4j
-    if thread_data is None and memory:
-        try:
-            conversation = await memory.short_term.get_conversation(thread_id)
-            if conversation:
-                # Create thread_data from Neo4j session
-                thread_data = {
-                    "id": thread_id,
-                    "title": conversation.title or thread_id,
-                    "created_at": conversation.created_at or datetime.now(timezone.utc),
-                    "updated_at": conversation.updated_at
-                    or conversation.created_at
-                    or datetime.now(timezone.utc),
-                }
-        except Exception:
-            pass
-
+    thread_data = await _load_thread(memory, thread_id)
     if thread_data is None:
         raise HTTPException(status_code=404, detail="Thread not found")
 
-    # Get messages from short-term memory
-    messages = []
-    if memory:
-        try:
-            conversation = await memory.short_term.get_conversation(thread_id)
-            if conversation and conversation.messages:
-                for msg in conversation.messages:
-                    messages.append(
-                        ChatMessage(
-                            id=str(msg.id),
-                            role=msg.role.value,
-                            content=msg.content,
-                            timestamp=msg.created_at,
-                            tool_calls=[],
-                        )
-                    )
-        except Exception:
-            pass
+    conversation = await memory.short_term.get_conversation(thread_id)
+    messages = [
+        ChatMessage(
+            id=str(msg.id),
+            role=msg.role.value,
+            content=msg.content,
+            timestamp=msg.created_at,
+            tool_calls=[],
+        )
+        for msg in conversation.messages
+    ]
 
     return Thread(
         id=thread_id,
-        title=thread_data.get("title", "Untitled"),
-        created_at=thread_data.get("created_at", datetime.now(timezone.utc)),
-        updated_at=thread_data.get("updated_at", datetime.now(timezone.utc)),
+        title=thread_data["title"],
+        created_at=thread_data["created_at"] or datetime.now(timezone.utc),
+        updated_at=thread_data["updated_at"] or datetime.now(timezone.utc),
         messages=messages,
     )
 
@@ -164,33 +186,12 @@ async def delete_thread(
     thread_id: str,
 ) -> dict:
     """Delete a thread and its messages."""
-    memory = get_memory_client()
+    memory = _require_memory()
 
-    # Check if thread exists in local storage or Neo4j
-    exists_locally = thread_id in _threads
-    exists_in_neo4j = False
-
-    if memory:
-        try:
-            conversation = await memory.short_term.get_conversation(thread_id)
-            exists_in_neo4j = conversation is not None
-        except Exception:
-            pass
-
-    if not exists_locally and not exists_in_neo4j:
+    if await _load_thread(memory, thread_id) is None:
         raise HTTPException(status_code=404, detail="Thread not found")
 
-    # Delete from local storage if present
-    if exists_locally:
-        del _threads[thread_id]
-
-    # Delete from Neo4j if present
-    if exists_in_neo4j and memory:
-        try:
-            await memory.short_term.clear_session(thread_id)
-        except Exception:
-            pass
-
+    await memory.short_term.clear_session(thread_id)
     return {"status": "deleted", "thread_id": thread_id}
 
 
@@ -200,39 +201,24 @@ async def update_thread(
     title: str | None = None,
 ) -> ThreadSummary:
     """Update a thread's title."""
-    memory = get_memory_client()
-    thread_data = _threads.get(thread_id)
+    memory = _require_memory()
 
-    # If not in local storage, try to get from Neo4j
-    if thread_data is None and memory:
-        try:
-            conversation = await memory.short_term.get_conversation(thread_id)
-            if conversation:
-                # Create thread_data from Neo4j session and store locally
-                thread_data = {
-                    "id": thread_id,
-                    "title": conversation.title or thread_id,
-                    "created_at": conversation.created_at or datetime.now(timezone.utc),
-                    "updated_at": conversation.updated_at
-                    or conversation.created_at
-                    or datetime.now(timezone.utc),
-                }
-                _threads[thread_id] = thread_data
-        except Exception:
-            pass
-
+    thread_data = await _load_thread(memory, thread_id)
     if thread_data is None:
         raise HTTPException(status_code=404, detail="Thread not found")
 
     if title is not None:
+        await memory.graph.execute_write(
+            "MATCH (c:Conversation {session_id: $session_id}) "
+            "SET c.title = $title, c.updated_at = datetime()",
+            {"session_id": thread_id, "title": title},
+        )
         thread_data["title"] = title
-
-    thread_data["updated_at"] = datetime.now(timezone.utc)
 
     return ThreadSummary(
         id=thread_id,
         title=thread_data["title"],
-        created_at=thread_data["created_at"],
-        updated_at=thread_data["updated_at"],
-        message_count=0,
+        created_at=thread_data["created_at"] or datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+        message_count=thread_data["message_count"],
     )

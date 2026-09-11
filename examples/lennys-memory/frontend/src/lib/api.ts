@@ -5,8 +5,10 @@
 import type {
   Thread,
   ThreadWithMessages,
+  MemoryContext,
   MemoryGraph,
   LocationEntity,
+  Preference,
   SSEEvent,
 } from "./types";
 
@@ -22,16 +24,20 @@ async function fetchAPI<T>(
   endpoint: string,
   options?: RequestInit & { timeout?: number },
 ): Promise<T> {
-  const { timeout = DEFAULT_TIMEOUT, ...fetchOptions } = options || {};
+  const { timeout = DEFAULT_TIMEOUT, signal, ...fetchOptions } = options || {};
 
-  // Create abort controller for timeout
+  // Create abort controller for timeout, combined with any caller signal so
+  // callers can cancel a request before the timeout fires.
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
+  const combinedSignal = signal
+    ? AbortSignal.any([signal, controller.signal])
+    : controller.signal;
 
   try {
     const response = await fetch(`${API_BASE}${endpoint}`, {
       ...fetchOptions,
-      signal: controller.signal,
+      signal: combinedSignal,
       headers: {
         "Content-Type": "application/json",
         ...fetchOptions?.headers,
@@ -46,6 +52,8 @@ async function fetchAPI<T>(
     return response.json();
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {
+      // Distinguish a caller cancellation from the timeout above.
+      if (signal?.aborted) throw err;
       throw new Error("Request timed out");
     }
     throw err;
@@ -77,6 +85,29 @@ export const threads = {
 
 // Memory API
 export const memory = {
+  /**
+   * Memory context for the panel: entities, preferences, recent topics and
+   * recent messages, scoped to a thread when one is supplied.
+   */
+  getContext: (options?: {
+    threadId?: string;
+    query?: string;
+    signal?: AbortSignal;
+  }) => {
+    const params = new URLSearchParams();
+    if (options?.threadId) {
+      params.set("thread_id", options.threadId);
+    }
+    if (options?.query) {
+      params.set("query", options.query);
+    }
+    const query = params.toString();
+    return fetchAPI<MemoryContext>(
+      `/memory/context${query ? `?${query}` : ""}`,
+      { signal: options?.signal },
+    );
+  },
+
   getGraph: (threadId?: string, episodeSessionIds?: string[]) => {
     const params = new URLSearchParams();
     if (threadId) {
@@ -125,6 +156,27 @@ export const memory = {
       }>
     >(`/memory/similar-traces?${params}`);
   },
+};
+
+// Preferences API (long-term memory)
+export const preferences = {
+  list: (options?: { category?: string; signal?: AbortSignal }) => {
+    const params = new URLSearchParams();
+    if (options?.category) params.set("category", options.category);
+    const query = params.toString();
+    return fetchAPI<Preference[]>(`/preferences${query ? `?${query}` : ""}`, {
+      signal: options?.signal,
+    });
+  },
+
+  create: (category: string, preference: string, context?: string) =>
+    fetchAPI<Preference>("/preferences", {
+      method: "POST",
+      body: JSON.stringify({ category, preference, context }),
+    }),
+
+  remove: (id: string) =>
+    fetchAPI<{ status: string }>(`/preferences/${id}`, { method: "DELETE" }),
 };
 
 // Locations API (for map view)
@@ -238,6 +290,7 @@ export async function* streamChat(
   threadId: string,
   message: string,
   memoryEnabled: boolean = true,
+  signal?: AbortSignal,
 ): AsyncGenerator<SSEEvent> {
   const response = await fetch(`${API_BASE}/chat`, {
     method: "POST",
@@ -249,6 +302,9 @@ export async function* streamChat(
       message,
       memory_enabled: memoryEnabled,
     }),
+    // Passing the signal is what actually stops the backend generator: without
+    // it, breaking out of the loop below leaves the agent running server-side.
+    signal,
   });
 
   if (!response.ok) {
@@ -289,6 +345,13 @@ export async function* streamChat(
       }
     }
   } finally {
+    // cancel() closes the HTTP response so the server sees the disconnect;
+    // releaseLock() alone would leave the body open.
+    try {
+      await reader.cancel();
+    } catch {
+      // Already closed or errored - nothing to clean up.
+    }
     reader.releaseLock();
   }
 }
@@ -296,6 +359,7 @@ export async function* streamChat(
 export const api = {
   threads,
   memory,
+  preferences,
   locations,
   streamChat,
 };

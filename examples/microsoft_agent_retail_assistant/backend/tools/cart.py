@@ -1,9 +1,19 @@
-"""Shopping cart tools."""
+"""Shopping cart tools.
+
+Cart state lives in the graph as ``(:Cart {session_id})-[:CONTAINS]->(:Product)``
+so it is scoped to the same session id the memory layers use. Reads go through
+``client.query.cypher()``; writes use ``client.graph.execute_write()``.
+
+Exposed as agent tools: :func:`get_cart`, :func:`add_to_cart`,
+:func:`remove_from_cart`. :func:`update_cart_item` and :func:`clear_cart` are
+reusable helpers. :func:`apply_coupon` and :func:`save_cart_for_later` need
+``:Coupon`` / ``:SavedCart`` data that ``data/load_products.py`` does not
+create — treat them as sketches, not working features.
+"""
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -13,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 async def get_cart(
-    client: "MemoryClient",
+    client: MemoryClient,
     session_id: str,
 ) -> dict:
     """
@@ -36,7 +46,7 @@ async def get_cart(
     ORDER BY contains.added_at DESC
     """
 
-    result = await client.graph.execute_read(cypher, {"session_id": session_id})
+    result = await client.query.cypher(cypher, {"session_id": session_id})
 
     items = []
     subtotal = 0
@@ -61,7 +71,7 @@ async def get_cart(
 
 
 async def add_to_cart(
-    client: "MemoryClient",
+    client: MemoryClient,
     session_id: str,
     product_id: str,
     quantity: int = 1,
@@ -85,7 +95,7 @@ async def add_to_cart(
     RETURN p.name as name, p.in_stock as in_stock, p.inventory as inventory, p.price as price
     """
 
-    check_result = await client.graph.execute_read(check_cypher, {"product_id": product_id})
+    check_result = await client.query.cypher(check_cypher, {"product_id": product_id})
 
     if not check_result:
         return {"success": False, "error": "Product not found"}
@@ -142,7 +152,7 @@ async def add_to_cart(
 
 
 async def update_cart_item(
-    client: "MemoryClient",
+    client: MemoryClient,
     session_id: str,
     product_id: str,
     quantity: int,
@@ -169,7 +179,7 @@ async def update_cart_item(
     RETURN p.inventory as inventory, p.name as name
     """
 
-    check_result = await client.graph.execute_read(check_cypher, {"product_id": product_id})
+    check_result = await client.query.cypher(check_cypher, {"product_id": product_id})
 
     if not check_result:
         return {"success": False, "error": "Product not found"}
@@ -207,7 +217,7 @@ async def update_cart_item(
 
 
 async def remove_from_cart(
-    client: "MemoryClient",
+    client: MemoryClient,
     session_id: str,
     product_id: str,
 ) -> dict:
@@ -245,7 +255,7 @@ async def remove_from_cart(
 
 
 async def clear_cart(
-    client: "MemoryClient",
+    client: MemoryClient,
     session_id: str,
 ) -> dict:
     """
@@ -276,7 +286,7 @@ async def clear_cart(
 
 
 async def apply_coupon(
-    client: "MemoryClient",
+    client: MemoryClient,
     session_id: str,
     coupon_code: str,
 ) -> dict:
@@ -302,7 +312,7 @@ async def apply_coupon(
            coupon.description as description
     """
 
-    result = await client.graph.execute_read(check_cypher, {"code": coupon_code.upper()})
+    result = await client.query.cypher(check_cypher, {"code": coupon_code.upper()})
 
     if not result:
         return {"success": False, "error": "Invalid or expired coupon code"}
@@ -346,7 +356,7 @@ async def apply_coupon(
 
 
 async def save_cart_for_later(
-    client: "MemoryClient",
+    client: MemoryClient,
     session_id: str,
     user_id: str,
 ) -> dict:

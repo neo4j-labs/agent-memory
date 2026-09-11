@@ -1,9 +1,20 @@
-"""Inventory management tools."""
+"""Inventory management tools.
+
+Single implementation of the stock operations. Reads go through
+``client.query.cypher()``; the one write (:func:`notify_when_available`) uses
+``client.graph.execute_write()`` because ``client.query`` is read-only by
+design.
+
+Exposed as agent tools: :func:`check_inventory`, :func:`find_alternatives`.
+:func:`get_stock_status`, :func:`notify_when_available` and
+:func:`get_low_stock_products` are kept as reusable helpers — wire them into a
+tool or a route if your app needs them.
+"""
 
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from neo4j_agent_memory import MemoryClient
@@ -12,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 async def check_inventory(
-    client: "MemoryClient",
+    client: MemoryClient,
     product_id: str,
 ) -> dict:
     """
@@ -35,7 +46,7 @@ async def check_inventory(
            p.low_stock_threshold as low_stock_threshold
     """
 
-    result = await client.graph.execute_read(cypher, {"product_id": product_id})
+    result = await client.query.cypher(cypher, {"product_id": product_id})
 
     if not result:
         return {"error": "Product not found", "product_id": product_id}
@@ -69,7 +80,7 @@ async def check_inventory(
 
 
 async def get_stock_status(
-    client: "MemoryClient",
+    client: MemoryClient,
     product_ids: list[str],
 ) -> dict:
     """
@@ -93,7 +104,7 @@ async def get_stock_status(
            p.inventory as quantity
     """
 
-    result = await client.graph.execute_read(cypher, {"product_ids": product_ids})
+    result = await client.query.cypher(cypher, {"product_ids": product_ids})
 
     statuses = {}
     for r in result:
@@ -121,7 +132,7 @@ async def get_stock_status(
 
 
 async def find_alternatives(
-    client: "MemoryClient",
+    client: MemoryClient,
     product_id: str,
     limit: int = 3,
 ) -> dict:
@@ -173,7 +184,7 @@ async def find_alternatives(
     LIMIT $limit
     """
 
-    result = await client.graph.execute_read(cypher, {"product_id": product_id, "limit": limit})
+    result = await client.query.cypher(cypher, {"product_id": product_id, "limit": limit})
 
     return {
         "original_product_id": product_id,
@@ -183,7 +194,7 @@ async def find_alternatives(
 
 
 async def notify_when_available(
-    client: "MemoryClient",
+    client: MemoryClient,
     product_id: str,
     user_id: str,
     session_id: str,
@@ -213,18 +224,19 @@ async def notify_when_available(
             "product": check["name"],
         }
 
-    # Create notification request in graph
+    # Create notification request in graph. This is a write, so it cannot go
+    # through the read-only client.query accessor.
     cypher = """
     MATCH (p:Product)
     WHERE p.id = $product_id OR elementId(p) = $product_id
-    MERGE (u:User {id: $user_id})
+    MERGE (u:User {identifier: $user_id})
     MERGE (u)-[r:WANTS_NOTIFICATION]->(p)
     SET r.created_at = datetime(),
         r.session_id = $session_id
     RETURN p.name as product_name
     """
 
-    result = await client.graph.execute_read(
+    result = await client.graph.execute_write(
         cypher,
         {"product_id": product_id, "user_id": user_id, "session_id": session_id},
     )
@@ -240,7 +252,7 @@ async def notify_when_available(
 
 
 async def get_low_stock_products(
-    client: "MemoryClient",
+    client: MemoryClient,
     category: str | None = None,
     threshold: int = 10,
     limit: int = 20,
@@ -270,11 +282,11 @@ async def get_low_stock_products(
     LIMIT $limit
     """
 
-    params = {"threshold": threshold, "limit": limit}
+    params: dict[str, Any] = {"threshold": threshold, "limit": limit}
     if category:
         params["category"] = category
 
-    result = await client.graph.execute_read(cypher, params)
+    result = await client.query.cypher(cypher, params)
 
     return {
         "low_stock_products": [r["product"] for r in result],

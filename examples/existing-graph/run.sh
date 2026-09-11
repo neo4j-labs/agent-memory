@@ -1,34 +1,46 @@
 #!/usr/bin/env bash
 # End-to-end runner for the existing-graph example.
 #
-# Loads a tiny Movies domain graph, adopts it as long-term memory entities,
-# then writes messages and verifies the resulting MENTIONS edges link to
-# the pre-existing nodes.
+#   1. seed.py      — load a tiny pre-library Movies domain graph (MERGE only)
+#   2. adopt.py     — dry run, then adopt the graph as long-term memory entities
+#   3. memory_io.py — write messages and verify no duplicates were created
+#   4. retrieve.py  — backfill embeddings, search, relate, traverse
+#
+# No host cypher-shell required: every step runs through the library's own
+# Neo4j client. Nothing here deletes data — pass --reset to seed.py yourself
+# (with EXISTING_GRAPH_ALLOW_RESET=1) if you want a clean domain graph.
 
 set -euo pipefail
 
-# Run from the repo root so module-relative imports work.
+# Run from the repo root so the documented `uv run python examples/...` paths work.
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 cd "$REPO_ROOT"
 
-NEO4J_URI=${NEO4J_URI:-bolt://localhost:7687}
-NEO4J_USERNAME=${NEO4J_USERNAME:-neo4j}
-NEO4J_PASSWORD=${NEO4J_PASSWORD:-password}
+# Defaults match the repo's test container (docker-compose.test.yml,
+# `make neo4j-start`). Override by exporting these before running.
+export NEO4J_URI=${NEO4J_URI:-bolt://localhost:7687}
+export NEO4J_USERNAME=${NEO4J_USERNAME:-neo4j}
+export NEO4J_PASSWORD=${NEO4J_PASSWORD:-test-password}
 
-if ! command -v cypher-shell > /dev/null; then
-    echo "cypher-shell not on PATH. Install Neo4j or run inside neo4j Docker." >&2
-    exit 1
-fi
+echo "==> Target: $NEO4J_URI (user: $NEO4J_USERNAME)"
 
-echo "==> Loading seed Movies graph..."
-cypher-shell -a "$NEO4J_URI" -u "$NEO4J_USERNAME" -p "$NEO4J_PASSWORD" \
-    < examples/existing-graph/seed_domain_graph.cypher
+echo
+echo "==> 1/4 Loading the seed Movies graph..."
+uv run python examples/existing-graph/seed.py
 
-echo "==> Running adopt_existing_graph()..."
+echo
+echo "==> 2/4 Projecting adoption (dry run), then adopting..."
+uv run python examples/existing-graph/adopt.py --dry-run
 uv run python examples/existing-graph/adopt.py
 
-echo "==> Writing messages and verifying MENTIONS edges..."
+echo
+echo "==> 3/4 Writing messages and verifying MENTIONS edges..."
 uv run python examples/existing-graph/memory_io.py
 
-echo "==> Done."
+echo
+echo "==> 4/4 Searching, relating and traversing the adopted graph..."
+uv run python examples/existing-graph/retrieve.py
+
+echo
+echo "==> Done. Re-run this script to confirm idempotency."

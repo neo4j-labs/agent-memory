@@ -1,0 +1,13 @@
+/*
+ * Chakra's own reset (shipped with `defaultSystem`) handles element styling.
+ * This file exists only for the few things a reset cannot express.
+ */
+html,
+body {
+  height: 100%;
+}
+
+/* Long entity names and Cypher snippets should wrap, not widen the page. */
+body {
+  overflow-wrap: anywhere;
+}

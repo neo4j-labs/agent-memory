@@ -19,15 +19,16 @@ This example is implemented twice using different cloud AI platforms, demonstrat
 | | [AWS Implementation](aws-financial-services-advisor/) | [Google Cloud Implementation](google-cloud-financial-advisor/) |
 |-|--------------------------------------------------------|---------------------------------------------------------------|
 | **Agent Framework** | [AWS Strands Agents](https://strandsagents.com/) | [Google ADK](https://google.github.io/adk-docs/) |
-| **LLM** | Amazon Bedrock (Claude Sonnet 4) | Google Gemini 2.5 Flash |
-| **Embeddings** | Amazon Titan Embed V2 | Vertex AI text-embedding-004 |
-| **Deployment** | AWS Lambda + CDK | Google Cloud Run |
+| **LLM** | Amazon Bedrock (Claude Sonnet, via a cross-region inference profile) | Google Gemini 2.5 Flash |
+| **Embeddings** | Amazon Titan Embed V2 (1024-d) | Vertex AI (768-d) |
+| **Deployment** | AWS Lambda + API Gateway + CloudFront (CDK) | Google Cloud Run |
 
 Both implementations share the same sample data, Neo4j schema, tool implementations, and frontend design. Choose whichever matches your cloud platform.
 
 ---
 
-> **Need a different LLM or embedding model?** As of `neo4j-agent-memory` v0.3 you can swap providers via a single string — `MemorySettings(llm="anthropic/claude-3-5-sonnet-latest", embedding="BAAI/bge-small-en-v1.5")`. See [Bring Your Own Model](https://neo4j.com/labs/agent-memory/how-to/bring-your-own-model.html).
+> **Need a different LLM or embedding model?** As of `neo4j-agent-memory` v0.3 you can swap providers via a single string — `MemorySettings(llm="anthropic/claude-sonnet-4-6", embedding="BAAI/bge-small-en-v1.5")`. See [Bring Your Own Model](https://neo4j.com/labs/agent-memory/how-to/bring-your-own-model.html).
+
 ## What It Does
 
 Ask a question like *"Investigate customer CUST-003 for potential money laundering"* and the system:
@@ -41,7 +42,7 @@ Ask a question like *"Investigate customer CUST-003 for potential money launderi
 
 ![agent chat](img/aml-wire-transfer.png)
 
-All tool results come from real Cypher queries against Neo4j -- not simulated data.
+All 16 tool results come from real Cypher queries against Neo4j — there is no simulated data in either app.
 
 ---
 
@@ -64,29 +65,37 @@ The supervisor orchestrates 4 specialist agents, each with Neo4j-backed tools:
 
 ### Three Memory Types
 
-| Memory | Purpose | Stored In |
-|--------|---------|-----------|
-| **Short-Term** | Conversation history per session | Neo4j via `MemoryClient.short_term` |
-| **Long-Term** | Customer entities and relationships | Neo4j via `MemoryClient.long_term` |
-| **Reasoning** | Investigation audit trails with agent steps and tool calls | Neo4j via `MemoryClient.reasoning` |
+| Memory | What gets written | API |
+|--------|------------------|-----|
+| **Short-Term** | One `:Conversation` per session, two `:Message` nodes per turn, entity extraction on the user turn | `MemoryClient.short_term` |
+| **Long-Term** | Sanctions/PEP screening outcomes as `(:Fact {predicate: 'SCREENED_AGAINST'})`, analyst preferences, and — after the optional adoption pass — the compliance nodes themselves as `:Entity` | `MemoryClient.long_term`, `MemoryClient.schema.adopt_existing_graph` |
+| **Reasoning** | A trace per turn linked to its triggering message, a step and `:ToolCall` per tool use, `(:ReasoningStep)-[:TOUCHED]->(:Entity)` audit edges, a structured `TraceOutcome` | `MemoryClient.reasoning` |
 
 ### Neo4j Graph Schema
 
 The sample data creates this graph structure:
 
 ```
-(:Customer)-[:HAS_DOCUMENT]->(:Document)
+(:Customer:IndividualCustomer)-[:HAS_DOCUMENT]->(:Document)
+(:Customer:CorporateCustomer)-[:HAS_DOCUMENT]->(:Document)
 (:Customer)-[:HAS_TRANSACTION]->(:Transaction)
 (:Customer)-[:HAS_ALERT]->(:Alert)
-(:Customer)-[:OWNS]->(:Organization)
-(:Customer)-[:CONTROLS]->(:Organization)
-(:Customer)-[:EMPLOYED_BY]->(:Organization)
-(:Organization)-[:CONNECTED_TO]->(:Organization)
-(:Organization)-[:LINKED_TO]->(:Organization)
+(:Customer)-[:HAS_INVESTIGATION]->(:Investigation)
+(:Customer)-[:OWNS|CONTROLS|DIRECTED_BY|EMPLOYED_BY]->(:Organization)
+(:Organization)-[:CONNECTED_TO|LINKED_TO|TRADES_WITH]->(:Organization)
 (:Alert)-[:RELATED_TO_TRANSACTION]->(:Transaction)
 (:SanctionedEntity)<-[:ALIAS_OF]-(:SanctionAlias)
 (:PEPRelative)-[:RELATIVE_OF]->(:PEP)
+(:Report)-[:ABOUT]->(:Customer)
+(:Investigation)-[:HAS_TRACE]->(:ReasoningTrace)
 ```
+
+Two conventions in there are deliberate, and they are the interesting part:
+
+- **Every node the loader writes also carries `:Compliance`.** The library derives Neo4j labels from POLE+O types, so an `ORGANIZATION` extracted from a chat turn becomes `:Entity:Organization` — the same label the compliance graph uses. The marker keeps the two namespaces apart, and the domain queries are scoped to it.
+- **Customers are split by secondary label, not just a property.** `:IndividualCustomer` and `:CorporateCustomer` give `adopt_existing_graph` one entity type per label (`PERSON` / `ORGANIZATION`), and neither collides with a library-derived label.
+
+`Transaction.date`, `Document.expiry_date` and `Document.submission_date` are real Neo4j `DATE` values, generated relative to the load date — which is what makes the agents' 90-day AML windows return anything.
 
 ---
 
@@ -104,8 +113,6 @@ Example:
 
 ![agent chat](img/investigations.png)
 
-## Alerts
-
 ## Sample Data
 
 Both implementations share the same data in the [`data/`](data/) directory:
@@ -116,6 +123,22 @@ Both implementations share the same data in the [`data/`](data/) directory:
 - **3 sanctions entries**: OFAC SDN and EU Consolidated list entries with aliases
 - **3 PEP entries**: Minister of Finance (Tier 1), Deputy PM (Tier 1), State Senator (Tier 2) with relatives
 - **3 pre-built alerts**: Structuring (CRITICAL), shell company network (HIGH), rapid movement (MEDIUM)
+
+Transaction and document dates are stored as `days_ago` / `expiry_days` offsets rather than absolute dates, so a fixture shipped today still falls inside the agents' time windows a year from now.
+
+The loader is safe to re-run: every write is a `MERGE`, so a second run changes nothing, and it never deletes anything it did not create. `--reset` exists for a clean slate and scopes its delete to the demo labels — your `:Conversation`, `:Message`, `:Entity` and `:ReasoningTrace` nodes survive it.
+
+```bash
+uv run python data/load_sample_data.py              # idempotent load
+uv run python data/load_sample_data.py --reset      # clean slate, demo labels only
+uv run python data/load_sample_data.py --adopt-only # adopt the graph as memory entities
+```
+
+### Turning the domain graph into long-term memory
+
+`--adopt` runs [`client.schema.adopt_existing_graph()`](https://neo4j.com/labs/agent-memory/how-to/adopt-existing-graph.html), which attaches the library's `:Entity` super-label and `id` / `type` / `name` properties to the compliance nodes. After it, extraction on a chat turn links mentions to the *existing* customers and organizations instead of MERGEing duplicates beside them.
+
+`:Transaction` and `:Document` are deliberately excluded. Adoption sets `n.type` to the library entity type, and in this graph `type` already means `'cash_deposit'` / `'passport'` — which the AML and KYC tools match on. That is the general rule for adopting a graph you did not design for the library: rename any domain property called `id`, `type` or `name` first.
 
 ---
 
@@ -153,28 +176,33 @@ This is the primary UX difference:
 
 | | AWS | Google Cloud |
 |-|-----|-------------|
-| **During investigation** | Loading spinner (supervisor blocks until done) | Live animated cards showing each agent activating, calling tools, accessing memory |
-| **Event types** | 5 (start, complete, response, trace, done) | 11 (+ delegate, tool_call, tool_result, memory_access, thinking) |
-| **Why** | Strands `agent(prompt)` is synchronous | ADK `Runner.run_async()` is an async generator |
+| **During investigation** | Live events: `thinking` text deltas, plus `tool_call` / `tool_result` per tool use | Live animated cards showing each agent activating, calling tools, accessing memory |
+| **Event types** | 9 (agent_start, thinking, tool_call, tool_result, agent_complete, response, trace_saved, done, error) | 11 (+ delegate, memory_access) |
+| **How** | `Agent.stream_async()`, mapping `current_tool_use` and `toolResult` events | `Runner.run_async()` is an async generator |
 
-Both frontends use the same Framer Motion components (`AgentOrchestrationView`, `ToolCallCard`, `MemoryAccessIndicator`), but the GCP version shows richer real-time activity.
+Both frontends use the same Framer Motion components (`AgentOrchestrationView`, `ToolCallCard`, `MemoryAccessIndicator`). The GCP version still shows per-sub-agent delegation, which the Strands topology surfaces as tool calls on the supervisor instead.
 
 ### Reasoning Traces
 
-Both record reasoning traces to Neo4j after each chat. The GCP version captures more detail (1 step per sub-agent with nested tool calls) because ADK exposes per-agent events during execution.
+Both record reasoning traces to Neo4j. The AWS app records them *while* the run happens — a trace opened with `triggered_by_message_id`, a step and `:ToolCall` per tool use, `:TOUCHED` edges to the entities acted on, and a structured `TraceOutcome` at the end — which is what makes its `/api/investigations/{id}/audit-trail` a single traversal.
 
-### Everything Else Is the Same
+### Largely, But Not Exactly, the Same
 
-- Same `Neo4jDomainService` with ~30 Cypher query methods
-- Same 16 tool functions (KYC, AML, Relationship, Compliance)
-- Same `bind_tool()` pattern to inject `neo4j_service` while hiding it from the LLM
-- Same FastAPI backend structure and API endpoints
-- Same React + Chakra UI v3 frontend
-- Same `MemoryClient` integration for all three memory types
+Both apps share the same shape: a `Neo4jDomainService` of focused Cypher methods, 16 tool functions, a `bind_tool()` pattern that injects collaborators while hiding them from the LLM, a FastAPI backend, and a React + Chakra UI v3 frontend.
+
+They have drifted in the details, though, and it is worth knowing before you treat one as a copy of the other: the two `neo4j_service.py` files differ by a few hundred lines, and the four `tools/*.py` pairs differ by 3-85 lines each. Nothing enforces that the shared halves stay shared. The AWS app additionally exposes `/api/reports/*` and persists SAR and risk-assessment reports in the graph.
 
 ---
 
 ## Getting Started
+
+### Hosted vs self-hosted
+
+The honest answer is "half and half". The three **memory** layers work unchanged against the hosted [Neo4j Agent Memory Service](https://memory.neo4jlabs.com) — point `MemorySettings` at it with a `MEMORY_API_KEY` and the conversations, entities, facts and reasoning traces are stored there. The **compliance domain graph** is not memory: it is your data, in your schema, and the loader writes it over bolt to a database you own. `client.schema.adopt_existing_graph()` is bolt-only for the same reason — the schema is server-managed on the hosted service.
+
+So: run both apps against a Neo4j instance you control (Aura Free is enough), which is what the steps below do. See [Backends: self-hosted vs hosted](https://neo4j.com/labs/agent-memory/explanation/backends.html) for the full picture.
+
+One constraint if you run both apps: they use different embedders (Titan is 1024-d, Vertex is 768-d) and the memory vector indexes are sized from whichever connects first. Give each app its own database, or `MemoryClient.connect()` will raise `EmbeddingDimensionMismatchError` — deliberately, rather than corrupting the indexes.
 
 ### AWS (Bedrock + Strands)
 
@@ -182,7 +210,8 @@ Both record reasoning traces to Neo4j after each chat. The GCP version captures 
 cd aws-financial-services-advisor
 cp .env.example backend/.env    # Configure Neo4j + AWS credentials
 make install                    # Install Python + Node dependencies
-make load-data                  # Load sample data into Neo4j
+make load-data                  # Load sample data into Neo4j (idempotent)
+make adopt-graph                # Optional: adopt the graph as memory entities
 make run                        # Start backend (8000) + frontend (5173)
 ```
 
@@ -213,7 +242,9 @@ financial-services-advisor/
 │   ├── sanctions.json                     # 3 sanctioned entities with aliases
 │   ├── pep.json                           # 3 PEPs + 1 relative
 │   ├── alerts.json                        # 3 compliance alerts
-│   └── load_sample_data.py                # Async Neo4j data loader
+│   └── load_sample_data.py                # Idempotent async loader (+ --adopt phase)
+│
+├── img/                                   # Screenshots used by this README
 │
 ├── aws-financial-services-advisor/        # AWS implementation
 │   ├── backend/
@@ -222,8 +253,11 @@ financial-services-advisor/
 │   │   │   ├── tools/                     # 16 Neo4j-backed tool functions
 │   │   │   ├── services/                  # memory_service, neo4j_service, risk_service
 │   │   │   └── api/routes/                # FastAPI endpoints
-│   │   └── tests/                         # 113 unit tests
+│   │   └── tests/                         # 151 tests (run with `make test`)
 │   ├── frontend/                          # React + Chakra + Framer Motion
+│   ├── infrastructure/                    # Six AWS CDK stacks (TypeScript)
+│   ├── docs/diagrams/                     # Editable Excalidraw sources
+│   ├── img/                               # Architecture diagram
 │   ├── GETTING_STARTED.md
 │   └── Makefile
 │
@@ -235,6 +269,8 @@ financial-services-advisor/
 │   │   │   ├── services/                  # memory_service, neo4j_service
 │   │   │   └── api/routes/                # FastAPI endpoints (incl. SSE streaming)
 │   ├── frontend/                          # React + Chakra + Framer Motion
+│   ├── infrastructure/                    # Cloud Build config + deploy scripts
+│   ├── img/                               # Architecture diagram
 │   ├── GETTING_STARTED.md
 │   └── Makefile
 │
@@ -245,22 +281,26 @@ financial-services-advisor/
 
 ## API Endpoints
 
-Both implementations expose the same REST API:
+Both implementations expose this core REST API:
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/chat` | POST | Chat with supervisor (synchronous) |
+| `/api/chat` | POST | Chat with supervisor (non-streaming) |
 | `/api/chat/stream` | POST | Chat with SSE streaming |
 | `/api/customers` | GET | List customers from Neo4j |
 | `/api/customers/{id}/risk` | GET | Risk assessment with contributing factors |
 | `/api/customers/{id}/network` | GET | Relationship network graph |
 | `/api/alerts` | GET/POST | Alert management |
 | `/api/alerts/summary` | GET | Alert statistics by severity/status |
-| `/api/traces/{session_id}` | GET | Reasoning traces for audit trail |
+| `/api/investigations` | GET/POST | Investigation management |
+| `/api/investigations/{id}/audit-trail` | GET | Reasoning trace plus the entities it touched |
+| `/api/traces/{session_id}` | GET | Reasoning traces for a chat session |
 | `/api/graph/stats` | GET | Neo4j node and relationship counts |
 | `/api/graph/neighbors/{id}` | GET | Entity neighborhood subgraph |
 | `/api/graph/query` | POST | Read-only Cypher query execution |
 | `/health` | GET | Health check |
+
+**AWS additionally exposes `/api/reports/*`** — SAR and risk-assessment reports, persisted in Neo4j as `(:Report)-[:ABOUT]->(:Customer)`. Each app's own `/docs` is the authoritative list.
 
 ---
 
@@ -279,4 +319,4 @@ Both implementations expose the same REST API:
 
 ---
 
-_Verified against `neo4j-agent-memory` v0.1.2 / v0.2-dev on 2026-05-03 (current PyPI release: v0.4.x with NAMS support) (structure, syntax, import tests, and 105 unit tests pass for the GCP implementation; full end-to-end run requires AWS or GCP credentials)._
+_Verified against `neo4j-agent-memory` v0.5.0 on 2026-09-10 — the shared loader runs idempotently against Neo4j 5.26 and the AWS implementation's 151 tests pass (124 unit, 27 integration). A full end-to-end chat run needs AWS or GCP credentials._

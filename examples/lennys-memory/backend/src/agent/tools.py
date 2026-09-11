@@ -9,15 +9,21 @@ This module provides tools for:
 
 import json
 import logging
-
-logger = logging.getLogger(__name__)
 import math
 import re
+import unicodedata
 from typing import Any
 
 from pydantic_ai import RunContext
 
 from src.agent.dependencies import AgentDeps
+
+logger = logging.getLogger(__name__)
+
+# Preference categories this demo writes (see ``api/routes/chat.py``) and reads
+# back in ``get_user_preferences``. Keeping the list in one place means the
+# write path and the read path cannot drift apart.
+PREFERENCE_CATEGORIES: tuple[str, ...] = ("content", "format", "topics", "general")
 
 
 def _guest_to_session_id(guest_name: str) -> str:
@@ -25,9 +31,12 @@ def _guest_to_session_id(guest_name: str) -> str:
 
     Handles Unicode characters by normalizing to ASCII equivalents
     (e.g., "Tobi Lütke" -> "tobi-lutke", not "tobi-l-tke").
-    """
-    import unicodedata
 
+    Must stay in lockstep with ``slugify()`` in
+    ``examples/lennys-memory/scripts/load_transcripts.py`` -- the loader names
+    every podcast session with that rule and these tools look sessions up by it.
+    ``tests/examples/test_lennys_memory_example.py`` asserts the two agree.
+    """
     # Normalize Unicode characters to their ASCII equivalents
     # NFD decomposes characters (ü -> u + combining umlaut)
     # Then we strip combining characters
@@ -112,6 +121,7 @@ async def search_podcast_content(
 
         return results
     except Exception as e:
+        logger.exception("search_podcast_content failed")
         return [{"error": f"Search failed: {str(e)}"}]
 
 
@@ -145,7 +155,7 @@ async def _get_message_context(
         }}] AS context_after
         """.replace("{context}", str(context_size))
 
-        results = await ctx.deps.client._client.execute_read(query, {"message_id": message_id})
+        results = await ctx.deps.client.query.cypher(query, {"message_id": message_id})
 
         if results and results[0]:
             return {
@@ -237,7 +247,7 @@ async def search_by_speaker(
         """
         params["limit"] = limit
 
-        results = await ctx.deps.client._client.execute_read(query, params)
+        results = await ctx.deps.client.query.cypher(query, params)
 
         formatted_results = []
         for r in results:
@@ -269,6 +279,7 @@ async def search_by_speaker(
 
         return formatted_results
     except Exception as e:
+        logger.exception("search_by_speaker failed")
         return [{"error": f"Search failed: {str(e)}"}]
 
 
@@ -320,6 +331,7 @@ async def search_by_episode(
             for msg in messages
         ]
     except Exception as e:
+        logger.exception("search_by_episode failed")
         return [{"error": f"Search failed: {str(e)}"}]
 
 
@@ -346,7 +358,7 @@ async def get_episode_list(ctx: RunContext[AgentDeps]) -> list[dict[str, Any]]:
         ORDER BY c.session_id
         """
 
-        results = await ctx.deps.client._client.execute_read(query)
+        results = await ctx.deps.client.query.cypher(query)
 
         return [
             {
@@ -357,6 +369,7 @@ async def get_episode_list(ctx: RunContext[AgentDeps]) -> list[dict[str, Any]]:
             for r in results
         ]
     except Exception as e:
+        logger.exception("get_episode_list failed")
         return [{"error": f"Query failed: {str(e)}"}]
 
 
@@ -386,7 +399,7 @@ async def get_speaker_list(ctx: RunContext[AgentDeps]) -> list[dict[str, Any]]:
         LIMIT 500
         """
 
-        results = await ctx.deps.client._client.execute_read(query)
+        results = await ctx.deps.client.query.cypher(query)
 
         # Parse speaker names from metadata
         import json
@@ -408,6 +421,7 @@ async def get_speaker_list(ctx: RunContext[AgentDeps]) -> list[dict[str, Any]]:
             for name, count in sorted(speakers.items(), key=lambda x: -x[1])
         ]
     except Exception as e:
+        logger.exception("get_speaker_list failed")
         return [{"error": f"Query failed: {str(e)}"}]
 
 
@@ -432,6 +446,7 @@ async def get_memory_stats(ctx: RunContext[AgentDeps]) -> dict[str, Any]:
             "note": "These are podcast transcript segments loaded into memory",
         }
     except Exception as e:
+        logger.exception("get_memory_stats failed")
         return {"error": f"Failed to get stats: {str(e)}"}
 
 
@@ -464,41 +479,42 @@ async def search_entities(
         return [{"error": "Memory client not available"}]
 
     try:
-        # Use direct Cypher query to get all entity properties including enriched_description
-        # (The library's search_entities doesn't map enriched_description to the Entity object)
-        embedder = ctx.deps.client.long_term._embedder
-        if embedder is None:
-            return [{"error": "Embedder not available"}]
+        # Two public calls instead of reaching for the private embedder:
+        #   1. the library's vector search ranks the entities, and
+        #   2. one read fetches the enrichment properties the Entity model does
+        #      not surface (enriched_description / wikipedia_url live as
+        #      top-level Neo4j properties, not in the metadata blob).
+        matches = await ctx.deps.client.long_term.search_entities(
+            query,
+            entity_types=[entity_type.upper()] if entity_type else None,
+            limit=limit * 2 if collapse_duplicates else limit,
+        )
+        if not matches:
+            return []
 
-        query_embedding = await embedder.embed(query)
+        enrichment = await ctx.deps.client.query.cypher(
+            """
+            MATCH (e:Entity)
+            WHERE e.id IN $ids
+            RETURN e.id AS id,
+                   e.enriched_description AS enriched_description,
+                   e.wikipedia_url AS wikipedia_url
+            """,
+            {"ids": [str(entity.id) for entity in matches]},
+        )
+        extra = {row["id"]: row for row in enrichment}
 
-        # Build the Cypher query with optional type filter
-        cypher = """
-        CALL db.index.vector.queryNodes('entity_embedding_idx', $limit, $embedding)
-        YIELD node, score
-        WHERE score >= $threshold
-        """
-        if entity_type:
-            cypher += " AND node.type = $entity_type"
-        cypher += """
-        RETURN node.id AS id,
-               node.name AS name,
-               node.type AS type,
-               node.subtype AS subtype,
-               node.enriched_description AS enriched_description,
-               node.wikipedia_url AS wikipedia_url,
-               score
-        ORDER BY score DESC
-        """
-
-        params = {
-            "embedding": query_embedding,
-            "limit": limit * 2 if collapse_duplicates else limit,
-            "threshold": 0.5,
-            "entity_type": entity_type.upper() if entity_type else None,
-        }
-
-        results = await ctx.deps.client._client.execute_read(cypher, params)
+        results = [
+            {
+                "id": str(entity.id),
+                "name": entity.name,
+                "type": entity.type,
+                "subtype": entity.subtype,
+                "enriched_description": extra.get(str(entity.id), {}).get("enriched_description"),
+                "wikipedia_url": extra.get(str(entity.id), {}).get("wikipedia_url"),
+            }
+            for entity in matches
+        ]
 
         if collapse_duplicates and results:
             # Collapse SAME_AS clusters to canonical entities
@@ -516,6 +532,7 @@ async def search_entities(
             for r in results[:limit]
         ]
     except Exception as e:
+        logger.exception("search_entities failed")
         return [{"error": f"Entity search failed: {str(e)}"}]
 
 
@@ -625,7 +642,7 @@ async def get_entity_context(
             ORDER BY size(e.name) ASC
             LIMIT 1
             """
-            results = await ctx.deps.client._client.execute_read(query, {"name": entity_name})
+            results = await ctx.deps.client.query.cypher(query, {"name": entity_name})
             if results:
                 # Parse the entity from Cypher result
                 entity = await ctx.deps.client.long_term.get_entity_by_name(results[0]["e"]["name"])
@@ -644,7 +661,7 @@ async def get_entity_context(
                c.session_id AS session_id
         LIMIT 5
         """
-        mentions = await ctx.deps.client._client.execute_read(query, {"name": entity_name})
+        mentions = await ctx.deps.client.query.cypher(query, {"name": entity_name})
 
         mention_list = []
         for m in mentions:
@@ -771,9 +788,7 @@ async def find_related_entities(
         RETURN e2.name AS name, e2.type AS type, e2.subtype AS subtype,
                e2.enriched_description AS enriched_description, co_occurrences
         """
-        results = await ctx.deps.client._client.execute_read(
-            query, {"name": resolved_name, "limit": limit}
-        )
+        results = await ctx.deps.client.query.cypher(query, {"name": resolved_name, "limit": limit})
 
         return [
             {
@@ -786,6 +801,7 @@ async def find_related_entities(
             for r in results
         ]
     except Exception as e:
+        logger.exception("find_related_entities failed")
         return [{"error": f"Failed to find related entities: {str(e)}"}]
 
 
@@ -820,7 +836,7 @@ async def _resolve_entity_name(
     ORDER BY size(e.name) ASC
     LIMIT 1
     """
-    results = await ctx.deps.client._client.execute_read(query, {"name": entity_name})
+    results = await ctx.deps.client.query.cypher(query, {"name": entity_name})
     if results:
         return results[0]["name"]
 
@@ -860,9 +876,7 @@ async def get_most_mentioned_entities(
                e.wikipedia_url AS wikipedia_url,
                mentions
         """
-        results = await ctx.deps.client._client.execute_read(
-            query, {"type": entity_type, "limit": limit}
-        )
+        results = await ctx.deps.client.query.cypher(query, {"type": entity_type, "limit": limit})
 
         return [
             {
@@ -876,6 +890,7 @@ async def get_most_mentioned_entities(
             for r in results
         ]
     except Exception as e:
+        logger.exception("get_most_mentioned_entities failed")
         return [{"error": f"Failed to get top entities: {str(e)}"}]
 
 
@@ -940,7 +955,7 @@ async def search_locations(
         """
         params["limit"] = limit
 
-        locations = await ctx.deps.client._client.execute_read(cypher_query, params)
+        locations = await ctx.deps.client.query.cypher(cypher_query, params)
 
         return [
             {
@@ -954,6 +969,7 @@ async def search_locations(
             for loc in locations
         ]
     except Exception as e:
+        logger.exception("search_locations failed")
         return [{"error": f"Location search failed: {str(e)}"}]
 
 
@@ -990,38 +1006,34 @@ async def find_locations_near(
         if not ref_loc or ref_loc.get("latitude") is None or ref_loc.get("longitude") is None:
             return [{"error": f"Location '{location_name}' not found with coordinates"}]
 
-        # Use geospatial search
-        nearby = await ctx.deps.client.search_locations_near(
+        # Geospatial search lives on the long-term memory layer and returns
+        # Entity objects with distance_km stashed in ``metadata``.
+        nearby = await ctx.deps.client.long_term.search_locations_near(
             latitude=ref_loc["latitude"],
             longitude=ref_loc["longitude"],
             radius_km=radius_km,
             limit=limit,
         )
 
-        return [
-            {
-                "name": loc.get("name"),
-                "type": loc.get("type", "LOCATION"),
-                "latitude": loc.get("latitude"),
-                "longitude": loc.get("longitude"),
-                "country": loc.get("country"),
-                "distance_km": round(
-                    _haversine_distance(
-                        ref_loc["latitude"],
-                        ref_loc["longitude"],
-                        loc.get("latitude") or 0,
-                        loc.get("longitude") or 0,
-                    ),
-                    1,
-                )
-                if loc.get("latitude") and loc.get("longitude")
-                else None,
-            }
-            for loc in nearby
-            if loc.get("name", "").lower()
-            != ref_loc.get("name", "").lower()  # Exclude reference location
-        ]
+        results: list[dict[str, Any]] = []
+        for entity in nearby:
+            if entity.name.lower() == str(ref_loc.get("name", "")).lower():
+                continue  # Exclude the reference location itself
+            coords = await ctx.deps.client.long_term.get_location_coordinates(entity.id)
+            results.append(
+                {
+                    "name": entity.name,
+                    "type": entity.full_type,
+                    "latitude": coords[0] if coords else None,
+                    "longitude": coords[1] if coords else None,
+                    "distance_km": round(entity.metadata["distance_km"], 1)
+                    if entity.metadata.get("distance_km") is not None
+                    else None,
+                }
+            )
+        return results
     except Exception as e:
+        logger.exception("find_locations_near failed")
         return [{"error": f"Nearby location search failed: {str(e)}"}]
 
 
@@ -1059,9 +1071,7 @@ async def get_episode_locations(
         ORDER BY mention_count DESC
         LIMIT 100
         """
-        locations = await ctx.deps.client._client.execute_read(
-            cypher_query, {"session_id": session_id}
-        )
+        locations = await ctx.deps.client.query.cypher(cypher_query, {"session_id": session_id})
 
         return [
             {
@@ -1076,6 +1086,7 @@ async def get_episode_locations(
             for loc in locations
         ]
     except Exception as e:
+        logger.exception("get_episode_locations failed")
         return [{"error": f"Failed to get episode locations: {str(e)}"}]
 
 
@@ -1107,6 +1118,9 @@ async def find_location_path(
         MATCH (end:Entity {type: 'LOCATION'})
         WHERE toLower(end.name) CONTAINS toLower($to_loc)
         WITH start, end LIMIT 1
+        // Neo4j raises when shortestPath's endpoints are the same node, which
+        // happens whenever both names match one location.
+        WHERE start <> end
         MATCH path = shortestPath((start)-[*..6]-(end))
         RETURN start.name AS from_location,
                start.location.latitude AS from_lat,
@@ -1124,7 +1138,7 @@ async def find_location_path(
                ] AS path_nodes,
                length(path) AS path_length
         """
-        results = await ctx.deps.client._client.execute_read(
+        results = await ctx.deps.client.query.cypher(
             query, {"from_loc": from_location, "to_loc": to_location}
         )
 
@@ -1147,6 +1161,7 @@ async def find_location_path(
             "path_nodes": r["path_nodes"],
         }
     except Exception as e:
+        logger.exception("find_location_path failed")
         return {"error": f"Path finding failed: {str(e)}"}
 
 
@@ -1198,16 +1213,17 @@ async def get_location_clusters(
                 "country": country,
                 "location_count": len(locs),
                 "locations": locs[:5],  # Top 5 locations per country
-                "center_lat": sum(l["latitude"] for l in locs if l["latitude"]) / len(locs)
+                "center_lat": sum(loc["latitude"] for loc in locs if loc["latitude"]) / len(locs)
                 if locs
                 else None,
-                "center_lon": sum(l["longitude"] for l in locs if l["longitude"]) / len(locs)
+                "center_lon": sum(loc["longitude"] for loc in locs if loc["longitude"]) / len(locs)
                 if locs
                 else None,
             }
             for country, locs in sorted(country_clusters.items(), key=lambda x: -len(x[1]))
         ]
     except Exception as e:
+        logger.exception("get_location_clusters failed")
         return [{"error": f"Cluster analysis failed: {str(e)}"}]
 
 
@@ -1280,6 +1296,7 @@ async def calculate_location_distances(
 
         return sorted(distances, key=lambda x: x["distance_km"])
     except Exception as e:
+        logger.exception("calculate_location_distances failed")
         return [{"error": f"Distance calculation failed: {str(e)}"}]
 
 
@@ -1304,21 +1321,30 @@ async def get_user_preferences(
         return [{"error": "Memory client not available"}]
 
     try:
-        preferences = await ctx.deps.client.long_term.search_preferences(
-            query="",
-            limit=20,
-        )
+        # ``search_preferences`` is a vector search -- an empty query embeds the
+        # empty string and then filters by cosine similarity, which is not a
+        # "list everything" operation. Enumerate the categories this app writes
+        # instead (see ``PREFERENCE_CATEGORIES`` in api/routes/chat.py).
+        preferences = []
+        for category in PREFERENCE_CATEGORIES:
+            preferences.extend(
+                await ctx.deps.client.long_term.get_preferences_by_category(category, limit=20)
+            )
 
         return [
             {
                 "category": p.category,
                 "preference": p.preference,
                 "confidence": p.confidence,
-                "source": p.source,
+                # Preference has no ``source`` field -- the chat route records
+                # provenance in metadata when it detects a preference.
+                "source": (p.metadata or {}).get("source"),
+                "context": p.context,
             }
-            for p in preferences
+            for p in preferences[:20]
         ]
     except Exception as e:
+        logger.exception("get_user_preferences failed")
         return [{"error": f"Failed to get preferences: {str(e)}"}]
 
 
@@ -1358,6 +1384,7 @@ async def find_similar_past_queries(
             for t in traces
         ]
     except Exception as e:
+        logger.exception("find_similar_past_queries failed")
         return [{"error": f"Failed to find similar traces: {str(e)}"}]
 
 
@@ -1435,6 +1462,7 @@ async def learn_from_similar_task(
 
         return results
     except Exception as e:
+        logger.exception("learn_from_similar_task failed")
         return [{"error": f"Failed to get similar traces: {str(e)}"}]
 
 
@@ -1465,11 +1493,15 @@ async def get_tool_usage_patterns(
 
         tool_data = []
         for s in stats[:limit]:
+            # ToolStats fields are `name` / `successful_calls` / `failed_calls`
+            # (this read used `tool_name` / `success_count` / `failure_count`
+            # and raised AttributeError on every call).
             tool_info = {
-                "tool_name": s.tool_name,
+                "tool_name": s.name,
+                "description": s.description,
                 "total_calls": s.total_calls,
-                "success_count": s.success_count,
-                "failure_count": s.failure_count,
+                "success_count": s.successful_calls,
+                "failure_count": s.failed_calls,
                 "success_rate": round(s.success_rate * 100, 1) if s.success_rate else 0,
                 "avg_duration_ms": round(s.avg_duration_ms, 1) if s.avg_duration_ms else None,
             }
@@ -1484,6 +1516,7 @@ async def get_tool_usage_patterns(
             "recommendation": _get_tool_recommendation(tool_data),
         }
     except Exception as e:
+        logger.exception("get_tool_usage_patterns failed")
         return {"error": f"Failed to get tool patterns: {str(e)}"}
 
 
@@ -1544,6 +1577,7 @@ async def get_session_reasoning_history(
             for t in traces
         ]
     except Exception as e:
+        logger.exception("get_session_reasoning_history failed")
         return [{"error": f"Failed to get session traces: {str(e)}"}]
 
 
@@ -1573,34 +1607,29 @@ async def find_duplicate_entities(
         return [{"error": "Memory client not available"}]
 
     try:
-        # Use the library's deduplication capabilities
-        duplicates = await ctx.deps.client.long_term.find_potential_duplicates(
-            entity_type=entity_type,
-            limit=limit,
-        )
+        # ``find_potential_duplicates`` is keyword-only and returns
+        # (entity1, entity2, confidence) tuples for pairs the library flagged
+        # with a pending SAME_AS edge. It does not filter by type, so we do.
+        duplicates = await ctx.deps.client.long_term.find_potential_duplicates(limit=limit)
 
-        return [
+        wanted = entity_type.upper() if entity_type else None
+        pairs = [
             {
-                "entity1": {
-                    "id": str(d.entity1.id),
-                    "name": d.entity1.name,
-                    "type": d.entity1.type,
-                },
-                "entity2": {
-                    "id": str(d.entity2.id),
-                    "name": d.entity2.name,
-                    "type": d.entity2.type,
-                },
-                "similarity": round(d.similarity, 3),
-                "status": d.status,
+                "entity1": {"id": str(e1.id), "name": e1.name, "type": e1.full_type},
+                "entity2": {"id": str(e2.id), "name": e2.name, "type": e2.full_type},
+                "similarity": round(confidence, 3),
+                "status": "pending",
             }
-            for d in duplicates
+            for e1, e2, confidence in duplicates
+            if wanted is None or e1.type.upper() == wanted
         ]
-    except AttributeError:
-        # Method may not exist in older library versions
-        # Fallback: Use custom Cypher to find similar names
+        if pairs:
+            return pairs
+        # No flagged pairs yet (deduplication only flags on ingest) -- fall back
+        # to fuzzy name matching so the tool is still useful on loaded corpora.
         return await _find_duplicates_fallback(ctx, entity_type, limit)
     except Exception as e:
+        logger.exception("find_duplicate_entities failed")
         return [{"error": f"Failed to find duplicates: {str(e)}"}]
 
 
@@ -1631,7 +1660,7 @@ async def _find_duplicates_fallback(
         ORDER BY similarity DESC
         LIMIT $limit
         """
-        results = await ctx.deps.client._client.execute_read(
+        results = await ctx.deps.client.query.cypher(
             query, {"entity_type": entity_type, "limit": limit}
         )
 
@@ -1645,6 +1674,7 @@ async def _find_duplicates_fallback(
             for r in results
         ]
     except Exception as e:
+        logger.exception("_find_duplicates_fallback failed")
         return [{"error": f"Fallback duplicate detection failed: {str(e)}"}]
 
 
@@ -1687,7 +1717,7 @@ async def get_entity_provenance(
                    relationship_type: type(r)
                })[0..5] AS sources
         """
-        results = await ctx.deps.client._client.execute_read(query, {"name": entity_name})
+        results = await ctx.deps.client.query.cypher(query, {"name": entity_name})
 
         if not results:
             return {"error": f"Entity '{entity_name}' not found"}
@@ -1708,6 +1738,7 @@ async def get_entity_provenance(
             "total_mentions": len([s for s in r["sources"] if s.get("message_id")]),
         }
     except Exception as e:
+        logger.exception("get_entity_provenance failed")
         return {"error": f"Failed to get entity provenance: {str(e)}"}
 
 
@@ -1772,6 +1803,7 @@ async def trigger_entity_enrichment(
             "suggestion": "Use `make enrich` to enrich entities with Wikipedia data.",
         }
     except Exception as e:
+        logger.exception("trigger_entity_enrichment failed")
         return {"error": f"Failed to trigger enrichment: {str(e)}"}
 
 
@@ -1799,26 +1831,29 @@ async def get_conversation_context(
         return [{"error": "Memory client not available"}]
 
     try:
-        messages = await ctx.deps.client.short_term.get_conversation(
+        # get_conversation() returns a Conversation, not a list -- iterating the
+        # model itself yields (field_name, value) pairs under pydantic v2.
+        # It also orders messages oldest-first, so slice the tail for "recent".
+        conversation = await ctx.deps.client.short_term.get_conversation(
             session_id=ctx.deps.session_id,
-            limit=limit,
         )
 
-        results = []
-        for msg in messages:
-            msg_data = {
-                "role": msg.role,
+        results: list[dict[str, Any]] = []
+        for msg in conversation.messages[-limit:]:
+            msg_data: dict[str, Any] = {
+                "role": msg.role.value,
                 "content": msg.content[:500] if len(msg.content) > 500 else msg.content,
-                "timestamp": msg.metadata.get("timestamp") if msg.metadata else None,
+                "timestamp": msg.created_at.isoformat() if msg.created_at else None,
             }
-            if include_tool_calls and hasattr(msg, "tool_calls") and msg.tool_calls:
-                msg_data["tool_calls"] = [
-                    {"name": tc.get("name"), "status": tc.get("status")} for tc in msg.tool_calls
-                ]
+            if include_tool_calls:
+                tool_calls = (msg.metadata or {}).get("tool_calls")
+                if tool_calls:
+                    msg_data["tool_calls"] = tool_calls
             results.append(msg_data)
 
         return results
     except Exception as e:
+        logger.exception("get_conversation_context failed")
         return [{"error": f"Failed to get conversation context: {str(e)}"}]
 
 
@@ -1883,7 +1918,7 @@ async def list_podcast_sessions(
         ORDER BY {sort_field} {order_clause}
         LIMIT $limit
         """
-        results = await ctx.deps.client._client.execute_read(query, {"limit": limit})
+        results = await ctx.deps.client.query.cypher(query, {"limit": limit})
 
         return [
             {
@@ -1896,6 +1931,7 @@ async def list_podcast_sessions(
             for r in results
         ]
     except Exception as e:
+        logger.exception("list_podcast_sessions failed")
         return [{"error": f"Failed to list sessions: {str(e)}"}]
 
 
@@ -1949,7 +1985,7 @@ async def get_episode_summary(
                message_count,
                entities
         """
-        results = await ctx.deps.client._client.execute_read(query, {"session_id": session_id})
+        results = await ctx.deps.client.query.cypher(query, {"session_id": session_id})
 
         if not results:
             return {"error": f"Episode with guest '{episode_guest}' not found"}
@@ -1965,6 +2001,7 @@ async def get_episode_summary(
             "note": "Full AI summary requires conversation summarization feature.",
         }
     except Exception as e:
+        logger.exception("get_episode_summary failed")
         return {"error": f"Failed to get episode summary: {str(e)}"}
 
 
@@ -2049,7 +2086,7 @@ async def memory_graph_search(
             }) AS mentioned_entities
         """
 
-        entity_results = await ctx.deps.client._client.execute_read(
+        entity_results = await ctx.deps.client.query.cypher(
             entity_query,
             {"message_ids": message_ids},
         )
@@ -2144,7 +2181,7 @@ async def memory_graph_search(
             RETURN e.id AS source_id, related_list
             """
 
-            related_results = await ctx.deps.client._client.execute_read(
+            related_results = await ctx.deps.client.query.cypher(
                 related_query,
                 {
                     "entity_ids": mentioned_entity_ids,
@@ -2217,7 +2254,7 @@ async def memory_graph_search(
             WHERE e1.id IN $entity_ids AND e2.id IN $entity_ids
             RETURN e1.id AS from_id, e2.id AS to_id
             """
-            inter_results = await ctx.deps.client._client.execute_read(
+            inter_results = await ctx.deps.client.query.cypher(
                 inter_rel_query, {"entity_ids": all_entity_ids}
             )
 
@@ -2262,7 +2299,7 @@ async def memory_graph_search(
                 n["id"].replace("msg-", "") for n in nodes if n["type"] == "Message"
             ]
 
-            msg_results = await ctx.deps.client._client.execute_read(
+            msg_results = await ctx.deps.client.query.cypher(
                 messages_for_entities_query,
                 {
                     "entity_ids": all_entity_ids,

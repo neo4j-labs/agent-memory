@@ -14,7 +14,7 @@ import { DialogRoot, DialogContent, DialogHeader, DialogTitle, DialogBody, Dialo
 import dynamic from "next/dynamic";
 import { BaseCard } from "./BaseCard";
 import { LuMapPin } from "react-icons/lu";
-import type { MapCardProps, LocationData, PathNode } from "./types";
+import type { MapCardProps, LocationData } from "./types";
 
 // Dynamic imports for Leaflet (avoid SSR issues)
 const MapContainer = dynamic(

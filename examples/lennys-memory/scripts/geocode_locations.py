@@ -1,20 +1,26 @@
 #!/usr/bin/env python3
 """Geocode Location entities in the memory graph.
 
-This script adds latitude/longitude coordinates to Location entities that
-don't have them yet. It uses Nominatim (OpenStreetMap) by default, which
-is free but rate-limited to 1 request per second.
+Adds latitude/longitude to Location entities that don't have coordinates yet,
+using one public batch API (``long_term.geocode_locations``). Nominatim
+(OpenStreetMap) is the default: free, and rate-limited to ~1 request/second.
 
 Usage:
     python geocode_locations.py [options]
 
 Options:
-    --provider nominatim|google    Geocoding provider (default: nominatim)
-    --api-key KEY                  API key (required for Google)
-    --batch-size N                 Batch size for processing (default: 50)
-    --skip-existing                Skip locations that already have coordinates
-    -v, --verbose                  Show detailed progress
+    --provider nominatim|google     Geocoding provider (default: nominatim)
+    --api-key KEY                   API key (required for Google)
+    --batch-size N                  Batch size for processing (default: 50)
+    --skip-existing / --no-skip-existing
+                                    Skip locations that already have coordinates
+                                    (default: skip). --no-skip-existing exists but
+                                    the library always selects only un-geocoded
+                                    locations today -- see the flag's help text.
+    -v, --verbose                   Show detailed progress
 """
+
+from __future__ import annotations
 
 import argparse
 import asyncio
@@ -22,17 +28,28 @@ import os
 import sys
 from pathlib import Path
 
-# Add backend src to path for imports
-backend_src = Path(__file__).parent.parent / "backend" / "src"
-sys.path.insert(0, str(backend_src))
+sys.path.insert(0, str(Path(__file__).parent))
 
-from dotenv import load_dotenv
+from _common import (  # noqa: E402
+    Colors,
+    add_model_args,
+    add_neo4j_args,
+    build_memory_settings,
+    color,
+    load_backend_env,
+)
+from pydantic import SecretStr  # noqa: E402
 
-# Load environment from backend
-load_dotenv(Path(__file__).parent.parent / "backend" / ".env")
+from neo4j_agent_memory import (  # noqa: E402
+    GeocodingConfig,
+    GeocodingProvider,
+    MemoryClient,
+)
+
+load_backend_env()
 
 
-async def main():
+async def main() -> None:
     parser = argparse.ArgumentParser(description="Geocode Location entities in the memory graph")
     parser.add_argument(
         "--provider",
@@ -52,9 +69,14 @@ async def main():
     )
     parser.add_argument(
         "--skip-existing",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=True,
-        help="Skip locations that already have coordinates (default: True)",
+        help=(
+            "Skip locations that already have coordinates (default: enabled). "
+            "NOTE: the library's geocode_locations() currently only ever selects "
+            "locations with no coordinates, so --no-skip-existing is forwarded "
+            "but cannot yet force a re-geocode; clear e.location first."
+        ),
     )
     parser.add_argument(
         "-v",
@@ -62,9 +84,10 @@ async def main():
         action="store_true",
         help="Show detailed progress",
     )
+    add_neo4j_args(parser)
+    add_model_args(parser)
     args = parser.parse_args()
 
-    # Validate Google API key
     if args.provider == "google" and not args.api_key:
         api_key = os.getenv("GOOGLE_GEOCODING_API_KEY")
         if not api_key:
@@ -73,22 +96,7 @@ async def main():
             sys.exit(1)
         args.api_key = api_key
 
-    # Import after path setup
-    from pydantic import SecretStr
-
-    from neo4j_agent_memory import (
-        GeocodingConfig,
-        GeocodingProvider,
-        MemoryClient,
-        MemorySettings,
-    )
-
-    # Get Neo4j connection settings from environment
-    neo4j_uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-    neo4j_password = os.getenv("NEO4J_PASSWORD", "password")
-
-    # Configure geocoding - the MemoryClient will automatically create and
-    # wire the geocoder to LongTermMemory
+    # The MemoryClient wires the geocoder to LongTermMemory from this config.
     geocoding_config = GeocodingConfig(
         enabled=True,
         provider=GeocodingProvider.GOOGLE
@@ -99,21 +107,13 @@ async def main():
         user_agent="lennys-memory/1.0",
     )
 
-    settings = MemorySettings(
-        neo4j={
-            "uri": neo4j_uri,
-            "password": SecretStr(neo4j_password),
-        },
-        geocoding=geocoding_config,
-    )
-
-    print(f"Geocoding Location entities using {args.provider.title()}")
-    print(f"Neo4j: {neo4j_uri}")
-    print()
+    print(f"{color('Geocoding Location entities', Colors.BOLD + Colors.CYAN)}")
+    print(f"{color('Provider', Colors.DIM)}   {args.provider.title()}")
+    settings = build_memory_settings(args, geocoding=geocoding_config)
 
     async with MemoryClient(settings) as client:
 
-        def on_progress(processed: int, total: int):
+        def on_progress(processed: int, total: int) -> None:
             if args.verbose or processed % 10 == 0 or processed == total:
                 print(f"  Progress: {processed}/{total} locations processed")
 
@@ -125,15 +125,19 @@ async def main():
 
         print()
         print("Geocoding complete!")
-        print(f"  Processed: {stats['processed']} locations")
-        print(f"  Geocoded:  {stats['geocoded']} locations")
-        print(f"  Skipped:   {stats['skipped']} locations")
-        print(f"  Failed:    {stats['failed']} locations")
+        # geocode_locations() returns {"processed", "geocoded"} -- anything
+        # processed but not geocoded is a provider miss.
+        processed = stats["processed"]
+        geocoded = stats["geocoded"]
+        print(f"  Processed:  {processed} locations")
+        print(f"  Geocoded:   {geocoded} locations")
+        print(f"  Not found:  {processed - geocoded} locations")
 
         if stats["geocoded"] > 0:
             print()
             print("You can now use spatial queries like:")
             print("  await memory.long_term.search_locations_near(lat, lon, radius_km=10)")
+            print("  await memory.long_term.get_location_coordinates(entity_id)")
 
 
 if __name__ == "__main__":

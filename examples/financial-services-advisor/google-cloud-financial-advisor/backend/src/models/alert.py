@@ -6,7 +6,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class AlertSeverity(str, Enum):
@@ -88,8 +88,7 @@ class Alert(BaseModel):
     requires_sar: bool = Field(default=False)
     auto_generated: bool = Field(default=False)
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class AlertUpdate(BaseModel):

@@ -18,14 +18,20 @@ This example application showcases the AWS-Neo4j partnership through a productio
 
 ### Key Features
 
-- **Multi-Agent Investigation**: Coordinated KYC, AML, relationship, and compliance analysis
-- **Context Graph Intelligence**: Relationship mapping and network analysis with Neo4j
-- **Explainable AI**: Full audit trails for regulatory compliance (EU AI Act ready)
-- **Real-time Monitoring**: Transaction and behavior pattern detection
-- **Graph-based RAG**: Reduces hallucinations through grounded, relationship-aware retrieval
-- **Entity Deduplication**: `DeduplicationConfig` available for preventing duplicate customer/account entities
-- **Provenance Tracking**: `link_entity_to_message()` and `link_entity_to_extractor()` for compliance audit trails
-- **Explicit Extraction Config**: `ExtractionConfig` for configuring entity extraction pipelines
+- **Multi-Agent Investigation**: a supervisor delegates to KYC, AML, Relationship and Compliance specialists, each with tools that run real Cypher against a Neo4j compliance graph
+- **Live streaming**: `Agent.stream_async()` drives the SSE route, so `tool_call` and `tool_result` events reach the browser *during* the investigation
+- **Explainable AI**: a reasoning trace per turn, one step per tool call, and `(:ReasoningStep)-[:TOUCHED]->(:Entity)` audit edges — so "which entities did this investigation act on?" is one hop:
+
+  ```cypher
+  MATCH (rt:ReasoningTrace {id: $trace_id})-[:HAS_STEP]->(s:ReasoningStep)-[:TOUCHED]->(e:Entity)
+  OPTIONAL MATCH (s)-[:USES_TOOL]->(tc:ToolCall)
+  RETURN e.name, e.type, s.action, collect(DISTINCT tc.tool_name) AS tools
+  ```
+
+  That query is what `GET /api/investigations/{id}/audit-trail` returns.
+- **Long-term memory with real content**: sanctions and PEP screenings are written as `(:Fact {predicate: 'SCREENED_AGAINST'})` triples and read back on the next investigation of the same subject
+- **Existing-graph adoption**: `client.schema.adopt_existing_graph()` turns the compliance nodes into long-term memory entities, so extraction links to them instead of duplicating them
+- **Portable graph access**: every read goes through `client.query.cypher()`, which validates read-only before the round-trip and works identically on self-hosted Neo4j and the hosted service
 
 ## Architecture
 
@@ -56,22 +62,15 @@ This example application showcases the AWS-Neo4j partnership through a productio
 | **Relationship Agent** | Network analysis using Context Graph |
 | **Compliance Agent** | Sanctions/PEP screening, report generation |
 
-## Current Status
-
-This example is in **alpha/demo** state. The architecture and agent orchestration pattern are functional, but several components use simulated data rather than real Neo4j queries. See [REVIEW.md](REVIEW.md) for a detailed analysis and [GETTING_STARTED.md](GETTING_STARTED.md) for a working setup guide.
-
-**Working**: Chat with supervisor agent, conversation memory, customer/alert CRUD, risk scoring, frontend UI
-**Simulated**: KYC/AML/Relationship/Compliance tool results (use `random.choice()`), graph visualization data
-
 ## Quick Start
 
 > For detailed setup instructions and troubleshooting, see **[GETTING_STARTED.md](GETTING_STARTED.md)**.
 
 ### Prerequisites
 
-- Python 3.10+ and [uv](https://docs.astral.sh/uv/)
+- Python 3.11+ and [uv](https://docs.astral.sh/uv/)
 - Node.js 18+
-- AWS CLI configured with Bedrock access (Claude Sonnet 4 + Titan Embed V2)
+- AWS CLI configured with Bedrock access (a current Claude Sonnet inference profile + Titan Embed V2)
 - Neo4j Aura account (or local Neo4j via Docker)
 
 ### Local Development
@@ -79,7 +78,7 @@ This example is in **alpha/demo** state. The architecture and agent orchestratio
 1. **Navigate to the example:**
 
 ```bash
-cd examples/aws-financial-services-advisor
+cd examples/financial-services-advisor/aws-financial-services-advisor
 ```
 
 2. **Set up environment:**
@@ -93,29 +92,35 @@ cp .env.example backend/.env
 
 ```bash
 make install
-# or: cd backend && uv sync && cd ../frontend && npm install
+# or: cd backend && uv sync --extra dev && cd ../frontend && npm ci
 ```
 
-4. **Run the application:**
+4. **Load the shared sample data:**
+
+```bash
+make load-data          # idempotent; re-running changes nothing
+make adopt-graph        # optional: make the domain nodes long-term memory entities
+```
+
+5. **Run the application:**
 
 ```bash
 make run
 ```
 
-5. **Access the application:**
+6. **Access the application:**
    - Frontend: http://localhost:5173
    - API Docs: http://localhost:8000/docs
 
 ### AWS Deployment
 
-Deploy the complete stack using AWS CDK:
-
 ```bash
-cd infrastructure
-npm install
-npx cdk bootstrap  # First time only
-npx cdk deploy --all
+make synth              # synthesize all six stacks — no AWS credentials needed
+make build              # build the frontend; the api stack uploads it to S3
+make deploy             # six stacks: network, auth, data, compute, api, monitoring
 ```
+
+API Gateway fronts the Lambda with one authorized `{proxy+}` resource, so every FastAPI route is reachable; `/health` stays unauthenticated. Neo4j credentials come from a Secrets Manager secret whose ARN the compute stack injects as `NEO4J_SECRET_ARN` — they never appear in the function's environment. See [GETTING_STARTED.md](GETTING_STARTED.md#aws-deployment-advanced) for the bootstrap and secret-population steps.
 
 ## Project Structure
 
@@ -123,46 +128,53 @@ npx cdk deploy --all
 aws-financial-services-advisor/
 ├── backend/
 │   ├── src/
-│   │   ├── agents/        # Strands Agent definitions
+│   │   ├── agents/        # Supervisor + the four specialists' prompts
 │   │   ├── api/routes/    # FastAPI endpoints
 │   │   ├── models/        # Pydantic models
-│   │   └── services/      # Business logic
-│   ├── handler.py         # Lambda handler
-│   └── pyproject.toml     # Python dependencies (uv)
-├── frontend/
-│   ├── src/
-│   │   ├── components/    # React components
-│   │   └── lib/           # API client and types
-│   └── package.json
+│   │   ├── tools/         # 16 Neo4j-backed tools + bind_tool()
+│   │   └── services/      # memory_service, neo4j_service, risk_service
+│   ├── handler.py         # Lambda handler (Mangum)
+│   ├── pyproject.toml     # Python dependencies (uv)
+│   └── tests/             # 151 tests
+├── frontend/              # React + Chakra UI v3 + Vite
+├── infrastructure/        # Six AWS CDK stacks (TypeScript)
+├── docs/diagrams/         # Editable Excalidraw sources
+├── img/                   # Architecture diagram
 ├── .env.example           # Environment template
 ├── Makefile               # Development commands
-├── GETTING_STARTED.md     # Setup guide
-└── REVIEW.md              # Code review
+└── GETTING_STARTED.md     # Setup guide
 ```
+
+The sample data and its loader live one level up, in [`../data/`](../data/), shared with the Google Cloud twin.
 
 ## API Endpoints
 
+The full list is at http://localhost:8000/docs. The ones worth knowing:
+
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/chat` | POST | Interact with the AI advisor |
+| `/api/chat` | POST | Interact with the AI advisor (awaits `invoke_async`) |
+| `/api/chat/stream` | POST | Same, as SSE — tool events arrive during the run |
 | `/api/customers` | GET/POST | Customer management |
-| `/api/customers/{id}/risk` | GET | Risk assessment |
+| `/api/customers/{id}/risk` | GET | Risk assessment with contributing factors |
 | `/api/customers/{id}/network` | GET | Relationship network |
 | `/api/investigations` | GET/POST | Investigation management |
 | `/api/investigations/{id}/start` | POST | Start multi-agent investigation |
-| `/api/investigations/{id}/audit-trail` | GET | Get reasoning trace |
-| `/api/alerts` | GET | Compliance alerts |
-| `/api/reports/sar` | POST | Generate SAR report |
+| `/api/investigations/{id}/audit-trail` | GET | Reasoning traces plus the `:TOUCHED` entity projection |
+| `/api/alerts` | GET/POST | Compliance alerts |
+| `/api/graph/query` | POST | Read-only Cypher (validated by `client.query.cypher`) |
+| `/api/reports/sar` | GET/POST | SAR reports, persisted in Neo4j |
+| `/health` | GET | Readiness probe — round-trips to Neo4j, 503 when it fails |
 
 ## Memory Types
 
 The application uses three types of Context Graph memory:
 
-| Memory Type | Purpose | Example Use |
-|-------------|---------|-------------|
-| **Short-Term** | Conversation history | Chat context, session state |
-| **Long-Term** | Entities & relationships | Customer profiles, org networks |
-| **Reasoning** | Decision audit trails | Investigation traces, agent reasoning |
+| Memory Type | What this app writes | Read back by |
+|-------------|---------------------|--------------|
+| **Short-Term** | One `:Conversation` per session; exactly one user and one assistant `:Message` per turn, with entity extraction on the user turn | `GET /api/chat/history/{session_id}`, `POST /api/chat/search` |
+| **Long-Term** | `(:Fact {predicate: 'SCREENED_AGAINST'})` per sanctions/PEP screening, plus analyst preferences. With `make adopt-graph`, the compliance nodes themselves become `:Entity` | `check_sanctions` / `verify_pep_status` surface `prior_screenings` on the next run |
+| **Reasoning** | A `:ReasoningTrace` per turn linked to the triggering message, a `:ReasoningStep` and `:ToolCall` per tool use, `:TOUCHED` edges to the entities acted on, and a structured `TraceOutcome` | `GET /api/traces/{session_id}`, `GET /api/investigations/{id}/audit-trail` |
 
 ## Sample Investigation Flow
 
@@ -204,6 +216,8 @@ CORS_ORIGINS=http://localhost:5173
 
 ## Security Considerations
 
+> This is a demo. `POST /api/graph/query` accepts caller-supplied Cypher; the library validates it as read-only before any round-trip, but before a real deployment put it behind the Cognito authorizer *and* a read-only Neo4j role. Client-side validation is defence in depth, not a security boundary.
+
 - **Authentication**: Cognito with MFA for compliance users
 - **Authorization**: Role-based access (Analyst, Supervisor, Admin)
 - **Audit Trail**: All actions logged to CloudWatch and Context Graph
@@ -243,4 +257,4 @@ This example is part of the neo4j-agent-memory project and is licensed under the
 
 ---
 
-_Verified against `neo4j-agent-memory` v0.1.2 / v0.2-dev on 2026-05-03 (current PyPI release: v0.4.x with NAMS support) (structure, syntax, and import tests pass; full end-to-end run requires AWS Bedrock credentials and the Strands Agents SDK)._
+_Verified against `neo4j-agent-memory` v0.5.0, strands-agents 1.55.1, fastapi 0.141.1, aws-cdk-lib 2.269.0 on 2026-09-10 — 151 backend tests pass (124 unit, 27 integration against Neo4j 5.26), `cdk synth` succeeds with no AWS credentials, and the domain API was exercised end to end. A full chat run additionally needs AWS Bedrock credentials._

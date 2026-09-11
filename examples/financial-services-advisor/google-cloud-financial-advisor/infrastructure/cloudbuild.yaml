@@ -12,7 +12,7 @@ steps:
       - '-t'
       - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO_NAME}/backend:latest'
       - './backend'
-    dir: 'examples/google-cloud-financial-advisor'
+    dir: 'examples/financial-services-advisor/google-cloud-financial-advisor'
 
   # Build frontend image
   - name: 'gcr.io/cloud-builders/docker'
@@ -24,7 +24,7 @@ steps:
       - '-t'
       - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO_NAME}/frontend:latest'
       - './frontend'
-    dir: 'examples/google-cloud-financial-advisor'
+    dir: 'examples/financial-services-advisor/google-cloud-financial-advisor'
 
   # Push backend image
   - name: 'gcr.io/cloud-builders/docker'

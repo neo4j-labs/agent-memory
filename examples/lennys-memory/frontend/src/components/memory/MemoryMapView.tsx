@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo, useCallback, useRef } from "react";
+import { useEffect, useState, useMemo, useCallback } from "react";
 import {
   Box,
   VStack,
@@ -11,23 +11,16 @@ import {
   Badge,
   IconButton,
   Link,
-  Tabs,
-  Flex,
-  useBreakpointValue,
 } from "@chakra-ui/react";
 import {
   HiX,
   HiRefresh,
-  HiMap,
   HiLocationMarker,
   HiCollection,
 } from "react-icons/hi";
 import {
   LuExternalLink,
-  LuLayers,
   LuRuler,
-  LuPenTool,
-  LuCircle,
   LuRoute,
   LuThermometer,
 } from "react-icons/lu";
@@ -58,10 +51,6 @@ const CircleMarker = dynamic(
 );
 const Polyline = dynamic(
   () => import("react-leaflet").then((mod) => mod.Polyline),
-  { ssr: false },
-);
-const LayersControl = dynamic(
-  () => import("react-leaflet").then((mod) => mod.LayersControl),
   { ssr: false },
 );
 
@@ -113,27 +102,6 @@ interface MemoryMapViewProps {
   initialShowAll?: boolean; // start with all locations visible
 }
 
-// Component for map controls and interactions
-function MapController({
-  locations,
-  selectedLocations,
-  onSelectLocations,
-  measureMode,
-  shortestPath,
-}: {
-  locations: LocationEntity[];
-  selectedLocations: LocationEntity[];
-  onSelectLocations: (locs: LocationEntity[]) => void;
-  measureMode: boolean;
-  shortestPath: {
-    nodes: Array<{ latitude?: number; longitude?: number }>;
-  } | null;
-}) {
-  // This component will be rendered inside MapContainer
-  // We can use useMap hook here if needed
-  return null;
-}
-
 export default function MemoryMapView({
   isOpen,
   onClose,
@@ -171,7 +139,6 @@ export default function MemoryMapView({
   const [layerMode, setLayerMode] = useState<LayerMode>("markers");
   const [basemap, setBasemap] = useState<BasemapType>("osm");
   const [measureMode, setMeasureMode] = useState(false);
-  const [drawMode, setDrawMode] = useState<"polygon" | "circle" | null>(null);
   const [showAllLocations, setShowAllLocations] = useState(initialShowAll);
 
   // Selection state

@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
 """Backfill RELATED_TO relationships for existing entities in the database.
 
-This script runs GLiREL relationship extraction on messages that already have
-extracted entities, and creates RELATED_TO relationships between Entity nodes.
+Runs GLiREL relationship extraction (no LLM) over messages that already have
+extracted entities and writes ``RELATED_TO`` edges between Entity nodes.
 
-This is useful for databases that were populated before relationship extraction
-was implemented, or when relationship extraction was disabled during initial load.
+Useful for databases populated before relationship extraction existed, or when
+``--no-relations`` was used during the initial load.
 
 Features:
-- Processes messages that have entities but no relationships extracted yet
-- Uses GLiREL for relationship extraction (no LLM required)
-- Batch processing with progress tracking
-- Resume capability (tracks which messages have been processed)
-- Rate limiting to avoid overwhelming the database
+- Durable progress: every visited message is stamped with
+  ``relations_extracted_at``, so a message GLiREL finds no relations in is still
+  "done" and the loop cannot re-process the same batch forever.
+- Resumable (``--status`` shows what is left), ``--dry-run`` previews.
+- Writes through ``long_term.add_relationship()`` -- the public writer.
 """
+
+from __future__ import annotations
 
 import argparse
 import asyncio
@@ -23,33 +25,40 @@ import sys
 import time
 import warnings
 from pathlib import Path
+from uuid import UUID
 
-# Suppress warnings before imports
-warnings.filterwarnings("ignore", category=UserWarning)
-warnings.filterwarnings("ignore", category=FutureWarning)
-warnings.filterwarnings("ignore", category=DeprecationWarning)
+# Quiet the HuggingFace/spaCy import chatter -- scoped to those modules so the
+# library's own DeprecationWarnings (and pydantic's, and the driver's) still
+# reach the operator. Never filter a whole warning category process-wide in an
+# example meant to teach current API usage.
+for _module in ("transformers", "huggingface_hub", "spacy", "thinc", "torch"):
+    warnings.filterwarnings("ignore", category=UserWarning, module=_module)
+    warnings.filterwarnings("ignore", category=FutureWarning, module=_module)
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 
-from dotenv import load_dotenv
-from pydantic import SecretStr
+sys.path.insert(0, str(Path(__file__).parent))
 
-from neo4j_agent_memory import MemoryClient, MemorySettings, Neo4jConfig
-from neo4j_agent_memory.extraction.gliner_extractor import (
+from _common import (  # noqa: E402
+    Colors,
+    add_model_args,
+    add_neo4j_args,
+    build_memory_settings,
+    color,
+    format_duration,
+    load_backend_env,
+)
+
+from neo4j_agent_memory import MemoryClient  # noqa: E402
+from neo4j_agent_memory.extraction.base import ExtractedEntity  # noqa: E402
+from neo4j_agent_memory.extraction.gliner_extractor import (  # noqa: E402
     GLiRELExtractor,
     is_glirel_available,
 )
-from neo4j_agent_memory.extraction.base import ExtractedEntity
-from neo4j_agent_memory.graph.queries import (
-    CREATE_ENTITY_RELATION_BY_ID,
-    CREATE_ENTITY_RELATION_BY_NAME,
-)
 
-# Load .env file from backend directory
-load_dotenv(Path(__file__).parent.parent / "backend" / ".env")
+load_backend_env()
 
-# Set up logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -57,45 +66,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# ANSI color codes
-class Colors:
-    RESET = "\033[0m"
-    BOLD = "\033[1m"
-    DIM = "\033[2m"
-    GREEN = "\033[92m"
-    YELLOW = "\033[93m"
-    RED = "\033[91m"
-    CYAN = "\033[96m"
-    BLUE = "\033[94m"
-
-
-def supports_color() -> bool:
-    return hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
-
-
-USE_COLORS = supports_color()
-
-
-def color(text: str, color_code: str) -> str:
-    if USE_COLORS:
-        return f"{color_code}{text}{Colors.RESET}"
-    return text
-
-
-def format_duration(seconds: float) -> str:
-    if seconds < 60:
-        return f"{seconds:.1f}s"
-    elif seconds < 3600:
-        mins = int(seconds // 60)
-        secs = int(seconds % 60)
-        return f"{mins}m {secs}s"
-    else:
-        hours = int(seconds // 3600)
-        mins = int((seconds % 3600) // 60)
-        return f"{hours}h {mins}m"
-
-
-# Cypher queries for backfill
+# Cypher queries for the backfill. Inlined rather than imported from
+# ``neo4j_agent_memory.graph.queries`` (internal, no stability guarantee) so the
+# example shows the query it runs.
 GET_MESSAGES_WITH_ENTITIES = """
 MATCH (m:Message)-[:MENTIONS]->(e:Entity)
 WITH m, collect(DISTINCT {
@@ -108,33 +81,28 @@ WHERE size(entities) >= 2
 RETURN m.id AS message_id,
        m.content AS content,
        entities
-ORDER BY m.created_at
+ORDER BY m.timestamp
 SKIP $skip
 LIMIT $limit
 """
 
-GET_MESSAGES_WITHOUT_RELATIONSHIPS = """
-// Find messages that have entities but where those entities don't have RELATED_TO between them
+# "Pending" is a durable fact on the node, not something inferred from whether
+# relationships happen to exist. A message GLiREL finds nothing in still gets
+# stamped, so it leaves this result set and the next page is genuinely new.
+GET_MESSAGES_PENDING = """
 MATCH (m:Message)-[:MENTIONS]->(e:Entity)
-WITH m, collect(DISTINCT e) AS entities
+WHERE m.relations_extracted_at IS NULL
+WITH m, collect(DISTINCT {
+    id: e.id,
+    name: e.name,
+    type: e.type,
+    subtype: e.subtype
+}) AS entities
 WHERE size(entities) >= 2
-// Check if any pair of entities from this message has a RELATED_TO relationship
-WITH m, entities,
-     [e IN entities | e.id] AS entity_ids
-OPTIONAL MATCH (e1:Entity)-[r:RELATED_TO]-(e2:Entity)
-WHERE e1.id IN entity_ids AND e2.id IN entity_ids
-WITH m, entities, count(r) AS rel_count
-WHERE rel_count = 0
 RETURN m.id AS message_id,
        m.content AS content,
-       [e IN entities | {
-           id: e.id,
-           name: e.name,
-           type: e.type,
-           subtype: e.subtype
-       }] AS entities
-ORDER BY m.created_at
-SKIP $skip
+       entities
+ORDER BY m.timestamp
 LIMIT $limit
 """
 
@@ -145,17 +113,25 @@ WHERE entity_count >= 2
 RETURN count(m) AS total
 """
 
-COUNT_MESSAGES_WITHOUT_RELATIONSHIPS = """
+COUNT_MESSAGES_PENDING = """
 MATCH (m:Message)-[:MENTIONS]->(e:Entity)
-WITH m, collect(DISTINCT e) AS entities
-WHERE size(entities) >= 2
-WITH m, entities,
-     [e IN entities | e.id] AS entity_ids
-OPTIONAL MATCH (e1:Entity)-[r:RELATED_TO]-(e2:Entity)
-WHERE e1.id IN entity_ids AND e2.id IN entity_ids
-WITH m, count(r) AS rel_count
-WHERE rel_count = 0
+WHERE m.relations_extracted_at IS NULL
+WITH m, count(DISTINCT e) AS entity_count
+WHERE entity_count >= 2
 RETURN count(m) AS total
+"""
+
+MARK_MESSAGES_PROCESSED = """
+UNWIND $message_ids AS message_id
+MATCH (m:Message {id: message_id})
+SET m.relations_extracted_at = datetime()
+"""
+
+CREATE_RELATION_BY_NAME = """
+MATCH (source:Entity {name: $source_name})
+MATCH (target:Entity {name: $target_name})
+MERGE (source)-[r:RELATED_TO {relation_type: $relation_type}]->(target)
+ON CREATE SET r.confidence = $confidence, r.created_at = datetime()
 """
 
 GET_RELATIONSHIP_STATS = """
@@ -169,13 +145,9 @@ async def get_message_count(
     memory: MemoryClient,
     skip_processed: bool = True,
 ) -> int:
-    """Get count of messages that need relationship extraction."""
-    query = (
-        COUNT_MESSAGES_WITHOUT_RELATIONSHIPS
-        if skip_processed
-        else COUNT_MESSAGES_WITH_ENTITIES
-    )
-    results = await memory._client.execute_read(query)
+    """Count messages that still need relationship extraction."""
+    query = COUNT_MESSAGES_PENDING if skip_processed else COUNT_MESSAGES_WITH_ENTITIES
+    results = await memory.query.cypher(query)
     return results[0]["total"] if results else 0
 
 
@@ -186,18 +158,22 @@ async def get_messages_batch(
     skip_processed: bool = True,
 ) -> list[dict]:
     """Get a batch of messages with their entities."""
-    query = (
-        GET_MESSAGES_WITHOUT_RELATIONSHIPS
-        if skip_processed
-        else GET_MESSAGES_WITH_ENTITIES
-    )
-    results = await memory._client.execute_read(query, {"skip": skip, "limit": limit})
-    return results
+    if skip_processed:
+        # Stamped messages drop out of the result set, so paging is unnecessary.
+        return await memory.query.cypher(GET_MESSAGES_PENDING, {"limit": limit})
+    return await memory.query.cypher(GET_MESSAGES_WITH_ENTITIES, {"skip": skip, "limit": limit})
+
+
+async def mark_processed(memory: MemoryClient, message_ids: list[str]) -> None:
+    """Stamp messages as visited so a zero-relation message is genuinely done."""
+    if not message_ids:
+        return
+    await memory.graph.execute_write(MARK_MESSAGES_PROCESSED, {"message_ids": message_ids})
 
 
 async def get_relationship_stats(memory: MemoryClient) -> dict:
     """Get current relationship statistics."""
-    results = await memory._client.execute_read(GET_RELATIONSHIP_STATS)
+    results = await memory.query.cypher(GET_RELATIONSHIP_STATS)
     if results:
         return {
             "total_relationships": results[0]["total_relationships"],
@@ -213,10 +189,13 @@ async def store_relations(
 ) -> int:
     """Store extracted relations as RELATED_TO relationships.
 
+    Uses the public ``long_term.add_relationship()`` writer when both endpoints
+    resolved to ids, and falls back to a name match otherwise.
+
     Args:
         memory: MemoryClient instance
-        relations: List of relation dicts with source, target, relation_type, confidence
-        entity_id_map: Mapping from entity name (lowercase) to entity ID
+        relations: Relation dicts with source, target, relation_type, confidence
+        entity_id_map: Mapping from lowercased entity name to entity ID
 
     Returns:
         Number of relationships created
@@ -224,33 +203,26 @@ async def store_relations(
     created = 0
 
     for rel in relations:
-        source_name = rel["source"].lower()
-        target_name = rel["target"].lower()
-
-        # Try to find entity IDs
-        source_id = entity_id_map.get(source_name)
-        target_id = entity_id_map.get(target_name)
+        source_id = entity_id_map.get(rel["source"].lower())
+        target_id = entity_id_map.get(rel["target"].lower())
 
         if source_id and target_id:
-            # Use ID-based query (faster)
             try:
-                await memory._client.execute_write(
-                    CREATE_ENTITY_RELATION_BY_ID,
-                    {
-                        "source_id": source_id,
-                        "target_id": target_id,
-                        "relation_type": rel["relation_type"],
-                        "confidence": rel["confidence"],
-                    },
+                await memory.long_term.add_relationship(
+                    UUID(source_id),
+                    UUID(target_id),
+                    rel["relation_type"],
+                    confidence=rel["confidence"],
                 )
                 created += 1
             except Exception as e:
                 logger.debug(f"Failed to create relation by ID: {e}")
         else:
-            # Fallback to name-based query
+            # Names that GLiREL returned but that are not in this message's
+            # entity list (e.g. an alias) -- match by name instead.
             try:
-                await memory._client.execute_write(
-                    CREATE_ENTITY_RELATION_BY_NAME,
+                await memory.graph.execute_write(
+                    CREATE_RELATION_BY_NAME,
                     {
                         "source_name": rel["source"],
                         "target_name": rel["target"],
@@ -379,7 +351,7 @@ async def backfill_relationships(
 
     if dry_run:
         # Show sample of messages that would be processed
-        print(f"Sample of messages that would be processed:")
+        print("Sample of messages that would be processed:")
         sample = await get_messages_batch(memory, 0, 5, skip_processed)
         for msg in sample:
             entity_names = [e["name"] for e in msg["entities"]]
@@ -401,6 +373,9 @@ async def backfill_relationships(
     total_stored = 0
     errors = 0
     skip = 0
+    # Guards against a batch that yields no new ids (e.g. a stamp write failed):
+    # without it the loop would spin on the same page forever.
+    seen: set[str] = set()
 
     while processed < total_messages:
         batch = await get_messages_batch(memory, skip, batch_size, skip_processed)
@@ -408,7 +383,18 @@ async def backfill_relationships(
         if not batch:
             break
 
+        new_ids = [msg["message_id"] for msg in batch if msg["message_id"] not in seen]
+        if not new_ids:
+            logger.warning("Batch contained no unseen messages; stopping to avoid a loop.")
+            break
+
+        batch_ids: list[str] = []
         for msg in batch:
+            if msg["message_id"] in seen:
+                continue
+            seen.add(msg["message_id"])
+            batch_ids.append(msg["message_id"])
+
             result = await process_message(memory, extractor, msg)
 
             total_extracted += result.get("relations_extracted", 0)
@@ -426,7 +412,7 @@ async def backfill_relationships(
 
                 sys.stdout.write(
                     f"\r  Progress: {processed}/{total_messages} "
-                    f"({processed/total_messages*100:.0f}%) "
+                    f"({processed / total_messages * 100:.0f}%) "
                     f"| Relations: {total_stored:,} stored "
                     f"| {rate:.1f} msg/s "
                     f"| ETA: {format_duration(eta)}"
@@ -436,10 +422,15 @@ async def backfill_relationships(
             if limit and processed >= limit:
                 break
 
-        # When not skipping processed, we need to move skip forward
-        if not skip_processed:
+        # Stamp the whole batch as visited -- including messages GLiREL found no
+        # relations in, which is what makes the next page genuinely new.
+        if skip_processed:
+            await mark_processed(memory, batch_ids)
+        else:
             skip += batch_size
-        # When skipping processed, keep skip at 0 since we're filtering out done ones
+
+        if limit and processed >= limit:
+            break
 
     print()  # Newline after progress
 
@@ -459,8 +450,12 @@ async def backfill_relationships(
     print(f"  {color('Elapsed time:', Colors.DIM)} {format_duration(elapsed)}")
     print(f"  {color('Throughput:', Colors.DIM)} {processed / elapsed:.1f} msg/s")
     print()
-    print(f"  {color('Total relationships now:', Colors.DIM)} {final_stats['total_relationships']:,}")
-    print(f"  {color('New relationships:', Colors.DIM)} {final_stats['total_relationships'] - initial_stats['total_relationships']:,}")
+    print(
+        f"  {color('Total relationships now:', Colors.DIM)} {final_stats['total_relationships']:,}"
+    )
+    print(
+        f"  {color('New relationships:', Colors.DIM)} {final_stats['total_relationships'] - initial_stats['total_relationships']:,}"
+    )
     print()
 
     return {
@@ -469,7 +464,8 @@ async def backfill_relationships(
         "relations_stored": total_stored,
         "errors": errors,
         "elapsed_seconds": elapsed,
-        "new_relationships": final_stats["total_relationships"] - initial_stats["total_relationships"],
+        "new_relationships": final_stats["total_relationships"]
+        - initial_stats["total_relationships"],
     }
 
 
@@ -490,12 +486,16 @@ async def show_status(memory: MemoryClient) -> None:
     print(f"  {color('Messages processed:', Colors.DIM)} {processed:,}")
     print(f"  {color('Messages pending:', Colors.DIM)} {pending:,}")
     print()
-    print(f"  {color('Total RELATED_TO relationships:', Colors.DIM)} {stats['total_relationships']:,}")
+    print(
+        f"  {color('Total RELATED_TO relationships:', Colors.DIM)} {stats['total_relationships']:,}"
+    )
     print(f"  {color('Unique relationship types:', Colors.DIM)} {stats['unique_types']}")
     print()
 
     if pending > 0:
-        print(f"  Run {color('make backfill-relationships', Colors.YELLOW)} to process pending messages.")
+        print(
+            f"  Run {color('make backfill-relationships', Colors.YELLOW)} to process pending messages."
+        )
     else:
         print(f"  {color('All messages have been processed!', Colors.GREEN)}")
     print()
@@ -522,21 +522,6 @@ Examples:
   # Preview without making changes
   %(prog)s --dry-run
 """,
-    )
-    parser.add_argument(
-        "--neo4j-uri",
-        default=os.getenv("NEO4J_URI", "bolt://localhost:7687"),
-        help="Neo4j connection URI",
-    )
-    parser.add_argument(
-        "--neo4j-user",
-        default=os.getenv("NEO4J_USERNAME", "neo4j"),
-        help="Neo4j username",
-    )
-    parser.add_argument(
-        "--neo4j-password",
-        default=os.getenv("NEO4J_PASSWORD", "password"),
-        help="Neo4j password",
     )
     parser.add_argument(
         "--batch-size",
@@ -577,6 +562,8 @@ Examples:
         help="Device to run GLiREL on (default: cpu)",
     )
 
+    add_neo4j_args(parser)
+    add_model_args(parser)
     args = parser.parse_args()
 
     # Check GLiREL availability
@@ -585,14 +572,8 @@ Examples:
         print("Install it with: pip install glirel")
         sys.exit(1)
 
-    # Connect to Neo4j
-    settings = MemorySettings(
-        neo4j=Neo4jConfig(
-            uri=args.neo4j_uri,
-            username=args.neo4j_user,
-            password=SecretStr(args.neo4j_password),
-        ),
-    )
+    # One settings builder for the whole pipeline (same embedding space).
+    settings = build_memory_settings(args, quiet=True)
 
     print()
     print(color("Connecting to Neo4j...", Colors.DIM), end=" ", flush=True)

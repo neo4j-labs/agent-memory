@@ -21,25 +21,22 @@ async def find_connections(
     *,
     neo4j_service: Neo4jDomainService,
 ) -> dict[str, Any]:
-    """Find all connections for an entity in the graph."""
+    """Find all connections for an entity in the graph.
+
+    Args:
+        entity_id: Customer or organization identifier
+        depth: Traversal depth in hops (1-3)
+    """
     logger.info(f"Finding connections for entity {entity_id}, depth={depth}")
 
-    query = """
-    MATCH (n)
-    WHERE n.id = $id OR n.name = $id
-    RETURN n {.id, .name, .type} AS entity
-    LIMIT 1
-    """
-    results = await neo4j_service._graph.execute_read(query, {"id": entity_id})
-    if not results:
+    start = await neo4j_service.get_node_summary(entity_id)
+    if not start:
         return {
             "entity_id": entity_id,
             "status": "NOT_FOUND",
             "message": f"Entity {entity_id} not found in network",
             "timestamp": datetime.now().isoformat(),
         }
-
-    start = results[0]["entity"]
     conn_data = await neo4j_service.find_connections(start["id"] or entity_id, depth=depth)
 
     connections = []
@@ -75,17 +72,18 @@ async def analyze_network_risk(
     *,
     neo4j_service: Neo4jDomainService,
 ) -> dict[str, Any]:
-    """Analyze network-level risk for an entity."""
+    """Analyze network-level risk for an entity.
+
+    Args:
+        entity_id: Customer or organization identifier
+        include_indirect: Whether to include second-hop connections
+    """
     logger.info(f"Analyzing network risk for {entity_id}")
 
     risk_data = await neo4j_service.get_network_risk(entity_id)
 
-    query = """
-    MATCH (n) WHERE n.id = $id OR n.name = $id
-    RETURN n.name AS name LIMIT 1
-    """
-    results = await neo4j_service._graph.execute_read(query, {"id": entity_id})
-    entity_name = results[0]["name"] if results else entity_id
+    node = await neo4j_service.get_node_summary(entity_id)
+    entity_name = node["name"] if node else entity_id
 
     return {
         "entity_id": entity_id,
@@ -104,7 +102,11 @@ async def detect_shell_companies(
     *,
     neo4j_service: Neo4jDomainService,
 ) -> dict[str, Any]:
-    """Detect potential shell companies in an entity's network."""
+    """Detect potential shell companies in an entity's network.
+
+    Args:
+        entity_id: Customer or organization identifier
+    """
     logger.info(f"Detecting shell companies for {entity_id}")
 
     shell_indicator_descriptions = {
@@ -116,12 +118,8 @@ async def detect_shell_companies(
         "minimal_activity": "Little to no business activity",
     }
 
-    query = """
-    MATCH (n) WHERE n.id = $id OR n.name = $id
-    RETURN n {.id, .name, .type, .shell_indicators} AS entity LIMIT 1
-    """
-    results = await neo4j_service._graph.execute_read(query, {"id": entity_id})
-    if not results:
+    node = await neo4j_service.get_node_summary(entity_id)
+    if not node:
         return {
             "entity_id": entity_id,
             "status": "NOT_FOUND",
@@ -129,8 +127,7 @@ async def detect_shell_companies(
             "timestamp": datetime.now().isoformat(),
         }
 
-    start = results[0]["entity"]
-    shells = await neo4j_service.detect_shell_companies(start["id"] or entity_id)
+    shells = await neo4j_service.detect_shell_companies(node["id"] or entity_id)
 
     detected_shells = []
     for org in shells:
@@ -149,13 +146,13 @@ async def detect_shell_companies(
             }
         )
 
-    subject_indicators = start.get("shell_indicators") or []
+    subject_indicators = node.get("shell_indicators") or []
     if subject_indicators:
         detected_shells.insert(
             0,
             {
-                "entity_id": start.get("id"),
-                "name": start.get("name"),
+                "entity_id": node.get("id"),
+                "name": node.get("name"),
                 "jurisdiction": None,
                 "indicators": [
                     {"code": ind, "description": shell_indicator_descriptions.get(ind, ind)}
@@ -169,7 +166,7 @@ async def detect_shell_companies(
 
     return {
         "entity_id": entity_id,
-        "entity_name": start.get("name"),
+        "entity_name": node.get("name"),
         "shell_companies_detected": len(detected_shells),
         "shell_companies": detected_shells,
         "risk_level": "CRITICAL" if detected_shells else "LOW",
@@ -183,22 +180,22 @@ async def map_beneficial_ownership(
     *,
     neo4j_service: Neo4jDomainService,
 ) -> dict[str, Any]:
-    """Map beneficial ownership structure for an entity."""
+    """Map beneficial ownership structure for an entity.
+
+    Args:
+        entity_id: Customer or organization identifier
+        threshold_percentage: Ownership share at which a holder counts as a
+            beneficial owner (25% is the common regulatory threshold)
+    """
     logger.info(f"Mapping beneficial ownership for {entity_id}")
 
-    query = """
-    MATCH (n) WHERE n.id = $id OR n.name = $id
-    RETURN n {.id, .name, .type} AS entity LIMIT 1
-    """
-    results = await neo4j_service._graph.execute_read(query, {"id": entity_id})
-    if not results:
+    entity = await neo4j_service.get_node_summary(entity_id)
+    if not entity:
         return {
             "entity_id": entity_id,
             "status": "NOT_FOUND",
             "timestamp": datetime.now().isoformat(),
         }
-
-    entity = results[0]["entity"]
     ownership = await neo4j_service.trace_ownership(entity["id"] or entity_id)
 
     ownership_chains = []

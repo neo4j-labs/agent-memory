@@ -121,6 +121,217 @@ const MEMORY_TYPE_COLORS = {
   },
 };
 
+// Pure node helpers, kept at module scope so hooks can depend on them
+// without re-creating them on every render.
+const getNodeLabel = (node: GraphNode): string => {
+  if (node.labels.includes("Thread")) return "Thread";
+  if (node.labels.includes("Conversation")) return "Conversation";
+  if (node.labels.includes("Message")) return "Message";
+  if (node.labels.includes("ReasoningStep")) return "ReasoningStep";
+  if (node.labels.includes("ReasoningTrace")) return "ReasoningTrace";
+  if (node.labels.includes("ToolCall")) return "ToolCall";
+  if (node.labels.includes("Tool")) return "Tool";
+  if (node.labels.includes("UserPreference")) return "UserPreference";
+  if (node.labels.includes("Preference")) return "Preference";
+  if (node.labels.includes("PreferenceCategory")) return "PreferenceCategory";
+  if (node.labels.includes("Category")) return "Category";
+  if (node.labels.includes("Location")) return "Location";
+  if (node.labels.includes("Person")) return "Person";
+  if (node.labels.includes("Organization")) return "Organization";
+  if (node.labels.includes("Topic")) return "Topic";
+  if (node.labels.includes("Entity")) return "Entity";
+  return node.labels[0] || "Unknown";
+};
+
+const getNodeMemoryType = (node: GraphNode): MemoryType => {
+  const nodeType = getNodeLabel(node);
+
+  if (
+    nodeType === "Thread" ||
+    nodeType === "Conversation" ||
+    nodeType === "Message"
+  ) {
+    return "short-term";
+  }
+
+  if (
+    nodeType === "UserPreference" ||
+    nodeType === "Preference" ||
+    nodeType === "PreferenceCategory" ||
+    nodeType === "Category" ||
+    nodeType === "Location" ||
+    nodeType === "Person" ||
+    nodeType === "Organization" ||
+    nodeType === "Topic" ||
+    nodeType === "Entity"
+  ) {
+    return "user-profile";
+  }
+
+  if (
+    nodeType === "ReasoningStep" ||
+    nodeType === "ReasoningTrace" ||
+    nodeType === "ToolCall" ||
+    nodeType === "Tool"
+  ) {
+    return "reasoning";
+  }
+
+  return "short-term";
+};
+
+const getNodeCaption = (node: GraphNode): string => {
+  const nodeType = getNodeLabel(node);
+  const props = node.properties;
+
+  switch (nodeType) {
+    case "Thread":
+    case "Conversation": {
+      const title = props.title as string | undefined;
+      const sessionId = props.session_id as string | undefined;
+      if (title) {
+        return `${title.substring(0, 30)}${title.length > 30 ? "..." : ""}`;
+      }
+      if (sessionId) {
+        // Format podcast session IDs nicely
+        const formatted = sessionId
+          .replace("lenny-podcast-", "")
+          .replace(/-/g, " ");
+        return (
+          formatted.substring(0, 25) + (formatted.length > 25 ? "..." : "")
+        );
+      }
+      return "Conversation";
+    }
+    case "Message": {
+      const role = (props.role as string) || "unknown";
+      const text = (props.text as string) || (props.content as string) || "";
+      return `${role}: ${text.substring(0, 30)}${text.length > 30 ? "..." : ""}`;
+    }
+    case "ReasoningStep":
+    case "ReasoningTrace": {
+      const task = (props.task as string) || "";
+      const reasoning = (props.reasoning_text as string) || "";
+      if (task) {
+        return `Task: ${task.substring(0, 25)}${task.length > 25 ? "..." : ""}`;
+      }
+      if (reasoning) {
+        const stepNum = props.step_number || "?";
+        return `Step ${stepNum}: ${reasoning.substring(0, 25)}${reasoning.length > 25 ? "..." : ""}`;
+      }
+      return "Reasoning";
+    }
+    case "ToolCall":
+      return "Tool Call";
+    case "Tool":
+      return (props.name as string) || "Tool";
+    case "UserPreference": {
+      const pref = (props.preference as string) || "";
+      return pref.substring(0, 35) + (pref.length > 35 ? "..." : "");
+    }
+    case "PreferenceCategory":
+      return (props.name as string) || "Category";
+    case "Location":
+      return (props.name as string) || "Location";
+    case "Person":
+      return (props.name as string) || "Person";
+    case "Organization":
+      return (props.name as string) || "Organization";
+    case "Topic":
+      return (props.name as string) || "Topic";
+    case "Entity":
+      return (props.name as string) || "Entity";
+    default:
+      return (props.name as string) || (props.title as string) || nodeType;
+  }
+};
+
+/**
+ * Convert a guest name to a session_id format.
+ * Handles Unicode characters and special formatting.
+ */
+const guestToSessionId = (guestName: string): string => {
+  // Normalize unicode, convert to lowercase, replace spaces with hyphens
+  const normalized = guestName
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") // Remove diacritics
+    .toLowerCase()
+    .replace(/\s+/g, "-") // Replace spaces with hyphens
+    .replace(/[^a-z0-9-]/g, "") // Remove non-alphanumeric except hyphens
+    .replace(/-+/g, "-") // Collapse multiple hyphens
+    .replace(/^-|-$/g, ""); // Trim leading/trailing hyphens
+  return `lenny-podcast-${normalized}`;
+};
+
+/**
+ * Extract episode session IDs from tool call results in thread messages.
+ * Looks for session_id fields and episode_guest fields in tool results.
+ */
+const extractEpisodeSessionIds = (
+  messages: Array<{ toolCalls?: Array<{ result?: unknown }> }>,
+): string[] => {
+  const sessionIds = new Set<string>();
+
+  for (const message of messages) {
+    if (!message.toolCalls) continue;
+
+    for (const toolCall of message.toolCalls) {
+      if (!toolCall.result) continue;
+
+      // Recursively search for session_id and episode_guest fields in the result
+      const findSessionIds = (obj: unknown): void => {
+        if (!obj || typeof obj !== "object") return;
+
+        if (Array.isArray(obj)) {
+          for (const item of obj) {
+            findSessionIds(item);
+          }
+        } else {
+          const record = obj as Record<string, unknown>;
+          // Check for session_id that matches podcast pattern
+          if (
+            typeof record.session_id === "string" &&
+            record.session_id.startsWith("lenny-podcast-")
+          ) {
+            sessionIds.add(record.session_id);
+          }
+          // Also check for episode field (some tools return it differently)
+          if (
+            typeof record.episode === "string" &&
+            record.episode.startsWith("lenny-podcast-")
+          ) {
+            sessionIds.add(record.episode);
+          }
+          // Check for episode_guest field and convert to session_id
+          if (
+            typeof record.episode_guest === "string" &&
+            record.episode_guest.length > 0 &&
+            record.episode_guest !== "Unknown"
+          ) {
+            sessionIds.add(guestToSessionId(record.episode_guest));
+          }
+          // Also check for guest field
+          if (
+            typeof record.guest === "string" &&
+            record.guest.length > 0 &&
+            record.guest !== "Unknown"
+          ) {
+            sessionIds.add(guestToSessionId(record.guest));
+          }
+          // Recurse into nested objects
+          for (const value of Object.values(record)) {
+            findSessionIds(value);
+          }
+        }
+      };
+
+      findSessionIds(toolCall.result);
+    }
+  }
+
+  return Array.from(sessionIds);
+};
+
 export default function MemoryGraphView({
   isOpen,
   onClose,
@@ -154,93 +365,7 @@ export default function MemoryGraphView({
   const nvlRef = useRef<NVL | null>(null);
   const [hasInitialFit, setHasInitialFit] = useState(false);
 
-  /**
-   * Convert a guest name to a session_id format.
-   * Handles Unicode characters and special formatting.
-   */
-  const guestToSessionId = (guestName: string): string => {
-    // Normalize unicode, convert to lowercase, replace spaces with hyphens
-    const normalized = guestName
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "") // Remove diacritics
-      .toLowerCase()
-      .replace(/\s+/g, "-") // Replace spaces with hyphens
-      .replace(/[^a-z0-9-]/g, "") // Remove non-alphanumeric except hyphens
-      .replace(/-+/g, "-") // Collapse multiple hyphens
-      .replace(/^-|-$/g, ""); // Trim leading/trailing hyphens
-    return `lenny-podcast-${normalized}`;
-  };
-
-  /**
-   * Extract episode session IDs from tool call results in thread messages.
-   * Looks for session_id fields and episode_guest fields in tool results.
-   */
-  const extractEpisodeSessionIds = (
-    messages: Array<{ toolCalls?: Array<{ result?: unknown }> }>,
-  ): string[] => {
-    const sessionIds = new Set<string>();
-
-    for (const message of messages) {
-      if (!message.toolCalls) continue;
-
-      for (const toolCall of message.toolCalls) {
-        if (!toolCall.result) continue;
-
-        // Recursively search for session_id and episode_guest fields in the result
-        const findSessionIds = (obj: unknown): void => {
-          if (!obj || typeof obj !== "object") return;
-
-          if (Array.isArray(obj)) {
-            for (const item of obj) {
-              findSessionIds(item);
-            }
-          } else {
-            const record = obj as Record<string, unknown>;
-            // Check for session_id that matches podcast pattern
-            if (
-              typeof record.session_id === "string" &&
-              record.session_id.startsWith("lenny-podcast-")
-            ) {
-              sessionIds.add(record.session_id);
-            }
-            // Also check for episode field (some tools return it differently)
-            if (
-              typeof record.episode === "string" &&
-              record.episode.startsWith("lenny-podcast-")
-            ) {
-              sessionIds.add(record.episode);
-            }
-            // Check for episode_guest field and convert to session_id
-            if (
-              typeof record.episode_guest === "string" &&
-              record.episode_guest.length > 0 &&
-              record.episode_guest !== "Unknown"
-            ) {
-              sessionIds.add(guestToSessionId(record.episode_guest));
-            }
-            // Also check for guest field
-            if (
-              typeof record.guest === "string" &&
-              record.guest.length > 0 &&
-              record.guest !== "Unknown"
-            ) {
-              sessionIds.add(guestToSessionId(record.guest));
-            }
-            // Recurse into nested objects
-            for (const value of Object.values(record)) {
-              findSessionIds(value);
-            }
-          }
-        };
-
-        findSessionIds(toolCall.result);
-      }
-    }
-
-    return Array.from(sessionIds);
-  };
-
-  const loadGraphData = async () => {
+  const loadGraphData = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     setSelectedNode(null);
@@ -281,7 +406,7 @@ export default function MemoryGraphView({
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [threadId]);
 
   // Handle node expansion (fetch neighbors)
   const handleNodeExpand = useCallback(
@@ -332,63 +457,6 @@ export default function MemoryGraphView({
     },
     [expandedNodes, expandingNode],
   );
-
-  const getNodeLabel = (node: GraphNode): string => {
-    if (node.labels.includes("Thread")) return "Thread";
-    if (node.labels.includes("Conversation")) return "Conversation";
-    if (node.labels.includes("Message")) return "Message";
-    if (node.labels.includes("ReasoningStep")) return "ReasoningStep";
-    if (node.labels.includes("ReasoningTrace")) return "ReasoningTrace";
-    if (node.labels.includes("ToolCall")) return "ToolCall";
-    if (node.labels.includes("Tool")) return "Tool";
-    if (node.labels.includes("UserPreference")) return "UserPreference";
-    if (node.labels.includes("Preference")) return "Preference";
-    if (node.labels.includes("PreferenceCategory")) return "PreferenceCategory";
-    if (node.labels.includes("Category")) return "Category";
-    if (node.labels.includes("Location")) return "Location";
-    if (node.labels.includes("Person")) return "Person";
-    if (node.labels.includes("Organization")) return "Organization";
-    if (node.labels.includes("Topic")) return "Topic";
-    if (node.labels.includes("Entity")) return "Entity";
-    return node.labels[0] || "Unknown";
-  };
-
-  const getNodeMemoryType = (node: GraphNode): MemoryType => {
-    const nodeType = getNodeLabel(node);
-
-    if (
-      nodeType === "Thread" ||
-      nodeType === "Conversation" ||
-      nodeType === "Message"
-    ) {
-      return "short-term";
-    }
-
-    if (
-      nodeType === "UserPreference" ||
-      nodeType === "Preference" ||
-      nodeType === "PreferenceCategory" ||
-      nodeType === "Category" ||
-      nodeType === "Location" ||
-      nodeType === "Person" ||
-      nodeType === "Organization" ||
-      nodeType === "Topic" ||
-      nodeType === "Entity"
-    ) {
-      return "user-profile";
-    }
-
-    if (
-      nodeType === "ReasoningStep" ||
-      nodeType === "ReasoningTrace" ||
-      nodeType === "ToolCall" ||
-      nodeType === "Tool"
-    ) {
-      return "reasoning";
-    }
-
-    return "short-term";
-  };
 
   const formatPropertyValue = (value: unknown): string => {
     if (value === null || value === undefined) {
@@ -451,72 +519,6 @@ export default function MemoryGraphView({
     }
 
     return String(value);
-  };
-
-  const getNodeCaption = (node: GraphNode): string => {
-    const nodeType = getNodeLabel(node);
-    const props = node.properties;
-
-    switch (nodeType) {
-      case "Thread":
-      case "Conversation": {
-        const title = props.title as string | undefined;
-        const sessionId = props.session_id as string | undefined;
-        if (title) {
-          return `${title.substring(0, 30)}${title.length > 30 ? "..." : ""}`;
-        }
-        if (sessionId) {
-          // Format podcast session IDs nicely
-          const formatted = sessionId
-            .replace("lenny-podcast-", "")
-            .replace(/-/g, " ");
-          return (
-            formatted.substring(0, 25) + (formatted.length > 25 ? "..." : "")
-          );
-        }
-        return "Conversation";
-      }
-      case "Message": {
-        const role = (props.role as string) || "unknown";
-        const text = (props.text as string) || (props.content as string) || "";
-        return `${role}: ${text.substring(0, 30)}${text.length > 30 ? "..." : ""}`;
-      }
-      case "ReasoningStep":
-      case "ReasoningTrace": {
-        const task = (props.task as string) || "";
-        const reasoning = (props.reasoning_text as string) || "";
-        if (task) {
-          return `Task: ${task.substring(0, 25)}${task.length > 25 ? "..." : ""}`;
-        }
-        if (reasoning) {
-          const stepNum = props.step_number || "?";
-          return `Step ${stepNum}: ${reasoning.substring(0, 25)}${reasoning.length > 25 ? "..." : ""}`;
-        }
-        return "Reasoning";
-      }
-      case "ToolCall":
-        return "Tool Call";
-      case "Tool":
-        return (props.name as string) || "Tool";
-      case "UserPreference": {
-        const pref = (props.preference as string) || "";
-        return pref.substring(0, 35) + (pref.length > 35 ? "..." : "");
-      }
-      case "PreferenceCategory":
-        return (props.name as string) || "Category";
-      case "Location":
-        return (props.name as string) || "Location";
-      case "Person":
-        return (props.name as string) || "Person";
-      case "Organization":
-        return (props.name as string) || "Organization";
-      case "Topic":
-        return (props.name as string) || "Topic";
-      case "Entity":
-        return (props.name as string) || "Entity";
-      default:
-        return (props.name as string) || (props.title as string) || nodeType;
-    }
   };
 
   const graphStats = useMemo(() => {
@@ -678,7 +680,7 @@ export default function MemoryGraphView({
     if (isOpen) {
       loadGraphData();
     }
-  }, [isOpen]);
+  }, [isOpen, loadGraphData]);
 
   if (!isOpen) return null;
 

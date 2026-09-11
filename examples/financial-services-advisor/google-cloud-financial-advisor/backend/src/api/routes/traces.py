@@ -85,7 +85,7 @@ async def get_session_traces(
 
     except Exception as e:
         logger.error("Error retrieving traces for session %s: %s", session_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/detail/{trace_id}")
@@ -137,4 +137,4 @@ async def get_trace_detail(
         raise
     except Exception as e:
         logger.error("Error retrieving trace %s: %s", trace_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e

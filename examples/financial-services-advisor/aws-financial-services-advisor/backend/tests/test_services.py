@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID, uuid4
 
 import pytest
+from neo4j_agent_memory.schema import TraceOutcome
 
 
 class MockRole(str, Enum):
@@ -58,14 +59,15 @@ class TestMemoryServiceConversation:
     @pytest.mark.asyncio
     async def test_get_conversation_history_accesses_messages(self):
         """get_conversation() returns Conversation object; must access .messages."""
-        with patch("src.services.memory_service.get_settings"), \
-             patch("src.services.memory_service.MemoryClient") as MockClient:
-
+        with (
+            patch("src.services.memory_service.get_settings"),
+            patch("src.services.memory_service.MemoryClient"),
+        ):
             from src.services.memory_service import FinancialMemoryService
 
             svc = FinancialMemoryService.__new__(FinancialMemoryService)
             svc._client = MagicMock()
-            svc._initialized = True
+            svc._connected = True
 
             messages = [
                 MockMessage("user", "Hello"),
@@ -84,14 +86,15 @@ class TestMemoryServiceConversation:
     @pytest.mark.asyncio
     async def test_search_conversations_uses_search_messages(self):
         """search_conversations uses search_messages (not search)."""
-        with patch("src.services.memory_service.get_settings"), \
-             patch("src.services.memory_service.MemoryClient"):
-
+        with (
+            patch("src.services.memory_service.get_settings"),
+            patch("src.services.memory_service.MemoryClient"),
+        ):
             from src.services.memory_service import FinancialMemoryService
 
             svc = FinancialMemoryService.__new__(FinancialMemoryService)
             svc._client = MagicMock()
-            svc._initialized = True
+            svc._connected = True
 
             svc._client.short_term.search_messages = AsyncMock(
                 return_value=[MockMessage("user", "test query")]
@@ -109,14 +112,15 @@ class TestMemoryServiceReasoning:
     @pytest.mark.asyncio
     async def test_start_trace_returns_string_id(self):
         """start_trace returns ReasoningTrace; we return str(trace.id)."""
-        with patch("src.services.memory_service.get_settings"), \
-             patch("src.services.memory_service.MemoryClient"):
-
+        with (
+            patch("src.services.memory_service.get_settings"),
+            patch("src.services.memory_service.MemoryClient"),
+        ):
             from src.services.memory_service import FinancialMemoryService
 
             svc = FinancialMemoryService.__new__(FinancialMemoryService)
             svc._client = MagicMock()
-            svc._initialized = True
+            svc._connected = True
 
             mock_trace = MockReasoningTrace()
             svc._client.reasoning.start_trace = AsyncMock(return_value=mock_trace)
@@ -128,14 +132,15 @@ class TestMemoryServiceReasoning:
     @pytest.mark.asyncio
     async def test_add_step_passes_thought_action_observation(self):
         """add_step uses thought/action/observation, not reasoning/result."""
-        with patch("src.services.memory_service.get_settings"), \
-             patch("src.services.memory_service.MemoryClient"):
-
+        with (
+            patch("src.services.memory_service.get_settings"),
+            patch("src.services.memory_service.MemoryClient"),
+        ):
             from src.services.memory_service import FinancialMemoryService
 
             svc = FinancialMemoryService.__new__(FinancialMemoryService)
             svc._client = MagicMock()
-            svc._initialized = True
+            svc._connected = True
 
             mock_step = MockReasoningStep()
             svc._client.reasoning.add_step = AsyncMock(return_value=mock_step)
@@ -164,14 +169,15 @@ class TestMemoryServiceReasoning:
     @pytest.mark.asyncio
     async def test_complete_trace_passes_outcome(self):
         """complete_trace uses outcome, not conclusion."""
-        with patch("src.services.memory_service.get_settings"), \
-             patch("src.services.memory_service.MemoryClient"):
-
+        with (
+            patch("src.services.memory_service.get_settings"),
+            patch("src.services.memory_service.MemoryClient"),
+        ):
             from src.services.memory_service import FinancialMemoryService
 
             svc = FinancialMemoryService.__new__(FinancialMemoryService)
             svc._client = MagicMock()
-            svc._initialized = True
+            svc._connected = True
 
             mock_trace = MockReasoningTrace()
             svc._client.reasoning.complete_trace = AsyncMock(return_value=mock_trace)
@@ -181,23 +187,30 @@ class TestMemoryServiceReasoning:
 
             call_kwargs = svc._client.reasoning.complete_trace.call_args
             assert isinstance(call_kwargs[0][0], UUID)
-            assert call_kwargs[1]["outcome"] == "Investigation complete"
+            # v0.3+: a structured TraceOutcome, not a bare string plus a bool.
+            outcome = call_kwargs[1]["outcome"]
+            assert isinstance(outcome, TraceOutcome)
+            assert outcome.summary == "Investigation complete"
+            assert outcome.success is True
             assert "conclusion" not in call_kwargs[1]
             assert "session_id" not in call_kwargs[1]
 
     @pytest.mark.asyncio
     async def test_get_trace_serializes_correctly(self):
         """get_investigation_trace correctly serializes trace with steps."""
-        with patch("src.services.memory_service.get_settings"), \
-             patch("src.services.memory_service.MemoryClient"):
-
+        with (
+            patch("src.services.memory_service.get_settings"),
+            patch("src.services.memory_service.MemoryClient"),
+        ):
             from src.services.memory_service import FinancialMemoryService
 
             svc = FinancialMemoryService.__new__(FinancialMemoryService)
             svc._client = MagicMock()
-            svc._initialized = True
+            svc._connected = True
 
-            mock_trace = MockReasoningTrace(task="Investigate CUST-003", outcome="Complete", success=True)
+            mock_trace = MockReasoningTrace(
+                task="Investigate CUST-003", outcome="Complete", success=True
+            )
             mock_trace.steps = [MockReasoningStep()]
             svc._client.reasoning.get_trace = AsyncMock(return_value=mock_trace)
 
@@ -211,14 +224,15 @@ class TestMemoryServiceReasoning:
 
     @pytest.mark.asyncio
     async def test_get_trace_returns_none_when_not_found(self):
-        with patch("src.services.memory_service.get_settings"), \
-             patch("src.services.memory_service.MemoryClient"):
-
+        with (
+            patch("src.services.memory_service.get_settings"),
+            patch("src.services.memory_service.MemoryClient"),
+        ):
             from src.services.memory_service import FinancialMemoryService
 
             svc = FinancialMemoryService.__new__(FinancialMemoryService)
             svc._client = MagicMock()
-            svc._initialized = True
+            svc._connected = True
             svc._client.reasoning.get_trace = AsyncMock(return_value=None)
 
             result = await svc.get_investigation_trace(str(uuid4()))
@@ -229,9 +243,10 @@ class TestMemoryServiceClient:
     """Test that the client property is exposed."""
 
     def test_client_property_returns_memory_client(self):
-        with patch("src.services.memory_service.get_settings"), \
-             patch("src.services.memory_service.MemoryClient") as MockClient:
-
+        with (
+            patch("src.services.memory_service.get_settings"),
+            patch("src.services.memory_service.MemoryClient"),
+        ):
             from src.services.memory_service import FinancialMemoryService
 
             svc = FinancialMemoryService.__new__(FinancialMemoryService)

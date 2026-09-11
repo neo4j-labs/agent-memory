@@ -1,75 +1,59 @@
 "use client";
 
 import { useState, useCallback, useRef } from "react";
-import { v4 as uuidv4 } from "uuid";
-import type { Message, ToolCall, SSEEvent } from "@/lib/types";
+import type { Message, ToolCall } from "@/lib/types";
 import { api, streamChat } from "@/lib/api";
 
 /**
  * Simplified chat hook that manages thread lifecycle internally.
  * - Creates threads automatically when needed
- * - Uses AbortController to cancel in-flight requests
+ * - Uses AbortController to cancel in-flight requests (the signal is handed to
+ *   `streamChat`, so cancelling really does stop the backend generator)
  * - Memory is always enabled (no toggle)
+ * - Bumps `memoryVersion` when a turn completes, so the memory panel can refetch
  */
 export function useChat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [threadId, setThreadId] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Incremented after every completed turn so consumers can refetch memory.
+  const [memoryVersion, setMemoryVersion] = useState(0);
 
   // AbortController ref for cancelling in-flight requests
   const abortControllerRef = useRef<AbortController | null>(null);
+  // Mirror of isStreaming so stable callbacks can read it without going stale.
+  const isStreamingRef = useRef(false);
 
   // Clear error
   const clearError = useCallback(() => {
     setError(null);
   }, []);
 
-  // Start a new conversation, optionally with an initial message
-  const startNewConversation = useCallback(async (initialMessage?: string) => {
-    // Cancel any in-flight requests
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
-    }
-
-    setError(null);
-    setMessages([]);
-    setThreadId(null);
-    setIsStreaming(false);
-
-    if (initialMessage) {
-      // Create thread and send message
-      try {
-        const thread = await api.threads.create();
-        setThreadId(thread.id);
-        // Send the initial message
-        await sendMessageToThread(thread.id, initialMessage);
-      } catch (err) {
-        setError(
-          err instanceof Error ? err.message : "Failed to create conversation",
-        );
-      }
-    }
+  const setStreaming = useCallback((value: boolean) => {
+    isStreamingRef.current = value;
+    setIsStreaming(value);
   }, []);
 
-  // Internal function to send message to a specific thread
+  // Internal function to send a message to a specific thread.
+  // Declared before startNewConversation so that callback can depend on it.
   const sendMessageToThread = useCallback(
     async (targetThreadId: string, content: string) => {
-      if (!content.trim() || isStreaming) return;
+      if (!content.trim() || isStreamingRef.current) return;
 
       // Cancel any previous streaming
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
       }
-      abortControllerRef.current = new AbortController();
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
 
       setError(null);
-      setIsStreaming(true);
+      setStreaming(true);
 
       // Add user message
       const userMessage: Message = {
-        id: uuidv4(),
+        id: crypto.randomUUID(),
         role: "user",
         content,
         timestamp: new Date().toISOString(),
@@ -77,7 +61,7 @@ export function useChat() {
       setMessages((prev) => [...prev, userMessage]);
 
       // Create assistant message placeholder
-      const assistantId = uuidv4();
+      const assistantId = crypto.randomUUID();
       const assistantMessage: Message = {
         id: assistantId,
         role: "assistant",
@@ -92,9 +76,14 @@ export function useChat() {
         const toolCallsMap = new Map<string, ToolCall>();
 
         // Stream response (memory always enabled)
-        for await (const event of streamChat(targetThreadId, content, true)) {
+        for await (const event of streamChat(
+          targetThreadId,
+          content,
+          true,
+          controller.signal,
+        )) {
           // Check if aborted
-          if (abortControllerRef.current?.signal.aborted) {
+          if (controller.signal.aborted) {
             break;
           }
 
@@ -109,7 +98,7 @@ export function useChat() {
               );
               break;
 
-            case "tool_call":
+            case "tool_call": {
               const toolCall: ToolCall = {
                 id: event.id,
                 name: event.name,
@@ -128,8 +117,9 @@ export function useChat() {
                 ),
               );
               break;
+            }
 
-            case "tool_result":
+            case "tool_result": {
               const existing = toolCallsMap.get(event.id);
               if (existing) {
                 existing.result = event.result;
@@ -147,9 +137,11 @@ export function useChat() {
                 );
               }
               break;
+            }
 
             case "done":
-              // Message complete
+              // Turn complete - new memory may have been written.
+              setMemoryVersion((v) => v + 1);
               break;
 
             case "error":
@@ -183,10 +175,43 @@ export function useChat() {
           ),
         );
       } finally {
-        setIsStreaming(false);
+        setStreaming(false);
       }
     },
-    [isStreaming],
+    [setStreaming],
+  );
+
+  // Start a new conversation, optionally with an initial message
+  const startNewConversation = useCallback(
+    async (initialMessage?: string) => {
+      // Cancel any in-flight requests
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+        abortControllerRef.current = null;
+      }
+
+      setError(null);
+      setMessages([]);
+      setThreadId(null);
+      setStreaming(false);
+
+      if (initialMessage) {
+        // Create thread and send message
+        try {
+          const thread = await api.threads.create();
+          setThreadId(thread.id);
+          // Send the initial message
+          await sendMessageToThread(thread.id, initialMessage);
+        } catch (err) {
+          setError(
+            err instanceof Error
+              ? err.message
+              : "Failed to create conversation",
+          );
+        }
+      }
+    },
+    [sendMessageToThread, setStreaming],
   );
 
   // Public sendMessage - creates thread if needed
@@ -219,6 +244,7 @@ export function useChat() {
     threadId,
     isStreaming,
     error,
+    memoryVersion,
     sendMessage,
     startNewConversation,
     clearError,

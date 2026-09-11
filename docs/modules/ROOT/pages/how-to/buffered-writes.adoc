@@ -22,18 +22,27 @@ The agent responds before persistence completes:
 
 [source,python]
 ----
-async def agent_turn(client, content):
-    # Submit the write to the buffer; return immediately.
-    await client.buffered.submit(
-        "MERGE (m:Message {id: $id}) SET m.content = $content",
-        {"id": message_id, "content": content},
+async def agent_turn(client, session_id, content):
+    # Value-returning APIs commit inline — the caller reads the result back,
+    # so they cannot be deferred.
+    message = await client.short_term.add_message(
+        session_id, "user", content, extraction_mode="skip",
     )
-    # The agent's response is not blocked on Neo4j.
-    return generate_response(content)
+    # Derived writes that nothing in this turn reads back go on the buffer
+    # and return immediately.
+    await client.buffered.submit(
+        """
+        MATCH (c:Conversation {session_id: $session})
+        SET c.turns_recorded = coalesce(c.turns_recorded, 0) + 1
+        """,
+        {"session": session_id},
+    )
+    # The agent's response is not blocked on the derived write.
+    return generate_response(message.content)
 
 
 async with MemoryClient(settings) as client:
-    response = await agent_turn(client, "Hello")
+    response = await agent_turn(client, "session-1", "Hello")
     # Drain the queue at end of session / before shutdown.
     await client.flush()
 ----
@@ -97,10 +106,15 @@ the agent's hot path:
 
 [source,python]
 ----
-errors = client.write_errors
-if errors:
-    for err in errors:
-        log.warning("Buffered write failed: %s — %s", err.query[:32], err.error)
+for err in client.write_errors:
+    # BufferedWriteError carries the originating Cypher, its parameters, the
+    # exception and when it failed.
+    log.warning(
+        "Buffered write failed at %s: %s — %s",
+        err.when.isoformat(),
+        err.query.strip()[:40],
+        type(err.error).__name__,
+    )
 ----
 
 == Tradeoffs
@@ -125,4 +139,8 @@ if errors:
 == See Also
 
 * xref:how-to/multi-tenancy.adoc[Multi-Tenant Memory]
-* `examples/buffered-writes/` — runnable example with a 50-turn timing comparison.
+* link:https://github.com/neo4j-labs/agent-memory/tree/main/examples/buffered-writes[`examples/buffered-writes/`] — a runnable
+  example that times a 50-turn conversation in `sync` mode against the same
+  conversation in `buffered` mode, then drops `max_pending` to 4 so the bounded
+  queue's back-pressure is visible in the output. Runs with `llm=None` and a
+  local embedder; no API key.

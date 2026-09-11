@@ -1,39 +1,53 @@
 #!/usr/bin/env python3
-"""Enrich entities with Wikipedia data.
+"""Enrich entities with data from Wikipedia and (optionally) Diffbot.
 
-This script enriches Entity nodes in Neo4j with data from Wikipedia/Wikimedia:
-- Description/summary from Wikipedia
-- Wikipedia URL
-- Wikidata ID
-- Thumbnail image URL
+Fills in, per Entity node:
+- ``enriched_description`` (Wikipedia summary or Diffbot description)
+- ``wikipedia_url``, ``wikidata_id``, ``image_url``
+- ``enriched_at`` / ``enrichment_provider``
 
 Features:
-- Real-time progress bars with ETA
-- Configurable rate limiting (respects Wikimedia ToS)
-- Skip already-enriched entities
-- Filter by entity type
-- Detailed statistics on completion
+- Real-time progress bar with ETA
+- Configurable rate limiting (respects the Wikimedia ToS)
+- ``--provider wikimedia|diffbot|composite`` with result caching
+- Retries rate-limited entities instead of silently skipping them
+- Skips already-enriched entities; filter by entity type
 """
+
+from __future__ import annotations
 
 import argparse
 import asyncio
 import logging
+import os
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from dotenv import load_dotenv
+sys.path.insert(0, str(Path(__file__).parent))
 
-# Load .env file from backend directory
-load_dotenv(Path(__file__).parent.parent / "backend" / ".env")
+from _common import (  # noqa: E402
+    USE_COLORS,
+    Colors,
+    add_model_args,
+    add_neo4j_args,
+    build_memory_settings,
+    color,
+    format_duration,
+    load_backend_env,
+)
 
-from neo4j_agent_memory import MemoryClient, MemorySettings, Neo4jConfig
-from neo4j_agent_memory.enrichment.base import EnrichmentStatus
-from neo4j_agent_memory.enrichment.wikimedia import WikimediaProvider
-from neo4j_agent_memory.llm import from_provider
+from neo4j_agent_memory import MemoryClient  # noqa: E402
+from neo4j_agent_memory.enrichment.base import EnrichmentStatus  # noqa: E402
+from neo4j_agent_memory.enrichment.factory import (  # noqa: E402
+    CachedEnrichmentProvider,
+    CompositeEnrichmentProvider,
+    create_enrichment_provider,
+)
 
-# Configure logging
+load_backend_env()
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -45,38 +59,16 @@ logger = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("neo4j").setLevel(logging.WARNING)
 
+# Re-exported so ``patch("_common.USE_COLORS", ...)`` is the only knob.
+__all__ = ["USE_COLORS", "Colors", "color", "enrich_entities"]
 
-# ANSI color codes
-class Colors:
-    RESET = "\033[0m"
-    BOLD = "\033[1m"
-    DIM = "\033[2m"
-    GREEN = "\033[92m"
-    YELLOW = "\033[93m"
-    RED = "\033[91m"
-    CYAN = "\033[96m"
-    BLUE = "\033[94m"
-    PURPLE = "\033[95m"
-
-
-def supports_color() -> bool:
-    """Check if terminal supports colors."""
-    return hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
-
-
-USE_COLORS = supports_color()
-
-
-def color(text: str, color_code: str) -> str:
-    """Apply color to text if supported."""
-    if USE_COLORS:
-        return f"{color_code}{text}{Colors.RESET}"
-    return text
+MAX_ATTEMPTS = 3
 
 
 @dataclass
 class EnrichmentStats:
     """Statistics for enrichment run."""
+
     total: int = 0
     enriched: int = 0
     not_found: int = 0
@@ -93,18 +85,8 @@ class EnrichmentStats:
         return self.enriched / processed * 100
 
 
-def format_time(seconds: float) -> str:
-    """Format seconds as human-readable time."""
-    if seconds < 60:
-        return f"{seconds:.0f}s"
-    elif seconds < 3600:
-        mins = int(seconds // 60)
-        secs = int(seconds % 60)
-        return f"{mins}m {secs}s"
-    else:
-        hours = int(seconds // 3600)
-        mins = int((seconds % 3600) // 60)
-        return f"{hours}h {mins}m"
+# ``format_duration`` lives in scripts/_common.py so all five scripts agree.
+format_time = format_duration
 
 
 def print_progress(
@@ -138,7 +120,7 @@ def print_progress(
     # Build status line
     status = (
         f"\r{color('Progress', Colors.CYAN)} [{bar}] "
-        f"{current}/{total} ({progress*100:.1f}%) "
+        f"{current}/{total} ({progress * 100:.1f}%) "
         f"ETA: {eta_str} "
         f"| {color('✓', Colors.GREEN)}{stats.enriched} "
         f"{color('✗', Colors.RED)}{stats.not_found} "
@@ -164,25 +146,26 @@ async def get_unenriched_entities(
     Returns:
         List of entity dicts with id, name, type
     """
-    # Build query
-    type_filter = ""
-    if entity_types:
-        types_str = ", ".join(f"'{t.upper()}'" for t in entity_types)
-        type_filter = f"AND e.type IN [{types_str}]"
-
-    limit_clause = f"LIMIT {limit}" if limit else ""
-
-    query = f"""
+    # Fully parameterized: user-supplied --types/--limit values never reach the
+    # query text. ``client.query.cypher`` is the portable read-only accessor and
+    # validates that the statement contains no write clauses.
+    query = """
     MATCH (e:Entity)
     WHERE e.enriched_description IS NULL
       AND e.enrichment_error IS NULL
-      {type_filter}
+      AND ($types IS NULL OR e.type IN $types)
     RETURN e.id AS id, e.name AS name, e.type AS type, e.description AS description
     ORDER BY e.name
-    {limit_clause}
+    LIMIT $limit
     """
 
-    result = await client._client.execute_read(query)
+    result = await client.query.cypher(
+        query,
+        {
+            "types": [t.upper() for t in entity_types] if entity_types else None,
+            "limit": limit if limit else 100_000,
+        },
+    )
     return [dict(record) for record in result]
 
 
@@ -201,7 +184,7 @@ async def get_enrichment_status(client: MemoryClient) -> dict:
         count(CASE WHEN e.enrichment_error IS NOT NULL THEN 1 END) AS errors
     """
 
-    result = await client._client.execute_read(query)
+    result = await client.query.cypher(query)
     record = result[0] if result else {}
     return {
         "total": record.get("total", 0),
@@ -233,14 +216,19 @@ async def update_entity_enrichment(
         e.enrichment_provider = $provider
     """
 
-    await client._client.execute_write(query, {
-        "id": entity_id,
-        "enriched_description": enrichment_data.get("description"),
-        "wikipedia_url": enrichment_data.get("wikipedia_url"),
-        "wikidata_id": enrichment_data.get("wikidata_id"),
-        "image_url": enrichment_data.get("image_url"),
-        "provider": "wikimedia",
-    })
+    # No public writer exists for enrichment properties, so this goes through
+    # ``client.graph`` (bolt only) rather than the private driver attribute.
+    await client.graph.execute_write(
+        query,
+        {
+            "id": entity_id,
+            "enriched_description": enrichment_data.get("description"),
+            "wikipedia_url": enrichment_data.get("wikipedia_url"),
+            "wikidata_id": enrichment_data.get("wikidata_id"),
+            "image_url": enrichment_data.get("image_url"),
+            "provider": enrichment_data.get("provider", "wikimedia"),
+        },
+    )
 
 
 async def mark_entity_not_found(
@@ -261,10 +249,43 @@ async def mark_entity_not_found(
         e.enrichment_attempted_at = datetime()
     """
 
-    await client._client.execute_write(query, {
-        "id": entity_id,
-        "reason": reason,
-    })
+    await client.graph.execute_write(
+        query,
+        {
+            "id": entity_id,
+            "reason": reason,
+        },
+    )
+
+
+def build_provider(
+    name: str,
+    *,
+    rate_limit: float,
+    diffbot_api_key: str | None = None,
+):
+    """Build an enrichment provider, wrapped in the library's result cache.
+
+    ``composite`` tries Diffbot first (richer, structured) and falls back to
+    Wikipedia -- the same ordering the backend's ``EnrichmentConfig`` uses.
+    """
+    if name == "wikimedia":
+        provider = create_enrichment_provider("wikimedia", rate_limit=rate_limit)
+    elif name == "diffbot":
+        if not diffbot_api_key:
+            raise SystemExit("--provider diffbot requires DIFFBOT_API_KEY (or --diffbot-api-key)")
+        provider = create_enrichment_provider("diffbot", api_key=diffbot_api_key)
+    elif name == "composite":
+        providers = []
+        if diffbot_api_key:
+            providers.append(create_enrichment_provider("diffbot", api_key=diffbot_api_key))
+        providers.append(create_enrichment_provider("wikimedia", rate_limit=rate_limit))
+        provider = CompositeEnrichmentProvider(providers)
+    else:  # pragma: no cover - argparse restricts the choices
+        raise SystemExit(f"Unknown provider: {name}")
+    # Caching means a re-run (or a name that appears under several entities)
+    # does not pay for the same API call twice.
+    return CachedEnrichmentProvider(provider, ttl_hours=168)
 
 
 async def enrich_entities(
@@ -273,8 +294,10 @@ async def enrich_entities(
     limit: int | None = None,
     rate_limit: float = 0.5,
     dry_run: bool = False,
+    provider_name: str = "wikimedia",
+    diffbot_api_key: str | None = None,
 ) -> EnrichmentStats:
-    """Enrich entities with Wikipedia data.
+    """Enrich entities with data from the selected provider.
 
     Args:
         client: Memory client
@@ -282,6 +305,8 @@ async def enrich_entities(
         limit: Maximum entities to process
         rate_limit: Seconds between API calls (default 0.5 = 2 req/sec)
         dry_run: If True, don't actually update entities
+        provider_name: "wikimedia", "diffbot" or "composite"
+        diffbot_api_key: Diffbot key (required for diffbot/composite)
 
     Returns:
         EnrichmentStats with counts
@@ -307,14 +332,14 @@ async def enrich_entities(
             print(f"  ... and {stats.total - 10} more")
         return stats
 
-    # Create Wikimedia provider
-    provider = WikimediaProvider(
+    provider = build_provider(
+        provider_name,
         rate_limit=rate_limit,
-        language="en",
+        diffbot_api_key=diffbot_api_key,
     )
 
     print(f"\n{color('Starting enrichment...', Colors.CYAN)}")
-    print(f"Rate limit: {1/rate_limit:.1f} requests/second")
+    print(f"Rate limit: {1 / rate_limit:.1f} requests/second")
     print()
 
     start_time = time.time()
@@ -327,42 +352,57 @@ async def enrich_entities(
         # Print progress
         print_progress(i, stats.total, stats, start_time, entity_name)
 
-        try:
-            # Call Wikimedia API
-            result = await provider.enrich(
-                entity_name,
-                entity_type,
-                context=entity.get("description"),
-            )
+        # RATE_LIMITED used to `continue`, which advanced the loop and left the
+        # entity neither enriched nor marked. Retry the SAME entity instead.
+        for attempt in range(MAX_ATTEMPTS):
+            try:
+                result = await provider.enrich(
+                    entity_name,
+                    entity_type,
+                    context=entity.get("description"),
+                )
 
-            if result.status == EnrichmentStatus.SUCCESS and result.has_data():
-                # Update entity with enrichment data
-                await update_entity_enrichment(client, entity_id, {
-                    "description": result.description,
-                    "wikipedia_url": result.wikipedia_url,
-                    "wikidata_id": result.wikidata_id,
-                    "image_url": result.image_url,
-                })
-                stats.enriched += 1
+                if result.status == EnrichmentStatus.SUCCESS and result.has_data():
+                    await update_entity_enrichment(
+                        client,
+                        entity_id,
+                        {
+                            "description": result.description,
+                            "wikipedia_url": result.wikipedia_url,
+                            "wikidata_id": result.wikidata_id,
+                            "image_url": result.image_url,
+                            "provider": provider_name,
+                        },
+                    )
+                    stats.enriched += 1
+                    break
 
-            elif result.status == EnrichmentStatus.NOT_FOUND:
-                await mark_entity_not_found(client, entity_id, "Not found in Wikipedia")
-                stats.not_found += 1
+                if result.status == EnrichmentStatus.NOT_FOUND:
+                    await mark_entity_not_found(client, entity_id, "Not found in enrichment source")
+                    stats.not_found += 1
+                    break
 
-            elif result.status == EnrichmentStatus.RATE_LIMITED:
-                stats.rate_limited += 1
-                # Wait longer and retry
-                await asyncio.sleep(rate_limit * 5)
-                continue
+                if result.status == EnrichmentStatus.RATE_LIMITED:
+                    stats.rate_limited += 1
+                    if attempt == MAX_ATTEMPTS - 1:
+                        await mark_entity_not_found(client, entity_id, "rate_limited")
+                        stats.errors += 1
+                        break
+                    # Exponential backoff, then retry this entity.
+                    await asyncio.sleep(rate_limit * 5 * (attempt + 1))
+                    continue
 
-            else:
-                await mark_entity_not_found(client, entity_id, result.error_message or "Unknown error")
+                await mark_entity_not_found(
+                    client, entity_id, result.error_message or "Unknown error"
+                )
                 stats.errors += 1
+                break
 
-        except Exception as e:
-            logger.error(f"Error enriching {entity_name}: {e}")
-            await mark_entity_not_found(client, entity_id, str(e))
-            stats.errors += 1
+            except Exception as e:
+                logger.error(f"Error enriching {entity_name}: {e}")
+                await mark_entity_not_found(client, entity_id, str(e))
+                stats.errors += 1
+                break
 
         # Rate limiting
         await asyncio.sleep(rate_limit)
@@ -399,17 +439,35 @@ Examples:
     )
 
     parser.add_argument(
-        "--types", "-t",
+        "--types",
+        "-t",
         nargs="+",
         help="Entity types to enrich (e.g., PERSON ORGANIZATION LOCATION)",
     )
     parser.add_argument(
-        "--limit", "-l",
+        "--limit",
+        "-l",
         type=int,
         help="Maximum number of entities to enrich",
     )
     parser.add_argument(
-        "--rate-limit", "-r",
+        "--provider",
+        "-p",
+        choices=["wikimedia", "diffbot", "composite"],
+        default="wikimedia",
+        help=(
+            "Enrichment source (default: wikimedia). 'diffbot' and 'composite' "
+            "need DIFFBOT_API_KEY; 'composite' tries Diffbot then Wikipedia."
+        ),
+    )
+    parser.add_argument(
+        "--diffbot-api-key",
+        default=os.getenv("DIFFBOT_API_KEY"),
+        help="Diffbot API key (env: DIFFBOT_API_KEY)",
+    )
+    parser.add_argument(
+        "--rate-limit",
+        "-r",
         type=float,
         default=0.5,
         help="Seconds between API calls (default: 0.5 = 2 req/sec)",
@@ -425,10 +483,13 @@ Examples:
         help="Show current enrichment status and exit",
     )
     parser.add_argument(
-        "-v", "--verbose",
+        "-v",
+        "--verbose",
         action="store_true",
         help="Verbose output",
     )
+    add_neo4j_args(parser)
+    add_model_args(parser)
 
     args = parser.parse_args()
 
@@ -437,30 +498,13 @@ Examples:
 
     # Print header
     print()
-    print(color("═" * 60, Colors.PURPLE))
-    print(color("  Wikipedia Entity Enrichment", Colors.BOLD))
-    print(color("═" * 60, Colors.PURPLE))
+    print(color("═" * 60, Colors.MAGENTA))
+    print(color("  Entity Enrichment", Colors.BOLD))
+    print(color("═" * 60, Colors.MAGENTA))
 
-    # Get settings from environment. v0.3+: provider-string shorthand —
-    # resolves to OpenAIEmbeddingProvider when [openai] is installed.
-    import os
-
-    embed_kwargs: dict = {}
-    if os.getenv("OPENAI_API_KEY"):
-        embed_kwargs["api_key"] = os.getenv("OPENAI_API_KEY")
-    embedding_provider = from_provider(
-        os.getenv("EMBEDDING_MODEL", "openai/text-embedding-3-small"),
-        kind="embedding",
-        **embed_kwargs,
-    )
-    settings = MemorySettings(
-        neo4j=Neo4jConfig(
-            uri=os.getenv("NEO4J_URI", "bolt://localhost:7687"),
-            username=os.getenv("NEO4J_USERNAME", "neo4j"),
-            password=os.getenv("NEO4J_PASSWORD", "password"),
-        ),
-        embedding=embedding_provider,
-    )
+    # One helper builds the settings for every script, so the loader, the
+    # backfills and the running backend all agree on the embedding space.
+    settings = build_memory_settings(args)
 
     print(f"\n{color('Connecting to Neo4j...', Colors.CYAN)}")
 
@@ -475,19 +519,19 @@ Examples:
         print(f"  {color('Pending:', Colors.YELLOW)}         {status['pending']:,}")
         print(f"  {color('Errors:', Colors.RED)}          {status['errors']:,}")
 
-        if status['total'] > 0:
-            pct = status['enriched'] / status['total'] * 100
+        if status["total"] > 0:
+            pct = status["enriched"] / status["total"] * 100
             print(f"  Coverage:          {pct:.1f}%")
 
         if args.status:
             return
 
-        if status['pending'] == 0:
+        if status["pending"] == 0:
             print(f"\n{color('✓ All entities are already enriched!', Colors.GREEN)}")
             return
 
         # Estimate time
-        pending = status['pending']
+        pending = status["pending"]
         if args.limit:
             pending = min(pending, args.limit)
         estimated_time = pending * args.rate_limit
@@ -500,13 +544,15 @@ Examples:
             limit=args.limit,
             rate_limit=args.rate_limit,
             dry_run=args.dry_run,
+            provider_name=args.provider,
+            diffbot_api_key=args.diffbot_api_key,
         )
 
         # Print summary
         print()
-        print(color("═" * 60, Colors.PURPLE))
+        print(color("═" * 60, Colors.MAGENTA))
         print(color("  Enrichment Complete", Colors.BOLD))
-        print(color("═" * 60, Colors.PURPLE))
+        print(color("═" * 60, Colors.MAGENTA))
         print(f"  Processed:     {stats.total:,}")
         print(f"  {color('Enriched:', Colors.GREEN)}     {stats.enriched:,}")
         print(f"  {color('Not found:', Colors.YELLOW)}    {stats.not_found:,}")

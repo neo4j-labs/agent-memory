@@ -13,7 +13,6 @@ import {
   Portal,
   IconButton,
   useBreakpointValue,
-  SimpleGrid,
 } from "@chakra-ui/react";
 import {
   LuBrain,
@@ -31,8 +30,11 @@ import {
   LuNetwork,
   LuCode,
 } from "react-icons/lu";
+import { LiveMemory } from "./LiveMemory";
+import { useMemoryContext } from "@/hooks/useMemoryContext";
 
-// Agent tools configuration - matches the backend tools
+// Agent tools - mirrors the 28 tools registered in
+// backend/src/agent/agent.py (keep in sync if tools are added there).
 const AGENT_TOOLS = {
   podcast: [
     {
@@ -62,6 +64,18 @@ const AGENT_TOOLS = {
       description: "Find co-occurring entities",
     },
     { name: "get_top_entities", description: "Get most mentioned entities" },
+    {
+      name: "find_duplicates",
+      description: "Find entities that may need merging",
+    },
+    {
+      name: "get_entity_provenance",
+      description: "See which messages an entity was extracted from",
+    },
+    {
+      name: "check_enrichment",
+      description: "Check or request Wikipedia enrichment",
+    },
   ],
   locations: [
     {
@@ -103,6 +117,22 @@ const AGENT_TOOLS = {
     {
       name: "get_tool_patterns",
       description: "Analyze tool usage patterns",
+    },
+    {
+      name: "get_reasoning_history",
+      description: "Read reasoning traces from this session",
+    },
+    {
+      name: "get_conversation_context",
+      description: "Recall earlier messages in the conversation",
+    },
+    {
+      name: "list_podcast_sessions",
+      description: "List episodes with message counts",
+    },
+    {
+      name: "get_episode_summary",
+      description: "Summarize an episode's topics and entities",
     },
   ],
 };
@@ -181,22 +211,62 @@ const TOOL_CALL_CARDS = [
 interface MemoryContextPanelProps {
   isVisible: boolean;
   onClose?: () => void;
+  /** Conversation to show memory for; null before the first message. */
+  threadId?: string | null;
+  /** Bumped by useChat when a turn completes, to trigger a refetch. */
+  memoryVersion?: number;
 }
 
 export function MemoryContextPanel({
   isVisible,
   onClose,
+  threadId = null,
+  memoryVersion = 0,
 }: MemoryContextPanelProps) {
   // Detect mobile viewport - default to false during SSR to avoid hydration mismatch
   const isMobile = useBreakpointValue({ base: true, lg: false }) ?? false;
+  const {
+    context,
+    isLoading: isLoadingMemory,
+    error: memoryError,
+  } = useMemoryContext(threadId, memoryVersion);
 
   if (!isVisible) return null;
 
   // Content to render (shared between mobile and desktop)
   const renderContent = () => (
     <Stack gap="4">
-      {/* Agent Context Accordion */}
-      <Accordion.Root collapsible size="sm" defaultValue={["capabilities"]}>
+      {/* Live memory + static agent reference */}
+      <Accordion.Root
+        collapsible
+        multiple
+        size="sm"
+        defaultValue={["memory", "capabilities"]}
+      >
+        {/* Stored memory for this thread (live, from the backend) */}
+        <Accordion.Item value="memory">
+          <Accordion.ItemTrigger>
+            <Flex flex="1" alignItems="center" gap="2">
+              <LuBrain size={12} />
+              <Span fontSize="xs">Stored Memory</Span>
+              <Badge size="sm" ml="auto">
+                {context.entities.length + context.preferences.length}
+              </Badge>
+            </Flex>
+            <Accordion.ItemIndicator />
+          </Accordion.ItemTrigger>
+          <Accordion.ItemContent>
+            <Box py="2">
+              <LiveMemory
+                context={context}
+                isLoading={isLoadingMemory}
+                error={memoryError}
+                hasThread={Boolean(threadId)}
+              />
+            </Box>
+          </Accordion.ItemContent>
+        </Accordion.Item>
+
         {/* Agent Capabilities */}
         <Accordion.Item value="capabilities">
           <Accordion.ItemTrigger>
@@ -415,7 +485,7 @@ export function MemoryContextPanel({
                 >
                   <Flex alignItems="center" gap="2">
                     <LuBot size={20} />
-                    <Heading size="sm">Agent Configuration</Heading>
+                    <Heading size="sm">Memory &amp; Agent</Heading>
                   </Flex>
                   <IconButton
                     aria-label="Close"
@@ -451,7 +521,7 @@ export function MemoryContextPanel({
       {/* Header */}
       <Flex alignItems="center" gap="2" mb="4">
         <LuBot size={20} />
-        <Heading size="sm">Agent Configuration</Heading>
+        <Heading size="sm">Memory &amp; Agent</Heading>
       </Flex>
       {renderContent()}
     </Box>

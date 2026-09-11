@@ -7,7 +7,6 @@ import {
   Text,
   VStack,
   HStack,
-  Badge,
   Portal,
   CloseButton,
   Flex,
@@ -111,7 +110,7 @@ export function WelcomeModal({
                   <Box color="brand.500">
                     <LuBrain size={24} />
                   </Box>
-                  <Text fontFamily="heading">Welcome to Lenny's Memory</Text>
+                  <Text fontFamily="heading">Welcome to Lenny&apos;s Memory</Text>
                 </Flex>
               </DialogTitle>
               <DialogCloseTrigger asChild>
@@ -122,7 +121,7 @@ export function WelcomeModal({
             <DialogBody>
               <VStack align="stretch" gap={4}>
                 <Text color="fg.muted">
-                  Explore Lenny's Podcast through the power of graph-based AI
+                  Explore Lenny&apos;s Podcast through the power of graph-based AI
                   memory. Ask questions about guests, topics, and insights from
                   hundreds of episodes.
                 </Text>
@@ -242,7 +241,7 @@ export function WelcomeModal({
                     </Box>
                     <Box flex="1">
                       <Text fontSize="sm" fontWeight="medium" color="blue.700">
-                        Learn how it's built
+                        Learn how it&apos;s built
                       </Text>
                       <Text fontSize="xs" color="blue.600">
                         Read the blog post about context graphs for AI agents
@@ -289,7 +288,7 @@ function SampleQuery({ children }: { children: string }) {
       borderWidth="1px"
       borderColor="border.subtle"
     >
-      "{children}"
+      &quot;{children}&quot;
     </Box>
   );
 }

@@ -1,18 +1,39 @@
-"""Product search tools."""
+"""Product search tools.
+
+Every function here takes a connected ``MemoryClient`` as its first argument
+and returns plain dicts. This module is the **single implementation** of these
+catalog operations: ``agent.py`` wraps them as Agent Framework tools and
+``main.py`` serves them over REST, so there is no second copy of the Cypher to
+drift.
+
+Reads go through ``client.query.cypher()`` — the portable accessor that works
+on both the bolt and the hosted (NAMS) backend — rather than the bolt-only
+``client.graph.execute_read()``.
+
+Exposed as agent tools: :func:`search_products`, :func:`get_product_details`.
+:func:`get_products_by_category`, :func:`get_brands` and :func:`get_categories`
+back the ``/products/categories`` and ``/products/brands`` REST endpoints.
+"""
 
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from neo4j.exceptions import ClientError
 
 if TYPE_CHECKING:
     from neo4j_agent_memory import MemoryClient
+    from neo4j_agent_memory.embeddings.base import Embedder
 
 logger = logging.getLogger(__name__)
 
+#: Name of the vector index created by ``data/load_products.py``.
+PRODUCT_VECTOR_INDEX = "product_embedding"
+
 
 async def search_products(
-    client: "MemoryClient",
+    client: MemoryClient,
     query: str,
     category: str | None = None,
     brand: str | None = None,
@@ -20,6 +41,7 @@ async def search_products(
     min_price: float | None = None,
     in_stock_only: bool = True,
     limit: int = 10,
+    embedder: Embedder | None = None,
 ) -> dict:
     """
     Search products using vector similarity and filters.
@@ -33,13 +55,19 @@ async def search_products(
         min_price: Optional minimum price.
         in_stock_only: Only return in-stock items.
         limit: Maximum results.
+        embedder: Embedder for the vector branch. ``None`` (no API key
+            configured) skips straight to text search. There is no
+            ``client.embeddings`` accessor — the embedder is constructed
+            explicitly in ``memory_config.create_embedder()``.
 
     Returns:
-        Dict with products list and count.
+        Dict with ``products`` (each carrying ``relevance_score``), ``count``
+        and ``search_mode`` ("vector" or "text") so callers can tell which
+        branch ran.
     """
     # Build filter conditions
     conditions = ["p:Product"]
-    params = {"query": query, "limit": limit}
+    params: dict[str, Any] = {"query": query, "limit": limit}
 
     if category:
         conditions.append("p.category = $category")
@@ -61,60 +89,76 @@ async def search_products(
         conditions.append("p.in_stock = true")
 
     where_clause = " AND ".join(conditions)
+    # The text branch matches (p:Product) in the pattern, so the label
+    # predicate is redundant there.
+    text_conditions = [c for c in conditions if c != "p:Product"]
 
-    try:
-        # Try vector search first
-        embedding = await client.embeddings.embed(query)
-        params["embedding"] = embedding
+    projection = """
+        p {
+            .id, .name, .description, .price, .in_stock, .inventory,
+            .image_url, .attributes,
+            category: coalesce(c.name, p.category),
+            brand: coalesce(b.name, p.brand)
+        } as product
+    """
 
-        cypher = f"""
-        CALL db.index.vector.queryNodes('product_embedding', $limit * 2, $embedding)
+    result: list[dict[str, Any]] | None = None
+    search_mode = "text"
+
+    if embedder is not None:
+        vector_cypher = f"""
+        CALL db.index.vector.queryNodes('{PRODUCT_VECTOR_INDEX}', $candidates, $embedding)
         YIELD node as p, score
         WHERE {where_clause}
         OPTIONAL MATCH (p)-[:IN_CATEGORY]->(c:Category)
         OPTIONAL MATCH (p)-[:MADE_BY]->(b:Brand)
-        RETURN p {{
-            .id, .name, .description, .price, .in_stock, .inventory,
-            .image_url, .attributes,
-            category: coalesce(c.name, p.category),
-            brand: coalesce(b.name, p.brand)
-        }} as product, score
+        RETURN {projection}, score
         ORDER BY score DESC
         LIMIT $limit
         """
+        try:
+            params["embedding"] = await embedder.embed(query)
+            # The index returns its nearest neighbours *before* the WHERE
+            # clause filters them, so ask for more candidates when filters are
+            # in play — otherwise a brand filter can empty the result set.
+            params["candidates"] = limit * (10 if len(text_conditions) > 1 else 2)
+            result = await client.query.cypher(vector_cypher, params)
+            search_mode = "vector"
+        except ClientError as exc:
+            # Missing index or bad dimensions — visible, not silent.
+            logger.warning(
+                "Vector search on '%s' failed (%s); falling back to text search. "
+                "Run `python -m data.load_products` with OPENAI_API_KEY set to "
+                "populate product embeddings.",
+                PRODUCT_VECTOR_INDEX,
+                exc.code or exc,
+            )
+        except Exception as exc:  # embedding provider errors (auth, quota, network)
+            logger.warning("Could not embed the query (%s); using text search.", exc)
 
-        result = await client.graph.execute_read(cypher, params)
-
-    except Exception as e:
-        logger.warning(f"Vector search failed, falling back to text search: {e}")
-
-        # Fallback to text search
-        cypher = f"""
+    if result is None:
+        text_cypher = f"""
         MATCH (p:Product)
         WHERE (toLower(p.name) CONTAINS toLower($query)
-               OR toLower(p.description) CONTAINS toLower($query))
-        AND {where_clause.replace("p:Product AND ", "")}
+               OR toLower(coalesce(p.description, '')) CONTAINS toLower($query))
+        {"AND " + " AND ".join(text_conditions) if text_conditions else ""}
         OPTIONAL MATCH (p)-[:IN_CATEGORY]->(c:Category)
         OPTIONAL MATCH (p)-[:MADE_BY]->(b:Brand)
-        RETURN p {{
-            .id, .name, .description, .price, .in_stock, .inventory,
-            .image_url, .attributes,
-            category: coalesce(c.name, p.category),
-            brand: coalesce(b.name, p.brand)
-        }} as product, 1.0 as score
-        ORDER BY p.popularity DESC NULLS LAST
+        RETURN {projection}, 1.0 as score
+        ORDER BY p.popularity DESC
         LIMIT $limit
         """
-
-        result = await client.graph.execute_read(cypher, params)
+        params.pop("embedding", None)
+        params.pop("candidates", None)
+        result = await client.query.cypher(text_cypher, params)
 
     products = [{**record["product"], "relevance_score": record["score"]} for record in result]
 
-    return {"products": products, "count": len(products)}
+    return {"products": products, "count": len(products), "search_mode": search_mode}
 
 
 async def get_product_details(
-    client: "MemoryClient",
+    client: MemoryClient,
     product_id: str,
 ) -> dict | None:
     """
@@ -141,14 +185,19 @@ async def get_product_details(
         category: c.name,
         brand: b.name,
         attributes: [attr in attributes | attr.name + ': ' + attr.value],
+        // avg() is an aggregation function and cannot take a list, so the
+        // mean is computed with reduce() over the collected reviews.
         rating: CASE WHEN size(reviews) > 0
-                     THEN round(avg([r in reviews | r.rating]) * 10) / 10
+                     THEN round(
+                         reduce(total = 0.0, rv IN reviews | total + coalesce(rv.rating, 0))
+                         / size(reviews) * 10
+                     ) / 10
                      ELSE null END,
         review_count: size(reviews)
     } as product
     """
 
-    result = await client.graph.execute_read(cypher, {"product_id": product_id})
+    result = await client.query.cypher(cypher, {"product_id": product_id})
 
     if result:
         return result[0]["product"]
@@ -156,7 +205,7 @@ async def get_product_details(
 
 
 async def get_products_by_category(
-    client: "MemoryClient",
+    client: MemoryClient,
     category: str,
     limit: int = 20,
     sort_by: str = "popularity",
@@ -194,12 +243,12 @@ async def get_products_by_category(
     LIMIT $limit
     """
 
-    result = await client.graph.execute_read(cypher, {"category": category, "limit": limit})
+    result = await client.query.cypher(cypher, {"category": category, "limit": limit})
 
     return {"products": [r["product"] for r in result], "category": category}
 
 
-async def get_brands(client: "MemoryClient", category: str | None = None) -> list[str]:
+async def get_brands(client: MemoryClient, category: str | None = None) -> list[str]:
     """Get all brands, optionally filtered by category."""
     if category:
         cypher = """
@@ -218,11 +267,11 @@ async def get_brands(client: "MemoryClient", category: str | None = None) -> lis
         """
         params = {}
 
-    result = await client.graph.execute_read(cypher, params)
+    result = await client.query.cypher(cypher, params)
     return [r["brand"] for r in result]
 
 
-async def get_categories(client: "MemoryClient") -> list[dict]:
+async def get_categories(client: MemoryClient) -> list[dict]:
     """Get all product categories with counts."""
     cypher = """
     MATCH (c:Category)<-[:IN_CATEGORY]-(p:Product)
@@ -230,5 +279,5 @@ async def get_categories(client: "MemoryClient") -> list[dict]:
     ORDER BY product_count DESC
     """
 
-    result = await client.graph.execute_read(cypher, {})
+    result = await client.query.cypher(cypher, {})
     return [dict(r) for r in result]

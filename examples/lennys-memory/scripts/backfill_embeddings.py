@@ -1,243 +1,216 @@
 #!/usr/bin/env python3
-"""Backfill embeddings for existing entities in the database.
+"""Backfill embeddings for existing Entity nodes.
 
-This script generates embeddings for Entity nodes that don't have them,
-enabling semantic vector search for entity lookup.
+Entities created without an embedding cannot be found by vector search. This
+script embeds them in batches and writes the vectors back through the library's
+buffered writer.
 
 Usage:
-    python backfill_embeddings.py [--batch-size 100] [--status]
+    python backfill_embeddings.py [--batch-size 100] [--status] [--dry-run]
 """
+
+from __future__ import annotations
 
 import argparse
 import asyncio
 import logging
-import os
 import sys
-import time
 from pathlib import Path
 
-from dotenv import load_dotenv
-from pydantic import SecretStr
+sys.path.insert(0, str(Path(__file__).parent))
 
-from neo4j_agent_memory import MemoryClient, MemorySettings, Neo4jConfig
-from neo4j_agent_memory.graph.queries import (
-    COUNT_ENTITIES_WITHOUT_EMBEDDINGS,
-    GET_ENTITIES_WITHOUT_EMBEDDINGS,
-    UPDATE_ENTITY_EMBEDDING,
+from _common import (  # noqa: E402
+    Colors,
+    ProgressBar,
+    add_model_args,
+    add_neo4j_args,
+    build_memory_settings,
+    color,
+    format_duration,
+    load_backend_env,
 )
 
-# Load .env file from backend directory
-load_dotenv(Path(__file__).parent.parent / "backend" / ".env")
+from neo4j_agent_memory import MemoryClient  # noqa: E402
+from neo4j_agent_memory.config.settings import MemoryConfig  # noqa: E402
+from neo4j_agent_memory.llm import from_provider  # noqa: E402
 
-# Set up logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-)
+load_backend_env()
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+# Inlined rather than imported from ``neo4j_agent_memory.graph.queries``: that
+# module is internal with no stability guarantee, and an example should show the
+# query it runs. ``$exclude`` lets a poison row drop out of the result set so a
+# persistent failure cannot turn the backfill into an infinite loop.
+COUNT_PENDING = """
+MATCH (e:Entity)
+WHERE e.embedding IS NULL
+RETURN count(e) AS count
+"""
 
-# ANSI color codes
-class Colors:
-    RESET = "\033[0m"
-    BOLD = "\033[1m"
-    DIM = "\033[2m"
-    GREEN = "\033[92m"
-    YELLOW = "\033[93m"
-    RED = "\033[91m"
-    CYAN = "\033[96m"
-    BLUE = "\033[94m"
+COUNT_TOTAL = "MATCH (e:Entity) RETURN count(e) AS count"
+
+FETCH_PENDING = """
+MATCH (e:Entity)
+WHERE e.embedding IS NULL AND NOT e.id IN $exclude
+RETURN e.id AS id, e.name AS name, e.type AS type, e.description AS description
+ORDER BY e.name
+LIMIT $limit
+"""
+# ``$exclude`` carries both the ids we already submitted a write for and the ids
+# that failed to embed. Both matter: buffered writes land asynchronously, so a
+# row we just embedded can still have a NULL embedding on the next page -- without
+# excluding it the loop would re-embed the same page indefinitely.
+
+WRITE_EMBEDDINGS = """
+UNWIND $rows AS row
+MATCH (e:Entity {id: row.id})
+SET e.embedding = row.embedding, e.updated_at = datetime()
+"""
 
 
-def supports_color() -> bool:
-    return hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
+def embed_text(row: dict) -> str:
+    """Text used to embed an entity: its name, plus its description if present."""
+    name = row["name"]
+    description = row.get("description")
+    return f"{name}: {description}" if description else name
 
 
-USE_COLORS = supports_color()
+async def get_status(client: MemoryClient) -> dict[str, int]:
+    """Count entities with and without embeddings."""
+    pending_rows = await client.query.cypher(COUNT_PENDING)
+    total_rows = await client.query.cypher(COUNT_TOTAL)
+    pending = pending_rows[0]["count"] if pending_rows else 0
+    total = total_rows[0]["count"] if total_rows else 0
+    return {"total": total, "with_embeddings": total - pending, "pending": pending}
 
 
-def color(text: str, color_code: str) -> str:
-    if USE_COLORS:
-        return f"{color_code}{text}{Colors.RESET}"
-    return text
-
-
-async def get_status(client: MemoryClient) -> dict:
-    """Get current embedding status."""
-    # Count entities without embeddings
-    result = await client._client.execute_read(
-        COUNT_ENTITIES_WITHOUT_EMBEDDINGS, {}
-    )
-    pending = result[0]["count"] if result else 0
-
-    # Count total entities
-    total_result = await client._client.execute_read(
-        "MATCH (e:Entity) RETURN count(e) AS count", {}
-    )
-    total = total_result[0]["count"] if total_result else 0
-
-    # Count entities with embeddings
-    with_embeddings = total - pending
-
-    return {
-        "total": total,
-        "with_embeddings": with_embeddings,
-        "pending": pending,
-    }
+def print_status(status: dict[str, int]) -> None:
+    print(f"\n{color('Entity Embedding Status', Colors.BOLD + Colors.CYAN)}")
+    print("=" * 50)
+    print(f"Total entities:  {color(str(status['total']), Colors.BOLD)}")
+    print(f"With embeddings: {color(str(status['with_embeddings']), Colors.GREEN)}")
+    print(f"Pending:         {color(str(status['pending']), Colors.YELLOW)}")
+    print("=" * 50)
 
 
 async def backfill_embeddings(
     client: MemoryClient,
+    embedding_model: str,
+    *,
     batch_size: int = 100,
-) -> None:
-    """Generate embeddings for entities that don't have them."""
-    # Get embedder from client
-    embedder = client.long_term._embedder
-    if embedder is None:
-        logger.error("No embedder configured. Cannot generate embeddings.")
-        return
+    dry_run: bool = False,
+) -> dict[str, int]:
+    """Embed every Entity that has no embedding, one ``embed_batch`` per page."""
+    embedder = from_provider(embedding_model, kind="embedding")
 
-    # Get initial status
     status = await get_status(client)
-    total_pending = status["pending"]
+    if status["pending"] == 0:
+        print(color("\nAll entities already have embeddings.", Colors.GREEN))
+        return {"embedded": 0, "failed": 0}
 
-    if total_pending == 0:
-        print(color("\nAll entities already have embeddings!", Colors.GREEN))
-        return
+    print_status(status)
+    if dry_run:
+        print(color("\nDry run: no embeddings generated.", Colors.YELLOW))
+        return {"embedded": 0, "failed": 0}
 
-    print(f"\n{color('Entity Embedding Backfill', Colors.BOLD + Colors.CYAN)}")
-    print(f"{'=' * 50}")
-    print(f"Total entities: {color(str(status['total']), Colors.BOLD)}")
-    print(f"With embeddings: {color(str(status['with_embeddings']), Colors.GREEN)}")
-    print(f"Pending: {color(str(total_pending), Colors.YELLOW)}")
-    print(f"{'=' * 50}\n")
-
-    processed = 0
+    progress = ProgressBar(status["pending"], label="Embedding")
     embedded = 0
-    errors = 0
-    start_time = time.time()
+    failed: list[str] = []
+    # Ids we have already handled this run (submitted or failed). The old loop
+    # paged with a constant skip=0 and relied on rows dropping out of the result
+    # set, which only held while every row succeeded -- one un-embeddable entity
+    # turned the backfill into an infinite loop that kept spending API calls.
+    handled: set[str] = set()
 
     while True:
-        # Get batch of entities without embeddings
-        entities = await client._client.execute_read(
-            GET_ENTITIES_WITHOUT_EMBEDDINGS,
-            {"skip": 0, "limit": batch_size},  # Always skip 0 since we update as we go
+        rows = await client.query.cypher(
+            FETCH_PENDING,
+            {"exclude": sorted(handled), "limit": batch_size},
         )
-
-        if not entities:
+        if not rows:
             break
+        handled.update(row["id"] for row in rows)
 
-        for entity in entities:
-            entity_id = entity["id"]
-            name = entity["name"]
-            entity_type = entity["type"]
-            description = entity.get("description")
+        try:
+            # EmbeddingProvider.embed() takes a SEQUENCE of texts and returns one
+            # vector per text -- one call per page instead of one per entity.
+            # (embed_one() is the single-text form; passing a str to embed()
+            # would iterate its characters.)
+            vectors = await embedder.embed([embed_text(row) for row in rows])
+        except Exception:
+            logger.exception("Batch embedding failed; falling back to one call per entity")
+            vectors = []
+            for row in rows:
+                try:
+                    vectors.append(await embedder.embed_one(embed_text(row)))
+                except Exception:
+                    logger.warning("Could not embed entity %s; skipping", row["name"])
+                    failed.append(row["id"])
+                    vectors.append(None)
 
-            try:
-                # Create embedding text from name and description
-                embed_text = name
-                if description:
-                    embed_text = f"{name}: {description}"
+        payload = [
+            {"id": row["id"], "embedding": vector}
+            for row, vector in zip(rows, vectors, strict=True)
+            if vector is not None
+        ]
+        if payload:
+            # Fire-and-forget write: the queue drains in the background while we
+            # embed the next page. ``client.flush()`` below waits for it.
+            await client.buffered.submit(WRITE_EMBEDDINGS, {"rows": payload})
+            embedded += len(payload)
 
-                # Generate embedding
-                embedding = await embedder.embed(embed_text)
+        progress.advance(len(rows), suffix=f"failed: {len(failed)}")
 
-                # Update entity with embedding
-                await client._client.execute_write(
-                    UPDATE_ENTITY_EMBEDDING,
-                    {"id": entity_id, "embedding": embedding},
-                )
+    await client.flush()
+    progress.close()
 
-                embedded += 1
-
-            except Exception as e:
-                logger.warning(f"Error embedding entity {name}: {e}")
-                errors += 1
-
-            processed += 1
-
-            # Progress update
-            elapsed = time.time() - start_time
-            rate = processed / elapsed if elapsed > 0 else 0
-            remaining = total_pending - processed
-            eta_seconds = remaining / rate if rate > 0 else 0
-            eta_str = f"{int(eta_seconds // 60)}m {int(eta_seconds % 60)}s"
-
-            progress_pct = (processed / total_pending) * 100
-            progress_bar = f"[{'=' * int(progress_pct // 5)}{' ' * (20 - int(progress_pct // 5))}]"
-
-            print(
-                f"\r{progress_bar} {processed}/{total_pending} ({progress_pct:.1f}%) | "
-                f"Embedded: {embedded} | Errors: {errors} | "
-                f"{rate:.1f} ent/s | ETA: {eta_str}    ",
-                end="",
-                flush=True,
-            )
-
-    print()  # New line after progress
-
-    elapsed = time.time() - start_time
-    print(f"\n{color('Backfill Complete', Colors.BOLD + Colors.GREEN)}")
-    print(f"{'=' * 50}")
-    print(f"Processed: {processed} entities")
+    print(f"\n{color('Backfill complete', Colors.BOLD + Colors.GREEN)}")
+    print("=" * 50)
     print(f"Embedded: {color(str(embedded), Colors.GREEN)}")
-    print(f"Errors: {color(str(errors), Colors.RED if errors > 0 else Colors.DIM)}")
-    print(f"Time: {elapsed:.1f}s")
-    print(f"{'=' * 50}")
+    print(f"Failed:   {color(str(len(failed)), Colors.RED if failed else Colors.DIM)}")
+    print(f"Time:     {format_duration(progress.elapsed)}")
+    if client.write_errors:
+        print(color(f"Write errors: {len(client.write_errors)}", Colors.RED))
+    print("=" * 50)
+    return {"embedded": embedded, "failed": len(failed)}
 
 
-async def main():
+async def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Backfill embeddings for entities without them"
+        description="Backfill embeddings for Entity nodes without them",
     )
     parser.add_argument(
         "--batch-size",
         type=int,
         default=100,
-        help="Number of entities to process per batch (default: 100)",
+        help="Entities embedded per batch (default: 100)",
     )
+    parser.add_argument("--status", action="store_true", help="Show status only")
     parser.add_argument(
-        "--status",
+        "--dry-run",
         action="store_true",
-        help="Show status only, don't process",
+        help="Report what would be embedded without calling the embedding API",
     )
+    add_neo4j_args(parser)
+    add_model_args(parser)
     args = parser.parse_args()
 
-    # Get Neo4j config from environment
-    neo4j_uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-    neo4j_user = os.getenv("NEO4J_USERNAME", "neo4j")
-    neo4j_password = os.getenv("NEO4J_PASSWORD", "password")
-    neo4j_database = os.getenv("NEO4J_DATABASE", "neo4j")
-
-    # Get OpenAI API key for embeddings
-    openai_api_key = os.getenv("OPENAI_API_KEY")
-    if not openai_api_key:
-        logger.error("OPENAI_API_KEY environment variable is required")
-        sys.exit(1)
-
-    neo4j_config = Neo4jConfig(
-        uri=neo4j_uri,
-        user=neo4j_user,
-        password=SecretStr(neo4j_password),
-        database=neo4j_database,
-    )
-
-    settings = MemorySettings(
-        neo4j=neo4j_config,
-        openai_api_key=SecretStr(openai_api_key),
-    )
+    # Buffered writes keep the embedding loop off the Neo4j round-trip path:
+    # ``submit()`` enqueues and returns, ``client.flush()`` waits at the end.
+    settings = build_memory_settings(args, memory=MemoryConfig(write_mode="buffered"))
 
     async with MemoryClient(settings) as client:
         if args.status:
-            status = await get_status(client)
-            print(f"\n{color('Entity Embedding Status', Colors.BOLD + Colors.CYAN)}")
-            print(f"{'=' * 50}")
-            print(f"Total entities: {color(str(status['total']), Colors.BOLD)}")
-            print(f"With embeddings: {color(str(status['with_embeddings']), Colors.GREEN)}")
-            print(f"Pending: {color(str(status['pending']), Colors.YELLOW)}")
-            print(f"{'=' * 50}")
-        else:
-            await backfill_embeddings(client, batch_size=args.batch_size)
+            print_status(await get_status(client))
+            return
+        await backfill_embeddings(
+            client,
+            args.embedding_model,
+            batch_size=args.batch_size,
+            dry_run=args.dry_run,
+        )
 
 
 if __name__ == "__main__":

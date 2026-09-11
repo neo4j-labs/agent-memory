@@ -1,30 +1,74 @@
 #!/usr/bin/env python3
-"""Vertex AI Embeddings Demo.
+"""Vertex AI embeddings with Neo4j Agent Memory.
 
-Demonstrates using Google Vertex AI for generating text embeddings
-with Neo4j Agent Memory.
+Demonstrates:
 
-Features demonstrated:
-- VertexAIEmbedder initialization
-- Single text embedding
-- Batch embedding for multiple texts
-- Integration with MemoryClient
-- Different task types for queries vs documents
+- ``VertexAIEmbedder`` with ``gemini-embedding-001`` (``text-embedding-004`` was
+  shut down on 2026-01-14 and now raises at construction).
+- ``output_dimensionality`` — the model's native size is 3072; the embedder
+  truncates to 768 by default so Neo4j vector indexes sized for the old default
+  keep working.
+- Single and batch embedding, plus cosine similarity over the results.
+- Task types (``RETRIEVAL_DOCUMENT`` vs ``RETRIEVAL_QUERY``) for asymmetric
+  search.
+- Wiring the provider into ``MemoryClient`` and writing **multi-tenant**
+  messages (``memory.multi_tenant=True`` + ``user_identifier=``).
 
-Requirements:
-    pip install neo4j-agent-memory[vertex-ai]
+Requirements::
+
+    pip install "neo4j-agent-memory[vertex-ai]"
     gcloud auth application-default login
+    export GOOGLE_CLOUD_PROJECT=your-project-id
+
+The embedding phases need real Google Cloud credentials and are skipped without
+``GOOGLE_CLOUD_PROJECT``; the MemoryClient phase runs on whatever embedder
+``_common.build_settings()`` resolves, so it also works with OpenAI or a local
+sentence-transformers model.
 """
+
+from __future__ import annotations
 
 import asyncio
 import os
 from datetime import datetime
 
-from pydantic import SecretStr
+from _common import (
+    VERTEX_EMBEDDING_MODEL,
+    build_settings,
+    describe_settings,
+    load_env,
+    use_vertex_embeddings,
+)
+
+USER_ID = os.getenv("DEMO_USER_ID", "demo-user")
+
+TEXTS = [
+    "Graph databases excel at relationship queries.",
+    "Vector search enables semantic similarity matching.",
+    "Agent memory combines short-term and long-term storage.",
+    "Entity extraction identifies people, places, and organizations.",
+    "The Model Context Protocol enables tool-based AI interactions.",
+]
 
 
-async def demo_basic_embeddings():
-    """Demonstrate basic Vertex AI embedding generation."""
+def vertex_available() -> bool:
+    """Vertex phases need a GCP project and the optional extra."""
+    if not os.getenv("GOOGLE_CLOUD_PROJECT"):
+        print("Skipping Vertex AI phases: GOOGLE_CLOUD_PROJECT is not set.")
+        print("  export GOOGLE_CLOUD_PROJECT=your-project-id")
+        return False
+    return True
+
+
+def cosine_similarity(a: list[float], b: list[float]) -> float:
+    dot_product: float = sum(x * y for x, y in zip(a, b, strict=False))
+    norm_a: float = sum(x * x for x in a) ** 0.5
+    norm_b: float = sum(x * x for x in b) ** 0.5
+    return float(dot_product / (norm_a * norm_b))
+
+
+async def demo_basic_embeddings() -> None:
+    """Single and batch embedding, plus similarity ranking."""
     from neo4j_agent_memory.embeddings.vertex_ai import VertexAIEmbedder
 
     print("=" * 60)
@@ -32,19 +76,18 @@ async def demo_basic_embeddings():
     print("=" * 60)
     print()
 
-    # Initialize embedder
     embedder = VertexAIEmbedder(
-        model="text-embedding-004",
-        project_id=os.environ.get("GOOGLE_CLOUD_PROJECT"),
-        location=os.environ.get("VERTEX_AI_LOCATION", "us-central1"),
+        model=VERTEX_EMBEDDING_MODEL,
+        project_id=os.getenv("GOOGLE_CLOUD_PROJECT"),
+        location=os.getenv("VERTEX_AI_LOCATION", "us-central1"),
     )
 
     print(f"Model: {embedder.model}")
     print(f"Dimensions: {embedder.dimensions}")
-    print(f"Task Type: {embedder.task_type}")
+    print(f"Output dimensionality: {embedder.output_dimensionality} (native: 3072)")
+    print(f"Task type: {embedder.task_type}")
     print()
 
-    # Single embedding
     print("1. Single Text Embedding")
     print("-" * 40)
     text = "Neo4j is a graph database that stores and manages connected data."
@@ -54,87 +97,104 @@ async def demo_basic_embeddings():
     print(f"   First 5 values: {embedding[:5]}")
     print()
 
-    # Batch embedding
     print("2. Batch Embedding")
     print("-" * 40)
-    texts = [
-        "Graph databases excel at relationship queries.",
-        "Vector search enables semantic similarity matching.",
-        "Agent memory combines short-term and long-term storage.",
-        "Entity extraction identifies people, places, and organizations.",
-        "The Model Context Protocol enables tool-based AI interactions.",
-    ]
-    embeddings = await embedder.embed_batch(texts)
-    print(f"   Processed {len(texts)} texts")
-    for i, (text, emb) in enumerate(zip(texts, embeddings)):
+    embeddings = await embedder.embed_batch(TEXTS)
+    print(f"   Processed {len(TEXTS)} texts")
+    for i, (text, emb) in enumerate(zip(TEXTS, embeddings, strict=False)):
         print(f"   [{i + 1}] {text[:40]}... → {len(emb)} dims")
     print()
 
-    # Compare similarities
     print("3. Semantic Similarity")
     print("-" * 40)
     query = "How do graph databases handle relationships?"
     query_embedding = await embedder.embed(query)
-
-    def cosine_similarity(a: list[float], b: list[float]) -> float:
-        dot_product = sum(x * y for x, y in zip(a, b))
-        norm_a = sum(x * x for x in a) ** 0.5
-        norm_b = sum(x * x for x in b) ** 0.5
-        return dot_product / (norm_a * norm_b)
-
     print(f"   Query: {query}")
     print()
     similarities = [
-        (text, cosine_similarity(query_embedding, emb)) for text, emb in zip(texts, embeddings)
+        (text, cosine_similarity(query_embedding, emb))
+        for text, emb in zip(TEXTS, embeddings, strict=False)
     ]
-    similarities.sort(key=lambda x: x[1], reverse=True)
+    similarities.sort(key=lambda pair: pair[1], reverse=True)
     for text, sim in similarities:
         print(f"   {sim:.4f} - {text[:50]}...")
     print()
 
 
-async def demo_with_memory_client():
-    """Demonstrate Vertex AI embeddings with MemoryClient."""
-    from neo4j_agent_memory import MemoryClient, MemorySettings
-    from neo4j_agent_memory.config.settings import Neo4jConfig
-    from neo4j_agent_memory.llm import from_provider
+async def demo_task_types() -> None:
+    """Asymmetric search: embed documents and queries with matched task types."""
+    from neo4j_agent_memory.embeddings.vertex_ai import VertexAIEmbedder
+
+    print("=" * 60)
+    print("Vertex AI Embeddings - Task Types")
+    print("=" * 60)
+    print()
+
+    for task_type, description in (
+        ("RETRIEVAL_DOCUMENT", "For indexing documents to be searched"),
+        ("RETRIEVAL_QUERY", "For search queries"),
+        ("SEMANTIC_SIMILARITY", "For comparing text similarity"),
+        ("CLASSIFICATION", "For text classification tasks"),
+        ("CLUSTERING", "For clustering similar texts"),
+    ):
+        print(f"  • {task_type}\n    {description}")
+
+    print()
+    print("Example: different task types for query vs document")
+    print("-" * 40)
+
+    doc_embedder = VertexAIEmbedder(
+        model=VERTEX_EMBEDDING_MODEL,
+        task_type="RETRIEVAL_DOCUMENT",
+        project_id=os.getenv("GOOGLE_CLOUD_PROJECT"),
+    )
+    query_embedder = VertexAIEmbedder(
+        model=VERTEX_EMBEDDING_MODEL,
+        task_type="RETRIEVAL_QUERY",
+        project_id=os.getenv("GOOGLE_CLOUD_PROJECT"),
+    )
+
+    doc_embedding = await doc_embedder.embed(
+        "Neo4j provides native graph storage and processing capabilities."
+    )
+    query_embedding = await query_embedder.embed("What are Neo4j's core features?")
+
+    print(f"  Document ({doc_embedder.task_type}): {len(doc_embedding)} dims")
+    print(f"  Query ({query_embedder.task_type}): {len(query_embedding)} dims")
+    print()
+    print("  Matched task types improve retrieval quality for asymmetric search.")
+    print()
+
+
+async def demo_with_memory_client() -> None:
+    """Store and search multi-tenant messages through MemoryClient."""
+    from neo4j_agent_memory import MemoryClient
 
     print("=" * 60)
     print("Vertex AI Embeddings - With MemoryClient")
     print("=" * 60)
     print()
 
-    # v0.3+: resolve a VertexAIEmbeddingProvider via the factory. Project
-    # ID and location are passed through to the adapter constructor.
-    embedding_provider = from_provider(
-        "vertex_ai/text-embedding-004",
-        kind="embedding",
-        project_id=os.environ.get("GOOGLE_CLOUD_PROJECT"),
-        location=os.environ.get("VERTEX_AI_LOCATION", "us-central1"),
-    )
-
-    settings = MemorySettings(
-        neo4j=Neo4jConfig(
-            uri=os.environ.get("NEO4J_URI", "bolt://localhost:7687"),
-            username=os.environ.get("NEO4J_USER", "neo4j"),
-            password=SecretStr(os.environ.get("NEO4J_PASSWORD", "password")),
-        ),
-        embedding=embedding_provider,
-    )
-
+    # multi_tenant=True makes ``user_identifier=`` mandatory on writes, which is
+    # what scopes messages to a tenant (there is no ``user_id=`` parameter on
+    # add_message).
+    settings = build_settings(multi_tenant=True)
     print("Configuration:")
-    print(f"  Embedding Provider: {type(settings.embedding).__name__}")
-    print(f"  Model: {settings.embedding.model}")
-    print(f"  Dimensions: {settings.embedding.dimensions}")
+    describe_settings(settings)
+    if not use_vertex_embeddings():
+        print("  (set EMBEDDING_PROVIDER=vertex_ai + GOOGLE_CLOUD_PROJECT for Vertex AI)")
     print()
 
     async with MemoryClient(settings) as client:
-        print("1. Storing messages with Vertex AI embeddings...")
-        print("-" * 40)
-
+        print(f"Connected backend: {client.backend}")
         session_id = f"vertex-demo-{datetime.now().strftime('%Y%m%d%H%M%S')}"
 
-        # Store some messages
+        # One :User node per tenant; messages are linked to it.
+        await client.users.upsert_user(identifier=USER_ID)
+
+        print()
+        print("1. Storing messages (scoped to one tenant)...")
+        print("-" * 40)
         messages = [
             ("user", "Tell me about graph databases and their use cases."),
             (
@@ -151,124 +211,60 @@ async def demo_with_memory_client():
                 "their relationships for richer context.",
             ),
         ]
-
         for role, content in messages:
             await client.short_term.add_message(
                 session_id=session_id,
                 role=role,
                 content=content,
-                user_id="demo-user",
+                user_identifier=USER_ID,
             )
             print(f"  [{role}] {content[:50]}...")
         print()
 
-        print("2. Semantic search with Vertex AI embeddings...")
+        print("2. Semantic search over the stored messages...")
         print("-" * 40)
-
-        queries = [
+        for query in (
             "graph database applications",
             "combining vectors and graphs",
             "Neo4j features",
-        ]
-
-        for query in queries:
+        ):
             print(f"\n  Query: '{query}'")
             results = await client.short_term.search_messages(
                 query=query,
                 session_id=session_id,
                 limit=2,
             )
+            if not results:
+                print("    (no matches above the similarity threshold)")
             for msg in results:
                 print(f"    → {msg.content[:60]}...")
         print()
 
-
-async def demo_task_types():
-    """Demonstrate different task types for Vertex AI embeddings."""
-    from neo4j_agent_memory.embeddings.vertex_ai import VertexAIEmbedder
-
-    print("=" * 60)
-    print("Vertex AI Embeddings - Task Types")
-    print("=" * 60)
-    print()
-
-    print("Vertex AI supports different task types for optimized embeddings:")
-    print()
-
-    task_types = [
-        ("RETRIEVAL_DOCUMENT", "For indexing documents to be searched"),
-        ("RETRIEVAL_QUERY", "For search queries"),
-        ("SEMANTIC_SIMILARITY", "For comparing text similarity"),
-        ("CLASSIFICATION", "For text classification tasks"),
-        ("CLUSTERING", "For clustering similar texts"),
-    ]
-
-    for task_type, description in task_types:
-        print(f"  • {task_type}")
-        print(f"    {description}")
-
-    print()
-    print("Example: Using different task types for query vs document")
-    print("-" * 40)
-
-    # Document embedder
-    doc_embedder = VertexAIEmbedder(
-        model="text-embedding-004",
-        task_type="RETRIEVAL_DOCUMENT",
-        project_id=os.environ.get("GOOGLE_CLOUD_PROJECT"),
-    )
-
-    # Query embedder
-    query_embedder = VertexAIEmbedder(
-        model="text-embedding-004",
-        task_type="RETRIEVAL_QUERY",
-        project_id=os.environ.get("GOOGLE_CLOUD_PROJECT"),
-    )
-
-    document = "Neo4j provides native graph storage and processing capabilities."
-    query = "What are Neo4j's core features?"
-
-    doc_embedding = await doc_embedder.embed(document)
-    query_embedding = await query_embedder.embed(query)
-
-    print(f"  Document ({doc_embedder.task_type}): {len(doc_embedding)} dims")
-    print(f"  Query ({query_embedder.task_type}): {len(query_embedding)} dims")
-    print()
-    print(
-        "  Using matched task types can improve retrieval quality for asymmetric search scenarios."
-    )
-    print()
+        print("3. Confirming the tenant link")
+        print("-" * 40)
+        rows = await client.query.cypher(
+            "MATCH (u:User {identifier: $user})-[:HAS_CONVERSATION]->"
+            "(c:Conversation {session_id: $session}) "
+            "RETURN count(c) AS conversations",
+            {"user": USER_ID, "session": session_id},
+        )
+        print(f"  :User {USER_ID} → {rows[0]['conversations']} conversation(s)")
+        print()
 
 
-async def main():
-    """Run all Vertex AI embedding demos."""
+async def main() -> None:
+    """Run the Vertex AI embedding demos."""
+    load_env()
+
     print("\n" + "=" * 60)
     print("Neo4j Agent Memory - Vertex AI Embeddings Demo")
     print("=" * 60 + "\n")
 
-    # Check for GCP project
-    if not os.environ.get("GOOGLE_CLOUD_PROJECT"):
-        print("Warning: GOOGLE_CLOUD_PROJECT not set.")
-        print("Set it with: export GOOGLE_CLOUD_PROJECT=your-project-id")
-        print()
-
-    try:
+    if vertex_available():
         await demo_basic_embeddings()
         await demo_task_types()
 
-        # Only run memory client demo if Neo4j is configured
-        if os.environ.get("NEO4J_URI") or os.environ.get("NEO4J_PASSWORD"):
-            await demo_with_memory_client()
-        else:
-            print("Skipping MemoryClient demo (NEO4J_* not configured)")
-
-    except Exception as e:
-        print(f"\nError: {e}")
-        print("\nMake sure you have:")
-        print("  1. Authenticated: gcloud auth application-default login")
-        print("  2. Set project: export GOOGLE_CLOUD_PROJECT=your-project-id")
-        print("  3. Enabled Vertex AI API in your GCP project")
-        raise
+    await demo_with_memory_client()
 
     print("\n" + "=" * 60)
     print("Demo complete!")

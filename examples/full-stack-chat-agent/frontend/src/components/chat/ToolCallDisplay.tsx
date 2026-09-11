@@ -16,8 +16,8 @@ export function ToolCallDisplay({ toolCall }: ToolCallDisplayProps) {
     toolCall.status === "success"
       ? "green"
       : toolCall.status === "error"
-      ? "red"
-      : "yellow";
+        ? "red"
+        : "yellow";
 
   return (
     <Box

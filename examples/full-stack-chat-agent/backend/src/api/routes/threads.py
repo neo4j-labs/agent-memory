@@ -1,13 +1,19 @@
 """Thread management API endpoints.
 
-Uses neo4j-agent-memory's session management features for persistent thread storage.
+A "thread" is a neo4j-agent-memory *session*: one ``(:Conversation)`` node and
+its ``(:Message)`` chain. The library's session APIs do the work —
+``create_conversation`` / ``get_conversation`` / ``list_sessions`` /
+``clear_session`` — with one raw write for the title, which the library does
+not yet expose (see the TODO on :func:`set_conversation_title`).
 """
 
+import logging
 import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 
+from neo4j_agent_memory import MemoryClient
 from src.api.schemas import (
     ChatMessage,
     CreateThreadRequest,
@@ -17,6 +23,45 @@ from src.api.schemas import (
 from src.memory.client import get_memory_client
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+DEFAULT_TITLE = "New Conversation"
+
+# Title lives on the Conversation node so `list_sessions()` can read it back.
+# TODO(neo4j-agent-memory): replace with short_term.set_conversation_title()
+# once the library ships it — tracked as a follow-up from the examples review.
+SET_CONVERSATION_TITLE = """
+MATCH (c:Conversation {session_id: $session_id})
+SET c.title = $title, c.updated_at = datetime()
+RETURN c.session_id AS session_id
+"""
+
+
+async def set_conversation_title(memory: MemoryClient, session_id: str, title: str) -> bool:
+    """Persist a thread title onto its Conversation node."""
+    rows = await memory.graph.execute_write(
+        SET_CONVERSATION_TITLE,
+        {"session_id": session_id, "title": title},
+    )
+    return bool(rows)
+
+
+async def thread_exists(memory: MemoryClient, session_id: str) -> bool:
+    """Whether a Conversation node exists for ``session_id``."""
+    sessions = await memory.short_term.list_sessions(prefix=session_id, limit=5)
+    return any(session.session_id == session_id for session in sessions)
+
+
+# `clear_session()` only reaches traces linked with (:Conversation)-[:HAS_TRACE]->,
+# which `start_trace(session_id=...)` does not create — so a deleted thread would
+# leave its ReasoningTrace/ReasoningStep/ToolCall nodes behind.
+# TODO(neo4j-agent-memory): have clear_session() also match traces by session_id.
+DELETE_SESSION_TRACES = """
+MATCH (rt:ReasoningTrace {session_id: $session_id})
+OPTIONAL MATCH (rt)-[:HAS_STEP]->(rs:ReasoningStep)
+OPTIONAL MATCH (rs)-[:USES_TOOL]->(tc:ToolCall)
+DETACH DELETE rt, rs, tc
+"""
 
 
 @router.get("/threads", response_model=list[ThreadSummary])
@@ -27,62 +72,46 @@ async def list_threads() -> list[ThreadSummary]:
         return []
 
     try:
-        # Use the new list_sessions() API for persistent session listing
         sessions = await memory.short_term.list_sessions(
             limit=100,
             order_by="updated_at",
             order_dir="desc",
         )
-
-        summaries = []
-        for session in sessions:
-            summaries.append(
-                ThreadSummary(
-                    id=session.session_id,
-                    title=session.title or session.session_id[:20] + "...",
-                    created_at=session.created_at,
-                    updated_at=session.updated_at or session.created_at,
-                    message_count=session.message_count,
-                )
-            )
-
-        return summaries
-
     except Exception as e:
-        # Log error and return empty list
-        import logging
-
-        logging.getLogger(__name__).warning(f"Failed to list sessions: {e}")
+        logger.warning("Failed to list sessions: %s", e)
         return []
+
+    return [
+        ThreadSummary(
+            id=session.session_id,
+            title=session.title or DEFAULT_TITLE,
+            created_at=session.created_at,
+            updated_at=session.updated_at or session.created_at,
+            message_count=session.message_count,
+        )
+        for session in sessions
+    ]
 
 
 @router.post("/threads", response_model=ThreadSummary)
-async def create_thread(
-    request: CreateThreadRequest,
-) -> ThreadSummary:
+async def create_thread(request: CreateThreadRequest) -> ThreadSummary:
     """Create a new conversation thread.
 
-    Creates a thread by adding an initial system message to establish the session.
+    Creates the Conversation node explicitly (no placeholder system message)
+    and persists the title on it so it survives a page reload.
     """
     memory = get_memory_client()
     thread_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
-    title = request.title or "New Conversation"
+    title = request.title or DEFAULT_TITLE
 
-    if memory:
+    if memory is not None:
         try:
-            # Create the session by adding an initial system message
-            # This establishes the session in the database with metadata
-            await memory.short_term.add_message(
-                session_id=thread_id,
-                role="system",
-                content=f"Conversation started: {title}",
-                metadata={"title": title, "created_at": now.isoformat()},
-            )
+            conversation = await memory.short_term.create_conversation(thread_id)
+            await set_conversation_title(memory, thread_id, title)
+            now = conversation.created_at or now
         except Exception as e:
-            import logging
-
-            logging.getLogger(__name__).warning(f"Failed to create thread in memory: {e}")
+            logger.warning("Failed to create thread %s in memory: %s", thread_id, e)
 
     return ThreadSummary(
         id=thread_id,
@@ -94,163 +123,111 @@ async def create_thread(
 
 
 @router.get("/threads/{thread_id}", response_model=Thread)
-async def get_thread(
-    thread_id: str,
-) -> Thread:
+async def get_thread(thread_id: str) -> Thread:
     """Get a thread with its messages."""
     memory = get_memory_client()
-
-    # Default values if memory is unavailable
     now = datetime.now(timezone.utc)
-    title = "Untitled"
-    created_at = now
-    updated_at = now
-    messages = []
 
-    if memory:
-        try:
-            # Get conversation from short-term memory
-            conversation = await memory.short_term.get_conversation(thread_id)
-            if conversation and conversation.messages:
-                # Extract title from first system message if available
-                for msg in conversation.messages:
-                    if msg.role.value == "system" and msg.metadata:
-                        title = msg.metadata.get("title", title)
-                        if msg.metadata.get("created_at"):
-                            try:
-                                created_at = datetime.fromisoformat(
-                                    msg.metadata["created_at"].replace("Z", "+00:00")
-                                )
-                            except (ValueError, TypeError):
-                                pass
-                        break
+    if memory is None:
+        raise HTTPException(status_code=503, detail="Memory service unavailable")
 
-                # Get timestamps from messages
-                if conversation.messages:
-                    first_msg = conversation.messages[0]
-                    last_msg = conversation.messages[-1]
-                    if first_msg.timestamp:
-                        created_at = first_msg.timestamp
-                    if last_msg.timestamp:
-                        updated_at = last_msg.timestamp
+    # Let a real failure surface as a 500: only a genuinely missing thread is
+    # a 404. (A broad `except` here used to turn every error into "not found",
+    # which is how an AttributeError on Message.timestamp hid as a 404.)
+    conversation = await memory.short_term.get_conversation(thread_id)
 
-                # Convert messages (skip system messages for display)
-                for msg in conversation.messages:
-                    if msg.role.value != "system":
-                        messages.append(
-                            ChatMessage(
-                                id=str(msg.id),
-                                role=msg.role.value,
-                                content=msg.content,
-                                timestamp=msg.timestamp or now,
-                                tool_calls=[],
-                            )
-                        )
-        except Exception as e:
-            import logging
+    # get_conversation() returns an empty Conversation for an unknown session,
+    # which is indistinguishable from a real thread with no messages yet —
+    # so confirm existence through the session listing.
+    if not conversation.messages and not await thread_exists(memory, thread_id):
+        raise HTTPException(status_code=404, detail="Thread not found")
 
-            logging.getLogger(__name__).warning(f"Failed to get thread: {e}")
-            raise HTTPException(status_code=404, detail="Thread not found")
+    messages = [
+        ChatMessage(
+            id=str(msg.id),
+            role=msg.role.value,
+            content=msg.content,
+            # Message inherits MemoryEntry: created_at / updated_at, no `timestamp`.
+            timestamp=msg.created_at or now,
+            tool_calls=[],
+        )
+        for msg in conversation.messages
+        if msg.role.value != "system"
+    ]
 
-    if not messages and memory:
-        # Check if session exists at all
-        try:
-            sessions = await memory.short_term.list_sessions(prefix=thread_id)
-            if not sessions:
-                raise HTTPException(status_code=404, detail="Thread not found")
-        except Exception:
-            pass
-
+    created_at = conversation.created_at or now
     return Thread(
         id=thread_id,
-        title=title,
+        title=conversation.title or DEFAULT_TITLE,
         created_at=created_at,
-        updated_at=updated_at,
+        updated_at=conversation.updated_at or created_at,
         messages=messages,
     )
 
 
 @router.delete("/threads/{thread_id}")
-async def delete_thread(
-    thread_id: str,
-) -> dict:
-    """Delete a thread and its messages.
+async def delete_thread(thread_id: str) -> dict[str, object]:
+    """Delete a thread: its messages, the Conversation node, and its traces.
 
-    Uses delete_message() to remove all messages in the session.
+    ``clear_session()`` is one Cypher statement; the old per-message
+    ``delete_message()`` loop left the Conversation node behind, so the thread
+    kept showing up in ``list_sessions()``.
     """
     memory = get_memory_client()
+    if memory is None:
+        raise HTTPException(status_code=503, detail="Memory service unavailable")
 
-    if memory:
-        try:
-            # Get all messages in the session
-            conversation = await memory.short_term.get_conversation(thread_id, limit=1000)
-            if conversation and conversation.messages:
-                # Delete each message
-                deleted_count = 0
-                for msg in conversation.messages:
-                    try:
-                        await memory.short_term.delete_message(msg.id, cascade=True)
-                        deleted_count += 1
-                    except Exception:
-                        pass
+    try:
+        await memory.short_term.clear_session(thread_id)
+        await memory.graph.execute_write(DELETE_SESSION_TRACES, {"session_id": thread_id})
+    except Exception as e:
+        logger.warning("Failed to delete thread %s: %s", thread_id, e)
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
-                return {
-                    "status": "deleted",
-                    "thread_id": thread_id,
-                    "messages_deleted": deleted_count,
-                }
-        except Exception as e:
-            import logging
-
-            logging.getLogger(__name__).warning(f"Failed to delete thread: {e}")
-
-    return {"status": "deleted", "thread_id": thread_id, "messages_deleted": 0}
+    return {"status": "deleted", "thread_id": thread_id}
 
 
-@router.patch("/threads/{thread_id}")
-async def update_thread(
-    thread_id: str,
-    title: str | None = None,
-) -> ThreadSummary:
-    """Update a thread's title.
-
-    Updates the title by modifying the system message metadata.
-    """
+@router.patch("/threads/{thread_id}", response_model=ThreadSummary)
+async def update_thread(thread_id: str, title: str) -> ThreadSummary:
+    """Rename a thread. Persists the title and returns the stored values."""
     memory = get_memory_client()
-    now = datetime.now(timezone.utc)
-    message_count = 0
+    if memory is None:
+        raise HTTPException(status_code=503, detail="Memory service unavailable")
 
-    if memory and title:
-        try:
-            # Get conversation to find system message and count
-            conversation = await memory.short_term.get_conversation(thread_id)
-            if conversation and conversation.messages:
-                message_count = len([m for m in conversation.messages if m.role.value != "system"])
+    try:
+        updated = await set_conversation_title(memory, thread_id, title)
+    except Exception as e:
+        logger.warning("Failed to rename thread %s: %s", thread_id, e)
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
-                # Find and update system message with new title
-                # Note: This would require an update_message method
-                # For now, we just return the new title
-        except Exception as e:
-            import logging
+    if not updated:
+        raise HTTPException(status_code=404, detail="Thread not found")
 
-            logging.getLogger(__name__).warning(f"Failed to update thread: {e}")
+    # Read back rather than synthesising created_at / message_count.
+    sessions = [
+        s
+        for s in await memory.short_term.list_sessions(prefix=thread_id, limit=5)
+        if s.session_id == thread_id
+    ]
+    if not sessions:
+        raise HTTPException(status_code=404, detail="Thread not found")
 
+    session = sessions[0]
     return ThreadSummary(
-        id=thread_id,
-        title=title or "Untitled",
-        created_at=now,  # Would need to fetch actual created_at
-        updated_at=now,
-        message_count=message_count,
+        id=session.session_id,
+        title=session.title or title,
+        created_at=session.created_at,
+        updated_at=session.updated_at or session.created_at,
+        message_count=session.message_count,
     )
 
 
 @router.get("/threads/{thread_id}/summary")
-async def get_thread_summary(
-    thread_id: str,
-) -> dict:
+async def get_thread_summary(thread_id: str) -> dict[str, object]:
     """Get a summary of the conversation thread.
 
-    Uses get_conversation_summary() for AI-powered summarization.
+    Uses get_conversation_summary() for AI-powered summarization (falls back to
+    a basic summary when no LLM is configured).
     """
     memory = get_memory_client()
 
@@ -263,23 +240,20 @@ async def get_thread_summary(
             max_tokens=500,
             include_entities=True,
         )
-
-        return {
-            "session_id": summary.session_id,
-            "summary": summary.summary,
-            "message_count": summary.message_count,
-            "time_range": (
-                [summary.time_range[0].isoformat(), summary.time_range[1].isoformat()]
-                if summary.time_range
-                else None
-            ),
-            "key_entities": summary.key_entities,
-            "key_topics": summary.key_topics,
-            "generated_at": summary.generated_at.isoformat(),
-        }
-
     except Exception as e:
-        import logging
+        logger.warning("Failed to get summary for %s: %s", thread_id, e)
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
-        logging.getLogger(__name__).warning(f"Failed to get summary: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return {
+        "session_id": summary.session_id,
+        "summary": summary.summary,
+        "message_count": summary.message_count,
+        "time_range": (
+            [summary.time_range[0].isoformat(), summary.time_range[1].isoformat()]
+            if summary.time_range
+            else None
+        ),
+        "key_entities": summary.key_entities,
+        "key_topics": summary.key_topics,
+        "generated_at": summary.generated_at.isoformat(),
+    }

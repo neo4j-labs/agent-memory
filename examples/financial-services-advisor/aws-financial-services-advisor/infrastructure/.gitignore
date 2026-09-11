@@ -1,0 +1,12 @@
+# CDK synth output (contains the bundled Lambda asset, which is large and
+# derived — never commit it).
+cdk.out/
+cdk.context.json
+
+# Compiled TypeScript
+*.js
+*.d.ts
+!jest.config.js
+dist/
+
+node_modules/

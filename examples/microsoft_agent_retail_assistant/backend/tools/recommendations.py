@@ -1,18 +1,47 @@
-"""Product recommendation tools using graph traversals and GDS algorithms."""
+"""Product recommendation tools using graph traversals.
+
+Single implementation of the recommendation operations: ``agent.py`` wraps
+these as Agent Framework tools and ``main.py`` serves
+:func:`get_related_products` over REST. Reads use ``client.query.cypher()``.
+
+Exposed as agent tools: all four functions in this module.
+"""
 
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from neo4j_agent_memory import MemoryClient
 
 logger = logging.getLogger(__name__)
 
+#: The relationship kinds :func:`get_related_products` can traverse, mapped to
+#: the query fragment that traverses them. Relationship types are not
+#: parameterisable in Cypher, so a closed allow-list like this — never a
+#: caller-supplied string — is the only safe way to accept one as input.
+RELATED_BRANCHES: dict[str, str] = {
+    "IN_CATEGORY": """MATCH (source)-[:IN_CATEGORY]->(c)<-[:IN_CATEGORY]-(related:Product)
+        WHERE related <> source AND related.in_stock = true
+        RETURN related, 'Same category: ' + c.name as relationship, 2 as weight""",
+    "MADE_BY": """MATCH (source)-[:MADE_BY]->(b)<-[:MADE_BY]-(related:Product)
+        WHERE related <> source AND related.in_stock = true
+        RETURN related, 'Same brand: ' + b.name as relationship, 2 as weight""",
+    "SIMILAR_TO": """MATCH (source)-[:SIMILAR_TO]-(related:Product)
+        WHERE related.in_stock = true
+        RETURN related, 'Similar product' as relationship, 3 as weight""",
+    "BOUGHT_TOGETHER": """MATCH (source)-[:BOUGHT_TOGETHER]-(related:Product)
+        WHERE related.in_stock = true
+        RETURN related, 'Frequently bought together' as relationship, 4 as weight""",
+    "HAS_ATTRIBUTE": """MATCH (source)-[:HAS_ATTRIBUTE]->(a)<-[:HAS_ATTRIBUTE]-(related:Product)
+        WHERE related <> source AND related.in_stock = true
+        RETURN related, 'Shared attribute: ' + a.name as relationship, 1 as weight""",
+}
+
 
 async def get_recommendations(
-    client: "MemoryClient",
+    client: MemoryClient,
     user_id: str | None = None,
     session_id: str | None = None,
     category: str | None = None,
@@ -48,17 +77,25 @@ async def get_recommendations(
     except Exception as e:
         logger.debug(f"Could not get preferences: {e}")
 
-    # 2. Get products from session context
+    # 2. Get products from session context.
+    #
+    # Two things matter in this query and both were wrong before:
+    #   * :Message nodes carry no session_id — the session lives on the
+    #     :Conversation the message hangs off (see graph/queries.py).
+    #   * extracted entities use the POLE+O model, so a product is
+    #     type 'OBJECT' with subtype 'PRODUCT' (and labels :Object:Product),
+    #     never type 'Product'.
     session_products = []
     if session_id:
         try:
             cypher = """
-            MATCH (m:Message {session_id: $session_id})-[:MENTIONS]->(e:Entity)
-            WHERE e.type = 'Product'
+            MATCH (:Conversation {session_id: $session_id})-[:HAS_MESSAGE]->(m:Message)
+            MATCH (m)-[:MENTIONS]->(e:Entity)
+            WHERE e.type = 'OBJECT'
             RETURN DISTINCT e.name as product_name
             LIMIT 10
             """
-            result = await client.graph.execute_read(cypher, {"session_id": session_id})
+            result = await client.query.cypher(cypher, {"session_id": session_id})
             session_products = [r["product_name"] for r in result]
         except Exception as e:
             logger.debug(f"Could not get session products: {e}")
@@ -103,7 +140,7 @@ async def get_recommendations(
         LIMIT $limit
         """
 
-        params = {
+        params: dict[str, Any] = {
             "brands": pref_brands,
             "categories": (pref_categories + [category]) if category else pref_categories,
             "styles": pref_styles,
@@ -112,7 +149,7 @@ async def get_recommendations(
         }
 
         try:
-            result = await client.graph.execute_read(cypher, params)
+            result = await client.query.cypher(cypher, params)
             for r in result:
                 recommendations.append(r["product"])
                 reasons.append(r["reason"])
@@ -145,7 +182,7 @@ async def get_recommendations(
             ORDER BY score DESC
             LIMIT $limit
             """
-            result = await client.graph.execute_read(
+            result = await client.query.cypher(
                 cypher, {"existing": existing_ids, "limit": remaining}
             )
             for r in result:
@@ -167,11 +204,11 @@ async def get_recommendations(
             ORDER BY p.popularity DESC NULLS LAST
             LIMIT $limit
             """
-            params = {"existing": existing_ids, "limit": remaining}
+            params: dict[str, Any] = {"existing": existing_ids, "limit": remaining}
             if category:
                 params["category"] = category
 
-            result = await client.graph.execute_read(cypher, params)
+            result = await client.query.cypher(cypher, params)
             for r in result:
                 recommendations.append(r["product"])
                 reasons.append(r["reason"])
@@ -184,7 +221,7 @@ async def get_recommendations(
 
 
 async def get_related_products(
-    client: "MemoryClient",
+    client: MemoryClient,
     product_id: str,
     relationship_types: list[str] | None = None,
     limit: int = 5,
@@ -201,45 +238,24 @@ async def get_related_products(
     Returns:
         Dict with related products and relationship info.
     """
-    if relationship_types is None:
-        relationship_types = ["SIMILAR_TO", "IN_CATEGORY", "MADE_BY", "BOUGHT_TOGETHER"]
+    types = list(relationship_types) if relationship_types else list(RELATED_BRANCHES)
+    unknown = [t for t in types if t not in RELATED_BRANCHES]
+    if unknown:
+        # Relationship types cannot be parameterised in Cypher, so anything
+        # that reaches the query body must come from this closed allow-list.
+        raise ValueError(
+            f"Unsupported relationship type(s): {unknown}. Allowed: {sorted(RELATED_BRANCHES)}"
+        )
 
-    # Build relationship pattern
-    rel_patterns = "|".join(relationship_types)
+    branches = "\n\n        UNION\n\n".join(RELATED_BRANCHES[t] for t in types)
 
     cypher = f"""
     MATCH (source:Product)
     WHERE source.id = $product_id OR elementId(source) = $product_id
 
-    // Find related through various paths
+    // Find related through the requested paths
     CALL (source) {{
-        MATCH (source)-[:IN_CATEGORY]->(c)<-[:IN_CATEGORY]-(related:Product)
-        WHERE related <> source AND related.in_stock = true
-        RETURN related, 'Same category: ' + c.name as relationship, 2 as weight
-
-        UNION
-
-        MATCH (source)-[:MADE_BY]->(b)<-[:MADE_BY]-(related:Product)
-        WHERE related <> source AND related.in_stock = true
-        RETURN related, 'Same brand: ' + b.name as relationship, 2 as weight
-
-        UNION
-
-        MATCH (source)-[:SIMILAR_TO]-(related:Product)
-        WHERE related.in_stock = true
-        RETURN related, 'Similar product' as relationship, 3 as weight
-
-        UNION
-
-        MATCH (source)-[:BOUGHT_TOGETHER]-(related:Product)
-        WHERE related.in_stock = true
-        RETURN related, 'Frequently bought together' as relationship, 4 as weight
-
-        UNION
-
-        MATCH (source)-[:HAS_ATTRIBUTE]->(a)<-[:HAS_ATTRIBUTE]-(related:Product)
-        WHERE related <> source AND related.in_stock = true
-        RETURN related, 'Shared attribute: ' + a.name as relationship, 1 as weight
+        {branches}
     }}
 
     WITH related, relationship, weight
@@ -254,7 +270,7 @@ async def get_related_products(
     LIMIT $limit
     """
 
-    result = await client.graph.execute_read(cypher, {"product_id": product_id, "limit": limit})
+    result = await client.query.cypher(cypher, {"product_id": product_id, "limit": limit})
 
     return {
         "source_product_id": product_id,
@@ -270,7 +286,7 @@ async def get_related_products(
 
 
 async def get_bought_together(
-    client: "MemoryClient",
+    client: MemoryClient,
     product_id: str,
     limit: int = 3,
 ) -> dict:
@@ -298,7 +314,7 @@ async def get_bought_together(
     LIMIT $limit
     """
 
-    result = await client.graph.execute_read(cypher, {"product_id": product_id, "limit": limit})
+    result = await client.query.cypher(cypher, {"product_id": product_id, "limit": limit})
 
     return {
         "source_product_id": product_id,
@@ -314,7 +330,7 @@ async def get_bought_together(
 
 
 async def explain_product_connection(
-    client: "MemoryClient",
+    client: MemoryClient,
     product_id_1: str,
     product_id_2: str,
     max_hops: int = 4,
@@ -363,7 +379,7 @@ async def explain_product_connection(
     """
 
     try:
-        result = await client.graph.execute_read(
+        result = await client.query.cypher(
             cypher,
             {"id1": product_id_1, "id2": product_id_2, "max_hops": max_hops},
         )
@@ -404,7 +420,7 @@ async def explain_product_connection(
            collect(DISTINCT b.name) as shared_brands
     """
 
-    result = await client.graph.execute_read(cypher, {"id1": product_id_1, "id2": product_id_2})
+    result = await client.query.cypher(cypher, {"id1": product_id_1, "id2": product_id_2})
 
     if result:
         r = result[0]

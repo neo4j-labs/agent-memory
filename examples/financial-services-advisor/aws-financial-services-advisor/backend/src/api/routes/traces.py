@@ -78,7 +78,7 @@ async def get_session_traces(
 
     except Exception as e:
         logger.error(f"Error fetching traces for session {session_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/detail/{trace_id}")
@@ -99,9 +99,7 @@ async def get_trace_detail(trace_id: str) -> dict[str, Any]:
             "outcome": trace.outcome,
             "success": trace.success,
             "started_at": trace.started_at.isoformat() if trace.started_at else None,
-            "completed_at": trace.completed_at.isoformat()
-            if trace.completed_at
-            else None,
+            "completed_at": trace.completed_at.isoformat() if trace.completed_at else None,
             "steps": [
                 {
                     "id": str(s.id),
@@ -131,4 +129,4 @@ async def get_trace_detail(trace_id: str) -> dict[str, Any]:
         raise
     except Exception as e:
         logger.error(f"Error fetching trace {trace_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e

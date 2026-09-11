@@ -1,6 +1,6 @@
-import { Box, Flex, Text, Badge } from '@chakra-ui/react'
-import { motion } from 'framer-motion'
-import { LuDatabase, LuSearch, LuSave } from 'react-icons/lu'
+import { Badge, Flex, Text } from '@chakra-ui/react'
+import { motion } from 'motion/react'
+import { LuDatabase, LuSave, LuSearch } from 'react-icons/lu'
 
 interface MemoryAccessIndicatorProps {
   operation: string
@@ -8,9 +8,14 @@ interface MemoryAccessIndicatorProps {
   query?: string
 }
 
-export default function MemoryAccessIndicator({ operation, tool, query }: MemoryAccessIndicatorProps) {
+/** One read from or write to agent memory, as reported by the backend. */
+export default function MemoryAccessIndicator({
+  operation,
+  tool,
+  query,
+}: MemoryAccessIndicatorProps) {
   const isSearch = operation === 'search'
-  const color = isSearch ? 'blue' : 'green'
+  const palette = isSearch ? 'brand' : 'green'
   const Icon = isSearch ? LuSearch : LuSave
 
   return (
@@ -24,16 +29,25 @@ export default function MemoryAccessIndicator({ operation, tool, query }: Memory
         gap={1.5}
         p={1.5}
         borderRadius="md"
-        border="1px solid"
-        borderColor={`${color}.200`}
-        bg={`${color}.50`}
+        borderWidth="1px"
+        colorPalette={palette}
+        borderColor="colorPalette.emphasized"
+        bg="colorPalette.subtle"
         fontSize="xs"
       >
         <LuDatabase size={12} />
         <Icon size={10} />
-        <Badge size="sm" colorPalette={color}>{operation}</Badge>
-        <Text fontFamily="mono" color={`${color}.700`}>{tool}</Text>
-        {query && <Text color="gray.500" truncate maxW="150px">{query}</Text>}
+        <Badge size="sm" colorPalette={palette}>
+          {operation}
+        </Badge>
+        <Text fontFamily="mono" color="colorPalette.fg">
+          {tool}
+        </Text>
+        {query && (
+          <Text color="fg.muted" truncate maxW="150px">
+            {query}
+          </Text>
+        )}
       </Flex>
     </motion.div>
   )

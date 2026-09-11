@@ -1,18 +1,24 @@
 """Supervisor Agent for orchestrating financial compliance investigations.
 
-This agent coordinates multi-agent investigations by delegating tasks
-to specialized agents (KYC, AML, Relationship, Compliance) and
-synthesizing their findings.
+Coordinates multi-agent investigations by delegating to the specialists (KYC,
+AML, Relationship, Compliance) via ADK's ``sub_agents`` and synthesising their
+findings.
+
+Memory: the supervisor gets ADK's ``load_memory`` for reads (served by
+``Neo4jMemoryService`` on the ``Runner``) and one write tool that records
+findings as ``:Fact`` nodes.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from google.adk.agents import LlmAgent
-from google.adk.tools import FunctionTool
+from google.adk.tools import FunctionTool, load_memory
 
+from ..config import get_settings
+from ._base import DEFAULT_MODEL
 from .aml_agent import create_aml_agent
 from .compliance_agent import create_compliance_agent
 from .kyc_agent import create_kyc_agent
@@ -29,29 +35,30 @@ logger = logging.getLogger(__name__)
 _supervisor_agent: LlmAgent | None = None
 _memory_service: FinancialMemoryService | None = None
 _neo4j_service: Neo4jDomainService | None = None
+_model: str | None = None
+
+SUPERVISOR_DESCRIPTION = (
+    "Senior Financial Compliance Supervisor that orchestrates "
+    "comprehensive investigations by coordinating KYC, AML, "
+    "relationship analysis, and compliance screening."
+)
 
 
 def create_supervisor_agent(
     memory_service: FinancialMemoryService | None = None,
-    model: str = "gemini-2.5-flash",
+    model: str = DEFAULT_MODEL,
     neo4j_service: Neo4jDomainService | None = None,
 ) -> LlmAgent:
     """Create the Supervisor Agent that orchestrates investigations.
 
-    The supervisor uses Google ADK's sub_agents feature to delegate
-    tasks to specialized agents for KYC, AML, relationship analysis,
-    and compliance screening.
-
     Args:
         memory_service: Memory service for context graph access.
-        model: The Gemini model to use.
+        model: The Gemini model to use (propagated to every sub-agent).
         neo4j_service: Domain data service for Neo4j queries.
 
     Returns:
         Configured Supervisor Agent with sub-agents.
     """
-    # Create specialized sub-agents, passing neo4j_service so their
-    # tools can query domain data from Neo4j
     kyc_agent = create_kyc_agent(memory_service, model, neo4j_service=neo4j_service)
     aml_agent = create_aml_agent(memory_service, model, neo4j_service=neo4j_service)
     relationship_agent = create_relationship_agent(
@@ -59,38 +66,16 @@ def create_supervisor_agent(
     )
     compliance_agent = create_compliance_agent(memory_service, model, neo4j_service=neo4j_service)
 
-    # Memory tools for the supervisor
-    tools = []
+    tools: list[object] = []
 
-    if memory_service:
-
-        async def search_investigation_context(
-            query: str,
-            limit: int = 10,
-        ) -> list[dict[str, Any]]:
-            """Search the context graph for relevant investigation information.
-
-            Use this to find prior investigations, known entities, or
-            previously identified risks.
-
-            Args:
-                query: Search query for relevant context.
-                limit: Maximum number of results.
-
-            Returns:
-                List of relevant memory entries.
-            """
-            return await memory_service.search_context(query, limit=limit)
+    if memory_service is not None:
 
         async def store_investigation_finding(
             content: str,
             customer_id: str | None = None,
             risk_level: str = "MEDIUM",
         ) -> str:
-            """Store an investigation finding or conclusion.
-
-            Use this to record important findings, risk assessments,
-            or recommendations for the audit trail.
+            """Record an investigation finding or conclusion for the audit trail.
 
             Args:
                 content: The finding to store.
@@ -102,7 +87,7 @@ def create_supervisor_agent(
             """
             return await memory_service.store_finding(
                 content=content,
-                category="investigation",
+                category="investigation_finding",
                 metadata={
                     "customer_id": customer_id,
                     "risk_level": risk_level,
@@ -110,72 +95,61 @@ def create_supervisor_agent(
                 },
             )
 
-        async def get_conversation_history(
-            session_id: str,
-            limit: int = 20,
-        ) -> list[dict[str, Any]]:
-            """Get the conversation history for context.
+        # `load_memory` is ADK's built-in memory search, served by the
+        # Neo4jMemoryService passed to Runner(memory_service=...).
+        tools.extend([load_memory, FunctionTool(store_investigation_finding)])
 
-            Args:
-                session_id: The session identifier.
-                limit: Maximum messages to retrieve.
-
-            Returns:
-                List of conversation messages.
-            """
-            entries = await memory_service.get_conversation_history(session_id, limit)
-            return [{"content": e.content, "type": e.memory_type} for e in entries]
-
-        tools.extend(
-            [
-                FunctionTool(search_investigation_context),
-                FunctionTool(store_investigation_finding),
-                FunctionTool(get_conversation_history),
-            ]
-        )
-
-    # Create the supervisor with sub-agents
     supervisor = LlmAgent(
         name="financial_advisor_supervisor",
         model=model,
-        description=(
-            "Senior Financial Compliance Supervisor that orchestrates "
-            "comprehensive investigations by coordinating KYC, AML, "
-            "relationship analysis, and compliance screening."
-        ),
+        description=SUPERVISOR_DESCRIPTION,
         instruction=SUPERVISOR_INSTRUCTION,
         sub_agents=[kyc_agent, aml_agent, relationship_agent, compliance_agent],
         tools=tools,
     )
 
-    logger.info("Supervisor Agent created with sub-agents")
+    logger.info("Supervisor Agent created (model=%s)", model)
     return supervisor
 
 
 def get_supervisor_agent(
     memory_service: FinancialMemoryService | None = None,
     neo4j_service: Neo4jDomainService | None = None,
+    model: str | None = None,
 ) -> LlmAgent:
     """Get or create the global Supervisor Agent instance.
+
+    The model id comes from ``VERTEX_AI_MODEL_ID`` (via settings) unless an
+    explicit ``model`` is passed, so changing that variable really does change
+    the model in use — across the supervisor and all four specialists.
 
     Args:
         memory_service: Memory service for context graph access.
             Required on first call.
         neo4j_service: Domain data service for Neo4j queries.
+        model: Optional explicit Gemini model id override.
 
     Returns:
         Supervisor Agent instance.
     """
-    global _supervisor_agent, _memory_service, _neo4j_service
+    global _supervisor_agent, _memory_service, _neo4j_service, _model
+
+    resolved_model = model or get_settings().vertex_ai.model_id
 
     if (
         _supervisor_agent is None
         or (memory_service and memory_service != _memory_service)
         or (neo4j_service and neo4j_service != _neo4j_service)
+        or resolved_model != _model
     ):
         _memory_service = memory_service or _memory_service
         _neo4j_service = neo4j_service or _neo4j_service
-        _supervisor_agent = create_supervisor_agent(_memory_service, neo4j_service=_neo4j_service)
+        _model = resolved_model
+        _supervisor_agent = create_supervisor_agent(
+            _memory_service,
+            resolved_model,
+            neo4j_service=_neo4j_service,
+        )
 
     return _supervisor_agent
 
@@ -183,9 +157,10 @@ def get_supervisor_agent(
 def reset_supervisor_agent() -> None:
     """Reset the global supervisor agent instance.
 
-    Useful for testing or when memory service changes.
+    Useful for testing or when the memory service changes.
     """
-    global _supervisor_agent, _memory_service, _neo4j_service
+    global _supervisor_agent, _memory_service, _neo4j_service, _model
     _supervisor_agent = None
     _memory_service = None
     _neo4j_service = None
+    _model = None

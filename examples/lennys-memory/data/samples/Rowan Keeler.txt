@@ -1,0 +1,32 @@
+Host (00:00:00):
+Welcome back to the show. My guest today is Rowan Keeler, who leads product at Northwind Logistics in Rotterdam. Rowan, thanks for coming on.
+
+Rowan Keeler (00:00:18):
+Thanks for having me. I have been looking forward to this since we met at the conference in Berlin.
+
+Host (00:00:31):
+Let's start where everyone wants to start: product-market fit. Northwind pivoted twice before it worked.
+
+Rowan Keeler (00:00:44):
+We did. The first version was a dashboard for warehouse managers. It demoed beautifully and nobody renewed. The lesson was that a dashboard is not a job to be done.
+
+(00:01:12):
+The second version shipped as an alerting product, and that is when retention finally moved. We went from twelve percent monthly retention to sixty-one percent in two quarters.
+
+Host (00:01:40):
+What did you change about how you hired during that period?
+
+Rowan Keeler (00:01:51):
+We stopped hiring for pedigree. Our best product manager came from a freight brokerage in Hamburg and had never worked at a software company. She understood the customer better than any of us.
+
+Host (00:02:20):
+You have written about the "two-week rule" for roadmaps. Explain that.
+
+Rowan Keeler (00:02:29):
+Nothing goes on the roadmap unless someone can ship a slice of it in two weeks. If a project cannot be sliced, we do not understand it yet. That one rule killed more bad ideas than any review process we ever ran.
+
+Host (00:03:05):
+Last question. What is the advice you would give a founder in their first year?
+
+Rowan Keeler (00:03:14):
+Talk to fifty customers before you write a line of code, and write down what you expected them to say before each call. The gap between your prediction and their answer is where the company is.

@@ -28,6 +28,16 @@ export interface StreamResult {
   traceId: string | null;
 }
 
+/**
+ * Everything a caller needs once the stream has finished, returned from
+ * `startStream` so the chat can append the assistant turn directly instead of
+ * reacting to state changes in an effect.
+ */
+export interface StreamOutcome extends StreamResult {
+  response: string;
+  agentStates: Map<string, AgentState>;
+}
+
 export function useAgentStream() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [activeAgent, setActiveAgent] = useState<string | null>(null);
@@ -76,7 +86,7 @@ export function useAgentStream() {
       sessionId?: string,
       customerId?: string,
       investigationId?: string,
-    ) => {
+    ): Promise<StreamOutcome | null> => {
       setIsStreaming(true);
       setActiveAgent(null);
       setFinalResponse(null);
@@ -85,6 +95,13 @@ export function useAgentStream() {
       setDelegationChain([]);
       agentStatesRef.current = new Map();
       setAgentStates(new Map());
+
+      // Collected inside the event callback; a holder object keeps the types
+      // honest across the `await` below.
+      const collected: { response: string; result: StreamResult | null } = {
+        response: "",
+        result: null,
+      };
 
       try {
         await streamChatMessage(
@@ -168,17 +185,19 @@ export function useAgentStream() {
                 break;
 
               case "response":
+                collected.response = event.content;
                 setFinalResponse(event.content);
                 break;
 
               case "done":
-                setStreamResult({
+                collected.result = {
                   sessionId: event.session_id,
                   agentsConsulted: event.agents_consulted,
                   toolCallCount: event.tool_call_count,
                   totalDurationMs: event.total_duration_ms,
                   traceId: event.trace_id ?? null,
-                });
+                };
+                setStreamResult(collected.result);
                 setActiveAgent(null);
                 break;
 
@@ -190,9 +209,17 @@ export function useAgentStream() {
         );
       } catch (err) {
         setError(err instanceof Error ? err.message : "Stream failed");
+        return null;
       } finally {
         setIsStreaming(false);
       }
+
+      if (!collected.result) return null;
+      return {
+        ...collected.result,
+        response: collected.response,
+        agentStates: new Map(agentStatesRef.current),
+      };
     },
     [updateAgent],
   );

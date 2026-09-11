@@ -16,6 +16,7 @@ export default function Home() {
     threadId,
     isStreaming,
     error,
+    memoryVersion,
     sendMessage,
     startNewConversation,
     clearError,
@@ -63,6 +64,8 @@ export default function Home() {
         <MemoryContextPanel
           isVisible={isMobile ? mobileConfigOpen : true}
           onClose={() => setMobileConfigOpen(false)}
+          threadId={threadId}
+          memoryVersion={memoryVersion}
         />
 
         {/* Mobile FAB to open agent config */}

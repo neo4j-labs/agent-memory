@@ -1,13 +1,23 @@
-"""Investigation API routes."""
+"""Investigation API routes.
+
+Investigations are **persisted in Neo4j**, not in a process-local dict: a
+regulator-facing audit trail that disappears on restart (or differs per Cloud
+Run instance) is the wrong lesson for this app. Reads and writes go through
+:class:`Neo4jDomainService`.
+
+The audit trail is a projection of the reasoning trace recorded while the
+multi-agent run executed — the same ``ReasoningTrace``/``ReasoningStep``/
+``ToolCall`` chain that ``/api/traces`` serves.
+"""
 
 from __future__ import annotations
 
 import logging
 import re
 import time
-import uuid
 from datetime import datetime
 from typing import Any
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from google.adk.runners import Runner
@@ -16,53 +26,109 @@ from google.genai import types
 
 from ...agents.supervisor import get_supervisor_agent
 from ...models.investigation import (
-    AgentFinding,
     AuditTrailEntry,
     Investigation,
     InvestigationCreate,
     InvestigationStatus,
     InvestigationType,
 )
+from ...services.adk_events import collect_run
 from ...services.memory_service import (
     FinancialMemoryService,
     get_initialized_memory_service,
 )
+from ...services.neo4j_service import Neo4jDomainService
+from ...services.trace_writer import TraceWriter
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/investigations", tags=["investigations"])
 
-# ADK session service (in-memory for agent state, separate from investigation persistence)
+APP_NAME = "financial_advisor"
+
+# ADK session service (agent state only — investigation state lives in Neo4j).
 session_service = InMemorySessionService()
 
-# In-memory cache for investigations not yet in Neo4j (fallback)
-_investigations: dict[str, Investigation] = {}
+
+def _require_neo4j_service(request: Request) -> Neo4jDomainService:
+    """Get the domain service from app state or fail with 503."""
+    service = getattr(request.app.state, "neo4j_service", None)
+    if service is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Neo4j service not available — investigations are persisted in Neo4j.",
+        )
+    return service
 
 
-def _get_neo4j_service(request):
-    """Get Neo4jDomainService from app state."""
-    svc = getattr(request.app.state, "neo4j_service", None)
-    return svc
+def _as_datetime(value: Any) -> datetime | None:
+    """Convert a Neo4j temporal (or ISO string) to a Python datetime."""
+    if value is None:
+        return None
+    to_native = getattr(value, "to_native", None)
+    if callable(to_native):
+        native = to_native()
+        return native if isinstance(native, datetime) else None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _enum_or_default(enum_cls: Any, value: Any, default: Any) -> Any:
+    """Coerce a stored string into an enum member, falling back to a default."""
+    if value is None:
+        return default
+    try:
+        return enum_cls(str(value).lower())
+    except ValueError:
+        return default
+
+
+def _to_investigation(record: dict[str, Any]) -> Investigation:
+    """Map a persisted Investigation node onto the API model."""
+    return Investigation(
+        id=record["id"],
+        customer_id=record.get("customer_id", ""),
+        type=_enum_or_default(
+            InvestigationType, record.get("type"), InvestigationType.COMPREHENSIVE
+        ),
+        reason=record.get("reason") or record.get("title") or record.get("trigger") or "",
+        status=_enum_or_default(
+            InvestigationStatus, record.get("status"), InvestigationStatus.PENDING
+        ),
+        priority=record.get("priority") or "normal",
+        overall_risk_level=record.get("overall_risk_level"),
+        summary=record.get("summary"),
+        agents_consulted=list(record.get("agents_consulted") or []),
+        assigned_to=record.get("assigned_to"),
+        reviewed_by=record.get("reviewed_by"),
+        created_at=_as_datetime(record.get("created_at")) or datetime.now(),
+        started_at=_as_datetime(record.get("started_at")),
+        completed_at=_as_datetime(record.get("completed_at")),
+        session_id=record.get("session_id"),
+    )
 
 
 @router.get("", response_model=list[Investigation])
 async def list_investigations(
+    raw_request: Request,
     status: InvestigationStatus | None = Query(None),
     customer_id: str | None = Query(None),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
 ) -> list[Investigation]:
-    """List all investigations with optional filtering."""
-    investigations = list(_investigations.values())
-
-    if status:
-        investigations = [i for i in investigations if i.status == status]
-    if customer_id:
-        investigations = [i for i in investigations if i.customer_id == customer_id]
-
-    # Sort by created_at descending
-    investigations.sort(key=lambda x: x.created_at, reverse=True)
-
-    return investigations[offset : offset + limit]
+    """List persisted investigations with optional filtering."""
+    neo4j_service = _require_neo4j_service(raw_request)
+    records = await neo4j_service.list_investigations(
+        status=status.value if status else None,
+        customer_id=customer_id,
+        limit=limit + offset,
+    )
+    return [_to_investigation(record) for record in records[offset : offset + limit]]
 
 
 @router.post("", response_model=Investigation)
@@ -71,66 +137,66 @@ async def create_investigation(
     raw_request: Request,
 ) -> Investigation:
     """Create a new investigation."""
-    # Validate customer exists in Neo4j
-    neo4j_service = getattr(raw_request.app.state, "neo4j_service", None)
-    if neo4j_service:
-        customer = await neo4j_service.get_customer(request.customer_id)
-        if not customer:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Customer {request.customer_id} not found",
-            )
+    neo4j_service = _require_neo4j_service(raw_request)
 
-    investigation_id = f"INV-{uuid.uuid4().hex[:8].upper()}"
-    session_id = f"inv-session-{investigation_id}"
+    customer = await neo4j_service.get_customer(request.customer_id)
+    if not customer:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Customer {request.customer_id} not found",
+        )
 
-    investigation = Investigation(
-        id=investigation_id,
-        customer_id=request.customer_id,
-        type=request.type,
-        reason=request.reason,
-        priority=request.priority,
-        assigned_to=request.assigned_to,
-        status=InvestigationStatus.PENDING,
-        session_id=session_id,
-        audit_trail=[
-            AuditTrailEntry(
-                action="CREATED",
-                details=f"Investigation created: {request.reason}",
-            )
-        ],
+    record = await neo4j_service.create_investigation(
+        {
+            "customer_id": request.customer_id,
+            "title": request.reason,
+            "reason": request.reason,
+            "description": f"Type: {request.type.value}, Priority: {request.priority}",
+            "trigger": request.reason,
+            "type": request.type.value,
+            "status": InvestigationStatus.PENDING.value,
+            "priority": request.priority,
+            "assigned_to": request.assigned_to,
+        }
     )
 
-    _investigations[investigation_id] = investigation
+    investigation_id = record["id"]
+    session_id = f"inv-session-{investigation_id}"
+    record = (
+        await neo4j_service.update_investigation(investigation_id, {"session_id": session_id})
+        or record
+    )
 
-    # Also persist to Neo4j
-    neo4j_service = _get_neo4j_service(raw_request)
-    if neo4j_service:
-        try:
-            await neo4j_service.create_investigation({
-                "id": investigation_id,
-                "customer_id": request.customer_id,
-                "title": request.reason,
-                "description": f"Type: {request.type.value}, Priority: {request.priority}",
-                "trigger": request.reason,
-                "priority": request.priority,
-            })
-        except Exception as e:
-            logger.warning(f"Failed to persist investigation to Neo4j: {e}")
-
-    logger.info(f"Created investigation {investigation_id}")
-    return investigation
+    logger.info("Created investigation %s", investigation_id)
+    return _to_investigation(record)
 
 
 @router.get("/{investigation_id}", response_model=Investigation)
-async def get_investigation(investigation_id: str) -> Investigation:
+async def get_investigation(investigation_id: str, raw_request: Request) -> Investigation:
     """Get a specific investigation."""
-    if investigation_id not in _investigations:
+    neo4j_service = _require_neo4j_service(raw_request)
+    record = await neo4j_service.get_investigation(investigation_id)
+    if record is None:
         raise HTTPException(
             status_code=404,
             detail=f"Investigation {investigation_id} not found",
         )
-    return _investigations[investigation_id]
+    return _to_investigation(record)
+
+
+def _parse_risk_level(response_text: str) -> str:
+    """Extract a risk level from the supervisor's summary.
+
+    Word-boundary matching, so "FOLLOW" does not read as "LOW".
+    """
+    response_upper = response_text.upper()
+    if re.search(r"\bCRITICAL\b", response_upper):
+        return "CRITICAL"
+    if re.search(r"\bHIGH\b", response_upper):
+        return "HIGH"
+    if re.search(r"\bLOW\b", response_upper):
+        return "LOW"
+    return "MEDIUM"
 
 
 @router.post("/{investigation_id}/start")
@@ -141,52 +207,36 @@ async def start_investigation(
 ) -> dict[str, Any]:
     """Start a multi-agent investigation.
 
-    This triggers the supervisor agent to orchestrate the investigation
-    by delegating to KYC, AML, Relationship, and Compliance agents.
+    Triggers the supervisor agent to orchestrate the investigation by
+    delegating to the KYC, AML, Relationship and Compliance agents, and records
+    the whole run as a reasoning trace attached to the investigation.
     """
-    if investigation_id not in _investigations:
+    neo4j_service = _require_neo4j_service(raw_request)
+    record = await neo4j_service.get_investigation(investigation_id)
+    if record is None:
         raise HTTPException(
             status_code=404,
             detail=f"Investigation {investigation_id} not found",
         )
 
-    investigation = _investigations[investigation_id]
-
-    if investigation.status not in [
+    investigation = _to_investigation(record)
+    if investigation.status not in (
         InvestigationStatus.PENDING,
         InvestigationStatus.IN_PROGRESS,
-    ]:
+    ):
         raise HTTPException(
             status_code=400,
-            detail=f"Investigation is {investigation.status}, cannot start",
+            detail=f"Investigation is {investigation.status.value}, cannot start",
         )
 
     start_time = time.time()
-
-    # Update status
-    investigation.status = InvestigationStatus.IN_PROGRESS
-    investigation.started_at = datetime.now()
-    investigation.audit_trail.append(
-        AuditTrailEntry(
-            action="STARTED",
-            details="Multi-agent investigation initiated",
-        )
+    session_id = investigation.session_id or f"inv-session-{investigation_id}"
+    await neo4j_service.update_investigation(
+        investigation_id,
+        {"status": InvestigationStatus.IN_PROGRESS.value, "session_id": session_id},
     )
 
-    try:
-        # Get the supervisor agent (with neo4j_service for tool bindings)
-        neo4j_service = getattr(raw_request.app.state, "neo4j_service", None)
-        supervisor = get_supervisor_agent(memory_service, neo4j_service=neo4j_service)
-
-        # Create session
-        session = await session_service.create_session(
-            app_name="financial_advisor",
-            user_id="investigator",
-            session_id=investigation.session_id,
-        )
-
-        # Build investigation prompt
-        prompt = f"""Conduct a comprehensive {investigation.type.value} investigation for customer {investigation.customer_id}.
+    prompt = f"""Conduct a comprehensive {investigation.type.value} investigation for customer {investigation.customer_id}.
 
 Reason for investigation: {investigation.reason}
 Priority: {investigation.priority}
@@ -200,106 +250,160 @@ Please:
 
 Begin the investigation now."""
 
-        # Create runner and execute
+    trace = TraceWriter(memory_service, session_id)
+
+    try:
+        supervisor = get_supervisor_agent(memory_service, neo4j_service=neo4j_service)
+        await session_service.create_session(
+            app_name=APP_NAME,
+            user_id="investigator",
+            session_id=session_id,
+        )
         runner = Runner(
             agent=supervisor,
-            app_name="financial_advisor",
+            app_name=APP_NAME,
             session_service=session_service,
+            memory_service=memory_service.adk_memory_service,
         )
 
-        # Run the investigation (run_async returns an async generator of events)
-        response_text = ""
-        agents_consulted = set()
-        tool_calls = []
+        stored = await memory_service.store_message(session_id, "user", prompt)
+        await trace.start(
+            f"{investigation.type.value} investigation of {investigation.customer_id}",
+            triggered_by_message_id=stored.id,
+        )
 
-        async for event in runner.run_async(
-            user_id="investigator",
-            session_id=investigation.session_id,
-            new_message=types.Content(
-                role="user",
-                parts=[types.Part(text=prompt)],
-            ),
-        ):
-            if hasattr(event, "content") and event.content and event.content.parts:
-                for part in event.content.parts:
-                    if hasattr(part, "text") and part.text:
-                        response_text += part.text
-            if hasattr(event, "agent_name"):
-                agents_consulted.add(event.agent_name)
-            if hasattr(event, "tool_calls") and event.tool_calls:
-                for tc in event.tool_calls:
-                    tool_calls.append(
-                        {
-                            "tool": tc.name,
-                            "agent": getattr(event, "agent_name", "unknown"),
-                        }
-                    )
-                    investigation.audit_trail.append(
-                        AuditTrailEntry(
-                            action="TOOL_CALL",
-                            agent=getattr(event, "agent_name", None),
-                            tool_used=tc.name,
-                            details=f"Called {tc.name}",
-                        )
-                    )
-
-        # Parse risk level from response (word-boundary match to avoid
-        # false positives like "FOLLOW" matching "LOW")
-        response_upper = response_text.upper()
-        risk_level = "MEDIUM"
-        if re.search(r"\bCRITICAL\b", response_upper):
-            risk_level = "CRITICAL"
-        elif re.search(r"\bHIGH\b", response_upper):
-            risk_level = "HIGH"
-        elif re.search(r"\bLOW\b", response_upper):
-            risk_level = "LOW"
-
-        # Update investigation
-        investigation.status = InvestigationStatus.COMPLETED
-        investigation.completed_at = datetime.now()
-        investigation.overall_risk_level = risk_level
-        investigation.summary = response_text[:2000]  # Truncate if too long
-        investigation.agents_consulted = list(agents_consulted)
-
-        investigation.audit_trail.append(
-            AuditTrailEntry(
-                action="COMPLETED",
-                details=f"Investigation completed. Risk level: {risk_level}",
+        try:
+            summary = await collect_run(
+                runner,
+                user_id="investigator",
+                session_id=session_id,
+                new_message=types.Content(role="user", parts=[types.Part(text=prompt)]),
             )
-        )
+        finally:
+            await runner.close()
+
+        for run_event in summary.events:
+            await trace.handle(run_event)
+
+        response_text = summary.response_text or "Investigation complete."
+        await memory_service.store_message(session_id, "assistant", response_text)
 
         duration = time.time() - start_time
+        risk_level = _parse_risk_level(response_text)
+        await trace.complete(
+            summary=response_text,
+            success=True,
+            duration_ms=int(duration * 1000),
+        )
+
+        await neo4j_service.update_investigation(
+            investigation_id,
+            {
+                "status": InvestigationStatus.COMPLETED.value,
+                "overall_risk_level": risk_level,
+                "summary": response_text[:2000],
+                "agents_consulted": summary.agents_consulted,
+                "trace_id": str(trace.trace_id) if trace.trace_id else None,
+            },
+        )
 
         return {
             "investigation_id": investigation_id,
-            "status": investigation.status,
+            "status": InvestigationStatus.COMPLETED.value,
             "overall_risk_level": risk_level,
-            "summary": investigation.summary,
-            "agents_consulted": list(agents_consulted),
-            "tool_calls_count": len(tool_calls),
+            "summary": response_text[:2000],
+            "agents_consulted": summary.agents_consulted,
+            "tool_calls_count": len(summary.tool_calls),
+            "trace_id": str(trace.trace_id) if trace.trace_id else None,
             "duration_seconds": round(duration, 2),
         }
 
-    except Exception as e:
-        logger.error(f"Investigation error: {e}", exc_info=True)
-
-        investigation.audit_trail.append(
-            AuditTrailEntry(
-                action="ERROR",
-                details=str(e),
-            )
+    except Exception as exc:
+        logger.error("Investigation error: %s", exc, exc_info=True)
+        await trace.complete(
+            summary=str(exc),
+            success=False,
+            duration_ms=int((time.time() - start_time) * 1000),
+            error_kind=type(exc).__name__,
         )
-
-        raise HTTPException(status_code=500, detail=str(e))
+        await neo4j_service.update_investigation(
+            investigation_id,
+            {"status": InvestigationStatus.ESCALATED.value, "summary": f"Error: {exc}"[:2000]},
+        )
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/{investigation_id}/audit-trail", response_model=list[AuditTrailEntry])
-async def get_audit_trail(investigation_id: str) -> list[AuditTrailEntry]:
-    """Get the audit trail for an investigation."""
-    if investigation_id not in _investigations:
+async def get_audit_trail(
+    investigation_id: str,
+    raw_request: Request,
+    memory_service: FinancialMemoryService = Depends(get_initialized_memory_service),
+) -> list[AuditTrailEntry]:
+    """Get the audit trail for an investigation.
+
+    Projected from the persisted reasoning trace: one entry per step, plus one
+    per tool call, so the trail shows which agent used which tool and what it
+    observed.
+    """
+    neo4j_service = _require_neo4j_service(raw_request)
+    record = await neo4j_service.get_investigation(investigation_id)
+    if record is None:
         raise HTTPException(
             status_code=404,
             detail=f"Investigation {investigation_id} not found",
         )
 
-    return _investigations[investigation_id].audit_trail
+    entries: list[AuditTrailEntry] = [
+        AuditTrailEntry(
+            timestamp=_as_datetime(record.get("created_at")) or datetime.now(),
+            action="CREATED",
+            details=record.get("reason") or record.get("title"),
+        )
+    ]
+
+    trace_id = record.get("trace_id")
+    if not trace_id:
+        return entries
+
+    trace = await memory_service.client.reasoning.get_trace_with_steps(UUID(str(trace_id)))
+    if trace is None:
+        return entries
+
+    entries.append(
+        AuditTrailEntry(
+            timestamp=trace.started_at or datetime.now(),
+            action="STARTED",
+            details=trace.task,
+        )
+    )
+    for step in trace.steps:
+        entries.append(
+            AuditTrailEntry(
+                timestamp=step.created_at,
+                action="REASONING_STEP",
+                details=step.thought or step.action,
+                result_summary=step.observation,
+            )
+        )
+        for tool_call in step.tool_calls:
+            entries.append(
+                AuditTrailEntry(
+                    timestamp=tool_call.created_at,
+                    action="TOOL_CALL",
+                    agent=step.action,
+                    tool_used=tool_call.tool_name,
+                    details=f"Called {tool_call.tool_name}",
+                    result_summary=str(tool_call.result)[:300] if tool_call.result else None,
+                )
+            )
+
+    if trace.completed_at:
+        entries.append(
+            AuditTrailEntry(
+                timestamp=trace.completed_at,
+                action="COMPLETED" if trace.success else "ERROR",
+                details=trace.outcome,
+            )
+        )
+
+    return entries

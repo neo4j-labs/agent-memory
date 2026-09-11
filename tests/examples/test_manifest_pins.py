@@ -166,11 +166,6 @@ def test_every_example_manifest_is_discovered():
 
 
 @pytest.mark.syntax
-@pytest.mark.xfail(
-    strict=False,
-    reason="example manifest floors move to >=0.5.0,<0.7 in the per-example slices; "
-    "delete this marker once they have landed",
-)
 def test_every_example_manifest_pins_a_current_capped_range():
     """One report listing every manifest that is behind, instead of five separate failures."""
     problems: list[str] = []

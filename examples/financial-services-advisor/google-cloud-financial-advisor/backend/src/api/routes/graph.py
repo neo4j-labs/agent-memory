@@ -1,4 +1,10 @@
-"""Graph API routes for Context Graph queries and visualization."""
+"""Graph API routes for Context Graph queries and visualization.
+
+Every read here goes through ``MemoryClient.query.cypher``, which validates
+read-only-ness for us and works against both the bolt and the hosted (NAMS)
+backends. The Cypher itself lives in :class:`Neo4jDomainService` so it is
+unit-testable without FastAPI.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +18,7 @@ from ...services.memory_service import (
     FinancialMemoryService,
     get_initialized_memory_service,
 )
+from ...services.neo4j_service import Neo4jDomainService
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/graph", tags=["graph"])
@@ -40,6 +47,14 @@ class EntityNeighborsRequest(BaseModel):
     relationship_types: list[str] | None = None
 
 
+def _require_neo4j_service(request: Request) -> Neo4jDomainService:
+    """Fetch the domain service from app state or fail with 503."""
+    service = getattr(request.app.state, "neo4j_service", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="Neo4j service not available")
+    return service
+
+
 @router.post("/query", response_model=CypherQueryResponse)
 async def execute_cypher_query(
     request: CypherQueryRequest,
@@ -47,193 +62,83 @@ async def execute_cypher_query(
 ) -> CypherQueryResponse:
     """Execute a read-only Cypher query against the Context Graph.
 
-    Only read operations (MATCH, RETURN) are allowed.
+    ``client.query.cypher`` rejects writes itself (CREATE/MERGE/DELETE/SET/…),
+    so this route does not hand-roll a keyword blocklist. For production, back
+    it with a read-only Neo4j role as well.
     """
-    # Security check - only allow read queries
-    query_upper = request.query.upper().strip()
-    # NOTE: Demo-only blocklist. For production, use an allowlist or run
-    # queries via a read-only Neo4j user/role.
-    forbidden_keywords = [
-        "CREATE",
-        "MERGE",
-        "DELETE",
-        "REMOVE",
-        "SET",
-        "DROP",
-        "DETACH",
-        "CALL",
-        "LOAD",
-        "FOREACH",
-    ]
-
-    for keyword in forbidden_keywords:
-        if keyword in query_upper:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Write operations ({keyword}) are not allowed. Use read-only queries.",
-            )
-
     try:
-        # Execute query through the memory client
-        client = memory_service.client
-        async with client._driver.session(database=client._database) as session:
-            result = await session.run(request.query, request.parameters)
-            records = await result.data()
+        records = await memory_service.client.query.cypher(request.query, request.parameters)
+    except ValueError as exc:
+        # Raised by the read-only validator.
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error("Cypher query error: %s", exc, exc_info=True)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-        return CypherQueryResponse(
-            query=request.query,
-            results=records,
-            count=len(records),
-        )
-
-    except Exception as e:
-        logger.error(f"Cypher query error: {e}", exc_info=True)
-        raise HTTPException(status_code=400, detail=str(e))
+    return CypherQueryResponse(
+        query=request.query,
+        results=records,
+        count=len(records),
+    )
 
 
 @router.get("/neighbors/{entity_id}")
 async def get_entity_neighbors(
     entity_id: str,
+    request: Request,
     depth: int = Query(1, ge=1, le=3, description="Traversal depth"),
     limit: int = Query(50, ge=1, le=200, description="Maximum neighbors"),
-    memory_service: FinancialMemoryService = Depends(get_initialized_memory_service),
 ) -> dict[str, Any]:
-    """Get neighbors of an entity from the Context Graph.
-
-    Returns nodes and relationships for visualization.
-    """
+    """Get neighbors of a node from the Context Graph (nodes + edges)."""
+    neo4j_service = _require_neo4j_service(request)
     try:
-        # Build a query to get neighbors
-        query = """
-        MATCH path = (start)-[r*1..{depth}]-(neighbor)
-        WHERE start.id = $entity_id OR start.name = $entity_id
-        WITH start, neighbor, r, path
-        LIMIT $limit
-        RETURN
-            start.id as start_id,
-            start.name as start_name,
-            labels(start) as start_labels,
-            neighbor.id as neighbor_id,
-            neighbor.name as neighbor_name,
-            labels(neighbor) as neighbor_labels,
-            [rel in r | type(rel)] as relationship_types
-        """.replace("{depth}", str(depth))
-
-        client = memory_service.client
-        async with client._driver.session(database=client._database) as session:
-            result = await session.run(
-                query,
-                {"entity_id": entity_id, "limit": limit},
-            )
-            records = await result.data()
-
-        # Format for visualization
-        nodes = {}
-        edges = []
-
-        for record in records:
-            # Add start node
-            start_id = record["start_id"] or record["start_name"]
-            if start_id and start_id not in nodes:
-                nodes[start_id] = {
-                    "id": start_id,
-                    "label": record["start_name"] or start_id,
-                    "type": record["start_labels"][0] if record["start_labels"] else "Unknown",
-                    "isRoot": True,
-                }
-
-            # Add neighbor node
-            neighbor_id = record["neighbor_id"] or record["neighbor_name"]
-            if neighbor_id and neighbor_id not in nodes:
-                nodes[neighbor_id] = {
-                    "id": neighbor_id,
-                    "label": record["neighbor_name"] or neighbor_id,
-                    "type": record["neighbor_labels"][0]
-                    if record["neighbor_labels"]
-                    else "Unknown",
-                    "isRoot": False,
-                }
-
-            # Add edge
-            if start_id and neighbor_id and record["relationship_types"]:
-                edges.append(
-                    {
-                        "from": start_id,
-                        "to": neighbor_id,
-                        "relationship": record["relationship_types"][0]
-                        if record["relationship_types"]
-                        else "RELATED",
-                    }
-                )
-
-        return {
-            "entity_id": entity_id,
-            "depth": depth,
-            "nodes": list(nodes.values()),
-            "edges": edges,
-            "total_nodes": len(nodes),
-            "total_edges": len(edges),
-        }
-
-    except Exception as e:
-        logger.error(f"Error getting neighbors: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        return await neo4j_service.get_neighbors(entity_id, depth=depth, limit=limit)
+    except Exception as exc:
+        logger.error("Error getting neighbors: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/stats")
-async def get_graph_stats(
-    memory_service: FinancialMemoryService = Depends(get_initialized_memory_service),
-) -> dict[str, Any]:
+async def get_graph_stats(request: Request) -> dict[str, Any]:
     """Get statistics about the Context Graph."""
+    neo4j_service = _require_neo4j_service(request)
     try:
-        client = memory_service.client
-        async with client._driver.session(database=client._database) as session:
-            # Get node counts by label
-            node_result = await session.run("""
-                MATCH (n)
-                RETURN labels(n) as label, count(*) as count
-                ORDER BY count DESC
-            """)
-            node_counts = await node_result.data()
-
-            # Get relationship counts by type
-            rel_result = await session.run("""
-                MATCH ()-[r]->()
-                RETURN type(r) as type, count(*) as count
-                ORDER BY count DESC
-            """)
-            rel_counts = await rel_result.data()
-
-            # Get total counts
-            total_result = await session.run("""
-                MATCH (n) WITH count(n) as nodes
-                MATCH ()-[r]->() WITH nodes, count(r) as rels
-                RETURN nodes, rels
-            """)
-            totals = await total_result.single()
-
-        return {
-            "total_nodes": totals["nodes"] if totals else 0,
-            "total_relationships": totals["rels"] if totals else 0,
-            "nodes_by_label": {
-                r["label"][0] if r["label"] else "Unknown": r["count"] for r in node_counts
-            },
-            "relationships_by_type": {r["type"]: r["count"] for r in rel_counts},
-        }
-
-    except Exception as e:
-        logger.error(f"Error getting stats: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        return await neo4j_service.get_graph_stats()
+    except Exception as exc:
+        logger.error("Error getting stats: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/memory")
 async def get_memory_graph(
     request: Request,
-    session_id: str | None = Query(None, description="Filter by session"),
+    session_id: str | None = Query(None, description="Scope to one conversation"),
     limit: int = Query(500, ge=1, le=2000),
 ) -> dict[str, Any]:
-    """Get the full memory graph for NVL visualization."""
-    neo4j_service = getattr(request.app.state, "neo4j_service", None)
-    if neo4j_service is None:
-        raise HTTPException(status_code=503, detail="Neo4j service not available")
-    return await neo4j_service.get_memory_graph(session_id=session_id, limit=limit)
+    """Get the combined domain + memory graph for visualization."""
+    neo4j_service = _require_neo4j_service(request)
+    try:
+        return await neo4j_service.get_memory_graph(session_id=session_id, limit=limit)
+    except Exception as exc:
+        logger.error("Error building memory graph: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/audit-trail/{entity_name}")
+async def get_entity_audit_trail(
+    entity_name: str,
+    request: Request,
+    limit: int = Query(50, ge=1, le=200),
+) -> dict[str, Any]:
+    """Which reasoning steps touched this entity, and via which tool?
+
+    Backed by the ``(:ReasoningStep)-[:TOUCHED]->(:Entity)`` edges the chat
+    route writes when it records tool calls with ``touched_entities=``.
+    """
+    neo4j_service = _require_neo4j_service(request)
+    try:
+        rows = await neo4j_service.get_entity_audit_trail(entity_name, limit=limit)
+    except Exception as exc:
+        logger.error("Error building audit trail: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {"entity_name": entity_name, "steps": rows, "total": len(rows)}

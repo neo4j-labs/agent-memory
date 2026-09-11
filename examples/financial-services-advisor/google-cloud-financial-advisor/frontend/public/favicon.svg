@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Financial Advisor">
+  <rect width="32" height="32" rx="7" fill="#6366F1"/>
+  <g stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round">
+    <path d="M16 8.5 L9.5 13 M16 8.5 L22.5 13 M9.5 13 L12.5 22 M22.5 13 L19.5 22 M12.5 22 L19.5 22 M16 8.5 L16 22"/>
+  </g>
+  <g fill="#FFFFFF">
+    <circle cx="16" cy="8.5" r="3"/>
+    <circle cx="9.5" cy="13" r="2.4"/>
+    <circle cx="22.5" cy="13" r="2.4"/>
+    <circle cx="12.5" cy="22" r="2.4"/>
+    <circle cx="19.5" cy="22" r="2.4"/>
+  </g>
+</svg>

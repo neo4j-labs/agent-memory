@@ -32,8 +32,9 @@ This example application showcases the Google Cloud-Neo4j integration through a 
 - **Explainable AI**: Full audit trails for regulatory compliance (EU AI Act ready)
 - **Real-time Monitoring**: Transaction and behavior pattern detection
 - **Graph-based RAG**: Reduces hallucinations through grounded, relationship-aware retrieval
-- **Entity Deduplication**: `DeduplicationConfig` available for preventing duplicate customer entities
-- **Explicit Extraction Config**: `ExtractionConfig` for configuring entity extraction pipelines
+- **Entity Deduplication**: customer entities are auto-merged above 0.95 similarity and flagged with `SAME_AS` above 0.85 (`MEMORY_DEDUP_*`)
+- **Real Entity Extraction**: conversations are mined for `:Entity` nodes by the same Gemini model the agents use — the startup log names the resolved extractor so a silent no-op is impossible
+- **Portable Query Layer**: domain reads go through `client.query.cypher`, which is read-only validated and works on both the bolt and hosted backends
 
 ---
 
@@ -80,7 +81,6 @@ gcloud projects create my-financial-advisor --name="Financial Advisor"
 gcloud config set project my-financial-advisor
 ```
 
-<!-- ![Google Cloud Console - Create Project](docs/screenshots/gcp-create-project.png) -->
 
 #### 1.2 Enable Required APIs
 
@@ -103,7 +103,6 @@ gcloud auth application-default login
 
 This opens a browser for you to authenticate. Once complete, your credentials are stored locally and will be used by the application.
 
-<!-- ![gcloud auth login browser](docs/screenshots/gcp-auth-browser.png) -->
 
 #### 1.4 Verify Vertex AI Access
 
@@ -130,32 +129,32 @@ You have two options: **Neo4j Aura** (cloud, recommended) or **Local Neo4j** (Do
 5. **Save the password** shown - you won't see it again!
 6. Copy the **Connection URI** (looks like `neo4j+s://xxxxxxxx.databases.neo4j.io`)
 
-<!-- ![Neo4j Aura Console - Create Instance](docs/screenshots/neo4j-aura-create.png) -->
 
-<!-- ![Neo4j Aura Console - Connection Details](docs/screenshots/neo4j-aura-connection.png) -->
 
 #### Option B: Local Neo4j with Docker
 
 For local development and testing:
 
 ```bash
-# Start Neo4j with Docker
+# Start Neo4j with Docker (same image and password as docker-compose.yml)
 docker run -d \
   --name neo4j \
   -p 7474:7474 -p 7687:7687 \
-  -e NEO4J_AUTH=neo4j/password123 \
+  -e NEO4J_AUTH=neo4j/password \
   -e NEO4J_PLUGINS='["apoc"]' \
-  neo4j:5-community
+  neo4j:5.26-community
 ```
 
 Local connection details:
 - **URI**: `bolt://localhost:7687`
 - **Username**: `neo4j`
-- **Password**: `password123`
+- **Password**: `password`
+
+Or bring up Neo4j, the backend and the frontend together with
+`docker compose up -d` (see [`docker-compose.yml`](docker-compose.yml)).
 
 Access Neo4j Browser at http://localhost:7474 to verify it's running.
 
-<!-- ![Neo4j Browser - Local Instance](docs/screenshots/neo4j-browser-local.png) -->
 
 ---
 
@@ -164,7 +163,7 @@ Access Neo4j Browser at http://localhost:7474 to verify it's running.
 #### 3.1 Navigate to the Example
 
 ```bash
-cd examples/google-cloud-financial-advisor
+cd examples/financial-services-advisor/google-cloud-financial-advisor
 ```
 
 #### 3.2 Create Your Environment File
@@ -173,36 +172,48 @@ cd examples/google-cloud-financial-advisor
 cp .env.example .env
 ```
 
+`.env` belongs in **this directory** (the app root). `backend/.env` is an
+optional developer override loaded on top of it.
+
 #### 3.3 Edit `.env` with Your Credentials
 
 Open `.env` in your editor and fill in your values:
 
 ```bash
-# Google Cloud Configuration
-GOOGLE_CLOUD_PROJECT=my-financial-advisor          # Your GCP project ID
-VERTEX_AI_LOCATION=us-central1                     # Or your preferred region
-VERTEX_AI_MODEL_ID=gemini-2.5-flash               # Gemini model for agents
-VERTEX_AI_EMBEDDING_MODEL=text-embedding-004       # Embedding model
-
-# Google AI API Key (required for Gemini via Google AI Studio)
-# Get your key at https://aistudio.google.com/apikey
+# Gemini credentials — pick ONE path.
+# Option A: Google AI Studio (https://aistudio.google.com/apikey)
 GOOGLE_API_KEY=your-google-api-key
+# Option B: Vertex AI — leave GOOGLE_API_KEY unset, run
+# `gcloud auth application-default login`, and set the project:
+GOOGLE_CLOUD_PROJECT=my-financial-advisor
+# GOOGLE_GENAI_USE_VERTEXAI=true
 
-# Neo4j Configuration
-# For Aura:
+# Models
+VERTEX_AI_LOCATION=us-central1
+VERTEX_AI_MODEL_ID=gemini-2.5-flash                # supervisor + 4 specialists + extraction
+VERTEX_AI_EMBEDDING_MODEL=gemini-embedding-001     # text-embedding-004 was retired 2026-01-14
+VERTEX_AI_EMBEDDING_DIMENSIONS=768                 # truncates the native 3072 dims
+
+# Neo4j — Aura:
 NEO4J_URI=neo4j+s://xxxxxxxx.databases.neo4j.io
 NEO4J_USER=neo4j
 NEO4J_PASSWORD=your-aura-password
 
-# For Local Neo4j:
+# Neo4j — local (docker-compose / docker run above):
 # NEO4J_URI=bolt://localhost:7687
 # NEO4J_USER=neo4j
-# NEO4J_PASSWORD=password123
+# NEO4J_PASSWORD=password
 
 # Application Settings
 LOG_LEVEL=INFO
 CORS_ORIGINS=http://localhost:5173,http://localhost:3000
 ```
+
+> **Which credential does what?** The ADK agents and the entity-extraction LLM
+> both use the Gemini model above. Embeddings always go through Vertex AI, so
+> semantic search needs a GCP project with the Vertex AI API enabled even on
+> Option A. Without any Gemini credential the app still starts; the startup log
+> then names the extractor as disabled and no `:Entity` nodes are created.
 
 ---
 
@@ -236,7 +247,6 @@ npm install
 cd ..
 ```
 
-<!-- ![Terminal - make install output](docs/screenshots/terminal-make-install.png) -->
 
 ---
 
@@ -268,7 +278,6 @@ INFO:__main__:  Created customer: Global Holdings Ltd
 INFO:__main__:Done!
 ```
 
-<!-- ![Terminal - Sample data loaded](docs/screenshots/terminal-load-data.png) -->
 
 #### Verify Data in Neo4j Browser
 
@@ -280,7 +289,6 @@ MATCH (n) RETURN labels(n)[0] AS type, count(*) AS count
 
 You should see counts for Customer, Organization, and Transaction nodes.
 
-<!-- ![Neo4j Browser - Data verification](docs/screenshots/neo4j-verify-data.png) -->
 
 ---
 
@@ -314,13 +322,41 @@ npm run dev
 
 #### 6.3 Verify Services Are Running
 
-- **Frontend**: Open http://localhost:5173 - You should see the Financial Advisor dashboard
-- **API Docs**: Open http://localhost:8000/docs - Interactive API documentation
-- **Health Check**: `curl http://localhost:8000/health` should return `{"status":"healthy"}`
+- **Frontend**: Open http://localhost:5173 — the Financial Advisor dashboard
+- **API Docs**: Open http://localhost:8000/docs — interactive API documentation
+- **Health Check**: `curl http://localhost:8000/health` → `{"status":"healthy","platform":"Google Cloud","service":"financial-advisor"}`
 
-<!-- ![Application - Dashboard home](docs/screenshots/app-dashboard-home.png) -->
+Expected backend startup log:
 
-<!-- ![FastAPI - Swagger docs](docs/screenshots/fastapi-docs.png) -->
+```
+INFO  src.main - Starting Google Cloud Financial Advisor...
+INFO  src.services.memory_service - Financial Memory Service initialized (extractor=LLMEntityExtractor, embedder=VertexAIEmbeddingProvider, dedup=on)
+INFO  src.main - Memory service initialized
+INFO  src.main - Neo4j domain service initialized
+INFO  uvicorn - Application startup complete.
+```
+
+`extractor=` is the line to read: if it says `NoOpExtractor`, or a warning says
+extraction is disabled, no Gemini credential was found and no `:Entity` nodes
+will be written.
+
+Two quick smoke checks that need no LLM call:
+
+```bash
+curl -s localhost:8000/api/graph/stats | head -c 200
+# {"total_nodes":93,"total_relationships":142,"nodes_by_label":{"Transaction":44,...
+
+curl -s localhost:8000/api/investigations
+# []   ← persisted in Neo4j, so this survives a restart
+```
+
+#### 6.4 Run the Tests
+
+```bash
+cd backend && uv run pytest        # 42 offline tests; no Neo4j, no credentials
+```
+
+
 
 ---
 
@@ -332,7 +368,6 @@ Now let's use the multi-agent system to investigate a customer.
 
 In the application, click on **"AI Assistant"** in the sidebar to open the chat interface.
 
-<!-- ![Application - Chat interface](docs/screenshots/app-chat-interface.png) -->
 
 #### 7.2 Start an Investigation
 
@@ -353,19 +388,16 @@ Press Enter and watch the **real-time agent orchestration panel** as it streams 
 
 Each agent card animates in from the left as it becomes active, tool calls appear with staggered fade-in animations, and results show success/error transitions.
 
-<!-- ![Application - Agent orchestration](docs/screenshots/app-agent-orchestration.png) -->
 
 #### 7.3 Review the Results
 
 The supervisor synthesizes all findings into a comprehensive report. Each assistant message includes an expandable **Agent Activity** section showing the reasoning trace timeline — click to see the full chain of agent reasoning, tool calls with arguments and results, and memory operations.
 
-<!-- ![Application - Investigation results](docs/screenshots/app-investigation-results.png) -->
 
 #### 7.4 Explore the Relationship Network
 
 Click on **"Network Graph"** to visualize the customer's connections:
 
-<!-- ![Application - Network visualization](docs/screenshots/app-network-graph.png) -->
 
 ---
 
@@ -412,7 +444,6 @@ gcloud run deploy financial-advisor-frontend \
   --allow-unauthenticated
 ```
 
-<!-- ![Google Cloud Console - Cloud Run deployed](docs/screenshots/gcp-cloud-run-deployed.png) -->
 
 ---
 
@@ -458,6 +489,28 @@ make clean
 make install
 ```
 
+### No `:Entity` nodes appear in the graph
+
+Check the backend startup log:
+
+```
+Financial Memory Service initialized (extractor=LLMEntityExtractor, embedder=VertexAIEmbeddingProvider, dedup=on)
+```
+
+If it says `extractor=NoOpExtractor` (or warns that extraction is disabled),
+no Gemini credential was found — set `GOOGLE_API_KEY`, or
+`GOOGLE_GENAI_USE_VERTEXAI=true` together with `GOOGLE_CLOUD_PROJECT`.
+
+### `docker compose up --build` or `make build` fails on `neo4j-agent-memory`
+
+The image installs from `backend/requirements-docker.txt`, not from
+`pyproject.toml`, because the manifest points the library at an editable path
+outside the build context. After changing dependencies, re-export it:
+
+```bash
+make docker-requirements
+```
+
 ---
 
 ## Architecture
@@ -500,13 +553,32 @@ make install
 └───────┘    └───────┘    └────────────┘    └──────────┘
 ```
 
-| Agent | Responsibility |
-|-------|----------------|
-| **Supervisor** | Orchestrates investigation workflow |
-| **KYC Agent** | Identity verification, document checking |
-| **AML Agent** | Transaction monitoring, pattern detection |
-| **Relationship Agent** | Network analysis using Context Graph |
-| **Compliance Agent** | Sanctions/PEP screening, report generation |
+| Agent | Responsibility | Domain tools |
+|-------|----------------|--------------|
+| **Supervisor** | Orchestrates the workflow, synthesises findings | — (delegates via `sub_agents`) |
+| **KYC Agent** | Identity verification, document checking | `verify_identity`, `check_documents`, `assess_customer_risk`, `check_adverse_media` |
+| **AML Agent** | Transaction monitoring, pattern detection | `scan_transactions`, `detect_patterns`, `flag_suspicious_transaction`, `analyze_velocity` |
+| **Relationship Agent** | Network analysis using the context graph | `find_connections`, `analyze_network_risk`, `detect_shell_companies`, `map_beneficial_ownership` |
+| **Compliance Agent** | Sanctions/PEP screening, report generation | `check_sanctions`, `verify_pep_status`, `generate_sar_report`, `assess_regulatory_requirements` |
+
+All five agents are built by one factory, `agents/_base.py::create_specialist_agent`,
+and all five use the model named by `VERTEX_AI_MODEL_ID`.
+
+**Memory wiring.** The `Runner` is constructed with
+`memory_service=memory_service.adk_memory_service`, so every agent gets ADK's
+built-in `load_memory` tool backed by Neo4j — there is no hand-rolled search
+tool per agent. Writes stay domain-specific: each agent has one
+`store_*_finding` tool that records a first-class `:Fact` through
+`client.long_term.add_fact`.
+
+```python
+runner = Runner(
+    agent=supervisor,
+    app_name="financial_advisor",
+    session_service=session_service,
+    memory_service=memory_service.adk_memory_service,  # ← Neo4jMemoryService
+)
+```
 
 ### SSE Streaming & Reasoning Traces
 
@@ -535,60 +607,82 @@ Client                     Server (SSE stream)
   |<-- done -------------------|  (summary)
 ```
 
-After streaming completes, the full reasoning trace (agent steps, tool calls, results) is automatically persisted to Neo4j and retrievable via `GET /api/traces/{session_id}`.
+The reasoning trace is written **as the run proceeds**, not after it, so a
+crashed run still leaves a partial trace. What gets persisted:
+
+| Written | Why it matters |
+|---|---|
+| `ReasoningTrace` with `triggered_by_message_id` | `(:ReasoningTrace)-[:INITIATED_BY]->(:Message)` — ties the reasoning to the question that caused it |
+| One `ReasoningStep` per agent activation | The delegation sequence, replayable |
+| `ToolCall` with `touched_entities=[EntityRef(...)]` | `(:ReasoningStep)-[:TOUCHED]->(:Entity)` — the audit edge |
+| `TraceOutcome(success=, summary=, error_kind=, related_entities=, metrics=)` | Indexable failure categories and per-run metrics |
+
+Which makes the regulator's question a one-hop query:
+
+```cypher
+MATCH (e:Entity {name: 'CUST-003'})<-[:TOUCHED]-(s:ReasoningStep)
+      <-[:HAS_STEP]-(t:ReasoningTrace)
+OPTIONAL MATCH (s)-[:USES_TOOL]->(tc:ToolCall)
+RETURN t.task, s.step_number, s.thought, collect(tc.tool_name) AS tools
+ORDER BY s.step_number
+```
+
+That query is exposed as `GET /api/graph/audit-trail/{entity_name}`; full traces
+are available at `GET /api/traces/{session_id}` and
+`GET /api/investigations/{id}/audit-trail`.
 
 ---
 
 ## Project Structure
 
 ```
-google-cloud-financial-advisor/
-├── backend/
-│   ├── src/
-│   │   ├── agents/            # Google ADK agent definitions
-│   │   │   ├── supervisor.py  # Orchestrator with sub-agents
-│   │   │   ├── kyc_agent.py   # KYC specialist + _bind_tool
-│   │   │   ├── aml_agent.py   # AML specialist
-│   │   │   ├── relationship_agent.py
-│   │   │   └── compliance_agent.py
-│   │   ├── tools/             # Agent tools (KYC, AML, etc.)
-│   │   ├── api/routes/        # FastAPI endpoints
-│   │   │   ├── chat.py        # POST /chat (sync) + /chat/stream (SSE)
-│   │   │   ├── traces.py      # GET /traces/{session_id}, /traces/detail/{id}
-│   │   │   ├── customers.py   # Customer CRUD
-│   │   │   ├── alerts.py      # Alert management
-│   │   │   └── ...
-│   │   ├── models/            # Pydantic models
-│   │   └── services/          # Neo4jDomainService, FinancialMemoryService
-│   ├── Dockerfile
-│   └── pyproject.toml         # Dependencies managed with uv
-├── frontend/
-│   ├── src/
-│   │   ├── hooks/
-│   │   │   └── useAgentStream.ts   # SSE connection + agent state management
-│   │   ├── components/
-│   │   │   ├── Chat/
-│   │   │   │   ├── ChatInterface.tsx           # Main chat with streaming
-│   │   │   │   ├── AgentOrchestrationView.tsx  # Real-time agent visualization
-│   │   │   │   ├── AgentActivityTimeline.tsx   # Post-completion trace timeline
-│   │   │   │   ├── ToolCallCard.tsx            # Animated tool call display
-│   │   │   │   └── MemoryAccessIndicator.tsx   # Neo4j memory flash indicator
-│   │   │   ├── Dashboard/
-│   │   │   │   ├── Sidebar.tsx            # Grouped nav, alert badges
-│   │   │   │   ├── CustomerDashboard.tsx  # Stats, skeleton loading
-│   │   │   │   └── AlertsPanel.tsx        # Empty states, semantic tokens
-│   │   │   ├── Investigation/
-│   │   │   │   ├── InvestigationPanel.tsx  # Timeline audit trail
-│   │   │   │   └── AgentWorkflow.tsx       # Workflow visualization
-│   │   │   └── Graph/
-│   │   │       └── NetworkViewer.tsx       # vis-network visualization
-│   │   └── lib/
-│   │       └── api.ts          # API client + SSE parsing
-│   └── package.json            # Includes framer-motion, chakra v3
-├── infrastructure/        # Cloud Run deployment configs
-├── data/                  # Sample data (JSON) and load_sample_data.py
-├── Makefile              # Development commands
-└── docker-compose.yml    # Local development setup
+financial-services-advisor/
+├── data/                  # Sample JSON + load_sample_data.py — SHARED with the
+│                          # AWS sibling example, one level above this app
+└── google-cloud-financial-advisor/
+    ├── backend/
+    │   ├── src/
+    │   │   ├── agents/
+    │   │   │   ├── _base.py         # create_specialist_agent + bind_tool
+    │   │   │   ├── supervisor.py    # Orchestrator: sub_agents + load_memory
+    │   │   │   ├── kyc_agent.py     # KYC specialist
+    │   │   │   ├── aml_agent.py     # AML specialist
+    │   │   │   ├── relationship_agent.py
+    │   │   │   ├── compliance_agent.py
+    │   │   │   └── prompts.py       # Agent instructions
+    │   │   ├── tools/               # Domain tools (KYC, AML, relationship, compliance)
+    │   │   ├── api/routes/
+    │   │   │   ├── chat.py          # POST /chat (JSON) + /chat/stream (SSE)
+    │   │   │   ├── traces.py        # GET /traces/{session_id}, /traces/detail/{id}
+    │   │   │   ├── graph.py         # Cypher, neighbours, stats, memory, audit-trail
+    │   │   │   ├── investigations.py# Neo4j-backed investigations + audit trail
+    │   │   │   ├── customers.py
+    │   │   │   └── alerts.py
+    │   │   ├── models/              # Pydantic request/response models
+    │   │   └── services/
+    │   │       ├── memory_service.py  # MemoryClient: embeddings, extractor, dedup
+    │   │       ├── neo4j_service.py   # All domain Cypher (reads via query.cypher)
+    │   │       ├── adk_events.py      # The only place that knows the ADK Event shape
+    │   │       └── trace_writer.py    # Audit-grade reasoning traces
+    │   ├── tests/                   # Offline FastAPI TestClient + unit tests
+    │   ├── Dockerfile
+    │   ├── requirements-docker.txt  # Locked deps exported without [tool.uv.sources]
+    │   └── pyproject.toml
+    ├── frontend/
+    │   ├── src/
+    │   │   ├── hooks/useAgentStream.ts          # SSE connection + agent state
+    │   │   ├── components/
+    │   │   │   ├── Chat/                        # ChatInterface, AgentOrchestrationView,
+    │   │   │   │                                # AgentActivityTimeline, ToolCallCard,
+    │   │   │   │                                # MemoryAccessIndicator
+    │   │   │   ├── Dashboard/                   # Sidebar, CustomerDashboard, AlertsPanel
+    │   │   │   ├── Investigation/               # InvestigationPanel, AgentWorkflow
+    │   │   │   └── Graph/MemoryGraphView.tsx    # Routed graph view
+    │   │   └── lib/api.ts                      # API client + SSE parsing
+    │   └── package.json
+    ├── infrastructure/    # cloudbuild.yaml + Cloud Run deploy scripts
+    ├── Makefile
+    └── docker-compose.yml
 ```
 
 ---
@@ -613,7 +707,13 @@ google-cloud-financial-advisor/
 | `/api/alerts` | GET | List compliance alerts |
 | `/api/alerts/{id}` | GET/PATCH | Get or update an alert |
 | `/api/alerts/summary` | GET | Alert statistics summary |
-| `/api/graph/stats` | GET | Graph statistics |
+| `/api/investigations` | GET | List persisted investigations |
+| `/api/investigations/{id}` | GET | Get one investigation |
+| `/api/graph/stats` | GET | Node and relationship counts by label/type |
+| `/api/graph/query` | POST | Read-only Cypher (validated by `client.query.cypher`) |
+| `/api/graph/neighbors/{id}` | GET | Neighbourhood of a node, shaped for visualisation |
+| `/api/graph/memory` | GET | Domain + memory subgraph, optionally scoped to `session_id` |
+| `/api/graph/audit-trail/{entity_name}` | GET | Reasoning steps that `TOUCHED` an entity |
 
 Full API documentation available at http://localhost:8000/docs when running locally.
 
@@ -623,16 +723,24 @@ Full API documentation available at http://localhost:8000/docs when running loca
 
 | Variable | Description | Required |
 |----------|-------------|----------|
-| `GOOGLE_CLOUD_PROJECT` | GCP project ID | Yes |
-| `GOOGLE_API_KEY` | Google AI API key ([get one here](https://aistudio.google.com/apikey)) | Yes |
-| `VERTEX_AI_LOCATION` | Vertex AI region (e.g., `us-central1`) | Yes |
-| `VERTEX_AI_MODEL_ID` | Gemini model ID (default: `gemini-2.5-flash`) | Yes |
-| `VERTEX_AI_EMBEDDING_MODEL` | Embedding model ID (default: `text-embedding-004`) | Yes |
 | `NEO4J_URI` | Neo4j connection URI | Yes |
-| `NEO4J_USER` | Neo4j username | Yes |
-| `NEO4J_PASSWORD` | Neo4j password | Yes |
-| `LOG_LEVEL` | Logging level | No (default: INFO) |
-| `CORS_ORIGINS` | Allowed CORS origins | No |
+| `NEO4J_USER` | Neo4j username | Yes (default: `neo4j`) |
+| `NEO4J_PASSWORD` | Neo4j password | **Yes** — the only hard requirement |
+| `NEO4J_DATABASE` | Neo4j database name | No (default: `neo4j`) |
+| `GOOGLE_API_KEY` | Gemini key for the Google AI Studio path ([get one](https://aistudio.google.com/apikey)) | One of this or the Vertex path |
+| `GOOGLE_CLOUD_PROJECT` | GCP project ID. Required for Vertex AI embeddings either way | For embeddings |
+| `GOOGLE_GENAI_USE_VERTEXAI` | Set to `true` to force the Vertex AI path. Exported automatically when `GOOGLE_API_KEY` is absent and a project is set | No |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Path to a service-account key / ADC file for Vertex AI | For Vertex AI |
+| `VERTEX_AI_LOCATION` | Vertex AI region | No (default: `us-central1`) |
+| `VERTEX_AI_MODEL_ID` | Gemini model for all five agents **and** entity extraction | No (default: `gemini-2.5-flash`) |
+| `VERTEX_AI_EMBEDDING_MODEL` | Vertex AI embedding model | No (default: `gemini-embedding-001`) |
+| `VERTEX_AI_EMBEDDING_DIMENSIONS` | Output dimensionality (fixes the Neo4j vector index size) | No (default: `768`) |
+| `MEMORY_ENABLE_EXTRACTION` | Extract entities from conversations | No (default: `true`) |
+| `MEMORY_ENABLE_DEDUPLICATION` | Deduplicate entities on ingest | No (default: `true`) |
+| `MEMORY_DEDUP_AUTO_MERGE_THRESHOLD` | Similarity at or above which entities auto-merge | No (default: `0.95`) |
+| `MEMORY_DEDUP_FLAG_THRESHOLD` | Similarity at or above which a `SAME_AS` review edge is written | No (default: `0.85`) |
+| `LOG_LEVEL` | Logging level | No (default: `INFO`) |
+| `CORS_ORIGINS` | Comma-separated allowed CORS origins | No |
 
 ---
 
@@ -655,4 +763,5 @@ This example is part of the neo4j-agent-memory project and is licensed under the
 
 ---
 
-_Verified against `neo4j-agent-memory` v0.1.2 / v0.2-dev on 2026-05-03 (current PyPI release: v0.4.x with NAMS support) (105 unit tests pass; full end-to-end run requires Google API key and `[google-adk,vertex-ai]` extras)._
+_Verified against `neo4j-agent-memory` 0.6.0-dev (PyPI floor `>=0.5.0,<0.7`), google-adk 2.9.0, google-genai 2.23.0, google-cloud-aiplatform 2.1.0, FastAPI 0.141.1, neo4j 6.3.0 on Python 3.12 — 2026-09-10._
+_Checked: `uv sync`, `uv run ruff check src/ tests/`, `uv run pytest` (42 offline tests), `docker build ./backend`. A full end-to-end investigation additionally needs Gemini credentials and a GCP project with the Vertex AI API enabled._

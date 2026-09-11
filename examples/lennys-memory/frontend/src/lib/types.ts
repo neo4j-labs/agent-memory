@@ -143,9 +143,10 @@ export interface LocationEntity {
   distance_km?: number | null; // Distance from search point (for nearby queries)
 }
 
-// Quick-start suggestion from previous conversations
+// Quick-start suggestion shown on the landing page
 export interface QuickStartSuggestion {
-  id: string; // original thread id
-  firstMessage: string; // content of first user message
-  timestamp: string; // when it was sent
+  id: string; // stable id (curated slug, or a thread id)
+  firstMessage: string; // the query that will be sent
+  category?: string; // short label describing what the query demonstrates
+  timestamp?: string; // only set for suggestions derived from a real thread
 }

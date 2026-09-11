@@ -27,14 +27,10 @@ class Beneficiary(BaseModel):
     """Transaction beneficiary information."""
 
     name: str = Field(..., description="Beneficiary name")
-    account_number: str | None = Field(
-        default=None, description="Beneficiary account number"
-    )
+    account_number: str | None = Field(default=None, description="Beneficiary account number")
     bank_name: str | None = Field(default=None, description="Beneficiary bank name")
     bank_country: str | None = Field(default=None, description="Bank jurisdiction")
-    jurisdiction: str | None = Field(
-        default=None, description="Beneficiary jurisdiction"
-    )
+    jurisdiction: str | None = Field(default=None, description="Beneficiary jurisdiction")
 
 
 class TransactionCreate(BaseModel):
@@ -46,13 +42,9 @@ class TransactionCreate(BaseModel):
     currency: str = Field(default="USD", description="Transaction currency")
     type: TransactionType = Field(..., description="Transaction type")
     description: str | None = Field(default=None, description="Transaction description")
-    beneficiary: Beneficiary | None = Field(
-        default=None, description="Beneficiary details"
-    )
+    beneficiary: Beneficiary | None = Field(default=None, description="Beneficiary details")
     reference: str | None = Field(default=None, description="Reference number")
-    metadata: dict[str, Any] = Field(
-        default_factory=dict, description="Additional metadata"
-    )
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
 
 class Transaction(TransactionCreate):
@@ -65,9 +57,7 @@ class Transaction(TransactionCreate):
     status: str = Field(default="completed", description="Transaction status")
     risk_score: float | None = Field(default=None, description="Transaction risk score")
     flagged: bool = Field(default=False, description="Whether transaction is flagged")
-    flag_reasons: list[str] = Field(
-        default_factory=list, description="Reasons for flagging"
-    )
+    flag_reasons: list[str] = Field(default_factory=list, description="Reasons for flagging")
 
 
 class TransactionPattern(BaseModel):
@@ -79,9 +69,7 @@ class TransactionPattern(BaseModel):
     transactions: list[str] = Field(..., description="Transaction IDs involved")
     time_range: dict[str, datetime] = Field(..., description="Time range of pattern")
     total_amount: float = Field(..., description="Total amount involved")
-    risk_indicators: list[str] = Field(
-        default_factory=list, description="Risk indicators"
-    )
+    risk_indicators: list[str] = Field(default_factory=list, description="Risk indicators")
 
 
 class TransactionSummary(BaseModel):
@@ -94,9 +82,7 @@ class TransactionSummary(BaseModel):
     total_inflow: float = Field(..., description="Total incoming amount")
     total_outflow: float = Field(..., description="Total outgoing amount")
     by_type: dict[str, int] = Field(default_factory=dict, description="Counts by type")
-    by_currency: dict[str, float] = Field(
-        default_factory=dict, description="Amounts by currency"
-    )
+    by_currency: dict[str, float] = Field(default_factory=dict, description="Amounts by currency")
     flagged_count: int = Field(default=0, description="Number of flagged transactions")
     high_risk_jurisdictions: list[str] = Field(
         default_factory=list, description="High-risk jurisdictions involved"

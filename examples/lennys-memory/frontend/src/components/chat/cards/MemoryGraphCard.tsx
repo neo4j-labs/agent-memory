@@ -26,7 +26,6 @@ import dynamic from "next/dynamic";
 import { BaseCard } from "./BaseCard";
 import { LuBrain, LuMessageSquare, LuBox } from "react-icons/lu";
 import type { ToolCall } from "@/lib/types";
-import { nodeColors } from "@/theme";
 
 // Types for the memory graph search result
 interface MemoryGraphNode {

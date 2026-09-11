@@ -12,6 +12,9 @@ export interface ApiStackProps extends cdk.StackProps {
   projectName: string;
   lambdaFunction: lambda.Function;
   userPool: cognito.UserPool;
+  /** Upload `../frontend/dist` to the frontend bucket. Requires a built
+   *  frontend; pass `-c deployFrontend=false` to synth without one. */
+  deployFrontend?: boolean;
 }
 
 export class ApiStack extends cdk.Stack {
@@ -43,63 +46,26 @@ export class ApiStack extends cdk.Stack {
       authorizerName: `${props.projectName}-authorizer`,
     });
 
-    // Lambda integration
-    const lambdaIntegration = new apigateway.LambdaIntegration(props.lambdaFunction, {
-      requestTemplates: { 'application/json': '{ "statusCode": "200" }' },
-    });
+    // Lambda integration. No requestTemplates: the proxy integration must pass
+    // the request through unchanged for FastAPI (via Mangum) to route it.
+    const lambdaIntegration = new apigateway.LambdaIntegration(props.lambdaFunction);
 
-    // API resources with Cognito authorization
+    // One authorized proxy for the whole API rather than a hand-maintained list
+    // of methods. FastAPI serves ~38 routes; enumerating seven of them meant
+    // /api/chat/stream, /api/graph/*, /api/traces/* and /api/reports/* were
+    // simply unreachable, and the enumeration drifted every time a route was
+    // added.
     const apiResource = this.api.root.addResource('api');
-
-    // Chat endpoints
-    const chatResource = apiResource.addResource('chat');
-    chatResource.addMethod('POST', lambdaIntegration, {
-      authorizer,
-      authorizationType: apigateway.AuthorizationType.COGNITO,
+    apiResource.addProxy({
+      anyMethod: true,
+      defaultIntegration: lambdaIntegration,
+      defaultMethodOptions: {
+        authorizer,
+        authorizationType: apigateway.AuthorizationType.COGNITO,
+      },
     });
 
-    const chatHistoryResource = chatResource.addResource('history').addResource('{sessionId}');
-    chatHistoryResource.addMethod('GET', lambdaIntegration, {
-      authorizer,
-      authorizationType: apigateway.AuthorizationType.COGNITO,
-    });
-
-    // Customer endpoints
-    const customersResource = apiResource.addResource('customers');
-    customersResource.addMethod('GET', lambdaIntegration, {
-      authorizer,
-      authorizationType: apigateway.AuthorizationType.COGNITO,
-    });
-    customersResource.addMethod('POST', lambdaIntegration, {
-      authorizer,
-      authorizationType: apigateway.AuthorizationType.COGNITO,
-    });
-
-    const customerResource = customersResource.addResource('{customerId}');
-    customerResource.addMethod('GET', lambdaIntegration, {
-      authorizer,
-      authorizationType: apigateway.AuthorizationType.COGNITO,
-    });
-
-    // Investigation endpoints
-    const investigationsResource = apiResource.addResource('investigations');
-    investigationsResource.addMethod('GET', lambdaIntegration, {
-      authorizer,
-      authorizationType: apigateway.AuthorizationType.COGNITO,
-    });
-    investigationsResource.addMethod('POST', lambdaIntegration, {
-      authorizer,
-      authorizationType: apigateway.AuthorizationType.COGNITO,
-    });
-
-    // Alerts endpoints
-    const alertsResource = apiResource.addResource('alerts');
-    alertsResource.addMethod('GET', lambdaIntegration, {
-      authorizer,
-      authorizationType: apigateway.AuthorizationType.COGNITO,
-    });
-
-    // Health endpoint (no auth required)
+    // Health endpoint (no auth required, so orchestrators can probe it)
     const healthResource = this.api.root.addResource('health');
     healthResource.addMethod('GET', lambdaIntegration);
 
@@ -115,7 +81,7 @@ export class ApiStack extends cdk.Stack {
     // CloudFront distribution
     this.distribution = new cloudfront.Distribution(this, 'Distribution', {
       defaultBehavior: {
-        origin: new origins.S3Origin(frontendBucket),
+        origin: origins.S3BucketOrigin.withOriginAccessControl(frontendBucket),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
       },
@@ -137,6 +103,17 @@ export class ApiStack extends cdk.Stack {
         },
       ],
     });
+
+    // Upload the built frontend. Without this the bucket is created, fronted by
+    // CloudFront, and empty.
+    if (props.deployFrontend ?? true) {
+      new s3deploy.BucketDeployment(this, 'FrontendDeploy', {
+        sources: [s3deploy.Source.asset('../frontend/dist')],
+        destinationBucket: frontendBucket,
+        distribution: this.distribution,
+        distributionPaths: ['/*'],
+      });
+    }
 
     // Outputs
     new cdk.CfnOutput(this, 'ApiUrl', {

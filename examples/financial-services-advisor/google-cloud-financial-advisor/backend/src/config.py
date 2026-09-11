@@ -34,11 +34,23 @@ class VertexAISettings(BaseSettings):
     )
     model_id: str = Field(
         default="gemini-2.5-flash",
-        description="Gemini model for agent reasoning",
+        description=(
+            "Gemini model for agent reasoning. Threaded through to every ADK "
+            "agent factory and to the entity-extraction LLM."
+        ),
     )
     embedding_model: str = Field(
-        default="text-embedding-004",
-        description="Vertex AI embedding model",
+        default="gemini-embedding-001",
+        description="Vertex AI embedding model (text-embedding-004 was retired 2026-01-14)",
+    )
+    embedding_dimensions: int = Field(
+        default=768,
+        description=(
+            "Output dimensionality requested from the embedding model. "
+            "gemini-embedding-001 is natively 3072-dimensional and supports "
+            "truncation; 768 keeps the Neo4j vector indexes the same shape as "
+            "graphs built against the retired text-embedding-004."
+        ),
     )
 
     def get_project_id(self) -> str:
@@ -46,6 +58,38 @@ class VertexAISettings(BaseSettings):
         if self.project_id:
             return self.project_id
         return os.environ.get("GOOGLE_CLOUD_PROJECT", "")
+
+    def use_vertex_ai(self) -> bool:
+        """Whether google-genai / ADK should route through Vertex AI.
+
+        google-genai selects Vertex AI from ``GOOGLE_GENAI_USE_VERTEXAI`` plus
+        ``GOOGLE_CLOUD_PROJECT``/``GOOGLE_CLOUD_LOCATION``; this mirrors that
+        decision so the extraction LLM provider string matches the agents.
+        """
+        flag = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").strip().lower()
+        return flag in {"1", "true", "yes"}
+
+    def get_api_key(self) -> str | None:
+        """Gemini API key for the Google AI Studio path (not Vertex AI)."""
+        return os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+
+    def llm_provider_string(self) -> str | None:
+        """Provider string for the entity-extraction LLM, or None if unusable.
+
+        Resolves to the same Gemini model the agents use:
+
+        * ``vertex_ai/<model>`` when the Vertex AI path is selected and a
+          project id is available;
+        * ``gemini/<model>`` when a Google AI Studio key is present;
+        * ``None`` when neither credential is configured — the caller then
+          disables extraction explicitly instead of silently falling back to
+          a no-op extractor.
+        """
+        if self.use_vertex_ai() and self.get_project_id():
+            return f"vertex_ai/{self.model_id}"
+        if self.get_api_key():
+            return f"gemini/{self.model_id}"
+        return None
 
 
 class Neo4jSettings(BaseSettings):
@@ -115,9 +159,7 @@ class Settings(BaseSettings):
     # Nested settings
     vertex_ai: Annotated[VertexAISettings, Field(default_factory=VertexAISettings)]
     neo4j: Annotated[Neo4jSettings, Field(default_factory=Neo4jSettings)]
-    memory_features: Annotated[
-        MemoryFeatureSettings, Field(default_factory=MemoryFeatureSettings)
-    ]
+    memory_features: Annotated[MemoryFeatureSettings, Field(default_factory=MemoryFeatureSettings)]
 
     # Application settings
     log_level: str = Field(

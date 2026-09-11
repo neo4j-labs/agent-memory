@@ -52,15 +52,9 @@ class AlertCreate(BaseModel):
     customer_id: str = Field(..., description="Related customer ID")
     title: str = Field(..., description="Alert title")
     description: str = Field(..., description="Detailed description")
-    transaction_ids: list[str] = Field(
-        default_factory=list, description="Related transactions"
-    )
-    evidence: dict[str, Any] = Field(
-        default_factory=dict, description="Supporting evidence"
-    )
-    metadata: dict[str, Any] = Field(
-        default_factory=dict, description="Additional metadata"
-    )
+    transaction_ids: list[str] = Field(default_factory=list, description="Related transactions")
+    evidence: dict[str, Any] = Field(default_factory=dict, description="Supporting evidence")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
 
 class Alert(AlertCreate):
@@ -68,20 +62,12 @@ class Alert(AlertCreate):
 
     id: str = Field(..., description="Unique alert identifier")
     status: AlertStatus = Field(default=AlertStatus.NEW, description="Current status")
-    created_at: datetime = Field(
-        default_factory=datetime.utcnow, description="Alert creation time"
-    )
-    updated_at: datetime = Field(
-        default_factory=datetime.utcnow, description="Last update time"
-    )
+    created_at: datetime = Field(default_factory=datetime.utcnow, description="Alert creation time")
+    updated_at: datetime = Field(default_factory=datetime.utcnow, description="Last update time")
     assigned_to: str | None = Field(default=None, description="Assigned analyst")
-    investigation_id: str | None = Field(
-        default=None, description="Linked investigation"
-    )
+    investigation_id: str | None = Field(default=None, description="Linked investigation")
     resolution: str | None = Field(default=None, description="Resolution notes")
-    resolved_at: datetime | None = Field(
-        default=None, description="Resolution timestamp"
-    )
+    resolved_at: datetime | None = Field(default=None, description="Resolution timestamp")
     resolved_by: str | None = Field(default=None, description="Who resolved the alert")
 
 
@@ -104,12 +90,8 @@ class AlertSummary(BaseModel):
     """Summary statistics for alerts."""
 
     total_count: int = Field(..., description="Total alert count")
-    by_status: dict[str, int] = Field(
-        default_factory=dict, description="Counts by status"
-    )
-    by_severity: dict[str, int] = Field(
-        default_factory=dict, description="Counts by severity"
-    )
+    by_status: dict[str, int] = Field(default_factory=dict, description="Counts by status")
+    by_severity: dict[str, int] = Field(default_factory=dict, description="Counts by severity")
     by_type: dict[str, int] = Field(default_factory=dict, description="Counts by type")
     avg_resolution_time_hours: float | None = Field(
         default=None, description="Average resolution time"

@@ -1,5 +1,7 @@
-import { Provider } from "@/components/ui/provider";
+import "./globals.css";
+
 import type { Metadata } from "next";
+import { Provider } from "@/components/ui/provider";
 
 export const metadata: Metadata = {
   title: "Smart Shopping Assistant",
@@ -13,6 +15,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
+    // `suppressHydrationWarning` is required by next-themes: its inline script
+    // stamps the colour-mode class on <html> before React hydrates.
     <html lang="en" suppressHydrationWarning>
       <body>
         <Provider>{children}</Provider>

@@ -1,34 +1,77 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
-import { v4 as uuidv4 } from "uuid";
-import type { Message, ToolCall, SSEEvent } from "@/lib/types";
-import { api, streamChat } from "@/lib/api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { api, ApiError, streamChat } from "@/lib/api";
+import type { Message, ToolCall } from "@/lib/types";
 
-export function useChat(threadId: string | null) {
+interface UseChatOptions {
+  /**
+   * Called when a turn finishes (the SSE `done` event). The page uses this to
+   * bump a `memoryVersion` counter so the memory panels refetch and the user
+   * can watch memory being written.
+   */
+  onTurnComplete?: () => void;
+}
+
+export function useChat(threadId: string | null, options: UseChatOptions = {}) {
+  const { onTurnComplete } = options;
   const [messages, setMessages] = useState<Message[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [memoryEnabled, setMemoryEnabled] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Load messages when thread changes
+  // The in-flight turn, so it can be cancelled by the Stop button or by
+  // switching threads. Without this the fetch ran to completion with its
+  // tokens landing nowhere.
+  const abortRef = useRef<AbortController | null>(null);
+
+  const stop = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+  }, []);
+
+  // Load messages when thread changes, and cancel any turn still streaming
+  // into the thread we are leaving.
   useEffect(() => {
-    if (!threadId) {
-      setMessages([]);
-      return;
-    }
+    let cancelled = false;
 
     const loadMessages = async () => {
+      if (!threadId) {
+        if (!cancelled) setMessages([]);
+        return;
+      }
       try {
         const thread = await api.threads.get(threadId);
-        setMessages(thread.messages || []);
+        if (!cancelled) {
+          setMessages(thread.messages);
+          setError(null);
+        }
       } catch (err) {
-        // Thread might be new, no messages yet
+        if (cancelled) return;
+        // A brand-new thread with no messages yet is a 404 and is expected.
+        // Anything else is a real failure and must be visible (an empty
+        // message list otherwise looks exactly like a working empty thread).
         setMessages([]);
+        if (err instanceof ApiError && err.status === 404) {
+          setError(null);
+        } else {
+          setError(
+            err instanceof Error
+              ? `Could not load conversation: ${err.message}`
+              : "Could not load conversation",
+          );
+        }
       }
     };
 
     loadMessages();
+
+    return () => {
+      cancelled = true;
+      // Whatever is streaming belongs to the thread we are leaving.
+      abortRef.current?.abort();
+      abortRef.current = null;
+    };
   }, [threadId]);
 
   const sendMessage = useCallback(
@@ -38,17 +81,19 @@ export function useChat(threadId: string | null) {
       setError(null);
       setIsStreaming(true);
 
+      const controller = new AbortController();
+      abortRef.current = controller;
+
       // Add user message
       const userMessage: Message = {
-        id: uuidv4(),
+        id: crypto.randomUUID(),
         role: "user",
         content,
         timestamp: new Date().toISOString(),
       };
-      setMessages((prev) => [...prev, userMessage]);
 
       // Create assistant message placeholder
-      const assistantId = uuidv4();
+      const assistantId = crypto.randomUUID();
       const assistantMessage: Message = {
         id: assistantId,
         role: "assistant",
@@ -56,20 +101,28 @@ export function useChat(threadId: string | null) {
         timestamp: new Date().toISOString(),
         toolCalls: [],
       };
-      setMessages((prev) => [...prev, assistantMessage]);
+      setMessages((prev) => [...prev, userMessage, assistantMessage]);
+
+      /** Patch the assistant turn in place, keyed on the client-minted id. */
+      const patchAssistant = (patch: Partial<Message>) =>
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === assistantId ? { ...msg, ...patch } : msg,
+          ),
+        );
 
       try {
         // Track tool calls by ID
         const toolCallsMap = new Map<string, ToolCall>();
 
-        // Stream response
         for await (const event of streamChat(
           threadId,
           content,
           memoryEnabled,
+          controller.signal,
         )) {
           switch (event.type) {
-            case "token":
+            case "token": {
               setMessages((prev) =>
                 prev.map((msg) =>
                   msg.id === assistantId
@@ -78,51 +131,46 @@ export function useChat(threadId: string | null) {
                 ),
               );
               break;
+            }
 
-            case "tool_call":
-              const toolCall: ToolCall = {
+            case "tool_call": {
+              toolCallsMap.set(event.id, {
                 id: event.id,
                 name: event.name,
                 args: event.args,
                 status: "pending",
-              };
-              toolCallsMap.set(event.id, toolCall);
-              setMessages((prev) =>
-                prev.map((msg) =>
-                  msg.id === assistantId
-                    ? {
-                        ...msg,
-                        toolCalls: Array.from(toolCallsMap.values()),
-                      }
-                    : msg,
-                ),
-              );
+              });
+              patchAssistant({ toolCalls: Array.from(toolCallsMap.values()) });
               break;
+            }
 
-            case "tool_result":
+            case "tool_result": {
               const existing = toolCallsMap.get(event.id);
               if (existing) {
-                existing.result = event.result;
-                existing.status = "success";
-                existing.duration_ms = event.duration_ms;
-                setMessages((prev) =>
-                  prev.map((msg) =>
-                    msg.id === assistantId
-                      ? {
-                          ...msg,
-                          toolCalls: Array.from(toolCallsMap.values()),
-                        }
-                      : msg,
-                  ),
-                );
+                // Replace rather than mutate: the old object is already
+                // referenced by rendered state, so mutating it would make a
+                // memoised `ToolCallDisplay` stop updating.
+                toolCallsMap.set(event.id, {
+                  ...existing,
+                  result: event.result,
+                  status: "success",
+                  duration_ms: event.duration_ms,
+                });
+                patchAssistant({
+                  toolCalls: Array.from(toolCallsMap.values()),
+                });
               }
               break;
+            }
 
-            case "done":
-              // Message complete
+            case "done": {
+              // Memory for this turn is written by the time the backend emits
+              // `done`, so this is when the memory panels should refetch.
+              onTurnComplete?.();
               break;
+            }
 
-            case "error":
+            case "error": {
               setError(event.message);
               setMessages((prev) =>
                 prev.map((msg) =>
@@ -135,24 +183,38 @@ export function useChat(threadId: string | null) {
                 ),
               );
               break;
+            }
           }
         }
       } catch (err) {
-        const errorMessage =
-          err instanceof Error ? err.message : "Failed to send message";
-        setError(errorMessage);
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === assistantId
-              ? { ...msg, content: `Error: ${errorMessage}` }
-              : msg,
-          ),
-        );
+        if (err instanceof DOMException && err.name === "AbortError") {
+          // Deliberate cancellation: keep whatever streamed, say so.
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === assistantId
+                ? {
+                    ...msg,
+                    content: msg.content
+                      ? `${msg.content}\n\n_(stopped)_`
+                      : "_(stopped)_",
+                  }
+                : msg,
+            ),
+          );
+        } else {
+          const errorMessage =
+            err instanceof Error ? err.message : "Failed to send message";
+          setError(errorMessage);
+          patchAssistant({ content: `Error: ${errorMessage}` });
+        }
       } finally {
+        if (abortRef.current === controller) {
+          abortRef.current = null;
+        }
         setIsStreaming(false);
       }
     },
-    [threadId, isStreaming, memoryEnabled],
+    [threadId, isStreaming, memoryEnabled, onTurnComplete],
   );
 
   const clearMessages = useCallback(() => {
@@ -165,7 +227,9 @@ export function useChat(threadId: string | null) {
     memoryEnabled,
     setMemoryEnabled,
     error,
+    clearError: useCallback(() => setError(null), []),
     sendMessage,
+    stop,
     clearMessages,
   };
 }

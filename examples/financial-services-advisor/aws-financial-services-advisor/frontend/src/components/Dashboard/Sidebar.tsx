@@ -1,13 +1,15 @@
-import { Box, VStack, Text, Icon, Flex } from '@chakra-ui/react'
-import { Link, useLocation } from 'react-router-dom'
+import { Badge, Box, Flex, Icon, Text, VStack } from '@chakra-ui/react'
 import {
+  FiAlertTriangle,
   FiHome,
   FiMessageSquare,
-  FiUsers,
-  FiAlertTriangle,
   FiSearch,
-  FiFileText,
+  FiShare2,
+  FiUsers,
 } from 'react-icons/fi'
+import { Link, useLocation } from 'react-router'
+import LabsDisclaimer from '../branding/LabsDisclaimer'
+import { ColorModeButton } from '../ui/color-mode'
 
 interface NavItemProps {
   icon: React.ElementType
@@ -24,9 +26,10 @@ function NavItem({ icon, label, to, isActive }: NavItemProps) {
         p={3}
         borderRadius="md"
         cursor="pointer"
-        bg={isActive ? 'teal.500' : 'transparent'}
-        color={isActive ? 'white' : 'gray.600'}
-        _hover={{ bg: isActive ? 'teal.600' : 'gray.100' }}
+        colorPalette="brand"
+        bg={isActive ? 'colorPalette.solid' : 'transparent'}
+        color={isActive ? 'colorPalette.contrast' : 'fg.muted'}
+        _hover={{ bg: isActive ? 'colorPalette.solid' : 'bg.muted' }}
         transition="all 0.2s"
       >
         <Icon as={icon} boxSize={5} mr={3} />
@@ -36,51 +39,59 @@ function NavItem({ icon, label, to, isActive }: NavItemProps) {
   )
 }
 
+// Every entry has a matching route in App.tsx.
+const navItems = [
+  { icon: FiHome, label: 'Dashboard', to: '/' },
+  { icon: FiMessageSquare, label: 'AI Advisor', to: '/chat' },
+  { icon: FiUsers, label: 'Customers', to: '/customers' },
+  { icon: FiSearch, label: 'Investigations', to: '/investigations' },
+  { icon: FiAlertTriangle, label: 'Alerts', to: '/alerts' },
+  { icon: FiShare2, label: 'Context Graph', to: '/graph' },
+]
+
 export default function Sidebar() {
   const location = useLocation()
 
-  const navItems = [
-    { icon: FiHome, label: 'Dashboard', to: '/' },
-    { icon: FiMessageSquare, label: 'AI Advisor', to: '/chat' },
-    { icon: FiUsers, label: 'Customers', to: '/customers' },
-    { icon: FiSearch, label: 'Investigations', to: '/investigations' },
-    { icon: FiAlertTriangle, label: 'Alerts', to: '/alerts' },
-    { icon: FiFileText, label: 'Reports', to: '/reports' },
-  ]
-
   return (
-    <Box
+    <Flex
+      direction="column"
       w="250px"
-      bg="white"
-      borderRight="1px"
-      borderColor="gray.200"
-      h="100vh"
+      flexShrink={0}
+      bg="bg.panel"
+      borderRightWidth="1px"
+      borderColor="border"
+      h="100dvh"
       position="sticky"
       top={0}
     >
       {/* Logo */}
-      <Flex align="center" p={4} borderBottom="1px" borderColor="gray.200">
-        <Box
+      <Flex align="center" p={4} borderBottomWidth="1px" borderColor="border" gap={3}>
+        <Flex
           w={10}
           h={10}
           borderRadius="lg"
-          bg="teal.500"
-          display="flex"
-          alignItems="center"
-          justifyContent="center"
-          mr={3}
+          colorPalette="brand"
+          bg="colorPalette.solid"
+          align="center"
+          justify="center"
+          flexShrink={0}
         >
-          <Text color="white" fontWeight="bold" fontSize="lg">
+          <Text color="colorPalette.contrast" fontWeight="bold" fontSize="lg">
             FS
           </Text>
-        </Box>
-        <Box>
-          <Text fontWeight="bold" fontSize="sm" color="gray.800">
+        </Flex>
+        <Box flex="1" minW={0}>
+          <Text fontWeight="bold" fontSize="sm" fontFamily="heading" truncate>
             Financial Services
           </Text>
-          <Text fontSize="xs" color="gray.500">
-            Compliance Advisor
-          </Text>
+          <Flex align="center" gap={2}>
+            <Text fontSize="xs" color="fg.muted">
+              Compliance Advisor
+            </Text>
+            <Badge size="sm" colorPalette="brand">
+              Beta
+            </Badge>
+          </Flex>
         </Box>
       </Flex>
 
@@ -98,11 +109,15 @@ export default function Sidebar() {
       </VStack>
 
       {/* Footer */}
-      <Box position="absolute" bottom={0} left={0} right={0} p={4} borderTop="1px" borderColor="gray.200">
-        <Text fontSize="xs" color="gray.500" textAlign="center">
-          Powered by Neo4j + AWS
-        </Text>
+      <Box mt="auto" p={4} borderTopWidth="1px" borderColor="border">
+        <LabsDisclaimer compact />
+        <Flex mt={2} align="center" justify="space-between">
+          <Text fontSize="xs" color="fg.subtle">
+            Neo4j + AWS Strands
+          </Text>
+          <ColorModeButton />
+        </Flex>
       </Box>
-    </Box>
+    </Flex>
   )
 }

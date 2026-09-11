@@ -6,12 +6,9 @@ These tests verify data structure and content without requiring Neo4j.
 from __future__ import annotations
 
 import ast
-import json
 from pathlib import Path
 
-import pytest
-
-DATA_DIR = Path(__file__).parent.parent.parent / "data"
+DATA_DIR = Path(__file__).resolve().parents[3] / "data"
 
 
 class TestCustomersData:
@@ -58,7 +55,8 @@ class TestTransactionsData:
     def test_structuring_pattern_exists(self, sample_transactions):
         """CUST-003 should have 4x $9,500 cash deposits (structuring)."""
         structuring = [
-            t for t in sample_transactions
+            t
+            for t in sample_transactions
             if t["customer_id"] == "CUST-003"
             and t["type"] == "cash_deposit"
             and t["amount"] == 9500
@@ -66,7 +64,7 @@ class TestTransactionsData:
         assert len(structuring) == 4
 
     def test_transactions_have_required_fields(self, sample_transactions):
-        required = {"id", "customer_id", "date", "type", "amount"}
+        required = {"id", "customer_id", "days_ago", "type", "amount"}
         for t in sample_transactions:
             assert required.issubset(t.keys()), f"Transaction {t.get('id')} missing fields"
 

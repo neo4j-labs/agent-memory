@@ -1,4 +1,4 @@
-.PHONY: help install load-sample load-full load-fast load-resume load-dry-run run-backend run-frontend run neo4j clean geocode-locations extract-entities enrich enrich-status backfill-relationships backfill-relationships-status backfill-embeddings backfill-embeddings-status mcp-server
+.PHONY: help install load-sample load-full load-fast load-resume load-dry-run run-backend run-frontend run neo4j clean geocode-locations extract-entities backfill-message-embeddings repair-links enrich enrich-status backfill-relationships backfill-relationships-status backfill-embeddings backfill-embeddings-status mcp-server test
 
 # Default target
 help:
@@ -9,14 +9,16 @@ help:
 	@echo "  make neo4j          Start Neo4j in Docker"
 	@echo ""
 	@echo "Data Loading:"
-	@echo "  make load-sample    Load 5 sample transcripts (for testing)"
-	@echo "  make load-full      Load all 299 transcripts"
+	@echo "  make load-sample    Load 5 transcripts (falls back to data/samples/)"
+	@echo "  make load-full      Load every transcript in data/ (see data/README.md)"
 	@echo "  make load-fast      Load all transcripts without entity extraction (faster)"
 	@echo "  make load-resume    Resume loading (skip already loaded transcripts)"
 	@echo "  make load-dry-run   Preview what would be loaded without loading"
 	@echo ""
 	@echo "Post-Processing:"
 	@echo "  make extract-entities           Extract entities from loaded sessions"
+	@echo "  make backfill-message-embeddings Embed messages loaded with --no-embeddings"
+	@echo "  make repair-links               Rebuild FIRST_MESSAGE/NEXT_MESSAGE chains"
 	@echo "  make backfill-relationships     Extract relationships between existing entities"
 	@echo "  make backfill-relationships-status  Show relationship extraction status"
 	@echo "  make backfill-embeddings        Generate embeddings for entities (for vector search)"
@@ -30,6 +32,9 @@ help:
 	@echo "  make run-backend    Start FastAPI backend only (port 8000)"
 	@echo "  make run-frontend   Start Next.js frontend only (port 3000)"
 	@echo "  make mcp-server     Start MCP server for Claude Desktop"
+	@echo ""
+	@echo "Testing:"
+	@echo "  make test           Run the backend unit tests"
 	@echo ""
 	@echo "Cleanup:"
 	@echo "  make clean          Remove generated files and dependencies"
@@ -50,43 +55,53 @@ neo4j:
 	@sleep 10
 	@echo "Neo4j available at http://localhost:7474"
 
-# Environment variables to suppress warnings during loading
-LOAD_ENV = PYTHONWARNINGS="ignore" HF_HUB_DISABLE_PROGRESS_BARS=1 TOKENIZERS_PARALLELISM=false
+# Quiet the HuggingFace/tokenizers chatter during loading. Deliberately does NOT
+# set PYTHONWARNINGS=ignore: that also hid the library's own deprecation notices
+# (the scripts scope their warning filters to the noisy modules instead).
+LOAD_ENV = HF_HUB_DISABLE_PROGRESS_BARS=1 TOKENIZERS_PARALLELISM=false
 
-# Load sample transcripts (5 files for quick testing)
+# Load a few transcripts for a quick smoke test. With no --data-dir the loader
+# uses ../data when it holds transcripts and ../data/samples otherwise, so this
+# works on a clean clone (see data/README.md).
 load-sample:
 	cd backend && $(LOAD_ENV) uv run python ../scripts/load_transcripts.py \
-		--data-dir ../data \
 		--sample 5
 
 # Load all transcripts (full dataset)
 load-full:
-	cd backend && $(LOAD_ENV) uv run python ../scripts/load_transcripts.py \
-		--data-dir ../data
+	cd backend && $(LOAD_ENV) uv run python ../scripts/load_transcripts.py
 
 # Load all transcripts without entity extraction (faster)
 load-fast:
 	cd backend && $(LOAD_ENV) uv run python ../scripts/load_transcripts.py \
-		--data-dir ../data \
 		--no-entities
 
 # Resume loading (skip already loaded transcripts)
 load-resume:
 	cd backend && $(LOAD_ENV) uv run python ../scripts/load_transcripts.py \
-		--data-dir ../data \
 		--resume
 
 # Preview what would be loaded (dry run)
 load-dry-run:
 	cd backend && $(LOAD_ENV) uv run python ../scripts/load_transcripts.py \
-		--data-dir ../data \
 		--dry-run
 
 # Extract entities from already loaded sessions (post-processing)
 extract-entities:
 	cd backend && $(LOAD_ENV) uv run python ../scripts/load_transcripts.py \
-		--data-dir ../data \
 		--extract-entities-only
+
+# Embed messages that were loaded with --no-embeddings (pairs with load-fast).
+# Without this, every vector search in the app returns nothing.
+backfill-message-embeddings:
+	cd backend && $(LOAD_ENV) uv run python ../scripts/load_transcripts.py \
+		--embeddings-only
+
+# Rebuild FIRST_MESSAGE/NEXT_MESSAGE chains for conversations loaded before
+# sequential linking existed (short_term.migrate_message_links).
+repair-links:
+	cd backend && $(LOAD_ENV) uv run python ../scripts/load_transcripts.py \
+		--repair-links
 
 # Backfill RELATED_TO relationships between existing entities
 # Uses GLiREL for relationship extraction (no LLM required)
@@ -149,6 +164,10 @@ mcp-server:
 		--profile extended \
 		--session-strategy per_day \
 		--user-id lenny-desktop
+
+# Run the backend unit tests (no Neo4j required)
+test:
+	cd backend && uv run pytest tests -m "not integration" -q --timeout=120
 
 # Clean up
 clean:

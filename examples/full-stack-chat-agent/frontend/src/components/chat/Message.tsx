@@ -25,11 +25,7 @@ export function Message({ message }: MessageProps) {
         justifyContent="center"
         flexShrink={0}
       >
-        {isUser ? (
-          <LuUser size={16} />
-        ) : (
-          <LuBot size={16} />
-        )}
+        {isUser ? <LuUser size={16} /> : <LuBot size={16} />}
       </Flex>
 
       {/* Content */}

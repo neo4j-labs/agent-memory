@@ -1,5 +1,5 @@
 import { Box, Text, Badge, HStack, Code } from "@chakra-ui/react";
-import { motion } from "framer-motion";
+import { motion } from "motion/react";
 import { LuWrench, LuCheck, LuLoader } from "react-icons/lu";
 
 interface ToolCallCardProps {
@@ -8,14 +8,6 @@ interface ToolCallCardProps {
   result?: unknown;
   agent: string;
 }
-
-const agentColorMap: Record<string, string> = {
-  supervisor: "blue",
-  kyc_agent: "teal",
-  aml_agent: "orange",
-  relationship_agent: "purple",
-  compliance_agent: "red",
-};
 
 function formatValue(v: unknown): string {
   if (v === null || v === undefined) return "";
@@ -89,5 +81,3 @@ export function ToolCallCard({ tool, args, result }: ToolCallCardProps) {
     </motion.div>
   );
 }
-
-export { agentColorMap };

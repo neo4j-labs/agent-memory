@@ -31,24 +31,18 @@ You also need a running Neo4j instance.
 from pydantic import SecretStr
 
 from neo4j_agent_memory import MemoryClient, MemorySettings, Neo4jConfig
-from neo4j_agent_memory.config.settings import (
-    EmbeddingConfig, EmbeddingProvider,
-    ExtractionConfig, ExtractorType,
-)
+from neo4j_agent_memory.config.settings import ExtractionConfig, ExtractorType
 
 settings = MemorySettings(
-    neo4j=Neo4jConfig(uri="bolt://localhost:7687", password=SecretStr("password")),
-    llm=None,                                         # <1>
-    embedding=EmbeddingConfig(
-        provider=EmbeddingProvider.SENTENCE_TRANSFORMERS,
-        model="all-MiniLM-L6-v2",
-        dimensions=384,
-    ),
+    backend="bolt",                                    # <1>
+    neo4j=Neo4jConfig(uri="bolt://localhost:7687", password=SecretStr("test-password")),
+    llm=None,                                          # <2>
+    embedding="sentence-transformers/all-MiniLM-L6-v2", # <3>
     extraction=ExtractionConfig(
         extractor_type=ExtractorType.PIPELINE,
         enable_spacy=True,
         enable_gliner=True,
-        enable_llm_fallback=False,                    # <2>
+        enable_llm_fallback=False,                     # <4>
     ),
 )
 
@@ -56,8 +50,15 @@ async with MemoryClient(settings) as memory:
     await memory.short_term.add_message("session-1", "user", "John works at Acme")
     print(await memory.get_context("Tell me about John"))
 ----
-<1> Explicit opt-out — no LLM client is ever constructed.
-<2> Required when `llm=None` — see <<validation>>.
+<1> Pins the self-hosted backend, so a `MEMORY_API_KEY` in the environment does not redirect this configuration to the hosted service.
+<2> Explicit opt-out — no LLM client is ever constructed.
+<3> Provider-string shorthand; resolves to a local `SentenceTransformersProvider`. An `EmbeddingProvider` instance also works.
+<4> Required when `llm=None` — see <<validation>>.
+
+[NOTE]
+====
+This configuration is self-hosted (bolt) only. On the hosted service (NAMS) extraction and embeddings run server-side, so there is no LLM or embedding provider to opt out of — see xref:how-to/use-nams.adoc[Use NAMS].
+====
 
 [[validation]]
 == Validation rules
@@ -96,4 +97,10 @@ If you _omit_ the `llm` field altogether (rather than passing `None`), the packa
 
 == Worked example
 
-A runnable script lives at `examples/no_llm/main.py` in the repository.
+A runnable script lives at `examples/no_llm/main.py` in the repository. It exercises all three memory layers with no LLM and fails fast when the local extraction stack is incomplete:
+
+[source,bash]
+----
+make neo4j-start
+uv run python examples/no_llm/main.py
+----

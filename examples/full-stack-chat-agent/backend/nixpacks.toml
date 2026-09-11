@@ -1,8 +1,11 @@
+# Railway / nixpacks build. `uv sync --frozen` installs from the committed
+# uv.lock, so pyproject.toml is the single source of truth for dependencies
+# (there is deliberately no requirements.txt to drift out of step with it).
 [phases.setup]
-nixPkgs = ["python312"]
+nixPkgs = ["python312", "uv"]
 
 [phases.install]
-cmds = ["pip install --upgrade pip", "pip install -r requirements.txt"]
+cmds = ["uv sync --frozen --no-dev"]
 
 [start]
-cmd = "python -m uvicorn src.main:app --host 0.0.0.0 --port ${PORT:-8000}"
+cmd = "uv run --no-sync python -m uvicorn src.main:app --host 0.0.0.0 --port ${PORT:-8000}"
