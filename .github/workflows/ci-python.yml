@@ -107,7 +107,7 @@ jobs:
         run: uv run pytest tests/unit -v --cov=neo4j_agent_memory --cov-report=xml --cov-report=term-missing
 
       - name: Upload unit test coverage artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: matrix.python-version == '3.12'
         with:
           name: coverage-unit
@@ -203,7 +203,7 @@ jobs:
           NEO4J_PASSWORD: test-password
 
       - name: Upload integration coverage artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: coverage-integration
@@ -560,7 +560,7 @@ jobs:
           uv run python -c "import neo4j_agent_memory; print(neo4j_agent_memory.__version__)"
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
