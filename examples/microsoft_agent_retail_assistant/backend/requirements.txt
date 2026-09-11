@@ -2,7 +2,7 @@
 agent-framework>=1.0.0b260212
 
 # Neo4j Agent Memory
-neo4j-agent-memory[openai,microsoft-agent]>=0.1.0
+neo4j-agent-memory[openai,microsoft-agent]>=0.5.0
 
 # Web framework
 fastapi>=0.100.0
