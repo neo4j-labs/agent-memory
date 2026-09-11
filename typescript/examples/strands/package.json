@@ -12,7 +12,7 @@
   "dependencies": {
     "@neo4j-labs/agent-memory": "file:../..",
     "@strands-agents/sdk": "^1.16",
-    "openai": "^6.45",
+    "openai": "^7.10",
     "zod": "^4.6"
   },
   "devDependencies": {
