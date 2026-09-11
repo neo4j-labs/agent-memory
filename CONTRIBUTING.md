@@ -43,12 +43,16 @@ make neo4j-stop   # Stop Neo4j container
 make neo4j-logs   # View Neo4j logs
 make neo4j-clean  # Stop and remove volumes
 
-# Run examples
-make example-basic      # Basic usage example
-make example-resolution # Entity resolution example
-make example-langchain  # LangChain integration example
-make example-pydantic   # Pydantic AI integration example
-make examples           # Run all examples
+# Run examples (see `make help` for the full list)
+make example-hello      # Smallest round trip (one PEP 723 file)
+make example-basic      # Guided tour of the whole API surface
+make example-resolution # Entity resolution strategies (no Neo4j)
+make example-no-llm     # Fully local: llm=None + local embedder
+make example-langchain  # LangChain 1.x agent (keyless)
+make example-pydantic   # PydanticAI 2.x agent (keyless)
+make examples           # Run every key-free example
+make examples-with-keys # Run the examples that need credentials
+make ts-test-examples   # Type-check + test every typescript/examples/* directory
 
 # Full-stack chat agent
 make chat-agent-install  # Install backend + frontend dependencies
@@ -71,11 +75,17 @@ run by `make check`:
 - **ty** (Astral's checker) is the second, independent checker whose
   complementary rules must also pass (`make ty`).
 
-The checked surface is `src`, `benchmarks`, and the top-level `examples/*.py`
-demos, and it is kept at **zero** errors/diagnostics — CI fails on any new
-error. Run the checkers with the integration extras installed
-(`uv sync --all-extras --group dev`) so `integrations/` is analyzed against real
-framework types.
+The checked surface is `src`, `benchmarks`, the top-level `examples/*.py` demos
+and every `examples/<dir>/main.py` entrypoint, and it is kept at **zero**
+errors/diagnostics — CI fails on any new error. Run the checkers with the
+integration extras installed (`uv sync --all-extras --group dev`) so
+`integrations/` is analyzed against real framework types.
+
+`make lint` / `make format-check` cover `src tests examples` — the whole examples
+tree, not just the top-level scripts. mypy cannot take more than one `main.py`
+per invocation ("Duplicate module named main") and the example directories are
+hyphenated so they cannot be packages, which is why `make typecheck` loops over
+them one file at a time.
 
 Follow these conventions when adding or changing code:
 
@@ -125,16 +135,26 @@ bolt classes), `await connect(NamsSettings(...))` → `NamsMemoryClient`.
 
 Examples are located in `examples/` and demonstrate various features:
 
+[`examples/README.md`](examples/README.md) is the full gallery, with a chooser
+table and the conventions every example follows. A selection:
+
 | Example | Description | Requirements |
 |---------|-------------|--------------|
-| [`lennys-memory/`](examples/lennys-memory/) | **Flagship demo**: Podcast knowledge graph with AI chat, graph visualization, map view, entity enrichment | Neo4j, OpenAI, Node.js |
-| [`financial-services-advisor/`](examples/financial-services-advisor/) | **AWS Strands demo**: Multi-agent KYC/AML compliance with 5 specialized agents, CDK deployment | Neo4j Aura, AWS Bedrock, Node.js |
-| `full-stack-chat-agent/` | Full-stack web app with FastAPI backend and Next.js frontend | Neo4j, OpenAI, Node.js |
-| `basic_usage.py` | Core memory operations (short-term, long-term, reasoning) | Neo4j, OpenAI API key |
-| `entity_resolution.py` | Entity matching strategies | None |
-| `langchain_agent.py` | LangChain integration | Neo4j, OpenAI, langchain extra |
-| `pydantic_ai_agent.py` | Pydantic AI integration | Neo4j, OpenAI, pydantic-ai extra |
-| `domain-schemas/` | GLiNER2 domain schema examples (8 domains) | GLiNER extra, optional Neo4j |
+| [`hello-memory/`](examples/hello-memory/) | The smallest round trip: one PEP 723 file, thirteen lines of body | `uv` only (NAMS key **or** Neo4j) |
+| [`basic_usage.py`](examples/basic_usage.py) | Guided tour: twelve sections across all three memory types | Neo4j (OpenAI key optional) |
+| [`entity_resolution.py`](examples/entity_resolution.py) | Entity matching strategies | None (optional: `fuzzy` extra, plus an embedder for the semantic section) |
+| [`enrichment_example.py`](examples/enrichment_example.py) | Wikipedia/Diffbot entity enrichment | Neo4j, network access (Diffbot key optional) |
+| [`langchain_agent.py`](examples/langchain_agent.py) | LangChain 1.x `create_agent` + memory middleware | Neo4j, `langchain-agents` extra (OpenAI optional) |
+| [`pydantic_ai_agent.py`](examples/pydantic_ai_agent.py) | PydanticAI 2.x agent with memory tools and traces | Neo4j, `pydantic-ai` extra (OpenAI optional) |
+| [`no_llm/`](examples/no_llm/) | Fully local: `llm=None`, local embedder, spaCy + GLiNER | Neo4j, `extraction` + `sentence-transformers` extras |
+| [`domain-schemas/`](examples/domain-schemas/) | GLiNER2 domain schemas (8 domains) via one runner | `gliner` extra, optional Neo4j |
+| [`nams-quickstart/`](examples/nams-quickstart/) | Hosted backend end to end, no Neo4j to operate | `MEMORY_API_KEY`, `nams` extra |
+| [`claude-code-team-memory/`](examples/claude-code-team-memory/) | One memory graph shared across a team's editors, no agent code | `MEMORY_API_KEY` (configs validate offline) |
+| [`strands-session-manager/`](examples/strands-session-manager/) | `Neo4jSessionManager` on `Agent(session_manager=...)` | Neo4j, `strands` extra (no API key) |
+| [`full-stack-chat-agent/`](examples/full-stack-chat-agent/) | FastAPI + PydanticAI + Next.js 16 over two Neo4j graphs | Neo4j, OpenAI, Node 22+ |
+| [`lennys-memory/`](examples/lennys-memory/) | **Flagship Python demo**: podcast knowledge graph, 28-tool agent, graph + map views | Neo4j, OpenAI, Node 22+ |
+| [`financial-services-advisor/`](examples/financial-services-advisor/) | Multi-agent KYC/AML compliance, implemented twice (AWS Strands + Bedrock, Google ADK + Gemini) | Neo4j, AWS or GCP credentials, Node 22+ |
+| [`typescript/examples/`](typescript/examples/) | Nine TypeScript examples; flagship `nextjs-memory-chat/` | `MEMORY_API_KEY`, Node 22+ (24+ for `eve-commerce-agent`) |
 
 ### Environment Setup
 

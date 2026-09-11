@@ -13,6 +13,14 @@ wheels/
 .env
 .env.local
 .env.*.local
+.env.production
+.env.development
+# Per-example .env files (every example ships a tracked .env.example instead)
+examples/**/.env
+typescript/examples/**/.env
+# Cloudflare Workers local secrets
+.dev.vars
+.dev.vars.*
 
 # IDE and editor files
 .idea/
@@ -24,6 +32,8 @@ wheels/
 
 # Testing and coverage
 .pytest_cache/
+examples/**/.pytest_cache/
+typescript/examples/**/.pytest_cache/
 .coverage
 htmlcov/
 coverage.xml
@@ -49,9 +59,16 @@ yarn-error.log*
 # TypeScript SDK (typescript/)
 typescript/node_modules/
 typescript/dist/
-typescript/.tsbuildinfo
 typescript/examples/*/node_modules/
-typescript/examples/*/package-lock.json
+# Example lockfiles are tracked where they exist (see
+# typescript/examples/README.md "Lockfile policy"); CI uses `npm ci` when it
+# finds one and `npm install` otherwise.
+
+# Build artifacts
+*.tsbuildinfo
+cdk.out/
+.turbo/
+*.tfstate*
 
 # Build outputs
 *.log
