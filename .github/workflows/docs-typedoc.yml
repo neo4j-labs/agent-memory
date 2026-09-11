@@ -61,14 +61,3 @@ jobs:
             git push origin main
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
-
-      # Pushes made with GITHUB_TOKEN do not trigger other workflows, so
-      # trigger-labs-build.yml won't fire for the commit above — dispatch the
-      # labs-pages rebuild directly.
-      - name: Trigger Labs Pages rebuild
-        if: steps.commit.outputs.changed == 'true'
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.LABS_PAGES_TOKEN }}
-          repository: neo4j-contrib/labs-pages
-          event-type: agent-memory-docs-update
