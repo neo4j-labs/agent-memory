@@ -124,10 +124,12 @@ export async function main(options: RunOptions = {}): Promise<RunResult> {
       userId,
       options.conversationId ?? process.env.CONVERSATION_ID,
     );
+    const redactedUserId =
+      userId.length <= 4 ? "***" : `${userId.slice(0, 2)}***${userId.slice(-2)}`;
     log(
       resumed
-        ? `Resumed conversation ${conversationId} for ${userId}`
-        : `Created conversation ${conversationId} for ${userId}`,
+        ? `Resumed conversation ${conversationId} for ${redactedUserId}`
+        : `Created conversation ${conversationId} for ${redactedUserId}`,
     );
 
     // A preference outlives any one conversation: written on the first run,
