@@ -141,7 +141,9 @@ export async function main(options: RunOptions = {}): Promise<RunResult> {
       title: "Lisbon trip planning",
       metadata: { source: "mastra-example" },
     });
-    log(`thread ${thread.id} created for the demo resource`);
+    // Thread ids are not printed: on the bridge transport the adapter derives
+    // them from the resource id, which comes from the environment.
+    log("first thread created for the demo resource");
 
     const answers: string[] = [];
     for (const text of FIRST_THREAD_TURNS) {
@@ -182,7 +184,7 @@ export async function main(options: RunOptions = {}): Promise<RunResult> {
       resourceId,
       title: "Follow-up",
     });
-    log(`\nsecond thread ${secondThread.id} (same resource, distinct id)`);
+    log(`\nsecond thread created (same resource, distinct id: ${secondThread.id !== thread.id})`);
 
     const recalled = await client.longTerm.searchPreferences("trip style", { limit: 3 });
     log(`Preferences recalled in the new thread: ${recalled.length}`);
