@@ -34,9 +34,17 @@ Plain `v*` tags do not trigger any publish.
 - `.github/workflows/ci-python.yml` fires on changes under `src/**`,
   `tests/**`, `benchmarks/**`, `examples/**`, `docs/**`, `scripts/**`,
   and Python config files. **TypeScript-only PRs do not trigger Python
-  CI.**
+  CI.** It also owns the `frontend-build` job, which installs, type-checks,
+  lints, tests and builds the five example frontends plus the AWS CDK app. A
+  `changed-paths` job narrows that matrix with plain `git diff`, so a
+  Python-only PR skips it.
 - `.github/workflows/ci-typescript.yml` fires on changes under
-  `typescript/**`. **Python-only PRs do not trigger TypeScript CI.**
+  `typescript/**`. **Python-only PRs do not trigger TypeScript CI.** Its
+  `type-check-examples` matrix covers all nine `typescript/examples/*`
+  directories on Node 24 (`eve-commerce-agent` requires `>=24`; the rest
+  require `>=22`) and runs `tsc --noEmit`, `npm test --if-present` and
+  `npm run build --if-present` for each — including the Next.js flagship,
+  `nextjs-memory-chat`.
 
 If you touch a cross-cutting file (e.g. `.gitignore`, top-level
 `README.md`), expect neither workflow to fire — surface the change in
@@ -166,7 +174,7 @@ src/neo4j_agent_memory/
 ├── integration.py             # MemoryIntegration convenience layer
 ├── mcp/
 │   ├── __init__.py          # MCP package exports
-│   ├── server.py            # MCP server (stdio/SSE/HTTP transports)
+│   ├── server.py            # MCP server (FastMCP 4: stdio / Streamable HTTP; sse deprecated)
 │   ├── _tools.py            # 16 MCP tools (core + extended profiles)
 │   ├── _resources.py        # 4 MCP resources (context, entities, preferences, stats)
 │   ├── _prompts.py          # 3 MCP prompts (conversation, reasoning, review)
@@ -1449,7 +1457,11 @@ real_estate_schema = DomainSchema(
 extractor = GLiNEREntityExtractor(schema=real_estate_schema, threshold=0.5)
 ```
 
-See `docs/entity-extraction.md` for detailed documentation and `examples/domain-schemas/` for example applications.
+See `docs/modules/ROOT/pages/how-to/entity-extraction.adoc` and
+`docs/modules/ROOT/pages/how-to/entity-extraction-schemas.adoc` for the full
+documentation. The runnable examples live in `examples/domain-schemas/`, driven by
+one runner: `uv run python examples/domain-schemas/run.py --schema <name>` (use
+`--list` to see the eight schemas and the sample corpora under `samples/`).
 
 ### Framework Integrations
 
@@ -1491,36 +1503,45 @@ from neo4j_agent_memory.embeddings.vertex_ai import VertexAIEmbedder
 
 # Create embedder with Vertex AI
 embedder = VertexAIEmbedder(
-    model="text-embedding-004",     # or gecko@003, gecko-multilingual
+    model="gemini-embedding-001",   # default; or text-embedding-005
     project_id="your-gcp-project",  # or from GOOGLE_CLOUD_PROJECT env
     location="us-central1",
     task_type="RETRIEVAL_DOCUMENT", # or RETRIEVAL_QUERY, SEMANTIC_SIMILARITY
+    output_dimensionality=768,      # default; None for the native 3072
 )
 
 # Single embedding
 embedding = await embedder.embed("Hello world")
 
-# Batch embedding (up to 250 texts per batch)
+# Batch embedding. gemini-embedding-001 accepts one text per request (the
+# embedder issues one call per text); the other models batch up to 250.
 embeddings = await embedder.embed_batch(["Text 1", "Text 2", "Text 3"])
 
-# Use with MemoryClient via config
+# Use with MemoryClient via the provider string (preferred) ...
 from neo4j_agent_memory import MemorySettings
-from neo4j_agent_memory.config.settings import EmbeddingConfig, EmbeddingProvider
 
-settings = MemorySettings(
-    embedding=EmbeddingConfig(
-        provider=EmbeddingProvider.VERTEX_AI,
-        model="text-embedding-004",
-        project_id="your-project",
-        location="us-central1",
-    ),
-)
+settings = MemorySettings(embedding="vertex_ai/gemini-embedding-001")
+
+# ... or pass the embedder explicitly
+async with MemoryClient(settings, embedder=embedder) as client:
+    ...
 ```
 
 **Supported Models:**
-- `text-embedding-004` - Recommended, 768 dimensions
-- `textembedding-gecko@003` - Legacy, 768 dimensions
-- `textembedding-gecko-multilingual@001` - Multilingual, 768 dimensions
+- `gemini-embedding-001` - Default. 3072 native dimensions, truncatable to 1536/768
+- `text-embedding-005` - 768 dimensions, English/code
+- `text-multilingual-embedding-002` - 768 dimensions, multilingual
+
+**Retired (raise `EmbeddingError` naming the replacement):** `text-embedding-004`
+(shut down 2026-01-14) and `textembedding-gecko*` (shut down 2025-04-09).
+
+**Output dimensionality:** `VertexAIEmbedder` defaults to
+`output_dimensionality=768` even though `gemini-embedding-001` emits 3072
+natively. Neo4j vector index dimensions are fixed at creation time and
+`MemoryClient` sizes its indexes from `embedder.dimensions`, so the 768 default
+keeps databases built against the old `text-embedding-004` default working with
+no re-embedding. Pass `output_dimensionality=None` (3072) or `1536` on a fresh
+database for better retrieval quality.
 
 #### Google ADK MemoryService
 
@@ -1742,7 +1763,19 @@ agent = ChatAgent(
 
 6. **Async Context Manager**: `MemoryClient` is designed to be used as an async context manager (`async with`) for proper connection handling.
 
-7. **Optional Dependencies**: Framework integrations and extractors (LangChain, spaCy, GLiNER, etc.) are optional. They're wrapped in try/except ImportError blocks.
+7. **Optional Dependencies**: Framework integrations and extractors (LangChain, spaCy, GLiNER, etc.) are optional. They're wrapped in try/except ImportError blocks. `pyproject.toml`'s `[project.optional-dependencies]` is the source of truth; the current set is:
+
+    | Group | Extras |
+    |---|---|
+    | LLM providers | `openai`, `anthropic`, `litellm`, `instructor`, `vertex-ai`, `bedrock`, `google`, `aws` |
+    | Embeddings | `sentence-transformers`, `vertex-ai`, `bedrock` |
+    | Extraction | `spacy`, `gliner`, `extraction` (both), `fuzzy` |
+    | Hosted backend | `nams` (httpx) |
+    | Frameworks | `langchain` (core only), `langchain-agents` (core + `langchain`), `pydantic-ai`, `llamaindex`, `crewai`, `openai-agents`, `microsoft-agent`, `google-adk`, `strands` |
+    | Tooling | `cli`, `mcp` (fastmcp 4), `opentelemetry`, `opik`, `observability` |
+    | Aggregates | `all`, `full` |
+
+    `langchain-agents` is the one to reach for in examples that build a real agent: the bare `langchain` extra installs `langchain-core` only and has no `create_agent`.
 
 8. **Type-Aware Resolution**: The `CompositeResolver` now supports type-aware resolution - entities of different types (e.g., PERSON vs LOCATION) are never merged even if they have similar names.
 
@@ -1811,14 +1844,14 @@ agent = ChatAgent(
     # entity.entity_type     # Wrong - this attribute doesn't exist
     ```
 
-22. **Entity Metadata Access**: Entity enrichment data (from Wikipedia, Diffbot) is stored in the `metadata` dict, not as direct attributes. Use `getattr()` with fallback to `metadata.get()`:
+22. **Entity Metadata Access**: Entity enrichment data (from Wikipedia, Diffbot) always lands in the `metadata` dict. `Entity` has no `enriched_description` / `wikipedia_url` / `wikidata_id` / `image_url` / `enriched_at` attributes, so read them straight out of `metadata` — the old `getattr()`-with-fallback idiom was a defensive no-op and is not needed:
 
     ```python
-    # Enrichment fields may be in metadata dict
     metadata = entity.metadata or {}
-    enriched_description = getattr(entity, "enriched_description", None) or metadata.get("enriched_description")
-    wikipedia_url = getattr(entity, "wikipedia_url", None) or metadata.get("wikipedia_url")
-    image_url = getattr(entity, "image_url", None) or metadata.get("image_url")
+    enriched_description = metadata.get("enriched_description")
+    wikipedia_url = metadata.get("wikipedia_url")
+    wikidata_id = metadata.get("wikidata_id")
+    image_url = metadata.get("image_url")
     ```
 
 23. **Neo4j Property Key Warnings**: When querying optional properties in Cypher, avoid referencing properties that may not exist in the schema. Use `'property' IN keys(node)` to check existence before accessing:
@@ -1896,7 +1929,13 @@ agent = ChatAgent(
 
 32. **Observational Memory**: The `MemoryObserver` tracks accumulated context per session (character count, message count) and extracts inline observations (decisions, facts) from user messages. When the token count exceeds `threshold_tokens` (default 30000), it generates keyword-based reflections from older messages. The observer is created in the MCP server lifespan and wired to `MemoryIntegration` via the `observer` property. The `memory_get_observations` tool returns the three-tier hierarchy: reflections, observations, and session stats.
 
-33. **MCP Tool Annotations**: All MCP tools include FastMCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`). Read tools are marked `readOnlyHint=True, idempotentHint=True`. Write tools are marked `readOnlyHint=False, idempotentHint=False`. No tools are marked destructive.
+33. **MCP Tool Annotations**: All MCP tools carry FastMCP annotations, declared once as `READ_ANNOTATIONS` / `WRITE_ANNOTATIONS` in `mcp/_tools.py`. MCP Python SDK 2 (which FastMCP 4 builds on) renamed the `ToolAnnotations` fields to **snake_case**, so the dicts use `read_only_hint`, `destructive_hint`, `idempotent_hint` — the SDK serialises them back to the wire's camelCase. Read tools are `read_only_hint=True, idempotent_hint=True`; write tools are `read_only_hint=False, idempotent_hint=False`. No tool is marked destructive. FastMCP still accepts the legacy camelCase spelling through a compatibility shim that can be switched off, so do not reintroduce it.
+
+34. **MCP Transports (FastMCP 4)**: `TRANSPORTS = ("stdio", "http", "streamable-http", "sse")` in `mcp/server.py`. `stdio` is the default (Claude Desktop, Claude Code, Cursor). `http` is Streamable HTTP — the only network transport in the current MCP spec; `streamable-http` is an explicit spelling of the same thing. `sse` is the legacy HTTP+SSE transport: it is still accepted so existing launch configurations keep starting, but `normalize_transport()` logs a warning and serves Streamable HTTP instead. Prefer `--transport http` in new docs and examples.
+
+35. **Google ADK wiring**: `google-adk` is pinned `>=2.0,<3` (plus `google-genai>=1.66`). Memory is a **`Runner`-level** service — `Runner(memory_service=Neo4jMemoryService(...))` together with the `load_memory` tool. `LlmAgent` has no `memory=` parameter; `Agent(memory=...)` does not exist. `search_memory()` returns a `SearchMemoryResponse`, so iterate `response.memories` (each entry is `memory.content.parts[0].text` plus `custom_metadata`), not the response itself.
+
+36. **Shared example environment helper**: single-file examples under `examples/` do `from _env import NEO4J_URI, NEO4J_PASSWORD, OPENAI_API_KEY, MEMORY_API_KEY`. `examples/_env.py` loads `examples/.env` (copy the tracked `examples/.env.example`) and falls back to a small hand-rolled parser when `python-dotenv` is absent. Directory examples that ship their own `.env.example` load that instead. Never re-copy the old inline `load_env_files()` helper into a new example.
 
 ## Environment Variables
 
@@ -1933,12 +1972,32 @@ make check             # Run lint, format check, mypy, ty
 make pre-commit        # Run all checks + unit tests
 make ci                # Full CI simulation
 
-# Simple Examples
-make example-basic     # Run basic usage example
-make example-resolution # Run entity resolution example
-make example-langchain # Run LangChain integration example
-make example-pydantic  # Run Pydantic AI integration example
-make examples          # Run all examples
+# Examples (key-free — `make examples` runs all of these)
+make example-hello            # Smallest round trip (one PEP 723 file)
+make example-basic            # Guided tour of the whole API surface
+make example-resolution       # Entity resolution strategies (no Neo4j)
+make example-no-llm           # llm=None + local embedder, fully offline
+make example-domain-schemas   # GLiNER domain-schema runner
+make example-existing-graph   # Adopt a pre-existing Neo4j graph
+make example-buffered-writes  # Non-blocking writes + back-pressure
+make example-audit-trail      # :TOUCHED reasoning audit edges
+make example-eval-harness     # Labelled memory-quality regression cases
+make example-strands-session-manager
+make example-strands-memory-store
+make example-langchain        # LangChain 1.x agent (keyless)
+make example-pydantic         # PydanticAI 2.x agent (keyless)
+make example-team-memory-doctor  # Validate the editor MCP configs offline
+make examples                 # Run every key-free example
+
+# Examples that need credentials
+make example-enrichment          # Wikipedia/Diffbot enrichment
+make example-nams-quickstart     # Hosted NAMS (MEMORY_API_KEY)
+make example-ontology-lifecycle  # Hosted ontology lifecycle (MEMORY_API_KEY)
+make example-team-memory-seed    # Seed the shared workspace (MEMORY_API_KEY)
+make examples-with-keys          # Run all credential-requiring examples
+
+# TypeScript examples
+make ts-test-examples  # Type-check + test every typescript/examples/* directory
 
 # Full-Stack Chat Agent Example
 make chat-agent-install  # Install backend + frontend dependencies
@@ -1949,7 +2008,25 @@ make chat-agent          # Show instructions for running both
 
 ## Running Examples
 
-Examples are located in `examples/` and can be run via Makefile targets or directly:
+`examples/README.md` is the gallery and the source of truth for what each example
+does; `tests/examples/test_examples_registry.py` fails if a directory there has
+no README footer, no index row, or no test module. The shape of the tree:
+
+| Group | Directories |
+|---|---|
+| Hosted backend (NAMS) | `nams-quickstart/`, `nams-fastapi/`, `nams-langchain/`, `ontology-lifecycle/`, `claude-code-team-memory/` |
+| Standalone scripts | `hello-memory/` (PEP 723), `basic_usage.py`, `entity_resolution.py`, `enrichment_example.py`, `langchain_agent.py`, `pydantic_ai_agent.py` |
+| v0.2 features | `existing-graph/`, `buffered-writes/`, `audit-trail/`, `eval-harness/` |
+| Runtime + tooling | `no_llm/`, `domain-schemas/` |
+| Framework integrations | `strands-session-manager/`, `strands-memory-store/`, `google_adk_demo/`, `google_cloud_integration/`, `microsoft_agent_retail_assistant/` |
+| Full-stack apps | `full-stack-chat-agent/`, `lennys-memory/`, `financial-services-advisor/` (AWS Strands + Google ADK twins) |
+| TypeScript | `typescript/examples/` — nine examples, flagship `nextjs-memory-chat/` |
+
+`hello-memory/` is the only example allowed to use a PEP 723 header; every other
+one pins `neo4j-agent-memory[...]>=0.5.0,<0.7` in a `requirements.txt` or
+`pyproject.toml` so the pin is reviewable.
+
+Examples can be run via Makefile targets or directly:
 
 ```bash
 # Via Makefile (auto-starts Docker Neo4j if NEO4J_URI not set)
@@ -1970,16 +2047,23 @@ cp examples/.env.example examples/.env
 Key variables:
 - `NEO4J_URI` - If set, uses this Neo4j instance; if not set, auto-starts Docker
 - `NEO4J_PASSWORD` - Neo4j password (use `test-password` for Docker)
-- `OPENAI_API_KEY` - Required for OpenAI embeddings and LLM extraction
+- `OPENAI_API_KEY` - Optional. Without it the examples fall back to a local sentence-transformers embedder and turn LLM extraction off
+- `MEMORY_API_KEY` - Required by the hosted (NAMS) examples only
+- `OPENAI_MODEL`, `EMBEDDING_MODEL`, `LOCAL_EMBEDDING_MODEL` - model ids, so no example hard-codes one
 
-If `NEO4J_URI` is not set, the Makefile targets will automatically start the Docker Neo4j container with `test-password`.
+The shared loader is `examples/_env.py`: single-file examples do
+`from _env import NEO4J_URI, NEO4J_PASSWORD, ...`, which reads `examples/.env`
+(via `python-dotenv` when installed, otherwise a small built-in parser).
+Directory examples that ship their own `.env.example` load that file instead.
+
+If `NEO4J_URI` is not set, the Makefile targets automatically start the Docker Neo4j container with `test-password`. `make examples` is key-free by design; anything needing credentials lives under `make examples-with-keys`.
 
 ## Full-Stack Chat Agent Example
 
 Located in `examples/full-stack-chat-agent/`, this is a complete demonstration of the neo4j-agent-memory package with:
 
 - **Backend**: FastAPI + PydanticAI agent with all three memory types
-- **Frontend**: Next.js 14 + Chakra UI with SSE streaming
+- **Frontend**: Next.js 16 (App Router) + React 19 + Chakra UI v3 with SSE streaming
 - **News Graph Tools**: Search, filter, and analyze news articles
 - **Memory Graph Visualization**: Interactive graph view using Neo4j Visualization Library (NVL)
   - Conversation-scoped filtering: Shows only nodes relevant to the current thread
@@ -2026,11 +2110,11 @@ make chat-agent-frontend
 
 ## Lenny's Memory Example (Flagship Demo)
 
-Located in `examples/lennys-memory/`, this is the flagship demo for the library launch. It loads 299 Lenny's Podcast episodes into a knowledge graph with a full-stack AI chat agent.
+Located in `examples/lennys-memory/`, this is the flagship Python demo. It loads a podcast corpus (299 episodes in the full dataset) into a knowledge graph with a full-stack AI chat agent. **The real transcripts are not shipped with the repository** — `make load-sample` runs against the synthetic fixtures in `data/samples/`.
 
 ### Tech Stack
 - **Backend**: FastAPI + PydanticAI + neo4j-agent-memory
-- **Frontend**: Next.js 14 + Chakra UI v3 + TypeScript
+- **Frontend**: Next.js 16 (App Router) + React 19 + Chakra UI v3 + TypeScript (Node >= 22)
 - **Graph Viz**: Neo4j Visualization Library (NVL)
 - **Map Viz**: Leaflet + react-leaflet + Turf.js
 - **Database**: Neo4j 5.x with APOC
@@ -2038,7 +2122,7 @@ Located in `examples/lennys-memory/`, this is the flagship demo for the library 
 
 ### Key Features
 
-- **19 agent tools**: Podcast search, entity queries, geospatial analysis, preferences, reasoning memory
+- **28 agent tools**: Podcast search, entity queries, geospatial analysis, preferences, reasoning memory, deduplication review, provenance and enrichment status
 - **Three memory types**: Short-term (conversations), long-term (entities, preferences), reasoning (reasoning traces)
 - **Wikipedia enrichment**: Entities auto-enriched with descriptions, images, Wikipedia URLs
 - **SSE streaming**: Real-time token delivery with tool call visualization
@@ -2059,15 +2143,24 @@ The latest version includes significant frontend improvements:
 - **Onboarding**: WelcomeModal for first-time users, suggested query chips
 - **Mobile-First Design**: Responsive layout, drawer navigation, FAB for new conversations
 
-### Agent Tools (19 total)
+### Agent Tools (28 total)
 
-**Podcast Content Search (6):** `search_podcast_content`, `search_by_speaker`, `search_by_episode`, `get_episode_list`, `get_speaker_list`, `get_memory_stats`
+Registered with `@agent.tool` in `backend/src/agent/agent.py`; the function names
+are all `tool_`-prefixed.
 
-**Entity Knowledge Graph (4):** `search_entities`, `get_entity_context`, `find_related_entities`, `get_most_mentioned_entities`
+**Podcast content search (6):** `tool_search_podcast`, `tool_search_by_speaker`, `tool_search_episode`, `tool_list_episodes`, `tool_list_speakers`, `tool_get_stats`
 
-**Geospatial Analysis (6):** `search_locations`, `find_locations_near`, `get_episode_locations`, `find_location_path`, `get_location_clusters`, `calculate_location_distances`
+**Entity knowledge graph (4):** `tool_search_entities`, `tool_get_entity_context`, `tool_find_related_entities`, `tool_get_top_entities`
 
-**Personalization (2):** `get_user_preferences`, `find_similar_past_queries`
+**Geospatial analysis (6):** `tool_search_locations`, `tool_find_locations_near`, `tool_get_episode_locations`, `tool_find_location_path`, `tool_get_location_clusters`, `tool_calculate_distances`
+
+**Personalization (2):** `tool_get_user_preferences`, `tool_find_similar_queries`
+
+**Reasoning memory (3):** `tool_learn_from_similar_task`, `tool_get_tool_patterns`, `tool_get_reasoning_history`
+
+**Memory hygiene and provenance (3):** `tool_find_duplicates`, `tool_get_entity_provenance`, `tool_check_enrichment`
+
+**Conversation and graph (4):** `tool_get_conversation_context`, `tool_list_podcast_sessions`, `tool_get_episode_summary`, `tool_memory_graph_search`
 
 ### Graph Visualization Features
 
@@ -2155,11 +2248,11 @@ See `examples/lennys-memory/README.md` for a full deep dive.
 Located in `examples/financial-services-advisor/google-cloud-financial-advisor/`, this demonstrates the Google Cloud ecosystem integration with a multi-agent compliance investigation app.
 
 ### Tech Stack
-- **Backend**: FastAPI + Google ADK (Agent Development Kit) + neo4j-agent-memory
-- **Frontend**: React + Vite + Chakra UI v3 + Framer Motion + TypeScript
+- **Backend**: Python 3.12, FastAPI + Google ADK 2.x (Agent Development Kit) + `neo4j-agent-memory[google-adk,vertex-ai,litellm]`
+- **Frontend**: React 19 + Vite + Chakra UI v3 + `motion` 13 (the renamed framer-motion) + TypeScript
 - **Database**: Neo4j 5.x
-- **LLM**: Gemini 2.5 Flash (via Google AI Studio)
-- **Embeddings**: Vertex AI text-embedding-004
+- **LLM**: Gemini 2.5 Flash (via Google AI Studio), model id from the environment
+- **Embeddings**: Vertex AI `gemini-embedding-001` (3072 native dimensions, truncated to 768)
 
 ### Multi-Agent Architecture
 
@@ -2277,7 +2370,7 @@ async with MemoryClient(settings) as client:
 ### Running
 
 ```bash
-cd examples/google-cloud-financial-advisor
+cd examples/financial-services-advisor/google-cloud-financial-advisor
 
 # Configure environment
 cp .env.example .env

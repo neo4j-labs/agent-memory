@@ -33,6 +33,74 @@ def pytest_configure(config):
 
 
 # =============================================================================
+# Cross-example import isolation
+# =============================================================================
+#
+# Several example directories ship a module with the same bare name --
+# ``_common.py`` exists under examples/google_cloud_integration/ and under
+# examples/lennys-memory/scripts/, ``main.py`` under eleven directories. Test
+# modules import them by putting the example directory on ``sys.path``, so
+# whichever test runs first wins and the next one silently gets the wrong
+# module (symptom: ``ImportError: cannot import name 'Colors' from '_common'``
+# only when the full directory is collected). Unload anything imported from
+# under examples/ after each test so collection order cannot matter.
+
+
+def _module_lives_under(module: Any, root: str) -> bool:
+    """True when ``module`` was loaded from under ``root``.
+
+    Namespace packages (``examples/*/backend/src``) have ``__file__ is None``,
+    so fall back to ``__path__`` -- otherwise a stale ``src`` package keeps
+    pointing at whichever backend was imported first.
+
+    Reads ``__dict__`` rather than using ``getattr``: some packages
+    (``transformers``) install a ``_LazyModule`` whose ``__getattr__`` imports a
+    submodule on any unknown attribute, which would turn this inspection into a
+    heavyweight -- and sometimes failing -- import.
+    """
+    namespace = getattr(module, "__dict__", {})
+    origin = namespace.get("__file__")
+    if origin:
+        return str(origin).startswith(root)
+    return any(str(entry).startswith(root) for entry in namespace.get("__path__", ()))
+
+
+@pytest.fixture(autouse=True)
+def _unload_example_modules():
+    """Drop modules and ``sys.path`` entries that belong to ``examples/``.
+
+    Two collisions this prevents, both order-dependent and therefore invisible
+    when a test module is run on its own:
+
+    * ``sys.modules`` -- four example directories ship a ``_common.py`` and
+      eleven ship a ``main.py``; the first import of a bare name wins.
+    * ``sys.path`` -- every full-stack backend has a ``src`` package, so
+      ``import src.agent.tools`` resolves against whichever backend directory
+      some earlier test pushed onto the path.
+    """
+    before_modules = set(sys.modules)
+    before_path = list(sys.path)
+    yield
+    examples_root = str(EXAMPLES_DIR)
+    for name in set(sys.modules) - before_modules:
+        # ``src`` is ambiguous repo-wide: the repository root, each full-stack
+        # backend and the lennys backend all have one, and the repo-root
+        # namespace portion shadows the others once it is cached.
+        if name == "src" or name.startswith("src."):
+            del sys.modules[name]
+            continue
+        module = sys.modules.get(name)
+        if module is not None and _module_lives_under(module, examples_root):
+            del sys.modules[name]
+    if sys.path != before_path:
+        sys.path[:] = [
+            entry
+            for entry in sys.path
+            if entry in before_path or not str(entry).startswith(examples_root)
+        ]
+
+
+# =============================================================================
 # Mock Components
 # =============================================================================
 
@@ -284,7 +352,7 @@ async def memory_client(neo4j_connection, mock_embedder, mock_extractor, mock_re
 
     # Cleanup
     try:
-        await client._client.execute_write("MATCH (n) DETACH DELETE n")
+        await client.graph.execute_write("MATCH (n) DETACH DELETE n")
     except Exception:
         pass
 

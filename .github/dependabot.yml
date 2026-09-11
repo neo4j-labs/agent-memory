@@ -1,0 +1,314 @@
+# Dependency automation for a polyglot repo: one Python library at the root, a
+# TypeScript SDK under `typescript/`, 5 TypeScript examples, and 8 example apps
+# with their own backends and frontends. Before this file existed, every pin in
+# the tree aged silently (see cross-cutting review finding xc-F06) — example
+# backends sat on `pydantic-ai>=0.0.39` against 2.x, and the workflows pinned
+# six unreviewed `actions/*@v4`.
+#
+# Conventions used throughout:
+#   * minor + patch updates are grouped into one PR per manifest, so routine
+#     churn costs one review;
+#   * major updates are left ungrouped so each framework migration gets its own
+#     PR and its own reviewer;
+#   * example manifests are labelled `examples` so they triage separately from
+#     library dependencies.
+#
+# Note on the Python ecosystem: `pip` is used for every Python manifest
+# (PEP 621 `pyproject.toml` and `requirements.txt` alike). The root and the four
+# example backends also track a `uv.lock`; switch those entries to
+# `package-ecosystem: "uv"` once the lockfile policy in xc-F14 is settled, so
+# the locks are refreshed with the manifests.
+version: 2
+
+updates:
+  # ---------------------------------------------------------------------------
+  # GitHub Actions
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels: ["dependencies", "ci"]
+    groups:
+      actions-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # ---------------------------------------------------------------------------
+  # Python — library
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels: ["dependencies", "python"]
+    groups:
+      python-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # ---------------------------------------------------------------------------
+  # Python — example backends with a pyproject.toml
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: "pip"
+    directory: "/examples/full-stack-chat-agent/backend"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+    labels: ["dependencies", "python", "examples"]
+    groups:
+      example-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "pip"
+    directory: "/examples/lennys-memory/backend"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+    labels: ["dependencies", "python", "examples"]
+    groups:
+      example-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "pip"
+    directory: "/examples/financial-services-advisor/aws-financial-services-advisor/backend"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+    labels: ["dependencies", "python", "examples"]
+    groups:
+      example-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "pip"
+    directory: "/examples/financial-services-advisor/google-cloud-financial-advisor/backend"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+    labels: ["dependencies", "python", "examples"]
+    groups:
+      example-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # ---------------------------------------------------------------------------
+  # Python — example backends with only a requirements.txt
+  # (`microsoft_agent_retail_assistant` has no pyproject at all; the three
+  # `nams-*` examples are single-file scripts with a one-line requirements.txt.)
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: "pip"
+    directory: "/examples/microsoft_agent_retail_assistant/backend"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+    labels: ["dependencies", "python", "examples"]
+    groups:
+      example-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "pip"
+    directory: "/examples/nams-quickstart"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+    labels: ["dependencies", "python", "examples", "nams"]
+    groups:
+      example-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "pip"
+    directory: "/examples/nams-fastapi"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+    labels: ["dependencies", "python", "examples", "nams"]
+    groups:
+      example-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "pip"
+    directory: "/examples/nams-langchain"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+    labels: ["dependencies", "python", "examples", "nams"]
+    groups:
+      example-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # ---------------------------------------------------------------------------
+  # npm — TypeScript SDK and its workspace package
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: "npm"
+    directory: "/typescript"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels: ["dependencies", "typescript"]
+    groups:
+      npm-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "npm"
+    directory: "/typescript/packages/vercel-ai-provider"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels: ["dependencies", "typescript"]
+    groups:
+      npm-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # ---------------------------------------------------------------------------
+  # npm — TypeScript examples
+  # (`@neo4j-labs/agent-memory` itself is a `file:../..` link in these
+  # manifests, so Dependabot only tracks their framework pins.)
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: "npm"
+    directory: "/typescript/examples/langchain"
+    schedule:
+      interval: "weekly"
+      day: "wednesday"
+    labels: ["dependencies", "typescript", "examples"]
+    groups:
+      example-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "npm"
+    directory: "/typescript/examples/mastra"
+    schedule:
+      interval: "weekly"
+      day: "wednesday"
+    labels: ["dependencies", "typescript", "examples"]
+    groups:
+      example-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "npm"
+    directory: "/typescript/examples/mcp"
+    schedule:
+      interval: "weekly"
+      day: "wednesday"
+    labels: ["dependencies", "typescript", "examples"]
+    groups:
+      example-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "npm"
+    directory: "/typescript/examples/strands"
+    schedule:
+      interval: "weekly"
+      day: "wednesday"
+    labels: ["dependencies", "typescript", "examples"]
+    groups:
+      example-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "npm"
+    directory: "/typescript/examples/vercel-ai"
+    schedule:
+      interval: "weekly"
+      day: "wednesday"
+    labels: ["dependencies", "typescript", "examples"]
+    groups:
+      example-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # ---------------------------------------------------------------------------
+  # npm — example frontends and the CDK app
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: "npm"
+    directory: "/examples/full-stack-chat-agent/frontend"
+    schedule:
+      interval: "weekly"
+      day: "thursday"
+    labels: ["dependencies", "frontend", "examples"]
+    groups:
+      example-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "npm"
+    directory: "/examples/lennys-memory/frontend"
+    schedule:
+      interval: "weekly"
+      day: "thursday"
+    labels: ["dependencies", "frontend", "examples"]
+    groups:
+      example-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "npm"
+    directory: "/examples/microsoft_agent_retail_assistant/frontend"
+    schedule:
+      interval: "weekly"
+      day: "thursday"
+    labels: ["dependencies", "frontend", "examples"]
+    groups:
+      example-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "npm"
+    directory: "/examples/financial-services-advisor/aws-financial-services-advisor/frontend"
+    schedule:
+      interval: "weekly"
+      day: "thursday"
+    labels: ["dependencies", "frontend", "examples"]
+    groups:
+      example-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "npm"
+    directory: "/examples/financial-services-advisor/google-cloud-financial-advisor/frontend"
+    schedule:
+      interval: "weekly"
+      day: "thursday"
+    labels: ["dependencies", "frontend", "examples"]
+    groups:
+      example-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "npm"
+    directory: "/examples/financial-services-advisor/aws-financial-services-advisor/infrastructure"
+    schedule:
+      interval: "weekly"
+      day: "thursday"
+    labels: ["dependencies", "examples", "infrastructure"]
+    groups:
+      example-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # ---------------------------------------------------------------------------
+  # npm — documentation site (Antora)
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: "npm"
+    directory: "/docs"
+    schedule:
+      interval: "weekly"
+      day: "friday"
+    labels: ["dependencies", "documentation"]
+    groups:
+      docs-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
