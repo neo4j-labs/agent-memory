@@ -25,7 +25,9 @@ const USER_KEY = "shopping-user-id";
 const SESSION_KEY_PREFIX = "shopping-session-id";
 
 function newSessionId(userId: string): string {
-  return `${userId}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  // crypto.randomUUID() is available in every browser Next 16 supports; the id
+  // scopes a shopper's server-side memory, so it must not be guessable.
+  return `${userId}-${crypto.randomUUID()}`;
 }
 
 export default function Home() {

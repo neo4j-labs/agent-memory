@@ -141,7 +141,7 @@ export async function main(options: RunOptions = {}): Promise<RunResult> {
       title: "Lisbon trip planning",
       metadata: { source: "mastra-example" },
     });
-    log(`thread ${thread.id} for resource ${thread.resourceId}`);
+    log(`thread ${thread.id} created for the demo resource`);
 
     const answers: string[] = [];
     for (const text of FIRST_THREAD_TURNS) {
@@ -212,7 +212,7 @@ export async function main(options: RunOptions = {}): Promise<RunResult> {
     });
 
     const threads = await client.shortTerm.listConversations({ userId: resourceId });
-    log(`NAMS lists ${threads.length} thread(s) for ${resourceId}`);
+    log(`NAMS lists ${threads.length} thread(s) for the demo resource`);
 
     if (cleanup) {
       await memory.deleteThread(thread.id);

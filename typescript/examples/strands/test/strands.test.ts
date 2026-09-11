@@ -50,7 +50,7 @@ describe("strands example", () => {
     expect(result.resumed).toBe(false);
     expect(result.answers).toHaveLength(3);
     expect(result.answers.every((answer) => answer.length > 0)).toBe(true);
-    expect(lines[0]).toMatch(/^Created conversation conv-\d+ for strands-test-user$/);
+    expect(lines[0]).toMatch(/^Created conversation conv-\d+ for the demo user$/);
   });
 
   it("persists the transcript as real NAMS messages via Neo4jSessionStorage", async () => {
@@ -166,7 +166,8 @@ describe("strands example", () => {
     const hint = lines.at(-1)!;
 
     expect(hint).toContain(`CONVERSATION_ID=${result.conversationId}`);
-    expect(hint).toContain(`DEMO_USER_ID=${USER_ID}`);
+    expect(hint).toContain("DEMO_USER_ID");
+    expect(hint).not.toContain(USER_ID);
     expect(lines.join("\n")).not.toContain("undefined");
   });
 

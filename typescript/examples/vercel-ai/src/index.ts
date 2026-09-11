@@ -126,8 +126,8 @@ export async function main(options: RunOptions = {}): Promise<RunResult> {
     );
     log(
       resumed
-        ? `Resumed conversation ${conversationId} for ${userId}`
-        : `Created conversation ${conversationId} for ${userId}`,
+        ? `Resumed conversation ${conversationId} for the demo user`
+        : `Created conversation ${conversationId} for the demo user`,
     );
 
     // A preference outlives any one conversation: written on the first run,
