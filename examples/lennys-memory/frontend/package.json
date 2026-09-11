@@ -9,11 +9,11 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@chakra-ui/react": "^3.2.0",
+    "@chakra-ui/react": "^3.37.0",
     "@emotion/react": "^11.13.0",
-    "@neo4j-nvl/base": "^1.0.0",
-    "@neo4j-nvl/react": "^1.0.0",
-    "@turf/turf": "^7.0.0",
+    "@neo4j-nvl/base": "^1.2.1",
+    "@neo4j-nvl/react": "^1.2.1",
+    "@turf/turf": "^7.4.0",
     "@vercel/analytics": "^1.6.1",
     "leaflet": "^1.9.4",
     "leaflet-draw": "^1.0.4",
@@ -24,14 +24,14 @@
     "next-themes": "^0.4.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
-    "react-icons": "^5.3.0",
+    "react-icons": "^5.7.0",
     "react-leaflet": "^4.2.1",
     "react-leaflet-cluster": "^2.1.0",
     "react-markdown": "^9.0.0",
     "uuid": "^10.0.0"
   },
   "devDependencies": {
-    "@types/leaflet": "^1.9.8",
+    "@types/leaflet": "^1.9.22",
     "@types/leaflet-draw": "^1.0.11",
     "@types/leaflet.heat": "^0.2.4",
     "@types/leaflet.markercluster": "^1.5.4",
