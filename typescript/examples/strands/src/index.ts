@@ -159,7 +159,9 @@ export async function main(options: RunOptions = {}): Promise<RunResult> {
           metadata: { source: CONVERSATION_SOURCE },
         });
     const resumed = existingId !== undefined;
-    log(`${resumed ? "Resumed" : "Created"} conversation ${conv.id} for ${userId}`);
+    log(
+      `${resumed ? "Resumed" : "Created"} conversation ${conv.id} for ${redactIdentifier(userId)}`,
+    );
 
     // 2. One factory call returns both halves of the Agent config. No casts:
     //    the example resolves a single copy of @strands-agents/sdk (see
@@ -278,6 +280,11 @@ export async function main(options: RunOptions = {}): Promise<RunResult> {
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function redactIdentifier(value: string): string {
+  if (value.length <= 4) return "****";
+  return `${value.slice(0, 2)}****${value.slice(-2)}`;
 }
 
 function flattenText(blocks: ContentBlock[]): string {
