@@ -76,6 +76,17 @@ class Neo4jSessionManager(SessionManager):
     Provide exactly one of ``memory_client`` (bolt or NAMS; left open on
     close unless we connected it) or ``settings`` (a client is
     constructed and owned by the manager).
+
+    Single-``Agent`` scope. The base class registers multi-agent
+    (``MultiAgentInitializedEvent`` / ``AfterNodeCallEvent`` /
+    ``AfterMultiAgentInvocationEvent``) and bidirectional-agent hooks
+    unconditionally, and its implementations of them raise
+    ``NotImplementedError`` naming this class — so attaching this manager to a
+    Strands Graph/Swarm or a ``BidiAgent`` fails at the first dispatch. Those
+    topologies want one of Strands' own repository-backed managers
+    (``FileSessionManager`` / ``S3SessionManager`` / ``RepositorySessionManager``);
+    the "shared brain" pattern this manager is built for is N independent
+    ``Agent`` instances, each with its own manager, over one graph.
     """
 
     def __init__(
@@ -284,6 +295,14 @@ class Neo4jSessionManager(SessionManager):
         so external AfterInvocationEvent hooks observe the final turn while it is
         still un-persisted; hooks that need the persisted message should read it
         on the next turn instead.
+
+        Both orderings hold *within one ``HookOrder`` priority group*: since
+        strands 1.5x, ``HookRegistry.add_callback`` takes a keyword-only
+        ``order`` and sorts by it first (lower runs first), preserving —
+        or, for reverse-dispatch events, inverting — registration order only
+        inside a group. Every callback registered here uses the default
+        priority, so a hook deliberately registered at ``HookOrder.SDK_FIRST``
+        or ``SDK_LAST`` can still straddle our flush.
         """
         super().register_hooks(registry, **kwargs)
         registry.add_callback(AfterInvocationEvent, self._on_after_invocation)

@@ -6,7 +6,10 @@ semantic memory, entity retrieval, and knowledge graph operations.
 
 Example:
     from strands import Agent
-    from neo4j_agent_memory.integrations.strands import context_graph_tools
+    from neo4j_agent_memory.integrations.strands import (
+        bedrock_llm_model,
+        context_graph_tools,
+    )
 
     tools = context_graph_tools(
         neo4j_uri=os.environ["NEO4J_URI"],
@@ -16,7 +19,7 @@ Example:
     )
 
     agent = Agent(
-        model="anthropic.claude-sonnet-4-20250514-v1:0",
+        model=bedrock_llm_model(),
         tools=tools,
     )
 """
@@ -704,7 +707,10 @@ def context_graph_tools(
 
     Example:
         from strands import Agent
-        from neo4j_agent_memory.integrations.strands import context_graph_tools
+        from neo4j_agent_memory.integrations.strands import (
+            bedrock_llm_model,
+            context_graph_tools,
+        )
 
         tools = context_graph_tools(
             neo4j_uri="neo4j+s://xxx.databases.neo4j.io",
@@ -714,7 +720,7 @@ def context_graph_tools(
         )
 
         agent = Agent(
-            model="anthropic.claude-sonnet-4-20250514-v1:0",
+            model=bedrock_llm_model(),
             tools=tools,
         )
 
@@ -996,11 +1002,12 @@ def nams_context_graph_tools(
 
         from strands import Agent
         from neo4j_agent_memory.integrations.strands import (
+            bedrock_llm_model,
             nams_context_graph_tools,
         )
 
         tools = nams_context_graph_tools()  # picks up MEMORY_API_KEY from env
-        agent = Agent(model="anthropic.claude-sonnet-4-20250514-v1:0", tools=tools)
+        agent = Agent(model=bedrock_llm_model(), tools=tools)
     """
     from neo4j_agent_memory.integrations.strands.config import resolve_nams_connection
 

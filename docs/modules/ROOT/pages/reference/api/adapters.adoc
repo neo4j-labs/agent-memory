@@ -199,6 +199,8 @@ VertexAIEmbeddingProvider(
 * Implements `EmbeddingProvider`.
 * Wraps the existing `embeddings.vertex_ai.VertexAIEmbedder`.
 * `task_type` is one of `RETRIEVAL_QUERY`, `RETRIEVAL_DOCUMENT`, `SEMANTIC_SIMILARITY`, `CLASSIFICATION`, `CLUSTERING`.
+* Pass the current model id, `"vertex_ai/gemini-embedding-001"`. Retired ids (`text-embedding-004`, `textembedding-gecko*`) raise `EmbeddingError` when the underlying embedder is constructed.
+* The underlying embedder truncates output to 768 dimensions by default, so leave `dimensions` unset (it resolves to 768) or pass `dimensions=768`. For 1536- or 3072-dimension vectors, construct `VertexAIEmbedder(output_dimensionality=...)` directly and pass it as `embedder=` to `MemoryClient` — this adapter does not forward `output_dimensionality` yet.
 
 Vertex AI as an *LLM* provider routes through LiteLLM — there is no native `VertexAIProvider` because the existing Vertex AI embedder predates the Protocol and is well-tested for embeddings only.
 

@@ -6,7 +6,10 @@ memory and knowledge graph operations.
 
 Example:
     from strands import Agent
-    from neo4j_agent_memory.integrations.strands import context_graph_tools
+    from neo4j_agent_memory.integrations.strands import (
+        bedrock_llm_model,
+        context_graph_tools,
+    )
 
     tools = context_graph_tools(
         neo4j_uri=os.environ["NEO4J_URI"],
@@ -15,7 +18,7 @@ Example:
     )
 
     agent = Agent(
-        model="anthropic.claude-sonnet-4-20250514-v1:0",
+        model=bedrock_llm_model(),  # us.anthropic.claude-sonnet-4-6 by default
         tools=tools,
     )
 
@@ -37,10 +40,11 @@ if TYPE_CHECKING:
 def llm_provider_from_strands(model: Any) -> LLMProvider:
     """Translate a Strands Agents model into an :class:`LLMProvider`.
 
-    Strands typically uses Bedrock model identifier strings (e.g.
-    ``"anthropic.claude-sonnet-4-20250514-v1:0"``). Strings without a
-    provider prefix are routed to the ``bedrock/`` provider; objects are
-    introspected via the shared helper.
+    Strands typically uses Bedrock model identifier strings — for current
+    Claude models, a cross-region inference-profile id such as
+    ``"us.anthropic.claude-sonnet-4-6"``. Strings without a ``provider/``
+    prefix are routed to the ``bedrock/`` provider; objects are introspected
+    via the shared helper.
     """
     if isinstance(model, str):
         from neo4j_agent_memory.llm import from_provider
@@ -55,9 +59,12 @@ def llm_provider_from_strands(model: Any) -> LLMProvider:
 
 try:
     from neo4j_agent_memory.integrations.strands.config import (
+        BEDROCK_CLAUDE_BASE_MODELS,
         BEDROCK_EMBEDDING_MODELS,
         BEDROCK_LLM_MODELS,
         StrandsConfig,
+        bedrock_embedding_model,
+        bedrock_llm_model,
     )
     from neo4j_agent_memory.integrations.strands.memory_store import (
         Neo4jMemoryStore,
@@ -78,8 +85,11 @@ try:
         "nams_context_graph_tools",
         "clear_client_cache",
         "StrandsConfig",
+        "BEDROCK_CLAUDE_BASE_MODELS",
         "BEDROCK_EMBEDDING_MODELS",
         "BEDROCK_LLM_MODELS",
+        "bedrock_embedding_model",
+        "bedrock_llm_model",
         "llm_provider_from_strands",
         "Neo4jSessionManager",
         "Neo4jRetrievalConfig",

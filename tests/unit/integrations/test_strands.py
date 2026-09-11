@@ -568,3 +568,62 @@ class TestBedrockModels:
         from neo4j_agent_memory.integrations.strands.config import BEDROCK_EMBEDDING_MODELS
 
         assert BEDROCK_EMBEDDING_MODELS["titan-v2"] == "amazon.titan-embed-text-v2:0"
+
+    def test_llm_defaults_are_inference_profile_ids(self) -> None:
+        """Current-generation Claude on Bedrock needs an inference-profile id."""
+        from neo4j_agent_memory.integrations.strands.config import BEDROCK_LLM_MODELS
+
+        for alias, model_id in BEDROCK_LLM_MODELS.items():
+            region_prefix, _, base = model_id.partition(".")
+            assert region_prefix in {"us", "eu", "apac", "global"}, alias
+            assert base.startswith("anthropic."), alias
+
+    def test_no_retired_claude_generations(self) -> None:
+        """Guard against the ids this map used to carry rotting back in."""
+        from neo4j_agent_memory.integrations.strands.config import (
+            BEDROCK_CLAUDE_BASE_MODELS,
+            BEDROCK_LLM_MODELS,
+        )
+
+        for model_id in (*BEDROCK_LLM_MODELS.values(), *BEDROCK_CLAUDE_BASE_MODELS.values()):
+            assert "claude-3-" not in model_id
+            assert "claude-sonnet-4-2025" not in model_id
+
+    def test_bedrock_llm_model_applies_prefix_override(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        """BEDROCK_INFERENCE_PROFILE_PREFIX swaps the cross-region prefix."""
+        from neo4j_agent_memory.integrations.strands.config import (
+            BEDROCK_CLAUDE_BASE_MODELS,
+            bedrock_llm_model,
+        )
+
+        monkeypatch.delenv("BEDROCK_MODEL_ID", raising=False)
+        monkeypatch.setenv("BEDROCK_INFERENCE_PROFILE_PREFIX", "eu")
+
+        assert bedrock_llm_model() == f"eu.{BEDROCK_CLAUDE_BASE_MODELS['claude-sonnet']}"
+
+    def test_bedrock_llm_model_env_override_wins(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        """BEDROCK_MODEL_ID is used verbatim, prefix included."""
+        from neo4j_agent_memory.integrations.strands.config import bedrock_llm_model
+
+        monkeypatch.setenv("BEDROCK_MODEL_ID", "global.anthropic.claude-opus-5")
+        monkeypatch.setenv("BEDROCK_INFERENCE_PROFILE_PREFIX", "eu")
+
+        assert bedrock_llm_model("claude-haiku") == "global.anthropic.claude-opus-5"
+
+    def test_bedrock_embedding_model_resolution(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        """Embedding ids take no inference-profile prefix; env still overrides."""
+        from neo4j_agent_memory.integrations.strands.config import bedrock_embedding_model
+
+        monkeypatch.delenv("BEDROCK_EMBEDDING_MODEL_ID", raising=False)
+        assert bedrock_embedding_model() == "amazon.titan-embed-text-v2:0"
+
+        monkeypatch.setenv("BEDROCK_EMBEDDING_MODEL_ID", "cohere.embed-english-v3")
+        assert bedrock_embedding_model("titan-v2") == "cohere.embed-english-v3"
+
+    def test_embedding_models_are_embedder_supported_shapes(self) -> None:
+        """Only payload shapes BedrockEmbedder can build may be listed."""
+        from neo4j_agent_memory.embeddings.bedrock import BEDROCK_MODEL_DIMENSIONS
+        from neo4j_agent_memory.integrations.strands.config import BEDROCK_EMBEDDING_MODELS
+
+        for model_id in BEDROCK_EMBEDDING_MODELS.values():
+            assert model_id in BEDROCK_MODEL_DIMENSIONS

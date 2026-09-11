@@ -10,6 +10,13 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 from pydantic_settings.sources import DotEnvSettingsSource
 
+from neo4j_agent_memory.embeddings.vertex_models import (
+    VERTEX_DEFAULT_EMBEDDING_MODEL,
+    VERTEX_DEFAULT_OUTPUT_DIMENSIONALITY,
+    VERTEX_EMBEDDING_MODELS,
+    VERTEX_RETIRED_EMBEDDING_MODELS,
+)
+
 # Strict config shared by every child config model. Misspelled fields raise
 # at construction time instead of being silently dropped.
 _STRICT_CONFIG = ConfigDict(extra="forbid")
@@ -109,7 +116,13 @@ class Neo4jConfig(BaseModel):
 
 
 class EmbeddingConfig(BaseModel):
-    """Embedding provider configuration."""
+    """Embedding provider configuration.
+
+    When ``provider`` is :attr:`EmbeddingProvider.VERTEX_AI` and ``model`` is
+    left at its default, the model defaults to ``gemini-embedding-001`` and
+    ``dimensions`` to 768 (see :data:`VERTEX_DEFAULT_EMBEDDING_MODEL`).
+    Retired Vertex AI model ids are rejected at construction time.
+    """
 
     model_config = _STRICT_CONFIG
 
@@ -129,9 +142,47 @@ class EmbeddingConfig(BaseModel):
         default="RETRIEVAL_DOCUMENT",
         description="Vertex AI task type (RETRIEVAL_QUERY, RETRIEVAL_DOCUMENT, etc.)",
     )
+    output_dimensionality: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Vertex AI output dimensionality. gemini-embedding-001 emits 3072 "
+            "dimensions natively and can be truncated to 1536 or 768. Defaults "
+            "to 768 for Vertex AI so existing vector indexes keep working; pass "
+            "an explicit value to override."
+        ),
+    )
     # AWS Bedrock specific
     aws_region: str | None = Field(default=None, description="AWS region for Bedrock")
     aws_profile: str | None = Field(default=None, description="AWS credentials profile name")
+
+    @model_validator(mode="after")
+    def _apply_vertex_ai_defaults(self) -> EmbeddingConfig:
+        """Fill Vertex AI defaults and reject retired Vertex AI model ids."""
+        if self.provider != EmbeddingProvider.VERTEX_AI:
+            return self
+
+        if self.model in VERTEX_RETIRED_EMBEDDING_MODELS:
+            shutdown = VERTEX_RETIRED_EMBEDDING_MODELS[self.model]
+            raise ValueError(
+                f"Vertex AI embedding model {self.model!r} was retired by Google on "
+                f"{shutdown} and no longer serves requests. Use one of: "
+                f"{', '.join(VERTEX_EMBEDDING_MODELS)} "
+                f"(default: {VERTEX_DEFAULT_EMBEDDING_MODEL})."
+            )
+
+        # The ``model``/``dimensions`` defaults describe OpenAI; translate them
+        # to the Vertex AI equivalents when the caller did not set them.
+        fields_set = self.model_fields_set
+        if "model" not in fields_set:
+            self.model = VERTEX_DEFAULT_EMBEDDING_MODEL
+        if "output_dimensionality" not in fields_set:
+            self.output_dimensionality = VERTEX_DEFAULT_OUTPUT_DIMENSIONALITY
+        if "dimensions" not in fields_set:
+            self.dimensions = self.output_dimensionality or VERTEX_EMBEDDING_MODELS.get(
+                self.model, VERTEX_DEFAULT_OUTPUT_DIMENSIONALITY
+            )
+        return self
 
 
 class LLMConfig(BaseModel):

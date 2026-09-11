@@ -894,3 +894,129 @@ class TestEdgeCases:
         # Verify cleared
         conv = await memory.get_conversation()
         assert len(conv) == 0
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(not AGENT_FRAMEWORK_AVAILABLE, reason="Microsoft Agent Framework not installed")
+class TestAgentLoopWiring:
+    """Drive a real ``Agent`` run loop over the Neo4j providers.
+
+    Every other test in this file calls ``before_run`` / ``after_run`` by hand,
+    which is why the 1.x GA rename of ``BaseContextProvider`` ->
+    ``ContextProvider`` went unnoticed: the providers were never handed to an
+    actual agent. These tests assemble the pipeline the way the docs tell users
+    to (``chat_client.as_agent(context_providers=[...])``) against a fake chat
+    client, so a future change to the provider protocol fails here.
+    """
+
+    @staticmethod
+    def _echo_client(reply="Canned reply"):
+        """Build a minimal non-streaming chat client that returns ``reply``."""
+        from agent_framework import BaseChatClient, ChatResponse, Message
+
+        class EchoChatClient(BaseChatClient):
+            """Records what the agent sent it and answers with a canned message."""
+
+            def __init__(self):
+                super().__init__()
+                self.seen_messages = []
+                self.seen_instructions = ""
+
+            def _inner_get_response(self, *, messages, stream, options, **kwargs):
+                self.seen_messages = list(messages)
+                # Provider instructions reach the client through the options
+                # mapping (``Agent`` merges ``SessionContext.instructions`` into
+                # ``chat_options["instructions"]``), not as a system message.
+                self.seen_instructions = options.get("instructions") or ""
+
+                async def _respond():
+                    return ChatResponse(
+                        messages=[Message("assistant", [reply])],
+                        finish_reason="stop",
+                    )
+
+                return _respond()
+
+        return EchoChatClient()
+
+    @pytest.mark.asyncio
+    async def test_context_provider_persists_a_full_turn(self, memory_client, session_id):
+        """One agent.run() writes both the user and assistant message to Neo4j."""
+        from neo4j_agent_memory.integrations.microsoft_agent import Neo4jContextProvider
+
+        provider = Neo4jContextProvider(
+            memory_client=memory_client,
+            session_id=session_id,
+            extract_entities=False,
+            include_reasoning=False,
+        )
+        client = self._echo_client("Hello back")
+        agent = client.as_agent(instructions="Be terse.", context_providers=[provider])
+
+        response = await agent.run("Remember that I like graph databases")
+
+        assert response.text == "Hello back"
+
+        conv = await memory_client.short_term.get_conversation(session_id=session_id)
+        roles = [m.role.value if hasattr(m.role, "value") else str(m.role) for m in conv.messages]
+        contents = [m.content for m in conv.messages]
+        assert roles == ["user", "assistant"]
+        assert contents == ["Remember that I like graph databases", "Hello back"]
+
+    @pytest.mark.asyncio
+    async def test_context_provider_injects_stored_memory(self, memory_client, session_id):
+        """Memory stored before the run reaches the model as instructions."""
+        from neo4j_agent_memory.integrations.microsoft_agent import Neo4jContextProvider
+
+        await memory_client.short_term.add_message(
+            session_id=session_id,
+            role="user",
+            content="I am shopping for a birthday gift for my sister",
+            extract_entities=False,
+            generate_embedding=False,
+        )
+
+        provider = Neo4jContextProvider(
+            memory_client=memory_client,
+            session_id=session_id,
+            extract_entities=False,
+            include_long_term=False,
+            include_reasoning=False,
+        )
+        client = self._echo_client()
+        agent = client.as_agent(context_providers=[provider])
+
+        await agent.run("Any suggestions?")
+
+        assert "Recent Conversation" in client.seen_instructions
+        assert "birthday gift for my sister" in client.seen_instructions
+
+    @pytest.mark.asyncio
+    async def test_chat_store_loads_history_into_the_next_run(self, memory_client, session_id):
+        """The history provider replays earlier turns on the following run."""
+        from neo4j_agent_memory.integrations.microsoft_agent import Neo4jChatMessageStore
+
+        store = Neo4jChatMessageStore(
+            memory_client=memory_client,
+            session_id=session_id,
+            generate_embeddings=False,
+        )
+        client = self._echo_client("Noted")
+        agent = client.as_agent(context_providers=[store])
+
+        await agent.run("First question")
+        await agent.run("Second question")
+
+        # The second run must have replayed turn one before the new input.
+        texts = [m.text for m in client.seen_messages]
+        assert "First question" in texts
+        assert "Noted" in texts
+        assert texts[-1] == "Second question"
+
+        conv = await memory_client.short_term.get_conversation(session_id=session_id)
+        assert [m.content for m in conv.messages] == [
+            "First question",
+            "Noted",
+            "Second question",
+            "Noted",
+        ]

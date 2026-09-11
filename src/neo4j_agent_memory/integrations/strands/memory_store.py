@@ -22,7 +22,7 @@ try:
     )
 except ImportError as import_error:  # pragma: no cover - exercised via package __init__
     raise ImportError(
-        "strands-agents>=1.44.0 is required for the Strands memory store. "
+        "strands-agents>=1.52 is required for the Strands memory store. "
         "Install with: pip install 'neo4j-agent-memory[strands]'"
     ) from import_error
 

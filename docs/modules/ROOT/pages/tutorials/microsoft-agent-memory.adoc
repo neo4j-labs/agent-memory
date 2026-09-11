@@ -6,7 +6,9 @@ This tutorial guides you through building a shopping assistant that remembers cu
 
 [NOTE]
 ====
-This tutorial targets Microsoft Agent Framework v1.0.0b260212. The framework has reached GA; check the https://github.com/microsoft/agent-framework[Microsoft Agent Framework releases] for the latest version and any API changes.
+This tutorial targets the Microsoft Agent Framework 1.x GA line (`>=1.13,<2`), verified against 1.18.0. Check the https://github.com/microsoft/agent-framework[Microsoft Agent Framework releases] for the latest version.
+
+If you are coming from the `1.0.0b260212` public preview, note that the GA line renamed the provider base classes (`BaseContextProvider` -> `ContextProvider`, `BaseHistoryProvider` -> `HistoryProvider`). The library handles the rename for you; you only need the dependency bump.
 ====
 
 == What You'll Build
@@ -30,7 +32,13 @@ A retail shopping assistant that:
 [source,bash]
 ----
 pip install neo4j-agent-memory[microsoft-agent,openai]
+pip install agent-framework-azure-ai   # the chat client this tutorial uses
 ----
+
+The `[microsoft-agent]` extra installs `agent-framework-core`, which ships the
+`agent_framework` package the integration imports. Chat clients live in separate
+distributions, so install the one you plan to use (or `agent-framework`, the
+meta-package that bundles them all).
 
 == Step 2: Set Up Neo4j
 
@@ -121,6 +129,7 @@ Create a file `agent.py`. All tools — both memory tools and product tools — 
 """Shopping assistant agent."""
 
 import json
+import os
 from typing import Annotated
 
 from agent_framework import Agent, FunctionTool, Message, tool
@@ -176,7 +185,10 @@ def get_product_tools(memory: Neo4jMicrosoftMemory) -> list[FunctionTool]:
         LIMIT 5
         """
 
-        result = await client.graph.execute_read(cypher, params)
+        # client.query.cypher() is the portable read-only accessor; it works on
+        # both the bolt and hosted (NAMS) backends. client.graph.execute_read()
+        # is deprecated and bolt-only.
+        result = await client.query.cypher(cypher, params)
         products = [dict(r) for r in result]
         return json.dumps({"products": products, "count": len(products)})
 
@@ -185,7 +197,7 @@ def get_product_tools(memory: Neo4jMicrosoftMemory) -> list[FunctionTool]:
 
 async def create_agent(memory: Neo4jMicrosoftMemory) -> Agent:
     """Create the shopping assistant agent."""
-    chat_client = AzureOpenAIResponsesClient(model="gpt-4")
+    chat_client = AzureOpenAIResponsesClient(model=os.getenv("OPENAI_MODEL", "gpt-5-mini"))
 
     # Create memory tools bound to the memory instance
     memory_tools = create_memory_tools(memory, include_gds_tools=bool(memory.gds))

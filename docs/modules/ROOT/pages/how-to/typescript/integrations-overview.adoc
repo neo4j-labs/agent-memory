@@ -7,28 +7,33 @@ Pick yours below.
 == Vercel AI SDK (TypeScript)
 
 The `agentMemoryMiddleware` injects three-tier context (reflections +
-observations + recent messages) into every model call and persists the
-assistant's response.
+observations + recent messages) into every model call and persists both the
+user's input and the assistant's response — streamed or not. It implements
+specification v4 (`ai` 7.x / `@ai-sdk/provider` 4.x).
 
 [source,ts]
 ----
-import { generateText } from "ai";
+import { generateText, wrapLanguageModel } from "ai";
+import { openai } from "@ai-sdk/openai";
 import { MemoryClient } from "@neo4j-labs/agent-memory";
 import { agentMemoryMiddleware } from "@neo4j-labs/agent-memory/middleware/vercel-ai";
 
 const client = new MemoryClient({ endpoint: "https://memory.neo4jlabs.com/v1", apiKey });
 
-const result = await generateText({
-  model: openai("gpt-4o"),
-  experimental_middleware: agentMemoryMiddleware(client, {
+const model = wrapLanguageModel({
+  model: openai(process.env.OPENAI_MODEL ?? "gpt-5-mini"),
+  middleware: agentMemoryMiddleware(client, {
     conversationId: "conv-uuid",
     userId: "alice@example.com",
     includeContext: true,
     persistResponses: true,
   }),
-  messages: [{ role: "user", content: "What did we decide?" }],
 });
+
+const result = await generateText({ model, prompt: "What did we decide?" });
 ----
+
+See link:vercel-ai.adoc[How-to: integrate with the Vercel AI SDK].
 
 == LangChain JS (TypeScript)
 
@@ -51,15 +56,17 @@ const docs = await retriever.invoke("Find entities about Acme Corp");
 
 == Mastra (TypeScript)
 
-`Neo4jMastraMemory` wraps `MemoryClient` as a Mastra `Memory` provider.
+`Neo4jMastraMemory` is a thin thread-and-message-history adapter in Mastra's
+vocabulary. It is not a Mastra `Memory` or storage adapter — drive it alongside
+your agent; see link:mastra.adoc[How-to: store Mastra threads in NAMS].
 
 [source,ts]
 ----
 import { Neo4jMastraMemory } from "@neo4j-labs/agent-memory/integrations/mastra";
-import { Agent } from "@mastra/core/agent";
 
 const memory = new Neo4jMastraMemory(client);
-const agent = new Agent({ name: "scout", memory });
+const thread = await memory.createThread({ resourceId: "alice", title: "Scouting" });
+await memory.saveMessage({ threadId: thread.id, role: "user", content: "Hi" });
 ----
 
 == Strands Agents (TypeScript)

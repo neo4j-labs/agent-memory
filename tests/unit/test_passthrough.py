@@ -249,5 +249,5 @@ def test_strands_wrapper_prefixes_bedrock_for_bare_strings(stub_from_provider):
         llm_provider_from_strands,
     )
 
-    llm_provider_from_strands("anthropic.claude-sonnet-4-20250514-v1:0")
-    assert stub_from_provider[0][0] == "bedrock/anthropic.claude-sonnet-4-20250514-v1:0"
+    llm_provider_from_strands("us.anthropic.claude-sonnet-4-6")
+    assert stub_from_provider[0][0] == "bedrock/us.anthropic.claude-sonnet-4-6"

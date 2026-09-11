@@ -47,7 +47,8 @@ This installs:
 
 * `neo4j-agent-memory` - The core memory library
 * `boto3` - AWS SDK for Bedrock access
-* `strands-agents` - AWS Strands Agents SDK
+* `strands-agents` - AWS Strands Agents SDK (`>=1.52,<2`; tested against 1.52
+  and 1.55.1)
 
 == Step 2: Configure Credentials
 
@@ -62,6 +63,12 @@ NEO4J_PASSWORD=your-password
 
 # AWS Configuration (uses default credentials if not set)
 AWS_REGION=us-east-1
+
+# Optional: pin the Bedrock ids instead of the library defaults.
+# Verify with: aws bedrock list-inference-profiles
+# BEDROCK_MODEL_ID=us.anthropic.claude-sonnet-4-6
+# BEDROCK_INFERENCE_PROFILE_PREFIX=us
+# BEDROCK_EMBEDDING_MODEL_ID=amazon.titan-embed-text-v2:0
 ----
 
 [TIP]
@@ -84,7 +91,10 @@ Create a file called `agent.py`:
 import os
 from dotenv import load_dotenv
 from strands import Agent
-from neo4j_agent_memory.integrations.strands import context_graph_tools
+from neo4j_agent_memory.integrations.strands import (
+    bedrock_llm_model,
+    context_graph_tools,
+)
 
 # Load environment variables
 load_dotenv()
@@ -98,9 +108,14 @@ tools = context_graph_tools(
     aws_region=os.environ.get("AWS_REGION", "us-east-1"),
 )
 
-# Create the agent with memory tools
+# Create the agent with memory tools.
+# bedrock_llm_model() resolves a cross-region inference-profile id
+# (us.anthropic.claude-sonnet-4-6 by default) — current Claude models on
+# Bedrock are not invocable by their bare foundation-model id. Override with
+# BEDROCK_MODEL_ID, or swap just the region prefix with
+# BEDROCK_INFERENCE_PROFILE_PREFIX=eu.
 agent = Agent(
-    model="anthropic.claude-sonnet-4-20250514-v1:0",
+    model=bedrock_llm_model(),
     tools=tools,
     system_prompt="""You are a helpful assistant with persistent memory.
 
@@ -163,6 +178,54 @@ as a software engineer. How can I help you today?
 You: What company do I work for?
 Assistant: Based on my memory, you work at Acme Corp as a software engineer!
 ----
+
+[TIP]
+====
+The tools above are *pull-based*: the agent decides when to read and write
+memory. If you also want every turn persisted and restored without the model
+having to ask, attach a session manager — one extra argument, and the
+conversation survives process restarts:
+
+[source,python]
+----
+from pydantic import SecretStr
+
+from neo4j_agent_memory import MemorySettings, Neo4jConfig
+from neo4j_agent_memory.integrations.strands import (
+    Neo4jRetrievalConfig,
+    Neo4jSessionManager,
+    bedrock_llm_model,
+)
+
+# Pinning backend="bolt" keeps a stray MEMORY_API_KEY from redirecting
+# writes to the hosted service; drop it (or use .for_nams()) for NAMS.
+manager = Neo4jSessionManager(
+    "tutorial-session",
+    settings=MemorySettings(
+        backend="bolt",
+        neo4j=Neo4jConfig(
+            uri=os.environ["NEO4J_URI"],
+            username=os.environ.get("NEO4J_USER", "neo4j"),
+            password=SecretStr(os.environ["NEO4J_PASSWORD"]),
+        ),
+    ),
+    # min_score is a Neo4j vector-index score ((1 + cosine) / 2), so 0.5
+    # means "orthogonal"; 0.75 is the equivalent of cosine 0.5.
+    retrieval_config=Neo4jRetrievalConfig(top_k=5, min_score=0.75),
+)
+
+agent = Agent(
+    model=bedrock_llm_model(),
+    tools=tools,
+    session_manager=manager,
+)
+----
+
+See xref:how-to/integrations/aws-strands.adoc#_session_manager_push_based[Session Manager (Push-Based)]
+for the constructor reference and limitations, and the
+`examples/strands-session-manager/` example for a runnable demo that needs no
+API key.
+====
 
 == Step 5: Explore the Knowledge Graph
 

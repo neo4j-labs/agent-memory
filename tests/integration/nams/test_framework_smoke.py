@@ -55,7 +55,7 @@ async def test_langchain_smoke(nams_client: MemoryClient, nams_session: str) -> 
     marker = _marker()
 
     async def store() -> None:
-        await memory._save_context_async(
+        await memory.asave_context(
             {"input": f"{marker} founded Acme Corporation in Paris."},
             {"output": "Noted."},
         )

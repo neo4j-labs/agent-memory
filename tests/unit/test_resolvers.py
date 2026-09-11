@@ -42,6 +42,9 @@ class TestExactMatchResolver:
 
         assert result.canonical_name == "Alice Johnson"
         assert result.original_name == "Alice Johnson"
+        # A miss must not claim an exact match, or the field is unreadable:
+        # callers would have to re-compare names to tell hit from miss.
+        assert result.match_type == "none"
 
     @pytest.mark.asyncio
     async def test_empty_existing(self, resolver):
@@ -49,6 +52,15 @@ class TestExactMatchResolver:
         result = await resolver.resolve("John Smith", "PERSON")
 
         assert result.canonical_name == "John Smith"
+        assert result.match_type == "none"
+
+    @pytest.mark.asyncio
+    async def test_empty_existing_list(self, resolver):
+        """An explicitly empty candidate list is also a miss, not an exact match."""
+        result = await resolver.resolve("John Smith", "PERSON", existing_entities=[])
+
+        assert result.canonical_name == "John Smith"
+        assert result.match_type == "none"
 
     @pytest.mark.asyncio
     async def test_find_matches(self, resolver):

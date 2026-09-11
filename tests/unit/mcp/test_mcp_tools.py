@@ -82,21 +82,21 @@ class TestFastMCPToolRegistration:
         async with Client(core_server) as client:
             tools = await client.list_tools()
             tool = next(t for t in tools if t.name == "memory_search")
-            assert "query" in tool.inputSchema.get("required", [])
+            assert "query" in tool.input_schema.get("required", [])
 
     @pytest.mark.asyncio
     async def test_memory_store_message_schema(self, core_server):
         async with Client(core_server) as client:
             tools = await client.list_tools()
             tool = next(t for t in tools if t.name == "memory_store_message")
-            assert "content" in tool.inputSchema.get("required", [])
+            assert "content" in tool.input_schema.get("required", [])
 
     @pytest.mark.asyncio
     async def test_memory_add_entity_schema(self, core_server):
         async with Client(core_server) as client:
             tools = await client.list_tools()
             tool = next(t for t in tools if t.name == "memory_add_entity")
-            required = tool.inputSchema.get("required", [])
+            required = tool.input_schema.get("required", [])
             assert "name" in required
             assert "entity_type" in required
 
@@ -105,7 +105,7 @@ class TestFastMCPToolRegistration:
         async with Client(extended_server) as client:
             tools = await client.list_tools()
             tool = next(t for t in tools if t.name == "graph_query")
-            assert "query" in tool.inputSchema.get("required", [])
+            assert "query" in tool.input_schema.get("required", [])
 
     @pytest.mark.asyncio
     async def test_graph_query_description_mentions_read_only(self, extended_server):

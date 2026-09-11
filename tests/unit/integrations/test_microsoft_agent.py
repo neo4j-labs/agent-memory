@@ -6,7 +6,11 @@ requiring an actual Neo4j database or Microsoft Agent Framework installation.
 
 from __future__ import annotations
 
+import inspect
 import json
+import re
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as package_version
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -14,6 +18,93 @@ import pytest
 
 # Skip all tests if agent_framework is not installed
 pytest.importorskip("agent_framework", reason="Microsoft Agent Framework not installed")
+
+
+def _release_tuple(raw: str) -> tuple[int, ...]:
+    """Parse the release segment of a version into a comparable tuple."""
+    match = re.match(r"\d+(?:\.\d+)*", raw.strip())
+    assert match is not None, f"unparseable version: {raw!r}"
+    return tuple(int(part) for part in match.group(0).split("."))
+
+
+class TestAgentFrameworkGAContract:
+    """Guard the Agent Framework 1.x GA surface the adapter is written against.
+
+    The 1.0.0b2 preview exported ``BaseContextProvider`` / ``BaseHistoryProvider``;
+    the GA line renamed both (keeping the keyword-only ``before_run`` /
+    ``after_run`` signatures). Nothing in the old test suite noticed, because
+    every test imported the adapter classes without ever checking what they
+    extend — the integration simply stopped importing. These tests fail loudly
+    on the next such rename.
+    """
+
+    def test_context_provider_extends_ga_base(self) -> None:
+        """Neo4jContextProvider must extend agent_framework.ContextProvider."""
+        from agent_framework import ContextProvider
+
+        from neo4j_agent_memory.integrations.microsoft_agent import Neo4jContextProvider
+
+        assert issubclass(Neo4jContextProvider, ContextProvider)
+
+    def test_chat_store_extends_ga_history_provider(self) -> None:
+        """Neo4jChatMessageStore must extend agent_framework.HistoryProvider."""
+        from agent_framework import HistoryProvider
+
+        from neo4j_agent_memory.integrations.microsoft_agent import Neo4jChatMessageStore
+
+        assert issubclass(Neo4jChatMessageStore, HistoryProvider)
+
+    @pytest.mark.parametrize("hook", ["before_run", "after_run"])
+    def test_context_hook_signature_matches_base(self, hook: str) -> None:
+        """The provider hooks must keep the framework's keyword-only signature."""
+        from agent_framework import ContextProvider
+
+        from neo4j_agent_memory.integrations.microsoft_agent import Neo4jContextProvider
+
+        base_params = inspect.signature(getattr(ContextProvider, hook)).parameters
+        ours = inspect.signature(getattr(Neo4jContextProvider, hook)).parameters
+
+        assert list(ours) == list(base_params)
+        for name, param in base_params.items():
+            assert ours[name].kind == param.kind
+
+    def test_history_provider_hooks_are_inherited(self) -> None:
+        """The chat store relies on HistoryProvider's before_run/after_run."""
+        from agent_framework import HistoryProvider
+
+        from neo4j_agent_memory.integrations.microsoft_agent import Neo4jChatMessageStore
+
+        assert Neo4jChatMessageStore.before_run is HistoryProvider.before_run
+        assert Neo4jChatMessageStore.after_run is HistoryProvider.after_run
+
+    @pytest.mark.parametrize("method", ["get_messages", "save_messages"])
+    def test_history_methods_accept_state_keyword(self, method: str) -> None:
+        """HistoryProvider calls these with ``state=``; both must accept it."""
+        from neo4j_agent_memory.integrations.microsoft_agent import Neo4jChatMessageStore
+
+        params = inspect.signature(getattr(Neo4jChatMessageStore, method)).parameters
+        assert "state" in params
+        assert params["state"].kind is inspect.Parameter.KEYWORD_ONLY
+
+    def test_installed_framework_satisfies_declared_minimum(self) -> None:
+        """The installed agent-framework must be at least MIN_VERSION."""
+        from neo4j_agent_memory.integrations.microsoft_agent import (
+            MICROSOFT_AGENT_FRAMEWORK_MIN_VERSION,
+        )
+
+        for distribution in ("agent-framework-core", "agent-framework"):
+            try:
+                installed = package_version(distribution)
+            except PackageNotFoundError:
+                continue
+            assert _release_tuple(installed) >= _release_tuple(
+                MICROSOFT_AGENT_FRAMEWORK_MIN_VERSION
+            ), (
+                f"{distribution} {installed} is older than the adapter's declared "
+                f"minimum {MICROSOFT_AGENT_FRAMEWORK_MIN_VERSION}"
+            )
+            return
+        pytest.skip("no agent-framework distribution metadata found")
 
 
 class TestNeo4jContextProvider:
@@ -259,6 +350,67 @@ class TestNeo4jChatMessageStore:
 
         assert len(messages) == 2
         assert all(isinstance(m, Message) for m in messages)
+
+    @pytest.mark.asyncio
+    async def test_before_run_loads_history_into_context(
+        self, chat_store: Any, mock_memory_client: MagicMock
+    ) -> None:
+        """The inherited before_run must load Neo4j history into the context.
+
+        This drives the real ``HistoryProvider.before_run``, which calls
+        ``get_messages(session_id, state=state)`` — so it fails if the
+        framework's loading contract drifts away from our signature.
+        """
+        from agent_framework import SessionContext
+
+        stored = MagicMock()
+        stored.role = MagicMock(value="user")
+        stored.content = "Earlier question"
+        stored.metadata = None
+        mock_conv = MagicMock()
+        mock_conv.messages = [stored]
+        mock_memory_client.short_term.get_conversation = AsyncMock(return_value=mock_conv)
+
+        context = SessionContext(session_id="chat-session-123", input_messages=[])
+
+        await chat_store.before_run(
+            agent=MagicMock(),
+            session=MagicMock(),
+            context=context,
+            state={},
+        )
+
+        loaded = context.get_messages(sources={chat_store.source_id})
+        assert [m.text for m in loaded] == ["Earlier question"]
+
+    @pytest.mark.asyncio
+    async def test_after_run_persists_inputs_and_outputs(
+        self, chat_store: Any, mock_memory_client: MagicMock
+    ) -> None:
+        """The inherited after_run must persist both input and response messages."""
+        from agent_framework import AgentResponse, Message, SessionContext
+
+        mock_memory_client.short_term.add_message = AsyncMock()
+
+        context = SessionContext(
+            session_id="chat-session-123",
+            input_messages=[Message("user", ["Hello"])],
+        )
+        response = MagicMock(spec=AgentResponse)
+        response.messages = [Message("assistant", ["Hi!"])]
+        context._response = response
+
+        await chat_store.after_run(
+            agent=MagicMock(),
+            session=MagicMock(),
+            context=context,
+            state={},
+        )
+
+        roles = [
+            call.kwargs["role"] for call in mock_memory_client.short_term.add_message.call_args_list
+        ]
+        assert roles == ["user", "assistant"]
 
     @pytest.mark.asyncio
     async def test_serialize_deserialize(

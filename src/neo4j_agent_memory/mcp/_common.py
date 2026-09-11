@@ -13,13 +13,22 @@ if TYPE_CHECKING:
 
 
 def _lifespan_context(ctx: Context) -> dict[str, Any]:
-    """Return the lifespan context dict, raising RuntimeError if unavailable."""
-    rc = ctx.request_context
-    if rc is None:
-        raise RuntimeError("MCP request context is not available (no active session)")
-    # rc.lifespan_context is typed as the generic LifespanContextT which resolves to
-    # Any in the FastMCP Context property — cast to dict[str, Any] at this boundary.
-    return cast(dict[str, Any], rc.lifespan_context)
+    """Return the lifespan context dict, raising RuntimeError if unavailable.
+
+    FastMCP 4 exposes the lifespan result directly as ``Context.lifespan_context``
+    (it reads the owning server's cached lifespan result rather than the MCP
+    session's, which matters once this server is mounted under another one).
+    It returns an empty dict when no lifespan ran, which for this server means
+    the tools have nothing to talk to — surface that as a RuntimeError rather
+    than a KeyError deeper in the call.
+    """
+    context: dict[str, Any] = ctx.lifespan_context
+    if not context:
+        raise RuntimeError(
+            "MCP lifespan context is not available (the server was created "
+            "without settings, or no session is active)"
+        )
+    return context
 
 
 def get_client(ctx: Context) -> MemoryClient:

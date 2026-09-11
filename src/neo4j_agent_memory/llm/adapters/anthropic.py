@@ -12,6 +12,14 @@ Preferred over LiteLLM for ``anthropic/*`` models because:
 Falls back to :func:`~neo4j_agent_memory.llm.structured.schema_aligned_extract`
 if the tool-use response is malformed.
 
+.. note::
+   The Anthropic SDK 1.x removed ``temperature`` / ``top_p`` / ``top_k`` from
+   ``messages.create()`` (passing one is a :class:`TypeError`), mirroring the
+   API, which rejects sampling parameters on current Claude models. This adapter
+   therefore accepts ``temperature`` for protocol compatibility but does not
+   send it; a non-default value is logged once. Use Anthropic's
+   ``output_config.effort`` knob for the equivalent control.
+
 Install with::
 
     pip install 'neo4j-agent-memory[anthropic]'
@@ -47,6 +55,27 @@ T = TypeVar("T", bound=BaseModel)
 
 
 _DEFAULT_MAX_TOKENS = 4096
+
+_sampling_warning_emitted = False
+
+
+def _note_dropped_temperature(temperature: float) -> None:
+    """Log once when a caller asks for a temperature Anthropic no longer accepts.
+
+    ``messages.create()`` has no ``temperature`` parameter on the anthropic 1.x
+    line, and the API rejects sampling parameters outright on current Claude
+    models, so the value cannot be forwarded. Silence would hide the difference
+    between what the caller asked for and what was sent, so say it once.
+    """
+    global _sampling_warning_emitted
+    if temperature == 0.0 or _sampling_warning_emitted:
+        return
+    _sampling_warning_emitted = True
+    logger.warning(
+        "Anthropic no longer accepts sampling parameters (temperature=%s ignored); "
+        "current Claude models reject them. Use output_config.effort instead.",
+        temperature,
+    )
 
 
 def _strip_provider_prefix(model: str) -> str:
@@ -148,7 +177,7 @@ class AnthropicProvider:
         from neo4j_agent_memory.llm.adapters.anthropic import AnthropicProvider
 
         provider = AnthropicProvider(
-            "anthropic/claude-3-5-sonnet-latest",
+            "anthropic/claude-opus-5",
             api_key="sk-ant-...",
             cache_system=True,  # opt-in prompt caching
         )
@@ -227,12 +256,12 @@ class AnthropicProvider:
         timeout: float | None = None,
     ) -> Completion:
         client = self._ensure_client()
+        _note_dropped_temperature(temperature)
         system, anth_messages = _split_system_message(messages)
         kwargs: dict[str, Any] = {
             "model": self._bare_model,
             "messages": anth_messages,
             "max_tokens": max_tokens if max_tokens is not None else self._default_max_tokens,
-            "temperature": temperature,
         }
         system_param = self._build_system_param(system)
         if system_param is not None:
@@ -281,6 +310,7 @@ class AnthropicProvider:
         :func:`schema_aligned_extract` on tool-use failure.
         """
         client = self._ensure_client()
+        _note_dropped_temperature(temperature)
         system, anth_messages = _split_system_message(messages)
         schema = response_model.model_json_schema()
 
@@ -296,7 +326,6 @@ class AnthropicProvider:
             "model": self._bare_model,
             "messages": anth_messages,
             "max_tokens": self._default_max_tokens,
-            "temperature": temperature,
             "tools": [tool_spec],
             "tool_choice": {"type": "tool", "name": "submit_extraction"},
         }

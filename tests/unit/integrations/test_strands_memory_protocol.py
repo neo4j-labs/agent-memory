@@ -1,4 +1,8 @@
-"""The store depends on strands' LTM module, added in strands-agents 1.44.0."""
+"""The store depends on strands' LTM module (`strands.memory`).
+
+It arrived in strands-agents 1.44.0; the `[strands]` extra floors at 1.52, the
+oldest release that also carries the multi-agent/bidi `SessionManager` hooks.
+"""
 
 from __future__ import annotations
 

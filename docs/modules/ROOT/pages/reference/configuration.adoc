@@ -198,7 +198,7 @@ OPENAI_API_KEY=sk-...
 |`model`
 |str
 |`text-embedding-3-small`
-|Model name
+|Model name. When `provider=VERTEX_AI` and `model` is not set, it defaults to `gemini-embedding-001` (and `dimensions` to 768).
 
 |`api_key`
 |SecretStr
@@ -235,6 +235,11 @@ OPENAI_API_KEY=sk-...
 |`RETRIEVAL_DOCUMENT`
 |Vertex AI task type
 
+|`output_dimensionality`
+|int \| None
+|None (768 when `provider=VERTEX_AI`)
+|Vertex AI truncation target. `gemini-embedding-001` emits 3072 dimensions natively and can be truncated to 1536 or 768.
+
 |`aws_region`
 |str
 |None
@@ -261,8 +266,8 @@ OPENAI_API_KEY=sk-...
 |Runs locally
 
 |`VERTEX_AI`
-|`text-embedding-004`, `textembedding-gecko@003`
-|Requires GCP project. Install with `pip install neo4j-agent-memory[vertex-ai]`
+|`gemini-embedding-001` (default), `text-embedding-005`, `text-multilingual-embedding-002`
+|Requires GCP project. Install with `pip install neo4j-agent-memory[vertex-ai]`. `text-embedding-004` (retired 2026-01-14) and `textembedding-gecko*` (retired 2025-04-09) raise an error.
 
 |`BEDROCK`
 |`amazon.titan-embed-text-v2:0`, `amazon.titan-embed-text-v1`, `cohere.embed-english-v3`, `cohere.embed-multilingual-v3`

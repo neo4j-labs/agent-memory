@@ -35,8 +35,9 @@ try:
         during streaming. No manual ``execute_memory_tool()`` dispatch needed.
 
         .. note::
-            Tool format follows Microsoft Agent Framework conventions.
-            May need updates for GA release.
+            Tool format follows Microsoft Agent Framework conventions
+            (``@tool``-decorated callables returning ``FunctionTool``), as
+            shipped on the 1.x GA line.
 
         Args:
             memory: The Neo4jMicrosoftMemory instance.

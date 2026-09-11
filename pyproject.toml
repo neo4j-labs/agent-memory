@@ -40,7 +40,13 @@ classifiers = [
 ]
 
 dependencies = [
-    "neo4j>=5.20.0",
+    # Neo4j driver 5.20+ or 6.x. The floor stays at 5.20 deliberately: the graph
+    # layer only uses the async driver surface that is identical on both majors
+    # (`AsyncGraphDatabase.driver`, `session.run`, `Result.data()`, `.single()`,
+    # `neo4j.time.DateTime.to_native()`, `neo4j.spatial.Point`), so pinning 6.x
+    # would strand deployments still on the 5.x line for no gain. Capped below 7
+    # because a major bump is free to reshape that surface.
+    "neo4j>=5.20,<7",
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
     "typing-extensions>=4.4",  # PEP 696 TypeVar defaults on Python < 3.13
@@ -53,20 +59,64 @@ dependencies = [
 #   - Universal fallback: [litellm] — covers every other provider
 #   - Optional power-user: [instructor] — for users who already use Instructor
 # LLM + embedding providers
-openai = ["openai>=1.0.0"]
-anthropic = ["anthropic>=0.20.0"]
-sentence-transformers = ["sentence-transformers>=2.2.0"]
-vertex-ai = ["google-cloud-aiplatform>=1.38.0"]
+#
+# OpenAI SDK 2.x or 3.x. Both majors expose every surface the two adapters bind
+# to — `AsyncOpenAI(api_key=, base_url=, organization=, timeout=, max_retries=,
+# default_headers=)`, `chat.completions.create(... response_format=json_schema,
+# max_tokens=, stop=, timeout=)`, `embeddings.create(... dimensions=)`, and the
+# `AuthenticationError` / `RateLimitError` / `APITimeoutError` / `BadRequestError`
+# / `APIConnectionError` / `APIStatusError` classes the exception translator
+# imports — verified against 2.54 and 3.13. The floor is 2.0 rather than 3.0
+# because openai 3.x moved its HTTP layer to the separate `httpx2` distribution
+# and no longer installs `httpx`; `[nams]` declares `httpx` itself and the two
+# distributions ship different top-level packages (`httpx` vs `httpx2`), so they
+# coexist in one environment. Note that the committed lock resolves openai 2.x:
+# litellm and crewai both cap it at `<3`.
+openai = ["openai>=2.0,<4"]
+# Anthropic SDK 1.x. 1.0 is the floor because the whole 1.x line dropped
+# `temperature` / `top_p` / `top_k` from `messages.create()` (a `TypeError` now,
+# matching the API, which rejects sampling parameters on current models) — the
+# adapter no longer sends them. Everything else it uses is unchanged:
+# `AsyncAnthropic(api_key=, base_url=, timeout=, max_retries=)`,
+# `messages.create(... system=, stop_sequences=, tools=, tool_choice=)`, the
+# text/tool_use content blocks, the `Usage` cache fields, and the exception
+# classes. 1.x is also built on `httpx2` rather than `httpx` (see above).
+anthropic = ["anthropic>=1.0,<2"]
+# sentence-transformers 3.x-6.x. The floor is 3.0 (2.x predates the
+# `device=`-keyword constructor contract); verified on 6.0, which reorganized the
+# package internals but keeps the three call sites this library uses
+# (`SentenceTransformer(name, device=...)`, `encode(texts, convert_to_numpy=True)`,
+# `get_sentence_embedding_dimension()`) — `encode()`'s first parameter was renamed
+# `sentences` -> `inputs` but is passed positionally here, and a
+# `@deprecated_kwargs` shim covers the keyword form.
+sentence-transformers = ["sentence-transformers>=3.0,<7"]
+# Vertex AI via google-cloud-aiplatform 2.x, which removed
+# `vertexai.language_models` and requires `google-genai` — the backend the
+# embedder falls back to (`genai.Client(vertexai=True, ...)` +
+# `models.embed_content(..., EmbedContentConfig(task_type=,
+# output_dimensionality=))`, verified on google-genai 2.22). google-genai is
+# declared explicitly because the embedder imports it directly. The 1.x
+# `TextEmbeddingModel` path is still in the code for deployments that pin an
+# older aiplatform, but it is no longer what a fresh install resolves.
+vertex-ai = ["google-cloud-aiplatform>=2.0,<3", "google-genai>=1.66"]
 bedrock = ["boto3>=1.26.0"]
-litellm = ["litellm>=1.50.0,<2.0"]
-instructor = ["instructor>=1.7.0"]
+litellm = ["litellm>=1.50,<2"]
+instructor = ["instructor>=1.7,<2"]
 
 # Cloud provider bundles
-google = ["google-cloud-aiplatform>=1.38.0"]
+google = ["google-cloud-aiplatform>=2.0,<3", "google-genai>=1.66"]
 aws = ["boto3>=1.26.0"]
 
-# AWS Strands Agents SDK
-strands = ["strands-agents>=1.44.0", "boto3>=1.26.0"]
+# AWS Strands Agents SDK 1.x. The floor is 1.52 because that is the oldest
+# release carrying every surface the two adapters bind to: the `SessionManager`
+# base class with multi-agent *and* bidirectional hooks (`sync_multi_agent`,
+# `initialize_bidi_agent`, `append_bidi_message`, `sync_bidi_agent`, registered
+# unconditionally in `strands.session.session_manager`), and the `strands.memory`
+# package (`MemoryStore`, `MemoryManager`, `AddMessagesContext`,
+# `ExtractionConfig`) that `Neo4jMemoryStore` implements. Capped at the next
+# major: `SessionManager` and `MemoryStore` are both pre-2.0 contracts that a
+# major bump is free to reshape.
+strands = ["strands-agents>=1.52,<2", "boto3>=1.26.0"]
 
 # Entity extraction
 spacy = ["spacy>=3.7.0"]
@@ -94,18 +144,74 @@ observability = [
 ]
 
 # Framework integrations
-langchain = ["langchain-core>=0.2.0"]
-llamaindex = ["llama-index-core>=0.10.0"]
-pydantic-ai = ["pydantic-ai>=0.1.0"]
-crewai = ["crewai>=0.50.0"]
-openai-agents = ["openai>=1.0.0"]
-microsoft-agent = ["agent-framework>=1.0.0b260212"]
+# LangChain 1.x. `[langchain]` carries only `langchain-core`, which is what the
+# two ABC-backed adapters need: `Neo4jAgentMemory` implements
+# `langchain_core.chat_history.BaseChatMessageHistory` and
+# `Neo4jMemoryRetriever` implements `langchain_core.retrievers.BaseRetriever`.
+# The floor is 1.0 because langchain-core 1.x removed `langchain_core.memory`
+# (the pre-v1 `BaseMemory` contract the old adapter imitated) — adapters written
+# against the 0.x shape do not belong on the 1.x line, and a floor spanning both
+# protects nobody.
+langchain = ["langchain-core>=1.0,<2"]
+# `create_agent` middleware lives in the `langchain` distribution (which pulls
+# langgraph), so `Neo4jMemoryMiddleware` gets its own extra rather than making
+# every user of the memory/retriever adapters install a graph runtime.
+langchain-agents = ["langchain-core>=1.0,<2", "langchain>=1.0,<2"]
+# LlamaIndex 0.14.x. `llama-index-core` has no 1.0 release yet, so the cap is
+# `<1` and the floor is the current minor: `Neo4jLlamaIndexMemory` subclasses
+# `llama_index.core.memory.BaseMemory` and implements the
+# `get`/`put`/`set`/`reset`/`get_all` + `aget`/`aput`/`aset`/`areset`/`aget_all`
+# pair plus `from_defaults`, which is the 0.12+ shape of that ABC.
+llamaindex = ["llama-index-core>=0.14,<1"]
+# PydanticAI 2.x. We depend on the `pydantic-ai-slim` distribution (same
+# `pydantic_ai` import package) rather than the `pydantic-ai` meta-package,
+# which pulls ~20 provider SDKs this adapter never imports. Historically the
+# `-slim` suffix was also load-bearing because the meta-package's
+# `pydantic-ai-slim[mcp]` -> `fastmcp-slim>=3` collided with the `fastmcp<3`
+# distribution used by the [mcp] extra; now that [mcp] is on fastmcp 4 (which
+# is itself a thin wrapper over `fastmcp-slim==4.x`) that collision is gone and
+# the suffix is purely about install weight.
+pydantic-ai = ["pydantic-ai-slim[openai]>=2.0,<3"]
+# CrewAI 1.x. `Neo4jCrewMemory` subclasses `crewai.memory.memory.Memory`, which
+# is a Pydantic model on the 1.x line; the 0.x floor predates that module layout.
+crewai = ["crewai>=1.0,<2"]
+# OpenAI Agents SDK. This extra deliberately carries only the `openai` SDK, not
+# the `openai-agents` distribution: the adapter (`Neo4jOpenAIMemory`,
+# `record_agent_trace`) never imports the `agents` package — it gates on
+# `import openai` and speaks plain chat-completion dicts, so an agent built with
+# any version of the Agents SDK can use it. Pulling `openai-agents` in would also
+# force `openai>=3` (its own floor) and make the `[all]` bundle unresolvable,
+# since litellm and crewai cap openai at `<3`.
+openai-agents = ["openai>=2.0,<4"]
+# Microsoft Agent Framework 1.x (GA). The adapter targets the GA provider
+# contract: `ContextProvider` / `HistoryProvider`, which replaced the
+# `BaseContextProvider` / `BaseHistoryProvider` names the 1.0.0b2 preview
+# exported (the keyword-only `before_run` / `after_run` signatures are
+# unchanged). We depend on `agent-framework-core`, not the `agent-framework`
+# meta-package: at GA the meta-package resolves to `agent-framework-core[all]`,
+# which drags in ~30 provider distributions (anthropic, bedrock, gemini,
+# mistral, ollama, redis, devui's fastapi/uvicorn, powerfx, ...) that this
+# adapter never imports. Everything it does import — `ContextProvider`,
+# `HistoryProvider`, `AgentSession`, `SessionContext`, `SupportsAgentRun`,
+# `FunctionTool`, `tool`, `Message` — is exported from the top-level
+# `agent_framework` package shipped by -core. Applications add their own chat
+# client (`agent-framework-openai`, `agent-framework-azure-ai`, or the
+# `agent-framework` meta-package) alongside this extra.
+microsoft-agent = ["agent-framework-core>=1.13,<2"]
 
-# MCP server
-mcp = ["fastmcp>=2.0.0,<3"]
+# MCP server. FastMCP 4.x (MCP Python SDK 2.x): keyword-only server
+# construction, `ctx.lifespan_context`, and Streamable HTTP as the network
+# transport (`transport="http"`). The legacy HTTP+SSE transport is still
+# reachable but deprecated upstream; the CLI maps `--transport sse` onto
+# streamable HTTP with a warning.
+mcp = ["fastmcp>=4.0,<5"]
 
-# Google ADK
-google-adk = ["google-adk>=0.1.0"]
+# Google ADK 2.x (GA). The adapter targets the 2.x BaseMemoryService
+# contract (keyword-only `search_memory`, `SearchMemoryResponse` of
+# `MemoryEntry(content=google.genai.types.Content(...), author, timestamp)`).
+# google-genai is pinned explicitly because the adapter builds `types.Content`
+# objects itself rather than relying on google-adk's transitive floor.
+google-adk = ["google-adk>=2.0,<3", "google-genai>=1.0"]
 
 # Hosted NAMS (Neo4j Agent Memory Service) backend
 nams = ["httpx>=0.27.0"]
@@ -148,10 +254,22 @@ dev = [
     "pre-commit>=3.6.0",
     "testcontainers[neo4j]>=4.0.0",
     "beautifulsoup4>=4.12.0",
-    "fastmcp>=2.0.0,<3",
+    "fastmcp>=4.0,<5",
     # NAMS HTTP-transport tests (Phase 2+)
     "httpx>=0.27.0",
     "respx>=0.21.0",
+    # examples/_env.py reads examples/.env through python-dotenv and degrades to a
+    # hand-rolled parser without it. Declared so the example smoke tests exercise
+    # the real path rather than the fallback (it was only ever present
+    # transitively via pydantic-settings).
+    "python-dotenv>=1.0",
+    # TODO: add `langchain-openai>=1.0,<2` here so CI exercises the
+    # `llm_provider_from_langchain` branch of examples/langchain_agent.py
+    # (requested by the LangChain example's review pass). It must land in the
+    # same commit that deletes the now-redundant
+    # `# type: ignore[import-not-found]` on examples/langchain_agent.py:105 —
+    # once the package is installed mypy resolves the import and `make
+    # typecheck` fails with `unused-ignore`.
 ]
 
 docs = [
@@ -222,10 +340,11 @@ plugins = ["pydantic.mypy"]
 # covered by typeshed's types-PyYAML, now a declared dev dependency so clean CI
 # resolves it (it was previously only ambiently present, which made the mypy
 # error count non-reproducible). Confirmed that gliner 0.2.24 ships no
-# py.typed marker; it is suppressed via the override below. google.adk.* also
-# ships no type information; since it is used at a typed boundary in only two
-# files (the ADK MemoryService), it is suppressed per-module here rather than
-# shipping local stubs. nest_asyncio (used only by the llamaindex integration)
+# py.typed marker; it is suppressed via the override below. google.adk 2.x and
+# google.genai *do* ship py.typed, but both are optional extras, so the
+# per-module overrides below stay: they keep `mypy src` clean in environments
+# where the [google-adk] extra is not installed (the ADK MemoryService imports
+# them at a typed boundary). nest_asyncio (used only by the llamaindex integration)
 # is likewise suppressed per-module below. The remaining dep that genuinely
 # ships no type information is glirel; its import diagnostics are intentionally
 # left in the budget and will be addressed later (local stubs vs. per-module
@@ -237,6 +356,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "google.adk.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "google.genai.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

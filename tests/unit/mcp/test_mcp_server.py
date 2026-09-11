@@ -305,3 +305,160 @@ class TestRunServerProviderKwargs:
         nams_config = created_settings[0].kwargs["nams"]
         assert nams_config.kwargs["endpoint"] == "https://memory.example.test/v1"
         assert nams_config.kwargs["api_key"].get_secret_value() == "nams_from_env"
+
+
+class TestTransportNormalization:
+    """Tests for FastMCP 4 transport resolution (Streamable HTTP vs legacy SSE)."""
+
+    def test_stdio_passes_through(self):
+        from neo4j_agent_memory.mcp.server import normalize_transport
+
+        assert normalize_transport("stdio") == "stdio"
+
+    def test_http_passes_through(self):
+        from neo4j_agent_memory.mcp.server import normalize_transport
+
+        assert normalize_transport("http") == "http"
+
+    def test_streamable_http_is_a_synonym_for_http(self):
+        from neo4j_agent_memory.mcp.server import normalize_transport
+
+        assert normalize_transport("streamable-http") == "http"
+
+    def test_sse_maps_to_http_with_a_warning(self, caplog):
+        """`sse` is accepted for compatibility but serves Streamable HTTP."""
+        import logging
+
+        from neo4j_agent_memory.mcp.server import normalize_transport
+
+        with caplog.at_level(logging.WARNING, logger="neo4j_agent_memory.mcp.server"):
+            assert normalize_transport("sse") == "http"
+        assert any("deprecated" in record.message for record in caplog.records)
+
+    def test_unknown_transport_raises(self):
+        from neo4j_agent_memory.mcp.server import normalize_transport
+
+        with pytest.raises(ValueError, match="Unknown transport"):
+            normalize_transport("websocket")
+
+    def test_transports_constant_lists_accepted_names(self):
+        from neo4j_agent_memory.mcp.server import TRANSPORTS
+
+        assert set(TRANSPORTS) == {"stdio", "http", "streamable-http", "sse"}
+
+
+class TestRunServerTransportDispatch:
+    """run_server() must hand FastMCP only the transports FastMCP 4 serves."""
+
+    @pytest.mark.parametrize(
+        ("requested", "expected"),
+        [
+            ("stdio", "stdio"),
+            ("http", "http"),
+            ("streamable-http", "http"),
+            ("sse", "http"),
+        ],
+    )
+    async def test_transport_is_normalized_before_run_async(
+        self, monkeypatch: pytest.MonkeyPatch, requested: str, expected: str
+    ) -> None:
+        import neo4j_agent_memory as nam
+        import neo4j_agent_memory.config.settings as settings_mod
+        import neo4j_agent_memory.mcp.server as server_mod
+
+        fake_server = MagicMock()
+        fake_server.run_async = AsyncMock()
+
+        class _FakeSettings:
+            def __init__(self, **kwargs: object) -> None:
+                self.kwargs = kwargs
+
+        class _FakeNeo4jConfig:
+            def __init__(self, **kwargs: object) -> None:
+                self.kwargs = kwargs
+
+        monkeypatch.setattr(nam, "MemorySettings", _FakeSettings)
+        monkeypatch.setattr(settings_mod, "Neo4jConfig", _FakeNeo4jConfig)
+        monkeypatch.setattr(
+            server_mod, "create_mcp_server", lambda _settings, *_a, **_k: fake_server
+        )
+
+        await server_mod.run_server(
+            neo4j_uri="bolt://localhost:7687",
+            neo4j_user="neo4j",
+            neo4j_password="test-password",
+            transport=requested,
+            host="127.0.0.1",
+            port=8123,
+        )
+
+        kwargs = fake_server.run_async.await_args.kwargs
+        assert kwargs["transport"] == expected
+        if expected == "http":
+            assert kwargs["host"] == "127.0.0.1"
+            assert kwargs["port"] == 8123
+        else:
+            # The host owns stderr on stdio; FastMCP's banner is noise there.
+            assert kwargs["show_banner"] is False
+
+    async def test_unknown_transport_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import neo4j_agent_memory as nam
+        import neo4j_agent_memory.config.settings as settings_mod
+        import neo4j_agent_memory.mcp.server as server_mod
+
+        class _FakeSettings:
+            def __init__(self, **kwargs: object) -> None:
+                self.kwargs = kwargs
+
+        class _FakeNeo4jConfig:
+            def __init__(self, **kwargs: object) -> None:
+                self.kwargs = kwargs
+
+        monkeypatch.setattr(nam, "MemorySettings", _FakeSettings)
+        monkeypatch.setattr(settings_mod, "Neo4jConfig", _FakeNeo4jConfig)
+        monkeypatch.setattr(
+            server_mod, "create_mcp_server", lambda _settings, *_a, **_k: MagicMock()
+        )
+
+        with pytest.raises(ValueError, match="Unknown transport"):
+            await server_mod.run_server(
+                neo4j_uri="bolt://localhost:7687",
+                neo4j_user="neo4j",
+                neo4j_password="test-password",
+                transport="websocket",
+            )
+
+
+class TestPreconnectedServerTransports:
+    """Neo4jMemoryMCPServer exposes run/run_http with run_sse as a shim."""
+
+    @pytest.fixture
+    def server(self):
+        from neo4j_agent_memory.mcp.server import Neo4jMemoryMCPServer
+
+        mock_client = MagicMock()
+        mock_client._settings.backend = "bolt"
+        return Neo4jMemoryMCPServer(mock_client)
+
+    async def test_run_uses_stdio_without_a_banner(self, server):
+        server._mcp.run_async = AsyncMock()
+        await server.run()
+        assert server._mcp.run_async.await_args.kwargs == {
+            "transport": "stdio",
+            "show_banner": False,
+        }
+
+    async def test_run_http_uses_streamable_http(self, server):
+        server._mcp.run_async = AsyncMock()
+        await server.run_http(host="0.0.0.0", port=9000)
+        assert server._mcp.run_async.await_args.kwargs == {
+            "transport": "http",
+            "host": "0.0.0.0",
+            "port": 9000,
+        }
+
+    async def test_run_sse_serves_streamable_http(self, server):
+        server._mcp.run_async = AsyncMock()
+        await server.run_sse(port=9001)
+        assert server._mcp.run_async.await_args.kwargs["transport"] == "http"
+        assert server._mcp.run_async.await_args.kwargs["port"] == 9001

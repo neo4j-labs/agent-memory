@@ -76,7 +76,7 @@ These are equivalent to the matching `--llm` / `--embedding` flags on `neo4j-age
 | `NAM_EMBEDDING__MODEL`
 | string
 | `text-embedding-3-small`
-| Embedding model name
+| Embedding model name. Unset with `PROVIDER=vertex_ai` it defaults to `gemini-embedding-001`
 
 | `NAM_EMBEDDING__API_KEY`
 | string
@@ -107,6 +107,16 @@ These are equivalent to the matching `--llm` / `--embedding` flags on `neo4j-age
 | string
 | `us-central1`
 | GCP region (for Vertex AI)
+
+| `NAM_EMBEDDING__TASK_TYPE`
+| string
+| `RETRIEVAL_DOCUMENT`
+| Vertex AI task type
+
+| `NAM_EMBEDDING__OUTPUT_DIMENSIONALITY`
+| int
+| _none_ (`768` for Vertex AI)
+| Vertex AI truncation target (`gemini-embedding-001` is 3072 natively)
 
 | `NAM_EMBEDDING__AWS_REGION`
 | string

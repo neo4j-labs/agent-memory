@@ -321,11 +321,34 @@ class LongTermProtocol(Protocol):
         """
         ...
 
-    async def wait_for_extraction(self) -> bool:
+    async def wait_for_extraction(
+        self,
+        *,
+        query: str | None = None,
+        expected_names: list[str] | None = None,
+        min_results: int = 1,
+        predicate: Callable[[list[Entity]], bool] | None = None,
+        timeout: float = 30.0,
+        interval: float = 1.0,
+        session_id: str | None = None,
+        **kwargs: Any,
+    ) -> bool:
         """Wait for any pending asynchronous entity extraction to complete.
 
         Returns True once extraction has settled (or immediately if there
         is nothing to await).
+
+        Every parameter is optional and keyword-only so that portable code
+        can pass the NAMS readiness arguments through ``client.long_term``
+        on either backend. On bolt, extraction is synchronous and the call
+        returns ``True`` immediately, ignoring all arguments. On NAMS they
+        select the readiness signal: ``session_id`` (alias
+        ``conversation_id``, accepted via ``**kwargs``) polls the
+        conversation's extraction status, while ``query`` /
+        ``expected_names`` / ``min_results`` / ``predicate`` confirm the
+        extracted entities are searchable. ``timeout`` and ``interval``
+        bound the polling. See
+        :meth:`neo4j_agent_memory.nams.long_term.NamsLongTermMemory.wait_for_extraction`.
         """
         ...
 

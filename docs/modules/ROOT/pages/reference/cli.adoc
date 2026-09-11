@@ -296,9 +296,9 @@ neo4j-agent-memory mcp serve [OPTIONS]
 | `--user`                | `neo4j`               | Neo4j username (env: `NEO4J_USER`).
 | `--password`            | _required_            | Neo4j password (env: `NEO4J_PASSWORD`).
 | `--database`            | `neo4j`               | Neo4j database name (env: `NEO4J_DATABASE`).
-| `--transport`           | `stdio`               | MCP transport (`stdio`, `sse`, or `http`).
-| `--host`                | `127.0.0.1`           | Host for network transports.
-| `--port`                | `8080`                | Port for network transports.
+| `--transport`           | `stdio`               | MCP transport: `stdio` or `http` (Streamable HTTP; `streamable-http` is a synonym). `sse` is deprecated and serves Streamable HTTP with a warning.
+| `--host`                | `127.0.0.1`           | Host for the HTTP transport (`0.0.0.0` to expose it).
+| `--port`                | `8080`                | Port for the HTTP transport.
 | `--profile`             | `extended`            | Tool profile: `core` (6 tools) or `extended` (16 tools).
 | `--session-strategy`    | `per_conversation`    | `per_conversation`, `per_day`, or `persistent`.
 | `--user-id`             | _none_                | User ID for `per_day`/`persistent` strategies (env: `MCP_USER_ID`).
@@ -336,7 +336,20 @@ neo4j-agent-memory mcp serve \
   --profile core \
   --session-strategy per_day \
   --user-id alice
+
+# Streamable HTTP, for a networked deployment (Cloud Run, Kubernetes).
+# The MCP endpoint is POST/GET http://<host>:8080/mcp/
+neo4j-agent-memory mcp serve \
+  --password mypw \
+  --transport http \
+  --host 0.0.0.0 \
+  --port 8080
 ----
+
+NOTE: `--transport sse` is deprecated. The MCP specification replaced the legacy
+HTTP+SSE transport with Streamable HTTP; the flag still starts a server but logs
+a warning and serves Streamable HTTP at `/mcp/`. See
+xref:reference/mcp-tools.adoc#_transports[Transports].
 
 == Environment Variables
 

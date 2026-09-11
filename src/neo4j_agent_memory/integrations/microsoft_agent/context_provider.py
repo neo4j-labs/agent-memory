@@ -1,4 +1,4 @@
-"""Microsoft Agent Framework BaseContextProvider implementation.
+"""Microsoft Agent Framework ContextProvider implementation.
 
 Provides Neo4j-backed context injection and memory extraction for
 Microsoft Agent Framework agents.
@@ -30,15 +30,15 @@ logger = logging.getLogger(__name__)
 try:
     from agent_framework import (
         AgentSession,
-        BaseContextProvider,
+        ContextProvider,
         Message,
         SessionContext,
         SupportsAgentRun,
     )
 
-    class Neo4jContextProvider(BaseContextProvider):
+    class Neo4jContextProvider(ContextProvider):
         """
-        Microsoft Agent Framework BaseContextProvider backed by Neo4j Agent Memory.
+        Microsoft Agent Framework ContextProvider backed by Neo4j Agent Memory.
 
         Provides automatic context injection before agent invocation and memory
         extraction after agent responses. Supports all three memory types:

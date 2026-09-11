@@ -1,11 +1,22 @@
 """MCP Server implementation for Neo4j Agent Memory.
 
-Provides a Model Context Protocol server using FastMCP that exposes
-memory capabilities as tools, resources, and prompts for AI platforms.
+Provides a Model Context Protocol server using FastMCP 4 (MCP Python SDK 2)
+that exposes memory capabilities as tools, resources, and prompts for AI
+platforms.
 
 Supports two tool profiles:
 - Core (6 tools): Essential read/write cycle
 - Extended (16 tools): Full surface with reasoning, entities, graph export
+
+Transports:
+- ``stdio`` — the default; what Claude Desktop, Claude Code, and Cursor use.
+- ``http`` — Streamable HTTP, the single network transport in the current MCP
+  spec. ``streamable-http`` is accepted as an explicit spelling of the same
+  thing.
+- ``sse`` — the legacy HTTP+SSE transport, deprecated in the MCP spec and in
+  FastMCP. Requesting it here logs a warning and serves Streamable HTTP
+  instead; it remains accepted only so existing launch configurations keep
+  starting.
 """
 
 from __future__ import annotations
@@ -21,6 +32,46 @@ if TYPE_CHECKING:
     from neo4j_agent_memory import MemoryClient
 
 logger = logging.getLogger(__name__)
+
+#: Transport names accepted by :func:`run_server` and the ``mcp serve`` CLI.
+TRANSPORTS = ("stdio", "http", "streamable-http", "sse")
+
+#: Transport names that are accepted but no longer serve what they name.
+DEPRECATED_TRANSPORTS = {"sse"}
+
+
+def normalize_transport(transport: str) -> str:
+    """Map a requested transport name onto what FastMCP 4 should actually run.
+
+    ``streamable-http`` and the deprecated ``sse`` both collapse onto ``http``
+    (Streamable HTTP). Requesting ``sse`` logs a deprecation warning: the MCP
+    spec replaced the HTTP+SSE transport with Streamable HTTP, and serving the
+    old one would leave clients on a transport that is going away.
+
+    Args:
+        transport: Requested transport name.
+
+    Returns:
+        Either ``"stdio"`` or ``"http"``.
+
+    Raises:
+        ValueError: If the name is not one of :data:`TRANSPORTS`.
+    """
+    if transport not in TRANSPORTS:
+        raise ValueError(
+            f"Unknown transport {transport!r}. Choose one of: {', '.join(TRANSPORTS)}."
+        )
+    if transport in DEPRECATED_TRANSPORTS:
+        logger.warning(
+            "Transport 'sse' is deprecated (the MCP spec replaced HTTP+SSE with "
+            "Streamable HTTP); serving Streamable HTTP instead. Use "
+            "--transport http."
+        )
+        return "http"
+    if transport == "streamable-http":
+        return "http"
+    return transport
+
 
 try:
     from fastmcp import FastMCP
@@ -102,7 +153,7 @@ try:
                     }
 
         mcp = FastMCP(
-            server_name,
+            name=server_name,
             instructions=get_instructions(profile),
             lifespan=lifespan,
         )
@@ -195,7 +246,7 @@ try:
                 }
 
             self._mcp = FastMCP(
-                server_name,
+                name=server_name,
                 instructions=get_instructions(profile),
                 lifespan=_preconnected_lifespan,
             )
@@ -212,17 +263,36 @@ try:
             register_prompts(self._mcp, profile=profile)
 
         async def run(self) -> None:
-            """Run the MCP server using stdio transport."""
-            await self._mcp.run_async(transport="stdio")
+            """Run the MCP server using stdio transport.
 
-        async def run_sse(self, host: str = "127.0.0.1", port: int = 8080) -> None:
-            """Run the MCP server using SSE transport.
+            The FastMCP startup banner is suppressed: on stdio the host owns
+            stderr, and the banner (which in 4.x also carries a third-party
+            deploy link) only shows up as noise in its logs.
+            """
+            await self._mcp.run_async(transport="stdio", show_banner=False)
+
+        async def run_http(self, host: str = "127.0.0.1", port: int = 8080) -> None:
+            """Run the MCP server using Streamable HTTP transport.
 
             Args:
                 host: Host to bind to.
                 port: Port to listen on.
             """
-            await self._mcp.run_async(transport="sse", host=host, port=port)
+            await self._mcp.run_async(transport="http", host=host, port=port)
+
+        async def run_sse(self, host: str = "127.0.0.1", port: int = 8080) -> None:
+            """Run the MCP server over HTTP. Deprecated alias for :meth:`run_http`.
+
+            The MCP spec replaced the HTTP+SSE transport with Streamable HTTP, so
+            this serves Streamable HTTP and logs a warning rather than starting
+            the legacy transport.
+
+            Args:
+                host: Host to bind to.
+                port: Port to listen on.
+            """
+            normalize_transport("sse")
+            await self.run_http(host=host, port=port)
 
     async def run_server(
         neo4j_uri: str,
@@ -255,7 +325,9 @@ try:
             neo4j_user: Neo4j username.
             neo4j_password: Neo4j password.
             neo4j_database: Neo4j database name.
-            transport: Transport type (stdio, sse, or http).
+            transport: Transport type — ``stdio`` (default), ``http`` /
+                ``streamable-http``, or the deprecated ``sse`` (which serves
+                Streamable HTTP with a warning). See :func:`normalize_transport`.
             host: Host for network transports.
             port: Port for network transports.
             profile: Tool profile ('core' or 'extended').
@@ -331,12 +403,13 @@ try:
             auto_preferences=auto_preferences,
         )
 
-        if transport == "sse":
-            await server.run_async(transport="sse", host=host, port=port)  # ty: ignore[possibly-missing-attribute]  # run_async exists on FastMCP; ty unifies with the ImportError-fallback stubs
-        elif transport == "http":
-            await server.run_async(transport="http", host=host, port=port)  # ty: ignore[possibly-missing-attribute]  # same
+        resolved_transport = normalize_transport(transport)
+        if resolved_transport == "http":
+            await server.run_async(transport="http", host=host, port=port)  # ty: ignore[possibly-missing-attribute]  # run_async exists on FastMCP; ty unifies with the ImportError-fallback stubs
         else:
-            await server.run_async(transport="stdio")  # ty: ignore[possibly-missing-attribute]  # same
+            # show_banner=False: on stdio the MCP host owns stderr, and FastMCP's
+            # startup banner is only noise in its logs.
+            await server.run_async(transport="stdio", show_banner=False)  # ty: ignore[possibly-missing-attribute]  # same
 
 except ImportError:
     # FastMCP not installed — these stubs have different signatures from the real
@@ -395,9 +468,13 @@ def main() -> None:
     )
     parser.add_argument(
         "--transport",
-        choices=["stdio", "sse", "http"],
+        choices=list(TRANSPORTS),
         default="stdio",
-        help="MCP transport type",
+        help=(
+            "MCP transport type: stdio (default) or http (Streamable HTTP). "
+            "'streamable-http' is a synonym for 'http'; 'sse' is deprecated "
+            "and serves Streamable HTTP."
+        ),
     )
     parser.add_argument(
         "--host",

@@ -31,17 +31,22 @@ logger = logging.getLogger(__name__)
 
 
 # ── Tool annotations ──────────────────────────────────────────────────
+#
+# MCP Python SDK 2 (which FastMCP 4 builds on) renamed the ``ToolAnnotations``
+# fields to snake_case. FastMCP still accepts the legacy camelCase spelling via
+# a compatibility shim that can be switched off, so these dicts use the native
+# names. They are serialised back to the wire's camelCase by the SDK.
 
 READ_ANNOTATIONS = {
-    "readOnlyHint": True,
-    "destructiveHint": False,
-    "idempotentHint": True,
+    "read_only_hint": True,
+    "destructive_hint": False,
+    "idempotent_hint": True,
 }
 
 WRITE_ANNOTATIONS = {
-    "readOnlyHint": False,
-    "destructiveHint": False,
-    "idempotentHint": False,
+    "read_only_hint": False,
+    "destructive_hint": False,
+    "idempotent_hint": False,
 }
 
 

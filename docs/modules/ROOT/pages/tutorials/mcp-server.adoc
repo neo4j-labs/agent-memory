@@ -147,6 +147,35 @@ Claude will call `memory_search` and find your stored preference for Italian foo
 
 Claude will call `memory_get_entity` (if using extended profile) or `memory_search` to find the entity and any related context.
 
+== Running the Server Remotely
+
+Claude Desktop launches the server as a child process and talks to it over
+`stdio`, which is what every step above uses. If you want one server shared by
+several clients -- a team deployment, or a Cloud Run service -- start it on the
+Streamable HTTP transport instead:
+
+[source,bash]
+----
+neo4j-agent-memory mcp serve \
+  --transport http \
+  --host 0.0.0.0 \
+  --port 8080 \
+  --password test-password
+----
+
+The MCP endpoint is then `POST`/`GET` at `/mcp/` on that host and port, and
+clients connect to the URL rather than spawning a process.
+
+[NOTE]
+====
+Streamable HTTP is the network transport in the current MCP specification, and
+FastMCP 4 -- which this server is built on -- deprecated the older HTTP+SSE
+transport. `--transport sse` is still accepted so existing launch configurations
+keep starting, but it warns and serves Streamable HTTP. If you are migrating a
+config, change `sse` to `http` and point the client at `/mcp/` instead of
+`/sse`.
+====
+
 == Programmatic Server Usage
 
 You can also start the MCP server from Python code:
@@ -194,3 +223,9 @@ By default, the server starts with the **extended** profile (16 tools). For simp
 ----
 
 See the xref:reference/mcp-tools.adoc[MCP Tools Reference] for the complete list of tools in each profile.
+
+== Runnable example
+
+link:https://github.com/neo4j-labs/agent-memory/tree/main/examples/claude-code-team-memory[`examples/claude-code-team-memory/`]
+turns this tutorial into a team setup: per-developer keys, a seeded shared
+workspace, and a `doctor.py` that validates every editor config offline.

@@ -3,73 +3,160 @@
 :source-highlighter: rouge
 
 The `@neo4j-labs/agent-memory/integrations/langchain` subpath exposes
-two duck-typed adapters that fit common LangChain JS shapes:
+two framework-free adapters over `MemoryClient`:
 
-* `Neo4jChatMessageHistory` — slots into `RunnableWithMessageHistory`
-  wherever a `BaseChatMessageHistory` is expected.
-* `Neo4jEntityRetriever` — slots into retriever chains wherever a
-  `BaseRetriever`-shaped object is expected.
+* `Neo4jChatMessageHistory` — read and write a conversation's messages
+  (`getMessages`, `addMessage`, `addUserMessage`, `addAIChatMessage`,
+  `clear`).
+* `Neo4jEntityRetriever` — entity look-up that returns
+  `{ pageContent, metadata }` documents (`invoke`,
+  `getRelevantDocuments`).
+
+Neither imports `@langchain/core`, so the SDK installs without it. They
+are *shapes you adapt*, not subclasses: `Neo4jChatMessageHistory` does
+not extend `BaseChatMessageHistory` and does not implement
+`addMessages`, so it cannot be dropped into
+`RunnableWithMessageHistory` — that class calls `addMessages()` on the
+history it is given. In LangChain JS v1 the idiom to reach for is
+`createAgent()` with middleware anyway, which is what the runnable
+example below does.
 
 A runnable example lives at
-link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/langchain[`clients/typescript/examples/langchain`].
+link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/langchain[`typescript/examples/langchain`]
+— a two-turn `createAgent()` agent with no checkpointer, plus a mocked
+test that runs without an API key.
 
-== Why duck-typed
+== Bridging the adapters to `@langchain/core`
 
-LangChain JS evolves quickly and the published interfaces shift between
-minor versions. Importing concrete base classes from `@langchain/core`
-would bind us to a specific version; duck-typing lets these adapters
-slot in regardless.
-
-The cost: type information about the LangChain interfaces is not
-imported. If you want stronger types in your own app, cast at the call
-site:
+Three small functions cover the whole gap. No casts are needed.
 
 [source,typescript]
 ----
-import type { BaseChatMessageHistory } from "@langchain/core/chat_history";
-import { Neo4jChatMessageHistory } from "@neo4j-labs/agent-memory/integrations/langchain";
+import { AIMessage, HumanMessage, SystemMessage, Document, type BaseMessage } from "langchain";
 
-const history: BaseChatMessageHistory =
-  new Neo4jChatMessageHistory(memory, conv.id) as unknown as BaseChatMessageHistory;
+interface AdapterMessage {
+  type: "human" | "ai" | "system";
+  content: string;
+}
+
+function toLangChainMessage(message: AdapterMessage): BaseMessage {
+  if (message.type === "ai") return new AIMessage(message.content);
+  if (message.type === "system") return new SystemMessage(message.content);
+  return new HumanMessage(message.content);
+}
+
+function fromLangChainMessage(message: BaseMessage): AdapterMessage | null {
+  const content = message.text.trim();
+  if (content === "") return null;
+  if (AIMessage.isInstance(message)) {
+    // An assistant turn that only requests a tool call is not an utterance.
+    if ((message.tool_calls?.length ?? 0) > 0) return null;
+    return { type: "ai", content };
+  }
+  if (message.getType() === "human") return { type: "human", content };
+  return null;
+}
+
+function toLangChainDocument(doc: { pageContent: string; metadata: Record<string, unknown> }) {
+  return new Document(doc);
+}
 ----
 
-== Chat message history
+== Memory middleware for `createAgent`
+
+`wrapModelCall` injects graph memory into the system message;
+`afterAgent` persists the turn through the history adapter. Because the
+graph holds the history, the agent needs no checkpointer — invoke it
+with only the new user message.
 
 [source,typescript]
 ----
-import { RunnableWithMessageHistory } from "@langchain/core/runnables";
+import { MemoryClient } from "@neo4j-labs/agent-memory";
 import { Neo4jChatMessageHistory } from "@neo4j-labs/agent-memory/integrations/langchain";
+import { ChatOpenAI } from "@langchain/openai";
+import { HumanMessage, SystemMessage, createAgent, createMiddleware } from "langchain";
 
-const chain = baseChain.pipe(...);
+const memory = new MemoryClient();                    // reads MEMORY_API_KEY
+const conversationId = (await memory.shortTerm.createConversation({ userId })).id;
+const history = new Neo4jChatMessageHistory(memory, conversationId);
 
-const memoryChain = new RunnableWithMessageHistory({
-  runnable: chain,
-  getMessageHistory: (sessionId) => new Neo4jChatMessageHistory(memory, sessionId),
-  inputMessagesKey: "input",
-  historyMessagesKey: "history",
+const namsMemory = createMiddleware({
+  name: "NamsMemoryMiddleware",
+  wrapModelCall: async (request, handler) => {
+    const ctx = await memory.shortTerm.getContext(conversationId);
+    const recalled = [
+      ...ctx.reflections.map((r) => `- ${r.content}`),
+      ...ctx.recentMessages.map((m) => `- ${m.role}: ${m.content}`),
+    ].join("\n");
+    if (recalled === "") return handler(request);
+    return handler({
+      ...request,
+      systemMessage: new SystemMessage(`${request.systemMessage.text}\n\n## Memory\n${recalled}`),
+    });
+  },
+  afterAgent: async (state) => {
+    for (const message of state.messages) {
+      const stored = fromLangChainMessage(message);
+      if (stored) await history.addMessage(stored);     // de-duplicate by message id
+    }
+  },
 });
 
-await memoryChain.invoke(
-  { input: "Hello!" },
-  { configurable: { sessionId: conv.id } },
-);
+const agent = createAgent({
+  model: new ChatOpenAI({ model: process.env.OPENAI_MODEL ?? "gpt-5-mini" }),
+  systemPrompt: "You are a concise assistant with a long memory.",
+  middleware: [namsMemory],
+});
+
+const result = await agent.invoke({ messages: [new HumanMessage("Hello!")] });
 ----
 
-== Entity retriever
+== Entity retriever as a tool
+
+`Neo4jEntityRetriever` takes `{ type, topK }` (not `limit`), and returns
+`pageContent` of the form `"<name> — <description>"` with `metadata`
+carrying `id`, `type`, `confidence`, `sourceStage` and `canonicalName`.
 
 [source,typescript]
 ----
 import { Neo4jEntityRetriever } from "@neo4j-labs/agent-memory/integrations/langchain";
+import { tool } from "langchain";
+import { z } from "zod";
 
-const retriever = new Neo4jEntityRetriever(memory, { limit: 5 });
-const docs = await retriever.invoke("Neo4j graph database");
-// docs[i].pageContent === entity.description
-// docs[i].metadata.name === entity.name
+const retriever = new Neo4jEntityRetriever(memory, { topK: 5 });
+
+const searchMemoryEntities = tool(
+  async ({ query }) => {
+    const docs = await retriever.invoke(query);
+    if (docs.length === 0) return "No entities in memory match that query.";
+    return docs.map((d) => `- ${d.pageContent} (id=${String(d.metadata.id)})`).join("\n");
+  },
+  {
+    name: "search_memory_entities",
+    description: "Search long-term memory for entities the user discussed before.",
+    schema: z.object({ query: z.string() }),
+  },
+);
+----
+
+NAMS extracts entities in a background pipeline, so a write is not
+immediately searchable. Await consistency explicitly rather than
+sleeping:
+
+[source,typescript]
+----
+const ready = await memory.longTerm.waitForExtraction({
+  query: "graph database",
+  expectedNames: ["Neo4j"],
+  timeoutMs: 20_000,
+});
+if (!ready) console.warn("extraction has not caught up yet");
 ----
 
 == Version compatibility
 
-These adapters are tested against LangChain JS 0.2+ shapes. We will not
-break the adapter signatures across minor releases without a CHANGELOG
-callout, but upstream interface drift can still surface — if you hit it,
-please file an issue with the LangChain JS version you're on.
+The adapters carry no LangChain dependency, so they cannot break on a
+LangChain release — but they also gain nothing from one. The bridge
+functions above are verified against `langchain` 1.5 and
+`@langchain/core` 1.2. If you hit drift, please file an issue with the
+LangChain JS version you are on.

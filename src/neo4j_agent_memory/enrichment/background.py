@@ -271,14 +271,23 @@ class BackgroundEnrichmentService:
         if not attrs:
             return
 
-        # Build the update query
-        # Store enrichment attributes in the entity's metadata JSON
+        # Build the update query.
+        #
+        # The headline fields are written as node properties so Cypher can
+        # filter and return them (``MemoryClient.get_locations`` selects
+        # ``e.enriched_description`` and ``e.wikipedia_url`` directly), and the
+        # full result is kept in the ``enrichment_data`` JSON blob. Both are
+        # folded back into ``Entity.metadata`` by
+        # ``LongTermMemory._parse_entity``.
         query = """
         MATCH (e:Entity {id: $id})
         SET e.enriched_description = $enriched_description,
             e.enriched_at = datetime(),
             e.enrichment_provider = $provider,
-            e.enrichment_data = $enrichment_data
+            e.enrichment_data = $enrichment_data,
+            e.wikipedia_url = coalesce($wikipedia_url, e.wikipedia_url),
+            e.wikidata_id = coalesce($wikidata_id, e.wikidata_id),
+            e.image_url = coalesce($image_url, e.image_url)
         RETURN e
         """
 
@@ -303,6 +312,9 @@ class BackgroundEnrichmentService:
             "enriched_description": result.description,
             "provider": result.provider,
             "enrichment_data": json.dumps(enrichment_data),
+            "wikipedia_url": result.wikipedia_url,
+            "wikidata_id": result.wikidata_id,
+            "image_url": result.image_url,
         }
 
         await self._client.execute_write(query, params)

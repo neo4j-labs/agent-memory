@@ -297,3 +297,84 @@ class TestGoogleADKMemoryServiceIntegration:
 
         session_memories = await memory_service.get_memories_for_session(session_id)
         assert len(session_memories) == 2
+
+
+@pytest.mark.integration
+class TestGoogleADK2xSessionIngestion:
+    """End-to-end ingestion of a real google-adk 2.x ``Session``."""
+
+    @pytest.mark.asyncio
+    async def test_adk_session_events_round_trip(self, memory_client, session_id):
+        """Events in, ADK MemoryEntry objects out (the load_memory path)."""
+        pytest.importorskip("google.adk", reason="requires the [google-adk] extra")
+
+        from google.adk.events.event import Event
+        from google.adk.memory.base_memory_service import SearchMemoryResponse
+        from google.adk.sessions.session import Session
+        from google.adk.tools import _memory_entry_utils
+        from google.genai import types
+
+        from neo4j_agent_memory.integrations.google_adk import Neo4jMemoryService
+
+        memory_service = Neo4jMemoryService(
+            memory_client=memory_client,
+            user_id="adk-2x-user",
+            include_entities=False,
+            include_preferences=False,
+            extract_on_store=False,
+        )
+
+        session = Session(
+            id=session_id,
+            app_name="memory-demo",
+            user_id="adk-2x-user",
+            events=[
+                Event(
+                    author="user",
+                    content=types.Content(
+                        role="user",
+                        parts=[types.Part(text="Project Alpha ships next Friday.")],
+                    ),
+                ),
+                Event(
+                    author="memory_demo",
+                    content=types.Content(
+                        role="model",
+                        parts=[types.Part(text="Noted: Project Alpha ships next Friday.")],
+                    ),
+                ),
+                # Tool-only event — must not be ingested (#130, defect 2).
+                Event(
+                    author="memory_demo",
+                    content=types.Content(
+                        role="model",
+                        parts=[
+                            types.Part(
+                                function_call=types.FunctionCall(
+                                    name="load_memory", args={"query": "Project Alpha"}
+                                )
+                            )
+                        ],
+                    ),
+                ),
+            ],
+        )
+
+        await memory_service.add_session_to_memory(session)
+
+        conversation = await memory_client.short_term.get_conversation(session_id)
+        assert len(conversation.messages) == 2
+
+        response = await memory_service.search_memory(
+            app_name="memory-demo",
+            user_id="adk-2x-user",
+            query="Project Alpha deadline",
+        )
+
+        assert isinstance(response, SearchMemoryResponse)
+        assert response.memories
+        texts = [_memory_entry_utils.extract_text(entry) for entry in response.memories]
+        assert any("Project Alpha" in text for text in texts)
+        # author/timestamp are what preload_memory renders.
+        assert all(entry.author for entry in response.memories)
+        assert all(entry.custom_metadata["memory_type"] == "message" for entry in response.memories)

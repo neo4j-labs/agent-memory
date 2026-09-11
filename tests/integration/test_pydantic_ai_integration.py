@@ -150,7 +150,7 @@ class TestMemoryTools:
         )
 
         tools = create_memory_tools(memory_client)
-        search_memory = tools[0]
+        search_memory = next(t for t in tools if t.__name__ == "search_memory")
 
         result = await search_memory("outdoor activities")
 
@@ -162,7 +162,7 @@ class TestMemoryTools:
         from neo4j_agent_memory.integrations.pydantic_ai import create_memory_tools
 
         tools = create_memory_tools(memory_client)
-        save_preference = tools[1]
+        save_preference = next(t for t in tools if t.__name__ == "save_preference")
 
         result = await save_preference(
             category="travel",
@@ -185,7 +185,7 @@ class TestMemoryTools:
         )
 
         tools = create_memory_tools(memory_client)
-        recall_preferences = tools[2]
+        recall_preferences = next(t for t in tools if t.__name__ == "recall_preferences")
 
         result = await recall_preferences("beverages")
 
@@ -197,7 +197,7 @@ class TestMemoryTools:
         from neo4j_agent_memory.integrations.pydantic_ai import create_memory_tools
 
         tools = create_memory_tools(memory_client)
-        search_memory = tools[0]
+        search_memory = next(t for t in tools if t.__name__ == "search_memory")
 
         result = await search_memory("xyz123nonexistent")
 
@@ -209,8 +209,51 @@ class TestMemoryTools:
         from neo4j_agent_memory.integrations.pydantic_ai import create_memory_tools
 
         tools = create_memory_tools(memory_client)
-        recall_preferences = tools[2]
+        recall_preferences = next(t for t in tools if t.__name__ == "recall_preferences")
 
         result = await recall_preferences("xyz123nonexistent")
 
         assert "No preferences found" in result
+
+
+@pytest.mark.integration
+class TestRecordAgentTrace:
+    """Record a PydanticAI 2.x run into reasoning memory and read it back."""
+
+    @pytest.mark.asyncio
+    async def test_trace_round_trip(self, memory_client, session_id):
+        """A TestModel run (no network) becomes a readable reasoning trace."""
+        pytest.importorskip("pydantic_ai")
+        from pydantic_ai import Agent
+        from pydantic_ai.models.test import TestModel
+
+        from neo4j_agent_memory.integrations.pydantic_ai import (
+            create_memory_tools,
+            record_agent_trace,
+        )
+
+        tools = create_memory_tools(memory_client)
+        agent = Agent(TestModel(), tools=tools)
+
+        result = await agent.run("Find me a vegetarian restaurant")
+
+        trace = await record_agent_trace(
+            memory_client.reasoning,
+            session_id=session_id,
+            result=result,
+            task="Find restaurant recommendation",
+        )
+
+        read_back = await memory_client.reasoning.get_trace_with_steps(trace.id)
+
+        assert read_back is not None
+        assert read_back.task == "Find restaurant recommendation"
+        assert read_back.success is True
+        # One step per tool call; TestModel exercises every registered tool.
+        assert len(read_back.steps) == len(tools)
+        tool_names = {
+            call.tool_name for step in read_back.steps for call in (step.tool_calls or [])
+        }
+        assert {"search_memory", "save_preference", "recall_preferences"} <= tool_names
+        # 2.x: the outcome summary comes from ``result.output``.
+        assert read_back.outcome

@@ -5,6 +5,20 @@
 `BaseMemoryService` interface, backing an ADK agent's memory with
 neo4j-agent-memory — on either the bolt or the NAMS backend.
 
+[NOTE]
+====
+Supported range: *google-adk 2.x* (tested against 2.8.0). Install it with the
+extra:
+
+[source,bash]
+----
+pip install "neo4j-agent-memory[google-adk]"
+----
+
+The extra also pulls `google-genai`, because search results are returned as
+`google.genai.types.Content` objects.
+====
+
 == Setup
 
 [source,python]
@@ -18,17 +32,136 @@ settings = MemorySettings(backend="nams", nams={"api_key": "nams_...",
 async with MemoryClient(settings) as client:
     memory = Neo4jMemoryService(memory_client=client, extract_on_store=True)
 
-    await memory.add_session_to_memory(session)        # stores messages, extracts entities
-    results = await memory.search_memory("user preferences")
+    await memory.add_session_to_memory(session)   # stores messages, extracts entities
+    response = await memory.search_memory(
+        app_name="memory-demo", user_id="user-123", query="user preferences"
+    )
 ----
+
+== Wire it into a Runner
+
+The memory service is passed to `Runner` (or `App`), and the agent reaches it
+through ADK's memory tools: `load_memory` lets the model search memory on
+demand, `preload_memory` injects recent recall into every request.
+
+[source,python]
+----
+import os
+
+from google.adk.agents import LlmAgent
+from google.adk.runners import Runner
+from google.adk.sessions import InMemorySessionService
+from google.adk.tools import load_memory  # or: preload_memory
+from google.genai import types
+
+from neo4j_agent_memory import MemoryClient, MemorySettings
+from neo4j_agent_memory.integrations.google_adk import Neo4jMemoryService
+
+APP_NAME = "memory-demo"
+USER_ID = "user-123"
+
+async with MemoryClient(MemorySettings()) as client:
+    memory_service = Neo4jMemoryService(memory_client=client, user_id=USER_ID)
+    session_service = InMemorySessionService()
+
+    agent = LlmAgent(
+        name="memory_demo",
+        model=os.environ.get("ADK_MODEL", "gemini-2.5-flash"),
+        instruction="Use load_memory to recall anything the user told you before.",
+        tools=[load_memory],
+    )
+    runner = Runner(
+        app_name=APP_NAME,
+        agent=agent,
+        session_service=session_service,
+        memory_service=memory_service,
+    )
+
+    session = await session_service.create_session(app_name=APP_NAME, user_id=USER_ID)
+    async for event in runner.run_async(
+        user_id=USER_ID,
+        session_id=session.id,
+        new_message=types.Content(role="user", parts=[types.Part(text="My sister is Sarah.")]),
+    ):
+        pass  # stream events as you like
+
+    # Persist the turn so the next session can recall it.
+    await memory_service.add_session_to_memory(
+        await session_service.get_session(
+            app_name=APP_NAME, user_id=USER_ID, session_id=session.id
+        )
+    )
+----
+
+[TIP]
+====
+`Runner.run_async()` is an async *generator* — iterate it with `async for`, never
+`await` it. `InMemorySessionService.create_session()` / `get_session()` are
+coroutines and must be awaited.
+====
+
+== Reading search results
+
+`search_memory()` returns a `SearchMemoryResponse`, not a list. Each
+`MemoryEntry` carries ADK content plus attribution:
+
+[source,python]
+----
+response = await memory_service.search_memory(
+    app_name="memory-demo", user_id="user-123", query="project deadline"
+)
+
+for entry in response.memories:
+    text = "".join(part.text or "" for part in entry.content.parts)
+    print(entry.author, entry.timestamp, entry.custom_metadata["memory_type"], text)
+----
+
+* `content` — a `google.genai.types.Content` with text parts.
+* `author` — the message role or ADK agent name for conversation recall;
+  `entity` or `preference` for long-term recall.
+* `timestamp` — ISO-8601 creation time (what `preload_memory` renders).
+* `custom_metadata` — `memory_type`, the similarity `score`, and the source
+  `session_id` / `category` when present.
+
+Two library-side conveniences sit alongside the ADK contract:
+`get_memories_for_session(session_id)` returns the library's own `MemoryEntry`
+dataclass (with `.content` as a plain string and `.memory_type`), and
+`add_memory(content=..., memory_type="preference", category=...)` writes a
+single memory and returns it.
+
+== Writing memory
+
+[cols="1,2"]
+|===
+| Call | Effect
+
+| `add_session_to_memory(session)`
+| Ingests every text-bearing event in the session as a message.
+
+| `add_events_to_memory(app_name=..., user_id=..., events=[...], session_id=...)`
+| Ingests an incremental slice (e.g. just the latest turn) — what
+  `Context.add_events_to_memory()` sends.
+
+| `add_memory(app_name=..., user_id=..., memories=[MemoryEntry(...)])`
+| Writes explicit ADK memory items — what `Context.add_memory()` sends.
+
+| `add_memory(content=..., memory_type="message" \| "preference", ...)`
+| The library convenience form; returns the created entry.
+|===
+
+ADK authors model turns with the *agent name* (`memory_demo`, `supervisor`, …),
+while the library stores `MessageRole` values. Agent-authored events are stored
+as `assistant` messages with the original author preserved in the message
+metadata as `adk_author`, and re-attributed to that agent name on the way back
+out of `search_memory()`.
 
 == Conversation scoping on NAMS
 
 NAMS message search is *conversation-scoped*; ADK's `search_memory()` does not
 carry a session id. `Neo4jMemoryService` handles this for you:
 
-* It tracks the active session whenever you call `add_session_to_memory` or
-  `add_memory`, and scopes `search_memory` to it.
+* It tracks the active session whenever you call `add_session_to_memory`,
+  `add_events_to_memory` or `add_memory`, and scopes `search_memory` to it.
 * You can override per call: `search_memory(query, session_id=...)`.
 * When no session is known on NAMS, it *skips* message search (rather than
   issuing the unscoped search NAMS rejects) and still returns entity and
@@ -48,6 +181,8 @@ graph clean — tool JSON is not stringified into it.
 * `session_id` is the canonical short-term parameter; `conversation_id` is
   accepted as an alias (`session_id` wins).
 * `add_entity` takes `entity_type` (aliases: `type`, `label`).
+* `search_memory` accepts `query` positionally as well as by keyword; ADK itself
+  always calls it with keywords (`app_name=`, `user_id=`, `query=`).
 
 [NOTE]
 ====

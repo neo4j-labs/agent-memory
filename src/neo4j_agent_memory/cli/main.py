@@ -737,20 +737,24 @@ def mcp() -> None:
 )
 @click.option(
     "--transport",
-    type=click.Choice(["stdio", "sse", "http"]),
+    type=click.Choice(["stdio", "http", "streamable-http", "sse"]),
     default="stdio",
-    help="MCP transport type (default: stdio).",
+    help=(
+        "MCP transport (default: stdio). 'http' is Streamable HTTP; "
+        "'streamable-http' is a synonym. 'sse' is deprecated and serves "
+        "Streamable HTTP with a warning."
+    ),
 )
 @click.option(
     "--host",
     default="127.0.0.1",
-    help="Host for network transports.",
+    help="Host to bind for --transport http (use 0.0.0.0 to expose it).",
 )
 @click.option(
     "--port",
     type=int,
     default=8080,
-    help="Port for network transports.",
+    help="Port to bind for --transport http. The MCP endpoint is /mcp/.",
 )
 @click.option(
     "--profile",
@@ -873,7 +877,7 @@ def mcp_serve(
 
     The server exposes memory tools, resources, and prompts via the
     Model Context Protocol. Use stdio transport for Claude Desktop
-    or SSE/HTTP for network deployments.
+    and Streamable HTTP for network deployments.
 
     \b
     Examples:
@@ -881,13 +885,20 @@ def mcp_serve(
         neo4j-agent-memory mcp serve --password mypassword
 
     \b
-        # Start with SSE transport on port 8080
-        neo4j-agent-memory mcp serve --transport sse --port 8080
+        # Start with Streamable HTTP on port 8080
+        neo4j-agent-memory mcp serve --transport http --port 8080
 
     \b
         # Start with core profile (fewer tools, less context overhead)
         neo4j-agent-memory mcp serve --profile core
     """
+    if transport == "sse":
+        error_console.print(
+            "[yellow]Warning:[/yellow] --transport sse is deprecated. The MCP spec "
+            "replaced HTTP+SSE with Streamable HTTP; serving Streamable HTTP "
+            "instead. Use --transport http."
+        )
+
     # Resolve backend: explicit --backend wins; otherwise infer from env.
     resolved_backend = backend or ("nams" if api_key else "bolt")
 
