@@ -876,13 +876,12 @@ def _nams_set_entity_feedback_tool(
         raise ImportError("strands-agents is required for Strands integration.") from e
 
     @tool
-    def set_entity_feedback(entity_id: str, feedback: str, user_id: str | None = None) -> str:
+    def set_entity_feedback(entity_id: str, feedback: str) -> str:
         """Record feedback on an entity in NAMS.
 
         Args:
             entity_id: Entity UUID.
             feedback: Feedback string ("positive" or "negative").
-            user_id: Optional per-user scoping.
 
         Returns:
             Confirmation message.

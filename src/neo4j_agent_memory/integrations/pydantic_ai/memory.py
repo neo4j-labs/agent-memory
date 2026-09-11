@@ -444,7 +444,6 @@ def nams_memory_tools(memory: "MemoryClient") -> list[Callable[..., Any]]:
     async def set_entity_feedback(
         entity_id: str,
         feedback: str,
-        user_identifier: str | None = None,
     ) -> str:
         """
         Record feedback (e.g. "positive"/"negative") on an entity.
@@ -453,7 +452,6 @@ def nams_memory_tools(memory: "MemoryClient") -> list[Callable[..., Any]]:
             entity_id: Entity UUID.
             feedback: Feedback string — convention is "positive" or
                 "negative", but any string the server accepts works.
-            user_identifier: Optional per-user scoping.
 
         Returns:
             Confirmation message.
@@ -472,12 +470,14 @@ def nams_memory_tools(memory: "MemoryClient") -> list[Callable[..., Any]]:
 
         Args:
             entity_id: Entity UUID.
-            limit: Maximum history entries to return.
+            limit: Maximum history entries to return. Must be at least 1.
 
         Returns:
             Formatted history as plain text.
         """
-        entries = await memory.long_term.get_entity_history(entity_id)
+        if limit < 1:
+            raise ValueError("limit must be at least 1")
+        entries = (await memory.long_term.get_entity_history(entity_id))[:limit]
         if not entries:
             return "No history for this entity."
         lines = []

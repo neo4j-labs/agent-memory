@@ -816,7 +816,6 @@ def _register_platinum_tools(mcp: FastMCP) -> None:
         ctx: Context,
         entity_id: str,
         feedback: str,
-        user_identifier: str | None = None,
     ) -> str:
         """Record user feedback on an entity (NAMS Platinum).
 
@@ -829,7 +828,6 @@ def _register_platinum_tools(mcp: FastMCP) -> None:
                 memory_search).
             feedback: Free-form feedback — convention is "positive" or
                 "negative".
-            user_identifier: Optional per-user scoping (multi-tenant).
         """
         client = get_client(ctx)
         try:
@@ -856,11 +854,13 @@ def _register_platinum_tools(mcp: FastMCP) -> None:
 
         Args:
             entity_id: Entity UUID.
-            limit: Maximum history entries to return (default: 50).
+            limit: Maximum history entries to return (default: 50; minimum: 1).
         """
         client = get_client(ctx)
         try:
-            history = await client.long_term.get_entity_history(entity_id)
+            if limit < 1:
+                raise ValueError("limit must be at least 1")
+            history = (await client.long_term.get_entity_history(entity_id))[:limit]
             return json.dumps({"entity_id": entity_id, "history": history}, default=str)
         except Exception as e:
             logger.error(f"Error in memory_get_entity_history: {e}")
@@ -902,11 +902,13 @@ def _register_platinum_tools(mcp: FastMCP) -> None:
 
         Args:
             session_id: Session identifier.
-            limit: Maximum reflections to return (default: 20).
+            limit: Maximum reflections to return (default: 20; minimum: 1).
         """
         client = get_client(ctx)
         try:
-            reflections = await client.short_term.get_reflections(session_id)
+            if limit < 1:
+                raise ValueError("limit must be at least 1")
+            reflections = (await client.short_term.get_reflections(session_id))[:limit]
             return json.dumps({"session_id": session_id, "reflections": reflections}, default=str)
         except Exception as e:
             logger.error(f"Error in memory_get_reflections: {e}")
