@@ -61,3 +61,11 @@ For the hosted service, swap the `neo4j={...}` config for
 See xref:sdks/typescript.adoc[TypeScript SDK]. The two SDKs share the same
 memory model and back onto the same NAMS service, so a Python and a TypeScript
 agent can read and write the same memory.
+
+== Runnable examples
+
+link:https://github.com/neo4j-labs/agent-memory/tree/main/examples[`examples/`] holds twenty-five examples, from
+link:https://github.com/neo4j-labs/agent-memory/tree/main/examples/hello-memory[`hello-memory/`] (one PEP 723 file, no checkout)
+through the framework integrations to four full-stack reference apps. The
+hosted-backend group starts at
+link:https://github.com/neo4j-labs/agent-memory/tree/main/examples/nams-quickstart[`nams-quickstart/`].

@@ -58,18 +58,17 @@ spec:
                   name: neo4j-password
             - name: NEO4J_DATABASE
               value: "neo4j"
+          # The MCP server exposes the protocol endpoint at /mcp/ (Streamable
+          # HTTP) and no separate health route, so probe the listening socket
+          # rather than an HTTP path. An httpGet probe against /mcp/ would be
+          # answered with a protocol error, and one against /health with a 404 —
+          # either way the revision would never pass startup.
           startupProbe:
-            httpGet:
-              path: /health
+            tcpSocket:
               port: 8080
             initialDelaySeconds: 5
             periodSeconds: 10
             failureThreshold: 3
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: 8080
-            periodSeconds: 30
   traffic:
     - percent: 100
       latestRevision: true

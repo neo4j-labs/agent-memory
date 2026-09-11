@@ -274,3 +274,17 @@ The NAMS transport emits OpenTelemetry-style spans for every request when a trac
 * xref:tutorials/nams-quickstart.adoc[Tutorial: 5-minute NAMS quickstart].
 * xref:how-to/migrate-to-nams.adoc[Migrate an existing bolt project to NAMS].
 * xref:explanation/backends.adoc[Bolt vs NAMS: when to pick which].
+
+== Runnable examples
+
+* link:https://github.com/neo4j-labs/agent-memory/tree/main/examples/nams-quickstart[`examples/nams-quickstart/`] — the whole
+  flow in one script: a conversation, messages, an entity, a reasoning trace,
+  `wait_for_extraction()` and a read-only Cypher round-trip. The same body runs
+  on bolt by flipping `backend`.
+* link:https://github.com/neo4j-labs/agent-memory/tree/main/examples/nams-fastapi[`examples/nams-fastapi/`] — NAMS memory inside
+  a FastAPI service, with per-user scoping and the error taxonomy mapped onto
+  HTTP status codes.
+* link:https://github.com/neo4j-labs/agent-memory/tree/main/examples/nams-langchain[`examples/nams-langchain/`] — the same
+  LangChain `create_agent` agent as the bolt example, hosted.
+* link:https://github.com/neo4j-labs/agent-memory/tree/main/examples/claude-code-team-memory[`examples/claude-code-team-memory/`] —
+  one workspace shared across a team's editors, with no agent code.

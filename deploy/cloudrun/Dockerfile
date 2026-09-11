@@ -39,5 +39,11 @@ EXPOSE 8080
 ENV PORT=8080
 ENV PYTHONUNBUFFERED=1
 
-# Run the MCP server via the installed CLI entry point
-CMD ["neo4j-agent-memory", "mcp", "serve", "--transport", "sse", "--host", "0.0.0.0", "--port", "8080"]
+# Run the MCP server via the installed CLI entry point.
+#
+# Transport is Streamable HTTP ("http"), the network transport in the current MCP
+# spec and the only one FastMCP 4 serves besides stdio. The MCP endpoint is
+# POST/GET /mcp/ — not the /sse + /messages pair the retired HTTP+SSE transport
+# used. Update client URLs if you are migrating from an older image.
+CMD ["neo4j-agent-memory", "mcp", "serve", \
+     "--transport", "http", "--host", "0.0.0.0", "--port", "8080"]

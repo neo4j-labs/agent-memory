@@ -94,3 +94,10 @@ reflects your key category (see xref:reference/authentication.adoc[key categorie
 * xref:reference/mcp-tools.adoc[MCP Tools] — the self-hosted Python MCP server.
 * xref:reference/rest-api.adoc[NAMS REST API] — the HTTP surface the tools back onto.
 * xref:reference/skills-api.adoc[Skills API] — the Skills tools in detail.
+
+== Runnable example
+
+link:https://github.com/neo4j-labs/agent-memory/tree/main/examples/claude-code-team-memory[`examples/claude-code-team-memory/`]
+ships ready-to-copy `.mcp.json`, `claude_desktop_config.json` and
+`.cursor/mcp.json` files wiring this server next to the self-hosted one, plus a
+`doctor.py` that reports which tool surface a given key actually sees.

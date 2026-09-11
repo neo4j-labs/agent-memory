@@ -37,6 +37,7 @@
 **** xref:how-to/use-nams.adoc[Use NAMS]
 **** xref:how-to/migrate-to-nams.adoc[Migrate to NAMS]
 **** xref:how-to/use-ontologies.adoc[Use Ontologies]
+**** xref:how-to/team-memory-in-your-editor.adoc[Team Memory in Your Editor]
 
 *** Core Operations
 **** xref:how-to/messages.adoc[Store & Search Messages]
@@ -81,6 +82,7 @@
 *** TypeScript
 **** xref:how-to/typescript/edge-runtime.adoc[Edge Runtime Deployment]
 **** xref:how-to/typescript/vercel-ai.adoc[Vercel AI SDK]
+**** xref:how-to/typescript/nextjs-memory-chat.adoc[Next.js Memory Chat]
 **** xref:how-to/typescript/mcp.adoc[MCP Tools]
 **** xref:how-to/typescript/langchain.adoc[LangChain JS]
 **** xref:how-to/typescript/mastra.adoc[Mastra]

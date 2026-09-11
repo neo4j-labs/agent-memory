@@ -15,6 +15,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   lint-test:
     name: Lint + Test (Node ${{ matrix.node }})
@@ -25,7 +29,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: ['20', '22']
+        node: ['22', '24']
     steps:
       - uses: actions/checkout@v4
 
@@ -54,21 +58,36 @@ jobs:
       - name: Verify packed artifact
         run: npm pack --dry-run
 
+  # Every directory under typescript/examples/ is type-checked, tested and (where
+  # it has a build script) built against the freshly built SDK, so API drift
+  # fails the PR that introduces it. Mirrored locally by `make ts-test-examples`.
+  #
+  # Node 24 across the board: eve-commerce-agent declares engines.node >= 24 and
+  # the other eight declare >= 22, so one runtime covers all of them.
   type-check-examples:
-    name: Type-check example (${{ matrix.example }})
+    name: Example (${{ matrix.example }})
     runs-on: ubuntu-latest
     needs: lint-test
     strategy:
       fail-fast: false
       matrix:
-        example: [langchain, mastra, mcp, strands, vercel-ai]
+        example:
+          - cloudflare-agents-edge
+          - eve-commerce-agent
+          - langchain
+          - mastra
+          - mcp
+          - nextjs-memory-chat
+          - ontology-lifecycle
+          - strands
+          - vercel-ai
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
           cache: 'npm'
           cache-dependency-path: typescript/package-lock.json
 
@@ -78,13 +97,33 @@ jobs:
           npm ci
           npm run build
 
+      # `npm ci` where the example commits a lockfile, `npm install` otherwise.
+      # See the lockfile policy in typescript/examples/README.md: a committed
+      # lockfile buys reproducibility, a floating example acts as a drift
+      # detector against its frameworks' latest releases.
       - name: Install example dependencies
         working-directory: typescript/examples/${{ matrix.example }}
-        run: npm install --no-package-lock
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            echo "::notice::no package-lock.json — using npm install"
+            npm install --no-package-lock
+          fi
 
       - name: Type-check example
         working-directory: typescript/examples/${{ matrix.example }}
         run: npx tsc --noEmit
+
+      # Eight of the nine ship an offline vitest suite that CI never ran.
+      - name: Test example
+        working-directory: typescript/examples/${{ matrix.example }}
+        run: npm test --if-present
+
+      # Builds the Next.js flagship and the Workers bundle; a no-op elsewhere.
+      - name: Build example
+        working-directory: typescript/examples/${{ matrix.example }}
+        run: npm run build --if-present
 
   vercel-ai-provider:
     name: Vercel AI provider package (Node ${{ matrix.node }})
@@ -95,7 +134,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: ['20', '22']
+        node: ['22', '24']
     steps:
       - uses: actions/checkout@v4
 

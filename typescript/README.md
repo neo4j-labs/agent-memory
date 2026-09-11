@@ -28,7 +28,7 @@
   provenance, tool calls).
 - Zero-config construction — reads `MEMORY_API_KEY` from the
   environment and defaults to the hosted service.
-- Works in Node 20+, Bun, Deno, Cloudflare Workers, and Vercel Edge.
+- Works in Node 22+, Bun, Deno, Cloudflare Workers, and Vercel Edge.
 - Five framework integrations: Vercel AI SDK middleware, MCP tools,
   LangChain JS, Mastra, and AWS Strands Agents.
 - Built-in request logging, request-id correlation, and edge-friendly
@@ -43,7 +43,7 @@
 npm install @neo4j-labs/agent-memory
 ```
 
-Requires Node.js 20+.
+Requires Node.js 22+.
 
 ## 🚀 Quick start
 
@@ -89,7 +89,7 @@ All four ship as subpath exports. See each integration's
 | Integration | Import | Example |
 |---|---|---|
 | **Vercel AI SDK** | `@neo4j-labs/agent-memory/middleware/vercel-ai` | [`examples/vercel-ai`](./examples/vercel-ai) |
-| **MCP tools** | `@neo4j-labs/agent-memory/mcp` | [`examples/mcp`](./examples/mcp) |
+| **MCP tools** | `@neo4j-labs/agent-memory/mcp`, `…/mcp/register` | [`examples/mcp`](./examples/mcp) |
 | **LangChain JS** | `@neo4j-labs/agent-memory/integrations/langchain` | [`examples/langchain`](./examples/langchain) |
 | **Mastra** | `@neo4j-labs/agent-memory/integrations/mastra` | [`examples/mastra`](./examples/mastra) |
 | **AWS Strands** | `@neo4j-labs/agent-memory/integrations/strands` | [`examples/strands`](./examples/strands) |

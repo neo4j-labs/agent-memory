@@ -1,0 +1,302 @@
+[
+  {
+    "id": "ar-1001",
+    "name": "Aeris Trailhead 3 Running Shoe",
+    "brand": "Aeris",
+    "category": "shoes",
+    "size": "10",
+    "price": 138,
+    "color": "slate",
+    "description": "Cushioned trail runner with a rock plate and a 6mm drop."
+  },
+  {
+    "id": "ar-1002",
+    "name": "Aeris Trailhead 3 Running Shoe",
+    "brand": "Aeris",
+    "category": "shoes",
+    "size": "11",
+    "price": 138,
+    "color": "slate",
+    "description": "Cushioned trail runner with a rock plate and a 6mm drop."
+  },
+  {
+    "id": "ar-1003",
+    "name": "Aeris Clearwater Road Shoe",
+    "brand": "Aeris",
+    "category": "shoes",
+    "size": "10",
+    "price": 112,
+    "color": "bone",
+    "description": "Lightweight daily road trainer with a breathable knit upper."
+  },
+  {
+    "id": "ar-1004",
+    "name": "Aeris Merino Crew Sock",
+    "brand": "Aeris",
+    "category": "socks",
+    "size": "M",
+    "price": 18,
+    "color": "charcoal",
+    "description": "Midweight merino crew sock with a reinforced heel."
+  },
+  {
+    "id": "nm-2001",
+    "name": "Northmoor Fellside Rain Shell",
+    "brand": "Northmoor",
+    "category": "jackets",
+    "size": "M",
+    "price": 245,
+    "color": "moss",
+    "description": "Three-layer waterproof shell with pit zips and a helmet hood."
+  },
+  {
+    "id": "nm-2002",
+    "name": "Northmoor Fellside Rain Shell",
+    "brand": "Northmoor",
+    "category": "jackets",
+    "size": "L",
+    "price": 245,
+    "color": "moss",
+    "description": "Three-layer waterproof shell with pit zips and a helmet hood."
+  },
+  {
+    "id": "nm-2003",
+    "name": "Northmoor Dunmere Down Vest",
+    "brand": "Northmoor",
+    "category": "jackets",
+    "size": "M",
+    "price": 168,
+    "color": "ink",
+    "description": "700-fill down vest that packs into its own chest pocket."
+  },
+  {
+    "id": "nm-2004",
+    "name": "Northmoor Dunmere Down Vest",
+    "brand": "Northmoor",
+    "category": "jackets",
+    "size": "S",
+    "price": 168,
+    "color": "rust",
+    "description": "700-fill down vest that packs into its own chest pocket."
+  },
+  {
+    "id": "nm-2005",
+    "name": "Northmoor Caldbeck Fleece",
+    "brand": "Northmoor",
+    "category": "sweaters",
+    "size": "L",
+    "price": 96,
+    "color": "oat",
+    "description": "Grid fleece midlayer with thumbholes and a deep half-zip."
+  },
+  {
+    "id": "lf-3001",
+    "name": "Loomfield Harbour Selvedge Jean",
+    "brand": "Loomfield",
+    "category": "jeans",
+    "size": "32",
+    "price": 158,
+    "color": "indigo",
+    "description": "13oz selvedge denim in a straight leg, unwashed."
+  },
+  {
+    "id": "lf-3002",
+    "name": "Loomfield Harbour Selvedge Jean",
+    "brand": "Loomfield",
+    "category": "jeans",
+    "size": "34",
+    "price": 158,
+    "color": "indigo",
+    "description": "13oz selvedge denim in a straight leg, unwashed."
+  },
+  {
+    "id": "lf-3003",
+    "name": "Loomfield Harbour Selvedge Jean",
+    "brand": "Loomfield",
+    "category": "jeans",
+    "size": "36",
+    "price": 158,
+    "color": "washed black",
+    "description": "13oz selvedge denim in a straight leg, one-wash."
+  },
+  {
+    "id": "lf-3004",
+    "name": "Loomfield Everyday Oxford Shirt",
+    "brand": "Loomfield",
+    "category": "shirts",
+    "size": "M",
+    "price": 88,
+    "color": "white",
+    "description": "Garment-washed oxford with a soft button-down collar."
+  },
+  {
+    "id": "lf-3005",
+    "name": "Loomfield Everyday Oxford Shirt",
+    "brand": "Loomfield",
+    "category": "shirts",
+    "size": "L",
+    "price": 88,
+    "color": "pale blue",
+    "description": "Garment-washed oxford with a soft button-down collar."
+  },
+  {
+    "id": "lf-3006",
+    "name": "Loomfield Heavyweight Pocket Tee",
+    "brand": "Loomfield",
+    "category": "t-shirts",
+    "size": "M",
+    "price": 42,
+    "color": "natural",
+    "description": "7oz cotton tee with a reinforced chest pocket."
+  },
+  {
+    "id": "lf-3007",
+    "name": "Loomfield Heavyweight Pocket Tee",
+    "brand": "Loomfield",
+    "category": "t-shirts",
+    "size": "L",
+    "price": 42,
+    "color": "faded navy",
+    "description": "7oz cotton tee with a reinforced chest pocket."
+  },
+  {
+    "id": "kt-4001",
+    "name": "Kestrel Daybreak 22L Pack",
+    "brand": "Kestrel",
+    "category": "bags",
+    "size": "one size",
+    "price": 124,
+    "color": "olive",
+    "description": "22L commuter pack with a padded laptop sleeve and a roll top."
+  },
+  {
+    "id": "kt-4002",
+    "name": "Kestrel Daybreak 14L Sling",
+    "brand": "Kestrel",
+    "category": "bags",
+    "size": "one size",
+    "price": 86,
+    "color": "black",
+    "description": "14L crossbody sling in recycled ripstop."
+  },
+  {
+    "id": "kt-4003",
+    "name": "Kestrel Transit Dopp Kit",
+    "brand": "Kestrel",
+    "category": "bags",
+    "size": "one size",
+    "price": 48,
+    "color": "sand",
+    "description": "Wipe-clean travel kit with a hanging hook."
+  },
+  {
+    "id": "kt-4004",
+    "name": "Kestrel Ridgeline Five-Panel Cap",
+    "brand": "Kestrel",
+    "category": "hats",
+    "size": "one size",
+    "price": 38,
+    "color": "olive",
+    "description": "Cotton-canvas five-panel with an adjustable strap."
+  },
+  {
+    "id": "pv-5001",
+    "name": "Pavia Stillwater Linen Shirt",
+    "brand": "Pavia",
+    "category": "shirts",
+    "size": "M",
+    "price": 134,
+    "color": "chalk",
+    "description": "European linen camp shirt with a relaxed drape."
+  },
+  {
+    "id": "pv-5002",
+    "name": "Pavia Stillwater Linen Shirt",
+    "brand": "Pavia",
+    "category": "shirts",
+    "size": "L",
+    "price": 134,
+    "color": "clay",
+    "description": "European linen camp shirt with a relaxed drape."
+  },
+  {
+    "id": "pv-5003",
+    "name": "Pavia Lambswool Crew Sweater",
+    "brand": "Pavia",
+    "category": "sweaters",
+    "size": "M",
+    "price": 182,
+    "color": "heather grey",
+    "description": "Fully-fashioned lambswool crew knitted in Scotland."
+  },
+  {
+    "id": "pv-5004",
+    "name": "Pavia Lambswool Crew Sweater",
+    "brand": "Pavia",
+    "category": "sweaters",
+    "size": "L",
+    "price": 182,
+    "color": "forest",
+    "description": "Fully-fashioned lambswool crew knitted in Scotland."
+  },
+  {
+    "id": "pv-5005",
+    "name": "Pavia Cashmere Scarf",
+    "brand": "Pavia",
+    "category": "accessories",
+    "size": "one size",
+    "price": 156,
+    "color": "camel",
+    "description": "Two-ply cashmere scarf with hand-knotted fringe."
+  },
+  {
+    "id": "td-6001",
+    "name": "Tindal Field Chino",
+    "brand": "Tindal",
+    "category": "trousers",
+    "size": "32",
+    "price": 98,
+    "color": "khaki",
+    "description": "Garment-dyed cotton chino with a straight leg."
+  },
+  {
+    "id": "td-6002",
+    "name": "Tindal Field Chino",
+    "brand": "Tindal",
+    "category": "trousers",
+    "size": "34",
+    "price": 98,
+    "color": "stone",
+    "description": "Garment-dyed cotton chino with a straight leg."
+  },
+  {
+    "id": "td-6003",
+    "name": "Tindal Weekend Hoodie",
+    "brand": "Tindal",
+    "category": "sweaters",
+    "size": "M",
+    "price": 104,
+    "color": "ash",
+    "description": "Loopback cotton hoodie with a kangaroo pocket."
+  },
+  {
+    "id": "td-6004",
+    "name": "Tindal Packable Sun Hat",
+    "brand": "Tindal",
+    "category": "hats",
+    "size": "one size",
+    "price": 52,
+    "color": "straw",
+    "description": "Crushable wide-brim hat with a chin cord."
+  },
+  {
+    "id": "td-6005",
+    "name": "Tindal Ribbed Beanie",
+    "brand": "Tindal",
+    "category": "hats",
+    "size": "one size",
+    "price": 34,
+    "color": "burgundy",
+    "description": "Merino-blend ribbed beanie with a folded cuff."
+  }
+]

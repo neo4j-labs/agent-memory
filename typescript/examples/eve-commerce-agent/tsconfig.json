@@ -1,0 +1,16 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    // eve bundles every authored module, so the shared bundler-style base is the
+    // right model here (unlike the script examples, which run on Node's loader).
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "noEmit": true,
+    "noUncheckedIndexedAccess": true
+  },
+  "include": ["agent/**/*", "test/**/*"],
+  "exclude": ["node_modules", ".eve", ".output"]
+}

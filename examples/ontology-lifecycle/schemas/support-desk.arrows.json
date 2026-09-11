@@ -1,0 +1,122 @@
+{
+  "_comment": "Arrows (https://arrows.app) JSON export of a small e-commerce support-desk model. NAMS converts it into a native ontology draft server-side \u2014 Python: client.ontology.import_(content=..., format='arrows'); TypeScript: client.ontology.import({ content, format: 'arrows' }). Node labels become entity types (mapped onto POLE+O), node properties become typed properties, and relationships become typed relationships.",
+  "nodes": [
+    {
+      "id": "n0",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "caption": "Customer",
+      "labels": [
+        "Customer"
+      ],
+      "properties": {
+        "email": "string",
+        "tier": "string",
+        "signed_up_at": "datetime"
+      },
+      "style": {}
+    },
+    {
+      "id": "n1",
+      "position": {
+        "x": 320,
+        "y": 0
+      },
+      "caption": "Order",
+      "labels": [
+        "Order"
+      ],
+      "properties": {
+        "order_number": "string",
+        "total": "float",
+        "placed_at": "datetime"
+      },
+      "style": {}
+    },
+    {
+      "id": "n2",
+      "position": {
+        "x": 640,
+        "y": 0
+      },
+      "caption": "Product",
+      "labels": [
+        "Product"
+      ],
+      "properties": {
+        "sku": "string",
+        "name": "string",
+        "category": "string"
+      },
+      "style": {}
+    },
+    {
+      "id": "n3",
+      "position": {
+        "x": 320,
+        "y": 260
+      },
+      "caption": "Ticket",
+      "labels": [
+        "Ticket"
+      ],
+      "properties": {
+        "reference": "string",
+        "subject": "string",
+        "severity": "string",
+        "opened_at": "datetime"
+      },
+      "style": {}
+    }
+  ],
+  "relationships": [
+    {
+      "id": "r0",
+      "type": "PLACED",
+      "fromId": "n0",
+      "toId": "n1",
+      "properties": {},
+      "style": {}
+    },
+    {
+      "id": "r1",
+      "type": "CONTAINS",
+      "fromId": "n1",
+      "toId": "n2",
+      "properties": {},
+      "style": {}
+    },
+    {
+      "id": "r2",
+      "type": "OPENED",
+      "fromId": "n0",
+      "toId": "n3",
+      "properties": {},
+      "style": {}
+    },
+    {
+      "id": "r3",
+      "type": "ABOUT",
+      "fromId": "n3",
+      "toId": "n1",
+      "properties": {},
+      "style": {}
+    },
+    {
+      "id": "r4",
+      "type": "CONCERNS",
+      "fromId": "n3",
+      "toId": "n2",
+      "properties": {},
+      "style": {}
+    }
+  ],
+  "style": {
+    "font-family": "sans-serif",
+    "background-color": "#ffffff",
+    "node-color": "#6366F1",
+    "node-label-color": "#ffffff"
+  }
+}

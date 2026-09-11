@@ -91,3 +91,12 @@ Under `strict`, a write that violates the active schema is rejected:
   `ValidationError`.
 
 Next: xref:reference/ontology-api.adoc[the full Ontology API reference].
+
+== Runnable examples
+
+Both SDKs ship the full revision cycle this tutorial stops short of — import an
+Arrows diagram, ingest under the schema, diff two revisions, then migrate the
+already-extracted entities onto a renamed type:
+
+* link:https://github.com/neo4j-labs/agent-memory/tree/main/examples/ontology-lifecycle[`examples/ontology-lifecycle/`] (Python)
+* link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/ontology-lifecycle[`typescript/examples/ontology-lifecycle/`] (TypeScript)

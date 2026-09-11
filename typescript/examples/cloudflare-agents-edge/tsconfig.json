@@ -1,0 +1,21 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    // Workers is a bundler target (wrangler/esbuild), so unlike the Node
+    // examples the shared base's `bundler` resolution is exactly right here.
+    // What changes is the global type surface: `@cloudflare/workers-types`
+    // instead of `@types/node`, so `ExecutionContext`, `ExportedHandler` and a
+    // `fetch`-only global scope are in scope — and `process`, `Buffer` and
+    // `require` are not. That is the type-level half of the edge canary.
+    "types": [
+      "@cloudflare/workers-types",
+      "@cloudflare/vitest-pool-workers/types",
+      // `import.meta.glob`, used by the edge-safety scan in test/edge.test.ts.
+      "vite/client"
+    ],
+    "lib": ["ES2023"],
+    "target": "ES2023",
+    "verbatimModuleSyntax": true
+  },
+  "include": ["src/**/*", "test/**/*", "vitest.config.ts"]
+}

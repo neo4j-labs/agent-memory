@@ -1,0 +1,8 @@
+# [nams] pulls the hosted-backend HTTP transport (httpx); [mcp] pulls FastMCP 4,
+# which doctor.py imports to enumerate the self-hosted tool profiles and which
+# `neo4j-agent-memory mcp serve` needs.
+neo4j-agent-memory[nams,mcp]>=0.5.0,<0.7
+
+# Optional: loads this directory's .env (the scripts fall back to a tiny
+# built-in parser when python-dotenv is absent).
+python-dotenv>=1.0,<2

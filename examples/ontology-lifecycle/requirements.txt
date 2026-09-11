@@ -1,0 +1,6 @@
+# The [nams] extra pulls the hosted-backend HTTP transport (httpx). The
+# ontology surface is hosted-only — there is no bolt equivalent.
+neo4j-agent-memory[nams]>=0.5.0,<0.7
+# Optional: loads this directory's .env (the script falls back to a tiny
+# built-in parser when python-dotenv is absent).
+python-dotenv>=1.0,<2
