@@ -110,7 +110,7 @@ class TestGoogleCloudIntegrationImports:
         from neo4j_agent_memory.embeddings.vertex_ai import VertexAIEmbedder
 
         embedder = VertexAIEmbedder()
-        assert embedder.model == "text-embedding-004"
+        assert embedder.model == "gemini-embedding-001"
         assert embedder.task_type == "RETRIEVAL_DOCUMENT"
         assert embedder.dimensions == 768
 
