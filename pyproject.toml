@@ -245,7 +245,7 @@ dev = [
     "mypy>=1.8.0",
     # ty is pre-1.0 and changes its rule set between releases, so pin it exactly
     # for reproducible CI. Bump deliberately. See the type-safety tracking issue #144.
-    "ty==0.0.13",
+    "ty==0.0.79",
     # yaml ships no inline types; the mypy override block assumes these stubs are
     # present. Pinned so the mypy error count is reproducible in clean CI (an
     # ambient install here silently shifted it). See #144.
