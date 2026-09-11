@@ -8,7 +8,7 @@
   },
   "dependencies": {
     "@neo4j-labs/agent-memory": "file:../..",
-    "ai": "^4.0.0",
+    "ai": "^7.0.94",
     "@ai-sdk/openai": "^1.0.0"
   },
   "devDependencies": {
