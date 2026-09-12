@@ -92,6 +92,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `expected_names` / `min_results` / `predicate` / `timeout` / `interval`, so
   portable code calling it through `client.long_term` failed `mypy --strict`. All
   parameters are keyword-only and optional; bolt still returns `True` immediately.
+- **Entity aliases are now readable by alias.** `add_entity` wrote `aliases`
+  into the JSON `metadata` blob while `get_entity_by_name` looks for a top-level
+  `aliases` property, so an entity was never findable by an alias passed to
+  `add_entity`. `aliases` is now a top-level list property everywhere, matching
+  what `MERGE_ENTITIES` already wrote; rows written earlier still read back via
+  the `metadata` fallback.
+- **`add_relationship` no longer acknowledges a write that matched nothing.**
+  The query `MATCH`es both endpoints before `MERGE`ing the edge, so ids that
+  address no node wrote zero rows and returned a relationship the graph did not
+  contain. It now raises `NotFoundError` naming both ids, and on a re-add it
+  returns the stored id instead of a newly minted one.
+- **`add_entity` returns the id the graph stored.** The `MERGE` is keyed on
+  `(name, type)`, so a repeat add hits `ON MATCH`, keeps the original `id` and
+  discards the freshly minted one — the returned entity then addressed no node,
+  and every later write keyed on it (`add_relationship`,
+  `link_entity_to_message`) silently did nothing.
+- **`merge_duplicate_entities` no longer orphans edges.** It migrated only
+  `MENTIONS` and `SAME_AS`, so a merge dropped the entity's `RELATED_TO` edges
+  (both directions) and both provenance edges (`EXTRACTED_FROM`,
+  `EXTRACTED_BY`), plus the v0.2 `APPLIES_TO` and `TOUCHED` audit edges. All of
+  them are now copied onto the surviving entity and tagged `migrated_from`; the
+  merged-away entity keeps its own edges so the merge stays reversible.
 - **`add_messages_batch` now accepts `user_identifier`**, enforcing `multi_tenant`
   and linking the conversation to its `:User`; previously the bulk path silently
   wrote unscoped, unlinked conversations — so a bulk write that used to succeed
