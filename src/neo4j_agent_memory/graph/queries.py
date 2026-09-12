@@ -351,7 +351,14 @@ ON CREATE SET
     r.valid_from = $valid_from,
     r.valid_until = $valid_until,
     r.created_at = datetime()
-RETURN r
+// Project the properties rather than ``RETURN r``: the client reads results
+// via ``Result.data()``, which serializes a relationship as a
+// ``(start_props, type, end_props)`` tuple and drops its own properties.
+// Callers need ``r.id`` to report the id the graph actually stored — on a
+// re-add ``ON CREATE`` did not run, so the pre-existing id wins.
+RETURN r.id AS id,
+       r.description AS description,
+       r.confidence AS confidence
 """
 
 GET_FACTS_BY_SUBJECT = """
@@ -1019,6 +1026,81 @@ CALL (source, target) {
         created_at: datetime()
     }]-(other)
     RETURN count(*) AS sameAsTransferred
+}
+// Transfer outgoing RELATED_TO edges. Without this the merged-away node keeps
+// the only copy of the edge and the surviving entity loses it.
+CALL (source, target) {
+    MATCH (source)-[r:RELATED_TO]->(other:Entity)
+    WHERE other <> target AND NOT (target)-[:RELATED_TO {type: r.type}]->(other)
+    MERGE (target)-[nr:RELATED_TO {type: r.type}]->(other)
+    ON CREATE SET
+        nr.id = r.id,
+        nr.description = r.description,
+        nr.confidence = r.confidence,
+        nr.valid_from = r.valid_from,
+        nr.valid_until = r.valid_until,
+        nr.created_at = r.created_at,
+        nr.migrated_from = source.id
+    RETURN count(*) AS relatedOutTransferred
+}
+// Transfer incoming RELATED_TO edges
+CALL (source, target) {
+    MATCH (other:Entity)-[r:RELATED_TO]->(source)
+    WHERE other <> target AND NOT (other)-[:RELATED_TO {type: r.type}]->(target)
+    MERGE (other)-[nr:RELATED_TO {type: r.type}]->(target)
+    ON CREATE SET
+        nr.id = r.id,
+        nr.description = r.description,
+        nr.confidence = r.confidence,
+        nr.valid_from = r.valid_from,
+        nr.valid_until = r.valid_until,
+        nr.created_at = r.created_at,
+        nr.migrated_from = source.id
+    RETURN count(*) AS relatedInTransferred
+}
+// Transfer provenance: which messages the entity was extracted from
+CALL (source, target) {
+    MATCH (source)-[r:EXTRACTED_FROM]->(m:Message)
+    WHERE NOT (target)-[:EXTRACTED_FROM]->(m)
+    MERGE (target)-[nr:EXTRACTED_FROM]->(m)
+    ON CREATE SET
+        nr.confidence = r.confidence,
+        nr.start_pos = r.start_pos,
+        nr.end_pos = r.end_pos,
+        nr.context = r.context,
+        nr.created_at = r.created_at,
+        nr.migrated_from = source.id
+    RETURN count(*) AS extractedFromTransferred
+}
+// Transfer provenance: which extractors produced the entity
+CALL (source, target) {
+    MATCH (source)-[r:EXTRACTED_BY]->(ex:Extractor)
+    WHERE NOT (target)-[:EXTRACTED_BY]->(ex)
+    MERGE (target)-[nr:EXTRACTED_BY]->(ex)
+    ON CREATE SET
+        nr.confidence = r.confidence,
+        nr.extraction_time_ms = r.extraction_time_ms,
+        nr.created_at = r.created_at,
+        nr.migrated_from = source.id
+    RETURN count(*) AS extractedByTransferred
+}
+// Transfer inbound preference scoping (v0.2 APPLIES_TO edges)
+CALL (source, target) {
+    MATCH (p:Preference)-[r:APPLIES_TO]->(source)
+    WHERE NOT (p)-[:APPLIES_TO]->(target)
+    MERGE (p)-[nr:APPLIES_TO]->(target)
+    ON CREATE SET nr.migrated_from = source.id
+    RETURN count(*) AS appliesToTransferred
+}
+// Transfer inbound reasoning audit edges (v0.2 TOUCHED edges)
+CALL (source, target) {
+    MATCH (s:ReasoningStep)-[r:TOUCHED]->(source)
+    WHERE NOT (s)-[:TOUCHED]->(target)
+    MERGE (s)-[nr:TOUCHED]->(target)
+    ON CREATE SET
+        nr.recorded_at = r.recorded_at,
+        nr.migrated_from = source.id
+    RETURN count(*) AS touchedTransferred
 }
 // Mark source as merged
 SET source.merged_into = target.id,

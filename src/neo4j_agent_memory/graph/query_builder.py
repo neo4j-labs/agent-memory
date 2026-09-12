@@ -235,7 +235,11 @@ def build_label_set_clause(entity_type: str, subtype: str | None, node_var: str 
 
 
 def build_create_entity_query(
-    entity_type: str, subtype: str | None, *, include_location: bool = False
+    entity_type: str,
+    subtype: str | None,
+    *,
+    include_location: bool = False,
+    include_aliases: bool = False,
 ) -> str:
     """Build the CREATE_ENTITY query with dynamic type/subtype labels.
 
@@ -246,6 +250,12 @@ def build_create_entity_query(
         entity_type: The entity type (e.g., "PERSON", "OBJECT")
         subtype: Optional subtype (e.g., "VEHICLE", "ADDRESS")
         include_location: If True, include location Point property (for LOCATION entities)
+        include_aliases: If True, include the top-level ``aliases`` list property.
+            Callers that set this must pass an ``aliases`` parameter when
+            running the query — Cypher errors on a referenced-but-absent
+            parameter. Off by default so that queries built by hand with their
+            own parameter dict keep working unchanged; ``LongTermMemory.add_entity``
+            opts in.
 
     Returns:
         Complete Cypher query string with dynamic labels
@@ -256,6 +266,9 @@ def build_create_entity_query(
 
         >>> query = build_create_entity_query("LOCATION", "CITY", include_location=True)
         >>> # Returns query that also sets e.location = $location
+
+        >>> query = build_create_entity_query("PERSON", None, include_aliases=True)
+        >>> # Returns query that also sets e.aliases = $aliases
     """
     label_set_clause = build_label_set_clause(entity_type, subtype)
 
@@ -267,6 +280,22 @@ def build_create_entity_query(
         location_on_create = ",\n    e.location = CASE WHEN $location IS NOT NULL THEN point({latitude: $location.latitude, longitude: $location.longitude}) ELSE null END"
         location_on_match = ",\n    e.location = CASE WHEN $location IS NOT NULL THEN point({latitude: $location.latitude, longitude: $location.longitude}) ELSE e.location END"
 
+    # Build aliases clause. ``aliases`` is a top-level list property (not
+    # buried in the JSON ``metadata`` string) so that name lookups —
+    # ``GET_ENTITY_BY_NAME`` reads ``$name IN e.aliases`` — and
+    # ``MERGE_ENTITIES``, which appends the merged-away name to
+    # ``target.aliases``, all agree on one location. ON MATCH appends only
+    # aliases not already present, atomically, so concurrent writers cannot
+    # clobber each other's list.
+    aliases_on_create = ""
+    aliases_on_match = ""
+    if include_aliases:
+        aliases_on_create = ",\n    e.aliases = coalesce($aliases, [])"
+        aliases_on_match = (
+            ",\n    e.aliases = coalesce(e.aliases, [])"
+            " + [a IN coalesce($aliases, []) WHERE NOT a IN coalesce(e.aliases, [])]"
+        )
+
     query = f"""MERGE (e:Entity {{name: $name, type: $type}})
 ON CREATE SET
     e.id = $id,
@@ -276,13 +305,13 @@ ON CREATE SET
     e.embedding = $embedding,
     e.confidence = $confidence,
     e.created_at = datetime(),
-    e.metadata = $metadata{location_on_create}
+    e.metadata = $metadata{aliases_on_create}{location_on_create}
 ON MATCH SET
     e.subtype = COALESCE($subtype, e.subtype),
     e.canonical_name = COALESCE($canonical_name, e.canonical_name),
     e.description = COALESCE($description, e.description),
     e.embedding = COALESCE($embedding, e.embedding),
-    e.updated_at = datetime(){location_on_match}"""
+    e.updated_at = datetime(){aliases_on_match}{location_on_match}"""
 
     # Add label SET clause if we have valid labels
     if label_set_clause:
