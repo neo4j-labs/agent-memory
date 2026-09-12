@@ -28,7 +28,7 @@
   },
   "devDependencies": {
     "@chakra-ui/cli": "^3.37.0",
-    "@types/node": "^24.0.0",
+    "@types/node": "^26.5.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "eslint": "^10.10.0",
