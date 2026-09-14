@@ -67,7 +67,7 @@
     "@ai-sdk/openai": "^4.0.24",
     "@ai-sdk/provider": "^4.0.4",
     "@neo4j-labs/agent-memory": "^0.4.0",
-    "@types/node": "^20",
+    "@types/node": "^26",
     "ai": "^7.0.42",
     "tsup": "^8.0.0",
     "typescript": "^5.0.0",
