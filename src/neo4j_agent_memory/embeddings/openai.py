@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
 from neo4j_agent_memory.core.exceptions import EmbeddingError
@@ -17,6 +18,63 @@ MODEL_DIMENSIONS = {
     "text-embedding-3-large": 3072,
     "text-embedding-ada-002": 1536,
 }
+
+logger = logging.getLogger(__name__)
+
+# Max input tokens per model. The API hard-fails (400) above this; we truncate to stay under it.
+# Target slightly below the true ceiling (8192) for safety headroom.
+MODEL_MAX_INPUT_TOKENS = {
+    "text-embedding-3-small": 8192,
+    "text-embedding-3-large": 8192,
+    "text-embedding-ada-002": 8192,
+}
+_DEFAULT_MAX_INPUT_TOKENS = 8192
+_TOKEN_HEADROOM = 192
+
+
+def _max_tokens_for(model: str) -> int:
+    """Return the safe token budget for ``model`` (ceiling minus headroom)."""
+    return MODEL_MAX_INPUT_TOKENS.get(model, _DEFAULT_MAX_INPUT_TOKENS) - _TOKEN_HEADROOM
+
+
+def _truncate_to_tokens(text: str, model: str) -> str:
+    """Truncate ``text`` so it fits within the token budget of ``model``.
+
+    Uses ``tiktoken`` when available for an accurate token count. Falls back to
+    a character-based estimate (4 chars per token) when ``tiktoken`` is not
+    installed or the encoding lookup fails, since ``tiktoken`` is an optional
+    dependency of this package.
+    """
+    budget = _max_tokens_for(model)
+    try:
+        import tiktoken  # tiktoken is an optional dependency, not declared in pyproject
+
+        try:
+            enc = tiktoken.encoding_for_model(model)
+        except KeyError:
+            enc = tiktoken.get_encoding("cl100k_base")
+        toks: list[int] = enc.encode(text)
+        if len(toks) <= budget:
+            return text
+        logger.warning(
+            "embedding input exceeds token budget (%d tokens > %d budget) for model %s; truncating",
+            len(toks),
+            budget,
+            model,
+        )
+        return str(enc.decode(toks[:budget]))
+    except Exception:
+        char_budget = budget * 4
+        if len(text) <= char_budget:
+            return text
+        logger.warning(
+            "embedding input exceeds char-estimate budget (%d chars > %d) for model %s "
+            "(tiktoken unavailable); truncating",
+            len(text),
+            char_budget,
+            model,
+        )
+        return text[:char_budget]
 
 
 class OpenAIEmbedder(BaseEmbedder):
@@ -71,6 +129,7 @@ class OpenAIEmbedder(BaseEmbedder):
     async def embed(self, text: str) -> list[float]:
         """Generate embedding for a single text."""
         client = self._ensure_client()
+        text = _truncate_to_tokens(text, self._model)
 
         try:
             kwargs: dict[str, Any] = {"input": text, "model": self._model}
@@ -87,6 +146,7 @@ class OpenAIEmbedder(BaseEmbedder):
         if not texts:
             return []
 
+        texts = [_truncate_to_tokens(t, self._model) for t in texts]
         client = self._ensure_client()
         all_embeddings: list[list[float]] = []
 
