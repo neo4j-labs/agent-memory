@@ -28,6 +28,6 @@ sse-starlette>=3.0,<4
 openai>=2.0,<4
 
 # Environment
-python-dotenv>=1.0,<2
+python-dotenv>=1.2.3,<2
 pydantic>=2.9,<3
 pydantic-settings>=2.6,<3
