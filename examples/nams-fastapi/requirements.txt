@@ -1,7 +1,7 @@
 # The [nams] extra pulls the hosted-backend HTTP transport (httpx). No Neo4j
 # driver, no embedding provider, no extraction model — the service runs those.
 neo4j-agent-memory[nams]>=0.5.0,<0.7
-fastapi>=0.141,<1
+fastapi>=0.141.1,<1
 # [standard] supplies the --reload watcher plus the httptools/uvloop speedups
 # the run command below assumes.
 uvicorn[standard]>=0.52,<1
