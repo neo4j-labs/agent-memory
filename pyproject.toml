@@ -249,7 +249,7 @@ dev = [
     # yaml ships no inline types; the mypy override block assumes these stubs are
     # present. Pinned so the mypy error count is reproducible in clean CI (an
     # ambient install here silently shifted it). See #144.
-    "types-PyYAML==6.0.12.20260518",
+    "types-PyYAML==6.0.12.20260906",
     "ruff>=0.3.0",
     "pre-commit>=3.6.0",
     "testcontainers[neo4j]>=4.0.0",
