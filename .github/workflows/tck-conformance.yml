@@ -30,7 +30,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     steps:
       - name: Checkout TCK
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: neo4j-labs/agent-memory-tck
           path: tck
