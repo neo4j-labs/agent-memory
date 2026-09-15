@@ -5,8 +5,9 @@ graph: entity types (each mapped onto a POLE+O ``pole_type``) with typed
 properties (``required`` / ``unique`` / ``enum`` constraints) and typed
 relationships. NAMS ships ~28 system templates and supports
 workspace-owned ontologies with immutable revisions, activation, and a
-per-version ``validation_mode`` (``permissive`` records non-conforming
-writes; ``strict`` rejects them).
+per-version ``validation_mode`` (``permissive`` or ``strict``). Enforcement
+depends on the service operation; activation alone does not verify a write
+constraint.
 
 This module exposes :class:`NamsOntology` — the ``client.ontology``
 accessor — plus the Pydantic models that hide the wire shape (notably the
@@ -16,9 +17,9 @@ into :class:`OntologyDocument`).
 Contract note
 =============
 
-The ontology endpoints are **not** documented in the staging OpenAPI;
-the routes and payloads below were verified empirically against the
-development/staging deployment:
+The routes below use the service’s snake_case ontology contract. The
+active response carries its bound version, which can be older than the
+latest revision:
 
 * ``GET    /ontologies``                          → list (summaries)
 * ``GET    /ontologies/{id}``                      → ``{record, versions[]}``
@@ -161,11 +162,10 @@ class Ontology(_Lenient):
 
 
 class ActiveOntology(_Lenient):
-    """The currently-bound ontology, with version metadata composed in.
+    """The currently bound document and authoritative active-version metadata.
 
-    ``validation_mode`` / ``revision`` / ``version_id`` are populated by a
-    second lookup (the ``/ontologies/active`` response itself carries no
-    version metadata).
+    Legacy responses without a version record leave binding metadata absent;
+    the latest revision is never inferred to be active.
     """
 
     document: OntologyDocument
@@ -173,6 +173,7 @@ class ActiveOntology(_Lenient):
     revision: int | None = None
     ontology_id: str | None = None
     version_id: str | None = None
+    schema_hash: str | None = None
 
 
 class _AllowExtra(BaseModel):
@@ -267,6 +268,26 @@ def _parse_version(raw: dict[str, Any]) -> OntologyVersion:
     return OntologyVersion.model_validate({**data, "document": doc})
 
 
+def _parse_active_version(raw: Any) -> OntologyVersion:
+    """Validate a supplied binding without changing other version parsers."""
+    if not isinstance(raw, dict):
+        raise ValueError("Invalid active ontology version metadata: expected an object.")
+    for key in ("id", "ontology_id"):
+        if not isinstance(raw.get(key), str) or not raw[key].strip():
+            raise ValueError(f"Invalid active ontology version metadata: {key} is required.")
+    revision = raw.get("revision")
+    if type(revision) is not int or revision < 1:
+        raise ValueError(
+            "Invalid active ontology version metadata: revision must be a positive integer."
+        )
+    if raw.get("validation_mode") not in ("permissive", "strict"):
+        raise ValueError("Invalid active ontology version metadata: unknown validation_mode.")
+    version = _parse_version(raw)
+    if raw.get("schema_json") is not None and version.document is None:
+        raise ValueError("Invalid active ontology version metadata: schema_json is not a document.")
+    return version
+
+
 # -----------------------------------------------------------------------------
 # Endpoint specs (REST-only — ontology is a hosted-NAMS capability).
 # -----------------------------------------------------------------------------
@@ -332,9 +353,9 @@ class NamsOntology:
         await client.ontology.activate(v.id)             # bind the version
         active = await client.ontology.get_active()      # parsed body + mode
 
-    From activation onward, server-side extraction validates entity writes
-    against the active schema (``strict`` rejects non-conforming writes →
-    :class:`ValidationError`).
+    Activation selects the workspace schema and validation mode. The service
+    applies validation according to the write path; reading the active binding
+    does not prove that a particular entity constraint was enforced.
     """
 
     def __init__(self, transport: HttpTransport) -> None:
@@ -368,12 +389,10 @@ class NamsOntology:
         return Ontology(record=OntologyRecord.model_validate(record), versions=versions)
 
     async def get_active(self) -> ActiveOntology:
-        """Return the active ontology's parsed body + composed version metadata.
+        """Return the bound document and the response's exact version metadata.
 
-        ``GET /ontologies/active`` returns the schema body but no version
-        metadata, so we resolve the active ontology id (via the ``is_active``
-        flag from :meth:`list`) and read its current version to surface
-        ``validation_mode`` / ``revision`` / ``version_id``.
+        Missing/null legacy version records leave the binding unknown. Supplied
+        malformed metadata or conflicting schema documents raise ``ValueError``.
         """
         self._guard_rest()
         payload = await self._transport.request(_SPEC_GET_ACTIVE)
@@ -387,22 +406,20 @@ class NamsOntology:
                 message="No active ontology bound for this workspace.",
             )
 
-        active = ActiveOntology(document=document)
-        # Compose version metadata via a second lookup.
-        summaries = await self.list()
-        match = next((s for s in summaries if s.is_active), None)
-        if match is None:
-            # Fall back to matching the active document's domain id to a name.
-            match = next((s for s in summaries if s.name == document.domain.id), None)
-        if match is not None:
-            active.ontology_id = match.id
-            detail = await self.get(match.id)
-            current = _current_version(detail, match.current_revision)
-            if current is not None:
-                active.validation_mode = current.validation_mode
-                active.revision = current.revision
-                active.version_id = current.id
-        return active
+        raw_version = payload.get("version")
+        if raw_version is None:
+            return ActiveOntology(document=document)
+        version = _parse_active_version(raw_version)
+        if version.document is not None and version.document != document:
+            raise ValueError("Active ontology version schema conflicts with the active document.")
+        return ActiveOntology(
+            document=document,
+            validation_mode=version.validation_mode,
+            revision=version.revision,
+            ontology_id=version.ontology_id,
+            version_id=version.id,
+            schema_hash=version.schema_hash,
+        )
 
     async def clone(self, template_name: str) -> OntologyVersion:
         """Clone a system template into an editable workspace copy (revision 1)."""
@@ -448,7 +465,7 @@ class NamsOntology:
         return _parse_version(payload or {})
 
     async def activate(self, version_id: str) -> OntologyVersion:
-        """Bind a version; subsequent entity writes validate against it."""
+        """Bind this schema version and its validation mode to the workspace."""
         self._guard_rest()
         payload = await self._transport.request(_SPEC_ACTIVATE, json={"version_id": version_id})
         return _parse_version(payload or {})
@@ -552,16 +569,6 @@ class NamsOntology:
             _SPEC_MIGRATION_STATUS, path_params={"job_id": job_id}
         )
         return MigrationJob.model_validate(payload or {})
-
-
-def _current_version(ontology: Ontology, revision: int | None) -> OntologyVersion | None:
-    if not ontology.versions:
-        return None
-    if revision is not None:
-        for v in ontology.versions:
-            if v.revision == revision:
-                return v
-    return max(ontology.versions, key=lambda v: v.revision)
 
 
 def _as_document_dict(schema: OntologyDocument | dict[str, Any]) -> dict[str, Any]:

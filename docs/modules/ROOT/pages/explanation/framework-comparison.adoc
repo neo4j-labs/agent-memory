@@ -1,545 +1,108 @@
-= Choosing an Agent Framework Integration
+= Choosing an agent framework integration
 :page-product: agent-memory
 :page-pagination:
 :description: Compare Neo4j Agent Memory integrations for LangChain, PydanticAI, LlamaIndex, CrewAI, OpenAI Agents SDK, AWS Strands Agents, and Microsoft Agent Framework.
 :keywords: agent, framework, comparison, langchain, pydantic-ai, llamaindex, crewai, openai, strands, aws, microsoft
 
-Neo4j Agent Memory provides integrations for seven popular agent frameworks. This guide helps you choose the right integration for your use case.
+An integration connects an agent framework's lifecycle to stored memory: when a conversation is loaded, which context enters a prompt, and when messages or traces are written. The framework choice does not change the backend's access rules or add unsupported memory operations.
 
-== Feature Comparison Matrix
+Neo4j Agent Memory and these adapters are an experimental, community-supported Neo4j Labs project. An upstream framework's stable or GA release does not imply official support for this integration.
 
-[cols="2,1,1,1,1,1,1,1", options="header"]
+[[_feature_comparison_matrix]]
+== Integration approaches
+
+[cols="1,2,2",options="header"]
 |===
-| Feature | LangChain | PydanticAI | LlamaIndex | CrewAI | OpenAI Agents | Strands | Microsoft ⚠️
-
-| *Memory Class*
-| `Neo4jAgentMemory`
-| `MemoryDependency`
-| `Neo4jLlamaIndexMemory`
-| `Neo4jCrewMemory`
-| `Neo4jOpenAIMemory`
-| `context_graph_tools()`
-| `Neo4jMicrosoftMemory`
-
-| *Retriever Support*
-| ✅ `Neo4jMemoryRetriever`
-| ❌
-| ✅ Native `TextNode`
-| ❌
-| ❌
-| ❌
-| ❌
-
-| *Built-in Tools*
-| ❌ Custom required
-| ✅ `create_memory_tools()`
-| ❌ Custom required
-| ❌ Custom required
-| ✅ `create_memory_tools()`
-| ✅ `context_graph_tools()`
-| ✅ `create_memory_tools()`
-
-| *Context Provider*
-| ❌
-| ❌
-| ❌
-| ❌
-| ❌
-| ❌
-| ✅ `Neo4jContextProvider`
-
-| *GDS Integration*
-| ❌
-| ❌
-| ❌
-| ❌
-| ❌
-| ❌
-| ✅ PageRank, paths, similarity
-
-| *Trace Recording*
-| ❌ Manual
-| ✅ `record_agent_trace()`
-| ❌ Manual
-| ❌ Manual
-| ✅ `record_agent_trace()`
-| ❌ Manual
-| ✅ `record_agent_trace()`
-
-| *Multi-Agent*
-| ⚠️ Limited
-| ⚠️ Limited
-| ⚠️ Limited
-| ✅ Native
-| ⚠️ Limited
-| ⚠️ Limited
-| ⚠️ Limited
-
-| *Async Support*
-| ✅ Via wrapper
-| ✅ Native
-| ✅ Via wrapper
-| ✅ Via wrapper
-| ✅ Native
-| ✅ Sync (async internal)
-| ✅ Native
-
-| *Test Coverage*
-| ✅ 39 tests
-| ✅ 38 tests
-| ✅ 25 tests
-| ✅ 30 tests
-| ✅ 35 tests
-| ✅ 95 tests
-| ✅ 55+ tests
+|Framework |Connection to memory |Maintained guide
+|LangChain |Chat history, retriever, and `create_agent` middleware for the 1.x lifecycle |xref:how-to/integrations/langchain.adoc[LangChain]
+|PydanticAI |Injected memory dependencies and explicit memory tools |xref:how-to/integrations/pydantic-ai.adoc[PydanticAI]
+|LlamaIndex |Memory adapted to LlamaIndex's conversation and retrieval abstractions |xref:how-to/integrations/llamaindex.adoc[LlamaIndex]
+|CrewAI |Memory for crew tasks and shared knowledge |xref:how-to/integrations/crewai.adoc[CrewAI]
+|OpenAI Agents SDK |Conversation access, memory tools, and trace helpers |xref:how-to/integrations/openai-agents.adoc[OpenAI Agents SDK]
+|Strands Agents |Memory tools, session management, and a memory store |xref:how-to/integrations/aws-strands.adoc[Strands Agents]
+|Microsoft Agent Framework |Context/history providers, tools, and trace helpers |xref:how-to/integrations/microsoft-agent.adoc[Microsoft Agent Framework]
+|Google ADK |Memory service integration |xref:how-to/integrations/google-adk.adoc[Google ADK]
 |===
 
-NOTE: The Microsoft Agent Framework column targets `agent-framework>=1.0.0b260212`. The framework has reached GA — check the https://github.com/microsoft/agent-framework[official releases] for the latest stable version.
+This table describes integration shapes, not a ranking or a promise that every adapter exposes every memory method. The linked guides own dependency ranges and setup details. In particular, the maintained LangChain adapter uses `BaseChatMessageHistory` and middleware; the old `BaseMemory` recipe is not the supported 1.x path. The Microsoft integration targets `agent-framework-core>=1.13,<2`, consistent with its maintained guide, rather than the retired public-preview pin.
 
-== Quick Decision Guide
+[[_quick_decision_guide]]
+== Choosing by application lifecycle
 
-=== Use LangChain if:
-
-* You have an existing LangChain application
-* You need retriever integration for RAG pipelines
-* You want the most battle-tested integration
-* You're building chains with conversation memory
+anchor:_use_langchain_if[]anchor:_use_pydanticai_if[]anchor:_use_llamaindex_if[]anchor:_use_crewai_if[]anchor:_use_openai_agents_sdk_if[]anchor:_use_strands_agents_if[]anchor:_use_microsoft_agent_framework_if[]
 
-[source,python]
-----
-from neo4j_agent_memory.integrations.langchain import Neo4jAgentMemory
+An existing framework is a useful starting point: keeping its message and execution abstractions reduces conversion work. For a new application, compare how each adapter fits the work you need to do:
 
-memory = Neo4jAgentMemory(memory_client=client, session_id="user-123")
-context = memory.load_memory_variables({"input": "query"})
-----
+* A chat application needs explicit ownership of conversation history and persistence.
+* A retrieval application needs to turn retrieved memory into the framework's expected context objects.
+* A tool-driven agent needs bounded memory tools and a policy for when it may call them.
+* A workflow with audits needs recorded steps, tool results, and outcomes, including failures.
 
-=== Use PydanticAI if:
+The application still decides what retrieved material enters the prompt. Exposing a memory tool does not guarantee that a model will call it.
 
-* Starting a new project from scratch
-* You want automatic reasoning trace recording
-* You prefer modern dependency injection patterns
-* You need type-safe tool definitions
+[[_memory_types_support]]
+== Memory layers and backend support
 
-[source,python]
-----
-from neo4j_agent_memory.integrations.pydantic_ai import MemoryDependency, create_memory_tools
-
-deps = MemoryDependency(memory_client=client, session_id="user-123")
-tools = create_memory_tools(deps)
-context = await deps.get_context("query")
-----
+The short-term, long-term, and reasoning layers describe different records. An adapter may expose one layer directly and use another through the underlying client. Trace helpers must be connected to an application's execution path; their existence does not make every agent run automatically observable.
 
-=== Use LlamaIndex if:
+Backend support is a separate question. Python supports Bolt and NAMS; TypeScript targets NAMS REST. Shared concepts do not imply identical operations or result shapes. Consult xref:reference/backend-capabilities.adoc[Backend capabilities] before choosing an adapter around preferences, graph writes, extraction, or user scoping.
 
-* Building RAG applications
-* You need `TextNode` compatibility
-* Combining document retrieval with graph knowledge
-* Using LlamaIndex chat engines or agents
+[[_installation]]
+== Dependency boundaries
 
-[source,python]
-----
-from neo4j_agent_memory.integrations.llamaindex import Neo4jLlamaIndexMemory
+Framework extras install the dependencies declared for that adapter. The model provider and application framework may require additional packages. Installing a broad extra is not a substitute for the selected guide's prerequisites.
 
-memory = Neo4jLlamaIndexMemory(memory_client=client, session_id="user-123")
-nodes = memory.get(input="query")  # Returns TextNode objects
-----
-
-=== Use CrewAI if:
+Use the xref:how-to/integrations/index.adoc[Python integration guides] or xref:how-to/typescript/integrations-overview.adoc[TypeScript integration overview] for installation commands and supported versions. Test counts are not a compatibility contract.
 
-* Building multi-agent systems
-* Need shared memory across agents
-* Want agent-specific context generation
-* Using CrewAI's crew and task abstractions
+[[_detailed_comparison]]
+== Context, persistence, and retrieval
 
-[source,python]
-----
-from neo4j_agent_memory.integrations.crewai import Neo4jCrewMemory
+anchor:_context_retrieval[]anchor:_message_storage[]anchor:_search_operations[]
 
-memory = Neo4jCrewMemory(memory_client=client, crew_id="research-crew")
-memory.remember("Finding from research", metadata={"type": "fact"})
-results = memory.recall("previous findings")
-----
+Context retrieval selects stored material relevant to the current task. Message storage persists an exchange. Search finds records by the supported semantic, property, or scope filters. These are distinct operations even when middleware combines them.
 
-=== Use OpenAI Agents SDK if:
+A useful integration design makes the actor explicit: an application invokes a client, framework middleware runs a hook, or a model chooses a tool. It also identifies where identifiers come from and whether a new process can reopen the same conversation. See the linked integration guide for method signatures and an executable path.
 
-* Using OpenAI's official agent framework
-* You want function calling tools in OpenAI format
-* Prefer OpenAI message format for conversations
-* Building with GPT-4 or GPT-3.5
+[[_performance_considerations]]
+== Execution and cost tradeoffs
 
-[source,python]
-----
-from neo4j_agent_memory.integrations.openai_agents import Neo4jOpenAIMemory, create_memory_tools
+anchor:_async_vs_sync[]anchor:_embedding_generation[]anchor:_entity_extraction[]
 
-memory = Neo4jOpenAIMemory(memory_client=client, session_id="user-123")
-tools = create_memory_tools(memory)  # OpenAI function format
-messages = await memory.get_conversation()  # OpenAI message format
-----
+An asynchronous interface lets an application await I/O without blocking its event loop. A synchronous bridge has different lifecycle constraints. Neither style alone establishes a throughput ranking: database latency, retrieval size, extraction work, model calls, and concurrency also matter.
 
-=== Use Strands Agents if:
+On Bolt, embedding and extraction settings affect client-side work. On NAMS, those operations are managed by the service. Measure the configured path on representative conversations, including a failed agent/tool turn, rather than assuming every adapter accepts the same tuning flags.
 
-* Building on AWS with Amazon Bedrock
-* You want pre-built tools for context graph operations
-* You prefer a simple tool-based API without managing memory classes
-* You need Bedrock embedding support out of the box
+[[_migration_guide]]
+== What changes when switching frameworks
 
-[source,python]
-----
-from strands import Agent
-from neo4j_agent_memory.integrations.strands import context_graph_tools
+anchor:_from_custom_memory_to_neo4j_agent_memory[]anchor:_between_frameworks[]
 
-tools = context_graph_tools(
-    neo4j_uri="bolt://localhost:7687",
-    neo4j_password="password",
-    embedding_provider="bedrock",
-)
+Keeping the same compatible backend can preserve stored records while an application changes frameworks. The application must still carry forward the correct workspace, conversation IDs, user filters where supported, and message-role conversions. A new client object or a repeated user name does not automatically resume a prior conversation.
 
-agent = Agent(
-    model="anthropic.claude-sonnet-4-20250514-v1:0",
-    tools=tools,
-)
-----
+Follow xref:how-to/migrate-to-nams.adoc[Migrate to NAMS] for a backend change. For a framework change, use the destination integration guide and verify storage followed by retrieval from a fresh client before replacing an existing path.
 
-=== Use Microsoft Agent Framework if:
+[[_best_practices]]
+== Choosing a memory boundary
 
-* Building with Azure OpenAI or Microsoft's agent platform
-* You want automatic context injection via ContextProvider hooks
-* You need Graph Data Science (GDS) algorithms for recommendations
-* You want auto-invoked tools with no manual dispatch
+anchor:_choose_based_on_existing_stack[]anchor:_for_new_projects[]anchor:_for_rag_applications[]anchor:_for_aws_projects[]anchor:_for_multi_agent_systems[]
 
-NOTE: This integration targets Microsoft Agent Framework v1.0.0b260212. The framework has reached GA — check the https://github.com/microsoft/agent-framework[official releases] for the latest stable version.
+Assign one owner to each write. If application code and middleware both persist a turn, the same exchange can be recorded twice. Keep retrieval scope explicit and pass only the context needed for the agent's task.
 
-[source,python]
-----
-from neo4j_agent_memory.integrations.microsoft_agent import (
-    Neo4jMicrosoftMemory,
-    create_memory_tools,
-)
+Multiple agents may share a graph while using separate conversations. That is a coordination choice, not an access-control guarantee. xref:explanation/multi-agent-sharing.adoc[Cross-agent sharing] explains the distinction.
 
-memory = Neo4jMicrosoftMemory(memory_client=client, session_id="user-123")
-tools = create_memory_tools(memory)
+[[_troubleshooting]]
+== Locating integration failures
 
-# Framework auto-invokes tools during agent.run()
-agent = chat_client.as_agent(
-    context_providers=[memory.context_provider],
-    tools=tools,
-)
-----
+anchor:_import_errors[]anchor:_asyncsync_issues[]anchor:_empty_results[]
 
-== Memory Types Support
+Import failures usually concern the installed framework/provider packages or the version range. Lifecycle failures concern when a hook runs and which event loop owns an asynchronous client. Empty search results concern stored data, embeddings, query thresholds, or scope.
 
-All integrations support the three-layer memory architecture:
+Use the relevant integration guide's troubleshooting and verification steps to isolate these layers. Changing the framework does not correct a backend capability mismatch.
 
-[cols="2,1,1,1", options="header"]
-|===
-| Memory Type | Description | Use Case | All Integrations
+[[_summary]]
+== Related documentation
 
-| *Short-Term*
-| Conversation history
-| Session context
-| ✅
-
-| *Long-Term*
-| Entities, preferences, facts
-| Persistent knowledge
-| ✅
-
-| *Reasoning*
-| Task traces, tool usage
-| Learning from past
-| ✅
-|===
-
-== Installation
-
-Install with your preferred framework:
-
-[source,bash]
-----
-# LangChain
-pip install neo4j-agent-memory[langchain]
-
-# PydanticAI
-pip install neo4j-agent-memory[pydantic-ai]
-
-# LlamaIndex
-pip install neo4j-agent-memory[llamaindex]
-
-# CrewAI
-pip install neo4j-agent-memory[crewai]
-
-# OpenAI Agents SDK
-pip install neo4j-agent-memory[openai-agents]
-
-# Strands Agents (AWS)
-pip install neo4j-agent-memory[strands]
-
-# Microsoft Agent Framework (Preview)
-pip install neo4j-agent-memory[microsoft-agent]
-
-# All frameworks
-pip install neo4j-agent-memory[all]
-----
-
-== Detailed Comparison
-
-=== Context Retrieval
-
-All integrations provide a way to get combined context for LLM prompts:
-
-[cols="1,2", options="header"]
-|===
-| Framework | Method
-
-| LangChain
-| `memory.load_memory_variables({"input": query})`
-
-| PydanticAI
-| `await deps.get_context(query)`
-
-| LlamaIndex
-| `memory.get(input=query)` → TextNode list
-
-| CrewAI
-| `memory.get_agent_context(agent_role, task)`
-
-| OpenAI Agents
-| `await memory.get_context(query)`
-
-| Strands
-| Via `search_context` tool (auto-called by agent)
-
-| Microsoft
-| `await memory.get_context(query)`
-|===
-
-=== Message Storage
-
-[cols="1,2", options="header"]
-|===
-| Framework | Method
-
-| LangChain
-| `memory.save_context(inputs, outputs)`
-
-| PydanticAI
-| `await deps.save_interaction(user_msg, assistant_msg)`
-
-| LlamaIndex
-| `memory.put(TextNode(text=content))`
-
-| CrewAI
-| `memory.remember(content, metadata)`
-
-| OpenAI Agents
-| `await memory.save_message(role, content)`
-
-| Strands
-| Via `add_memory` tool (auto-called by agent)
-
-| Microsoft
-| `await memory.save_message(role, content)`
-|===
-
-=== Search Operations
-
-[cols="1,2", options="header"]
-|===
-| Framework | Method
-
-| LangChain
-| Via `Neo4jMemoryRetriever.get_relevant_documents()`
-
-| PydanticAI
-| Via memory tools or direct client access
-
-| LlamaIndex
-| `memory.get(input=query)` with semantic search
-
-| CrewAI
-| `memory.recall(query, n=5)`
-
-| OpenAI Agents
-| `await memory.search(query)`
-
-| Strands
-| Via `search_context` and `get_entity_graph` tools
-
-| Microsoft
-| `await memory.search_memory(query)`
-|===
-
-== Performance Considerations
-
-=== Async vs Sync
-
-[cols="1,2,2", options="header"]
-|===
-| Framework | API Style | Notes
-
-| LangChain
-| Sync (async under hood)
-| Uses ThreadPoolExecutor for async bridging
-
-| PydanticAI
-| Async native
-| Best performance for async applications
-
-| LlamaIndex
-| Sync (async under hood)
-| Uses ThreadPoolExecutor for async bridging
-
-| CrewAI
-| Sync (async under hood)
-| Uses ThreadPoolExecutor for async bridging
-
-| OpenAI Agents
-| Async native
-| Best performance for async applications
-
-| Strands
-| Sync (async internal)
-| Tools are sync; async MemoryClient runs in thread pool
-
-| Microsoft
-| Async native
-| ContextProvider hooks and tools are async
-|===
-
-=== Embedding Generation
-
-All integrations support configurable embedding generation:
-
-* `generate_embedding=True` - Enable for semantic search
-* `generate_embedding=False` - Disable for faster writes
-
-=== Entity Extraction
-
-All integrations support configurable entity extraction:
-
-* `extract_entities=True` - Extract entities from messages
-* `extract_entities=False` - Disable for faster processing
-
-== Migration Guide
-
-=== From Custom Memory to Neo4j Agent Memory
-
-1. Install the integration for your framework
-2. Replace your memory class with the Neo4j-backed version
-3. Update configuration to point to Neo4j
-4. Migrate existing data if needed
-
-=== Between Frameworks
-
-The underlying Neo4j data model is the same across all integrations. To switch frameworks:
-
-1. Install the new framework integration
-2. Use the same Neo4j database
-3. Update your code to use the new integration API
-4. Existing data (messages, entities, traces) will be available
-
-== Best Practices
-
-=== Choose Based on Existing Stack
-
-If you already use a framework, choose that integration:
-
-* LangChain project → LangChain integration
-* LlamaIndex project → LlamaIndex integration
-* CrewAI project → CrewAI integration
-* OpenAI-native → OpenAI Agents integration
-* AWS/Strands project → Strands integration
-* Azure/Microsoft project → Microsoft Agent Framework integration
-
-=== For New Projects
-
-Consider PydanticAI or OpenAI Agents for new projects:
-
-* Modern async-native design
-* Built-in trace recording
-* Type-safe tool creation
-* Better IDE support
-
-=== For RAG Applications
-
-LlamaIndex integration works best with document-based RAG:
-
-* Native TextNode support
-* Combines document and graph retrieval
-* Works with LlamaIndex indices and query engines
-
-=== For AWS Projects
-
-Strands Agents integration is built for the AWS ecosystem:
-
-* Native Amazon Bedrock embedding support
-* Pre-built tools for context graph operations
-* Works with the AWS Strands Agents SDK
-* Combines with HybridMemoryProvider for AgentCore Memory
-
-=== For Multi-Agent Systems
-
-CrewAI integration is designed for multi-agent collaboration:
-
-* Shared memory across agents
-* Agent-specific context generation
-* Cross-task knowledge persistence
-
-== Troubleshooting
-
-=== Import Errors
-
-Each integration requires its framework to be installed:
-
-[source,bash]
-----
-# If you get "ImportError: No module named 'langchain_core'"
-pip install langchain-core
-
-# If you get "ImportError: No module named 'llama_index'"
-pip install llama-index-core
-
-# If you get "ImportError: No module named 'pydantic_ai'"
-pip install pydantic-ai
-
-# If you get "ImportError: No module named 'crewai'"
-pip install crewai
-
-# If you get "ImportError: No module named 'openai'"
-pip install openai
-
-# If you get "ImportError: No module named 'strands'"
-pip install strands-agents
-
-# If you get "ImportError: No module named 'agent_framework'"
-pip install agent-framework>=1.0.0b260212
-----
-
-=== Async/Sync Issues
-
-If you encounter event loop issues:
-
-* LangChain, LlamaIndex, CrewAI: Use sync methods directly
-* PydanticAI, OpenAI Agents, Microsoft: Use `asyncio.run()` or async context
-
-=== Empty Results
-
-If searches return empty:
-
-1. Verify embeddings are generated
-2. Check data exists in Neo4j Browser
-3. Try lowering similarity thresholds
-
-== Summary
-
-| Use Case | Recommended Framework |
-|----------|----------------------|
-| Existing LangChain app | LangChain |
-| New project | PydanticAI or OpenAI Agents |
-| RAG with documents | LlamaIndex |
-| Multi-agent systems | CrewAI |
-| OpenAI function calling | OpenAI Agents |
-| AWS / Bedrock ecosystem | Strands |
-| Azure / Microsoft ecosystem | Microsoft Agent Framework |
-| GDS graph algorithms | Microsoft Agent Framework |
-| Maximum flexibility | Direct MemoryClient |
+* xref:how-to/integrations/index.adoc[Python integration guides]
+* xref:how-to/typescript/integrations-overview.adoc[TypeScript integrations]
+* xref:reference/backend-capabilities.adoc[Backend capabilities]
+* xref:explanation/memory-types.adoc[The three memory types]

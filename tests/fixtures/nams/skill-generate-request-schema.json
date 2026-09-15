@@ -1,0 +1,28 @@
+{
+  "source": "https://memory.neo4jlabs.com/openapi.json",
+  "observed": "2026-09-13",
+  "definition": "handlers.generateSkillRequest",
+  "schema": {
+    "properties": {
+      "batchId": {
+        "description": "BatchID (ADR-0014) groups the N runs a \"Create all\" from a scan enqueues so\nthe activity list can render their per-run outcomes under the parent scan.",
+        "type": "string"
+      },
+      "nameHint": {
+        "type": "string"
+      },
+      "procedureFormat": {
+        "description": "Optional per-run override for the graph-vs-prose eval A/B: \"graph\"|\"prose\".",
+        "type": "string"
+      },
+      "scope": {
+        "$ref": "#/definitions/handlers.skillScope"
+      },
+      "skillId": {
+        "description": "re-distill target (new version)",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  }
+}

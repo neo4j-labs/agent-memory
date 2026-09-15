@@ -21,7 +21,7 @@ An intelligent compliance assistant powered by **Google ADK** (Agent Development
 
 ## Overview
 
-This example application showcases the Google Cloud-Neo4j integration through a production-ready architecture for financial services compliance. It demonstrates how AI agents can leverage graph-based memory for explainable, auditable decision-making.
+This example application showcases the Google Cloud-Neo4j integration through a example architecture for financial services compliance. It demonstrates how AI agents can use graph memory for explainable, auditable decision-making.
 
 ### Key Features
 
@@ -61,9 +61,9 @@ Before you begin, ensure you have the following installed:
 
 - **Python 3.11+** - [Download Python](https://www.python.org/downloads/)
 - **uv** - Fast Python package manager: `curl -LsSf https://astral.sh/uv/install.sh | sh`
-- **Node.js 18+** - [Download Node.js](https://nodejs.org/)
+- **Node.js 22.13+ on the 22 release line, or Node.js 24** for the frontend development toolchain - [Download Node.js](https://nodejs.org/)
 - **Google Cloud CLI** - [Install gcloud](https://cloud.google.com/sdk/docs/install)
-- **Docker Desktop** (optional, only if running Neo4j locally via Docker) - [Download Docker](https://www.docker.com/products/docker-desktop/)
+- **Neo4j Aura account** and a dedicated empty AuraDB instance — see Step 2
 
 ---
 
@@ -116,45 +116,11 @@ You should see a list of available models. If you get a permission error, ensure
 
 ---
 
-### Step 2: Set Up Neo4j
+### Step 2: Set Up Neo4j Aura
 
-You have two options: **Neo4j Aura** (cloud, recommended) or **Local Neo4j** (Docker).
+Set up a dedicated empty AuraDB instance using [the shared Aura guide](../../AURA_SETUP.md), including its credential exports and connection check. Use the generated `neo4j+s://` URI. The starter data is synthetic; confirm capacity and any additional feature requirements before expanding it.
 
-#### Option A: Neo4j Aura (Recommended for Production)
-
-1. Go to [Neo4j Aura Console](https://console.neo4j.io/)
-2. Click **Create Instance** → Select **Free** tier
-3. Choose a cloud provider and region (ideally close to your Google Cloud region)
-4. Wait for the instance to be created (~2 minutes)
-5. **Save the password** shown - you won't see it again!
-6. Copy the **Connection URI** (looks like `neo4j+s://xxxxxxxx.databases.neo4j.io`)
-
-
-
-#### Option B: Local Neo4j with Docker
-
-For local development and testing:
-
-```bash
-# Start Neo4j with Docker (same image and password as docker-compose.yml)
-docker run -d \
-  --name neo4j \
-  -p 7474:7474 -p 7687:7687 \
-  -e NEO4J_AUTH=neo4j/password \
-  -e NEO4J_PLUGINS='["apoc"]' \
-  neo4j:5.26-community
-```
-
-Local connection details:
-- **URI**: `bolt://localhost:7687`
-- **Username**: `neo4j`
-- **Password**: `password`
-
-Or bring up Neo4j, the backend and the frontend together with
-`docker compose up -d` (see [`docker-compose.yml`](docker-compose.yml)).
-
-Access Neo4j Browser at http://localhost:7474 to verify it's running.
-
+This application reads `NEO4J_USER` for the username. In the private configuration below, set it to the same value as `NEO4J_USERNAME` from the Aura setup. Replace all template connection values with the credentials for this instance. Keep the backend and frontend running locally against Aura.
 
 ---
 
@@ -199,10 +165,7 @@ NEO4J_URI=neo4j+s://xxxxxxxx.databases.neo4j.io
 NEO4J_USER=neo4j
 NEO4J_PASSWORD=your-aura-password
 
-# Neo4j — local (docker-compose / docker run above):
-# NEO4J_URI=bolt://localhost:7687
-# NEO4J_USER=neo4j
-# NEO4J_PASSWORD=password
+NEO4J_DATABASE=neo4j
 
 # Application Settings
 LOG_LEVEL=INFO
@@ -279,9 +242,9 @@ INFO:__main__:Done!
 ```
 
 
-#### Verify Data in Neo4j Browser
+#### Verify Data in Aura Query
 
-Open Neo4j Browser and run:
+In the Aura console, open **Query**, select this example's instance, connect with its credentials, and run:
 
 ```cypher
 MATCH (n) RETURN labels(n)[0] AS type, count(*) AS count
@@ -304,7 +267,7 @@ This starts:
 - **Backend** (FastAPI) - http://localhost:8000
 - **Frontend** (Vite) - http://localhost:5173
 
-> **Note:** Ensure your Neo4j instance is already running (either Aura or local Docker) before starting the application.
+> **Note:** Confirm the dedicated Aura instance is **Running** before starting the application. `make dev` starts only the local backend and frontend; their configured database is Aura.
 
 #### 6.2 Or Start Services Separately
 
@@ -462,15 +425,7 @@ gcloud projects add-iam-policy-binding $PROJECT_ID \
 
 ### Neo4j connection refused
 
-For local Neo4j, ensure Docker is running:
-
-```bash
-docker ps | grep neo4j
-# If not running:
-docker start neo4j
-```
-
-For Aura, verify your URI includes `neo4j+s://` (not `bolt://`).
+In the Aura console, confirm the intended instance is **Running** and its URI uses `neo4j+s://`. Select it in Aura **Query** and run `RETURN 1 AS connected`; expect `1`. Check both the app-root `.env` and the optional `backend/.env` override for stale connection settings.
 
 ### Frontend can't connect to backend
 
@@ -501,7 +456,7 @@ If it says `extractor=NoOpExtractor` (or warns that extraction is disabled),
 no Gemini credential was found — set `GOOGLE_API_KEY`, or
 `GOOGLE_GENAI_USE_VERTEXAI=true` together with `GOOGLE_CLOUD_PROJECT`.
 
-### `docker compose up --build` or `make build` fails on `neo4j-agent-memory`
+### Application image build fails on `neo4j-agent-memory`
 
 The image installs from `backend/requirements-docker.txt`, not from
 `pyproject.toml`, because the manifest points the library at an editable path
@@ -725,7 +680,7 @@ Full API documentation available at http://localhost:8000/docs when running loca
 |----------|-------------|----------|
 | `NEO4J_URI` | Neo4j connection URI | Yes |
 | `NEO4J_USER` | Neo4j username | Yes (default: `neo4j`) |
-| `NEO4J_PASSWORD` | Neo4j password | **Yes** — the only hard requirement |
+| `NEO4J_PASSWORD` | Generated Aura password | **Yes** — provide the matching Aura URI and username as well |
 | `NEO4J_DATABASE` | Neo4j database name | No (default: `neo4j`) |
 | `GOOGLE_API_KEY` | Gemini key for the Google AI Studio path ([get one](https://aistudio.google.com/apikey)) | One of this or the Vertex path |
 | `GOOGLE_CLOUD_PROJECT` | GCP project ID. Required for Vertex AI embeddings either way | For embeddings |
@@ -763,5 +718,7 @@ This example is part of the neo4j-agent-memory project and is licensed under the
 
 ---
 
-_Verified against `neo4j-agent-memory` 0.6.0-dev (PyPI floor `>=0.5.0,<0.7`), google-adk 2.9.0, google-genai 2.23.0, google-cloud-aiplatform 2.1.0, FastAPI 0.141.1, neo4j 6.3.0 on Python 3.12 — 2026-09-10._
-_Checked: `uv sync`, `uv run ruff check src/ tests/`, `uv run pytest` (42 offline tests), `docker build ./backend`. A full end-to-end investigation additionally needs Gemini credentials and a GCP project with the Vertex AI API enabled._
+**Historical verification report — 2026-09-10.** The following records a prior checkout/test report. Its development-version labels, passing counts, and release-availability statements are historical, not evidence of current package compatibility. See the [current source and artifact evidence](../../../DOCUMENTATION_REMEDIATION_STATUS.md) before selecting an SDK artifact.
+
+> _Verified against `neo4j-agent-memory` 0.6.0-dev (PyPI floor `>=0.5.0,<0.7`), google-adk 2.9.0, google-genai 2.23.0, google-cloud-aiplatform 2.1.0, FastAPI 0.141.1, neo4j 6.3.0 on Python 3.12 — 2026-09-10._
+> _Checked: `uv sync`, `uv run ruff check src/ tests/`, `uv run pytest` (42 offline tests), `docker build ./backend`. A full end-to-end investigation additionally needs Gemini credentials and a GCP project with the Vertex AI API enabled._

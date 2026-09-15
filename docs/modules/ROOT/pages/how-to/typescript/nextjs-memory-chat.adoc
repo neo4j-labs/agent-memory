@@ -116,9 +116,13 @@ export async function POST(request: Request) {
 }
 ----
 
-Both sides of the turn are persisted by the middleware — the user's message in
+The middleware attempts both writes — the user's message in
 `transformParams`, the assistant's in `wrapStream` once the stream finishes. You
-write no `addMessage` call.
+write no `addMessage` call in this minimal route. The assistant write is
+fire-and-forget and exposes no completion promise. Returning/draining the stream
+does not prove persistence before a serverless runtime stops. For a route that
+must coordinate storage with its lifecycle, use the
+xref:how-to/typescript/edge-runtime.adoc[application-owned write pattern].
 
 On the client, `useChat` with `DefaultChatTransport` sends the conversation id in
 the request body:
@@ -203,7 +207,10 @@ const settled = await client.longTerm.waitForExtraction({
 ----
 
 It returns `false` on timeout rather than throwing, so a quiet turn that produced
-no new entities degrades to "nothing new" instead of an error. Order the rail's
+no new entities degrades to "nothing new" instead of an error. Validation and
+transport errors still propagate. A new workspace entity can also come from
+another conversation: this predicate is a UI refresh hint, not extraction
+provenance for this turn. Order the rail's
 refresh as *context → wait for extraction → refetch graph*, and surface the middle
 step as a badge so the reader can see the window open and close.
 
@@ -269,6 +276,6 @@ xref:how-to/typescript/edge-runtime.adoc[How to: deploy to edge runtimes].
 
 == Compatibility
 
-Verified against `@neo4j-labs/agent-memory` 0.6.0-dev (in-tree), `next` 16.3.4,
+Current-source example dependency declarations (not a release or live-service verification): `next` 16.3.4,
 `react` 19.3.0, `ai` 7.0.97, `@ai-sdk/openai` 4.0.65, `@ai-sdk/react` 4.0.100,
 `@chakra-ui/react` 3.37.0, `@neo4j-nvl/react` 1.2.1, Node.js 22 — 2026-09-10.

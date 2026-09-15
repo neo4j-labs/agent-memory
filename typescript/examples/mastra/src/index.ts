@@ -10,8 +10,7 @@
  *   2. The thread is a real NAMS conversation: read the title back, ask for
  *      three-tier context, and run a semantic search over its own messages.
  *   3. Cross-thread recall. A second thread for the *same* `resourceId` recalls
- *      a preference stored during the first one — the thing a thread-scoped
- *      store cannot do.
+ *      messages explicitly selected from the first thread by application code.
  *
  * `Neo4jMastraMemory` is a thin thread-and-message-history adapter, **not** a
  * Mastra storage adapter: it is never passed to `new Agent({ memory })`. See
@@ -26,14 +25,14 @@ import type { MastraModelConfig } from "@mastra/core/llm";
 import { MemoryClient } from "@neo4j-labs/agent-memory";
 import { Neo4jMastraMemory } from "@neo4j-labs/agent-memory/integrations/mastra";
 import { pathToFileURL } from "node:url";
-import { preferenceReminder, toMastraMessages } from "./nams-threads.js";
+import { toMastraMessages } from "./nams-threads.js";
 
 const INSTRUCTIONS =
   "You help users plan trips. Keep answers to two sentences and refer back to " +
   "what the user already told you instead of asking again.";
 
 const FIRST_THREAD_TURNS = [
-  "I'm planning a 7-day trip to Lisbon.",
+  "I'm planning a 7-day trip to Lisbon. I prefer food and history trips.",
   "Given what I told you, what should I book first?",
 ];
 
@@ -63,8 +62,8 @@ export interface RunResult {
   storedRoles: string[];
   /** Messages the semantic search found inside the first thread. */
   searchHits: number;
-  /** Preferences recalled in the second thread, written during the first. */
-  recalledPreferences: string[];
+  /** Prior-thread messages explicitly selected by the application. */
+  recalledMessages: string[];
   /** Threads NAMS lists for this resource (expects both). */
   threadsForResource: number;
   deleted: boolean;
@@ -150,12 +149,6 @@ export async function main(options: RunOptions = {}): Promise<RunResult> {
       answers.push(await turn(agent, memory, thread.id, text, log));
     }
 
-    // A preference is resource-scoped, not thread-scoped — this is what the
-    // second thread will recall below.
-    await client.longTerm.addPreference("travel", "Prefers food and history trips", {
-      context: "Stated while planning a 7-day Lisbon trip",
-    });
-
     // --- Act 2: the thread is a real NAMS conversation ----------------------
     const stored = await memory.getMessages(thread.id);
     log(`\nNAMS holds ${stored.length} messages for this thread:`);
@@ -186,15 +179,10 @@ export async function main(options: RunOptions = {}): Promise<RunResult> {
     });
     log(`\nsecond thread created (same resource, distinct id: ${secondThread.id !== thread.id})`);
 
-    const recalled = await client.longTerm.searchPreferences("trip style", { limit: 3 });
-    log(`Preferences recalled in the new thread: ${recalled.length}`);
-    for (const preference of recalled) {
-      log(`  [${preference.category}] ${preference.preference}`);
-    }
-
-    // The new thread starts empty, so everything the agent can say about the
-    // user's taste came from resource-scoped long-term memory.
-    const primed = recalled.map((p) => preferenceReminder(p.category, p.preference));
+    // Explicit source selection: the same resourceId alone does not retrieve context.
+    const recalled = await memory.getMessages(thread.id, { limit: 20 });
+    log(`Prior-thread messages explicitly selected: ${recalled.length}`);
+    const primed = toMastraMessages(recalled);
     log(`\nuser> ${SECOND_THREAD_TURN}`);
     const followUp = await agent.generate([
       ...primed,
@@ -221,7 +209,8 @@ export async function main(options: RunOptions = {}): Promise<RunResult> {
       await memory.deleteThread(secondThread.id);
       log("\nCLEANUP=1 — both threads deleted");
     } else {
-      log("\nRe-run with CLEANUP=1 to delete both threads on the way out.");
+      log(`\nKeep thread ids ${thread.id} and ${secondThread.id} for inspection or deletion.`);
+      log("CLEANUP=1 deletes only the threads created during that run.");
     }
 
     return {
@@ -231,7 +220,7 @@ export async function main(options: RunOptions = {}): Promise<RunResult> {
       answers,
       storedRoles: stored.map((m) => m.role),
       searchHits: hits.length,
-      recalledPreferences: recalled.map((p) => p.preference),
+      recalledMessages: recalled.map((message) => message.content),
       threadsForResource: threads.length,
       deleted: cleanup,
     };

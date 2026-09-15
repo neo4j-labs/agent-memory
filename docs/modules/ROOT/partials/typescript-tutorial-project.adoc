@@ -1,0 +1,34 @@
+include::partial$typescript-tutorial-checkout.adoc[]
+
+Enter the shared lesson project. On its first use, install its locked
+dependencies; subsequent lessons reuse them. Create the tutorial environment
+file only if it does not already exist:
+
+[source,bash]
+----
+cd "$AGENT_MEMORY_TUTORIAL_ROOT/typescript/examples/vercel-ai"
+if [ ! -d node_modules ]; then npm ci; fi
+if [ ! -e .env ]; then
+  (umask 077; set -C; cat .env.tutorial.example > .env)
+fi
+chmod 600 .env
+npm run lint
+----
+
+Expected: typechecking finishes without errors. It does not authenticate or
+write to NAMS. Edit the private `.env` with the keys required by this lesson;
+keep it out of version control. An existing `.env` is preserved: add missing
+tutorial settings without replacing its other values.
+For the two model lessons, set `OPENAI_MODEL=gpt-4o-mini` and supply
+`OPENAI_API_KEY`; an existing demo configuration may select a different model.
+
+The tutorial template uses `gpt-4o-mini` for model lessons. `DEMO_USER_ID`,
+newest-conversation reuse and the `gpt-5-mini` default in `.env.example` belong
+to the separate `npm start` demo. These lessons create or explicitly resume
+their own conversations instead.
+
+All remaining commands run in `typescript/examples/vercel-ai/`.
+`--env-file-if-exists=.env` loads that file; exported shell variables take
+precedence, so keep them consistent with the selected workspace. The project
+sets ESM and supplies the compiler configuration; no global TypeScript install
+is needed.

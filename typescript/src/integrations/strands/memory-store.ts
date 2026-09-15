@@ -95,6 +95,7 @@ export class Neo4jMemoryStore implements MemoryStore {
   readonly description: string;
   readonly maxSearchResults: number | undefined;
   readonly writable: boolean;
+  /** Strands framework extraction setting; does not configure the NAMS server pipeline. */
   readonly extraction: boolean | ExtractionConfig;
 
   readonly userId: string | undefined;

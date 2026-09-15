@@ -1,467 +1,313 @@
-= Environment Variables Reference
+= Environment variables reference
 :page-product: agent-memory
 :page-pagination:
 :toclevels: 2
 
-Complete reference for all environment variables supported by neo4j-agent-memory.
+Environment inputs recognized by Python MemorySettings and its optional integrations. All declared child fields are listed, including settings that the current MemoryClient does not automatically consume; those limits are stated explicitly.
 
-== Overview
+== Loading and precedence
 
-Environment variables use the `NAM_` prefix (Neo4j Agent Memory) and follow a nested structure with double underscores (`__`) for sub-keys.
+`NAM_GROUP__FIELD` maps to `settings.group.field`. Constructor values override process environment, then `.env`, configured file secrets, and defaults. Arrays/dictionaries use JSON. Unknown nested fields in a recognized group are validation errors. See xref:reference/configuration.adoc#precedence[Configuration sources].
 
-Example: `NAM_NEO4J__URI` maps to `settings.neo4j.uri`
+Use lowercase `true`/`false` for booleans and quote JSON lists in a shell. Do not mix a top-level provider string with nested fields for that same provider; use a constructed provider when you need its additional options.
 
-== Provider strings
-
-The MCP CLI also reads two top-level provider env vars that bypass the legacy nested structure:
-
-[cols="2,1,3", options="header"]
+[cols="2,2,4",options="header"]
 |===
-| Variable          | Type   | Description
-| `NAM_LLM`         | string | LLM provider string, e.g. `anthropic/claude-3-5-sonnet-latest`. Resolved via `from_provider`.
-| `NAM_LLM_API_KEY` | string | API key override for `NAM_LLM`.
-| `NAM_EMBEDDING`   | string | Embedding provider string, e.g. `BAAI/bge-small-en-v1.5`.
+| Variable | Default | Behavior
+| `NAM_BACKEND` | Unset | `bolt` or `nams`; explicit selection overrides auto-detection.
+| `NAM_EMBEDDING` | Implicit OpenAI config | Provider string, for example `openai/text-embedding-3-small`; resolves through from_provider.
+| `NAM_LLM` | Resolved from extraction requirements | Provider string, for example `openai/gpt-4o-mini`.
 |===
 
-These are equivalent to the matching `--llm` / `--embedding` flags on `neo4j-agent-memory mcp serve`. See xref:how-to/bring-your-own-model.adoc[Bring Your Own Model].
+== NAMS process aliases
 
-== Neo4j Connection
+These aliases are read from process environment after settings-source loading. Use the `NAM_NAMS__...` form in a dotenv file unless your application explicitly loads that file into process environment.
 
-[cols="2,1,1,3", options="header"]
+[cols="2,1,4",options="header"]
 |===
-| Variable | Type | Default | Description
-
-| `NAM_NEO4J__URI`
-| string
-| `bolt://localhost:7687`
-| Neo4j connection URI
-
-| `NAM_NEO4J__USERNAME`
-| string
-| `neo4j`
-| Authentication username
-
-| `NAM_NEO4J__PASSWORD`
-| string
-| _required_
-| Authentication password
-
-| `NAM_NEO4J__DATABASE`
-| string
-| `neo4j`
-| Database name
-
-| `NAM_NEO4J__MAX_CONNECTION_POOL_SIZE`
-| int
-| `50`
-| Connection pool size
-
-| `NAM_NEO4J__CONNECTION_TIMEOUT`
-| float
-| `30.0`
-| Connection timeout in seconds
+| Alias | Default | Behavior
+| `MEMORY_API_KEY` | Unset | Populates an unset NAMS key. A populated key selects NAMS when backend is not pinned.
+| `MEMORY_ENDPOINT` | Unset | Overrides the default NAMS endpoint if endpoint was not explicitly set.
+| `MEMORY_WORKSPACE_ID` | Unset | Populates an unset workspace ID, sent as X-Workspace-Id. Workspace access is determined by your credentials.
 |===
-
-== Embedding Configuration
-
-[cols="2,1,1,3", options="header"]
-|===
-| Variable | Type | Default | Description
-
-| `NAM_EMBEDDING__PROVIDER`
-| string
-| `openai`
-| Embedding provider (`openai`, `sentence_transformers`, `vertex_ai`, `bedrock`)
-
-| `NAM_EMBEDDING__MODEL`
-| string
-| `text-embedding-3-small`
-| Embedding model name. Unset with `PROVIDER=vertex_ai` it defaults to `gemini-embedding-001`
-
-| `NAM_EMBEDDING__API_KEY`
-| string
-| _none_
-| API key for provider
-
-| `NAM_EMBEDDING__DIMENSIONS`
-| int
-| `1536`
-| Embedding vector dimensions
-
-| `NAM_EMBEDDING__BATCH_SIZE`
-| int
-| `100`
-| Batch size for bulk operations
-
-| `NAM_EMBEDDING__DEVICE`
-| string
-| `cpu`
-| Device for local models (`cpu`, `cuda`)
-
-| `NAM_EMBEDDING__PROJECT_ID`
-| string
-| _none_
-| GCP project ID (for Vertex AI)
-
-| `NAM_EMBEDDING__LOCATION`
-| string
-| `us-central1`
-| GCP region (for Vertex AI)
-
-| `NAM_EMBEDDING__TASK_TYPE`
-| string
-| `RETRIEVAL_DOCUMENT`
-| Vertex AI task type
-
-| `NAM_EMBEDDING__OUTPUT_DIMENSIONALITY`
-| int
-| _none_ (`768` for Vertex AI)
-| Vertex AI truncation target (`gemini-embedding-001` is 3072 natively)
-
-| `NAM_EMBEDDING__AWS_REGION`
-| string
-| _none_
-| AWS region (for Bedrock)
-
-| `NAM_EMBEDDING__AWS_PROFILE`
-| string
-| _none_
-| AWS credentials profile name (for Bedrock)
-
-| `OPENAI_API_KEY`
-| string
-| _none_
-| Standard OpenAI API key (alternative to NAM_EMBEDDING__API_KEY)
-|===
-
-== AWS Configuration
-
-Standard AWS environment variables used by boto3 when using Bedrock embeddings or Strands agents.
-
-[cols="2,1,1,3", options="header"]
-|===
-| Variable | Type | Default | Description
-
-| `AWS_REGION`
-| string
-| _none_
-| Default AWS region for Bedrock API calls
-
-| `AWS_PROFILE`
-| string
-| _none_
-| AWS credentials profile name
-
-| `AWS_ACCESS_KEY_ID`
-| string
-| _none_
-| AWS access key (alternative to profile-based auth)
-
-| `AWS_SECRET_ACCESS_KEY`
-| string
-| _none_
-| AWS secret key (alternative to profile-based auth)
-|===
-
-== Extraction Configuration
-
-[cols="2,1,1,3", options="header"]
-|===
-| Variable | Type | Default | Description
-
-| `NAM_EXTRACTION__ENABLE_SPACY`
-| bool
-| `true`
-| Enable spaCy extractor
-
-| `NAM_EXTRACTION__ENABLE_GLINER`
-| bool
-| `true`
-| Enable GLiNER extractor
-
-| `NAM_EXTRACTION__ENABLE_LLM_FALLBACK`
-| bool
-| `false`
-| Enable LLM extractor as fallback
-
-| `NAM_EXTRACTION__GLINER_MODEL`
-| string
-| `gliner-community/gliner_medium-v2.5`
-| GLiNER model name
-
-| `NAM_EXTRACTION__GLINER_SCHEMA`
-| string
-| `poleo`
-| Domain schema for GLiNER
-
-| `NAM_EXTRACTION__GLINER_THRESHOLD`
-| float
-| `0.5`
-| Confidence threshold (0.0-1.0)
-
-| `NAM_EXTRACTION__SPACY_MODEL`
-| string
-| `en_core_web_sm`
-| spaCy model name
-
-| `NAM_EXTRACTION__LLM_MODEL`
-| string
-| `gpt-4o-mini`
-| LLM model for extraction
-
-| `NAM_EXTRACTION__MERGE_STRATEGY`
-| string
-| `confidence`
-| Merge strategy for multi-stage extraction
-|===
-
-== Enrichment Configuration
-
-[cols="2,1,1,3", options="header"]
-|===
-| Variable | Type | Default | Description
-
-| `NAM_ENRICHMENT__ENABLED`
-| bool
-| `false`
-| Enable background enrichment
-
-| `NAM_ENRICHMENT__PROVIDERS`
-| JSON array
-| `["wikimedia"]`
-| List of enrichment providers
-
-| `NAM_ENRICHMENT__DIFFBOT_API_KEY`
-| string
-| _none_
-| Diffbot API key
-
-| `NAM_ENRICHMENT__CACHE_RESULTS`
-| bool
-| `true`
-| Cache enrichment results
-
-| `NAM_ENRICHMENT__BACKGROUND_ENABLED`
-| bool
-| `true`
-| Process enrichment asynchronously
-
-| `NAM_ENRICHMENT__ENTITY_TYPES`
-| JSON array
-| `["PERSON", "ORGANIZATION", "LOCATION", "EVENT"]`
-| Entity types to enrich
-
-| `NAM_ENRICHMENT__MIN_CONFIDENCE`
-| float
-| `0.7`
-| Minimum confidence to trigger enrichment
-|===
-
-== Geocoding Configuration
-
-[cols="2,1,1,3", options="header"]
-|===
-| Variable | Type | Default | Description
-
-| `NAM_GEOCODING__ENABLED`
-| bool
-| `false`
-| Enable location geocoding
-
-| `NAM_GEOCODING__PROVIDER`
-| string
-| `nominatim`
-| Geocoding provider (`nominatim`, `google`)
-
-| `GOOGLE_GEOCODING_API_KEY`
-| string
-| _none_
-| Google Geocoding API key
-|===
-
-== Resolution Configuration
-
-[cols="2,1,1,3", options="header"]
-|===
-| Variable | Type | Default | Description
-
-| `NAM_RESOLUTION__EMBEDDING_THRESHOLD`
-| float
-| `0.85`
-| Embedding similarity threshold
-
-| `NAM_RESOLUTION__FUZZY_THRESHOLD`
-| float
-| `0.9`
-| Fuzzy string matching threshold
-
-| `NAM_RESOLUTION__MATCH_SAME_TYPE_ONLY`
-| bool
-| `true`
-| Only match entities of same type
-|===
-
-== Deduplication Configuration
-
-[cols="2,1,1,3", options="header"]
-|===
-| Variable | Type | Default | Description
-
-| `NAM_DEDUPLICATION__ENABLED`
-| bool
-| `true`
-| Enable entity deduplication
-
-| `NAM_DEDUPLICATION__AUTO_MERGE_THRESHOLD`
-| float
-| `0.95`
-| Auto-merge if similarity >= threshold
-
-| `NAM_DEDUPLICATION__FLAG_THRESHOLD`
-| float
-| `0.85`
-| Flag for review if >= threshold
-
-| `NAM_DEDUPLICATION__USE_FUZZY_MATCHING`
-| bool
-| `true`
-| Use fuzzy string matching
-
-| `NAM_DEDUPLICATION__MAX_CANDIDATES`
-| int
-| `10`
-| Maximum candidates to check
-|===
-
-== Observability
-
-[cols="2,1,1,3", options="header"]
-|===
-| Variable | Type | Default | Description
-
-| `OPIK_API_KEY`
-| string
-| _none_
-| Opik API key for LLM observability
-
-| `OTEL_EXPORTER_OTLP_ENDPOINT`
-| string
-| _none_
-| OpenTelemetry OTLP endpoint
-|===
-
-== Testing
-
-[cols="2,1,1,3", options="header"]
-|===
-| Variable | Type | Default | Description
-
-| `RUN_INTEGRATION_TESTS`
-| bool
-| `0`
-| Enable integration tests
-
-| `SKIP_INTEGRATION_TESTS`
-| bool
-| `0`
-| Skip integration tests
-
-| `AUTO_START_DOCKER`
-| bool
-| `true`
-| Auto-start Docker Neo4j for tests
-
-| `AUTO_STOP_DOCKER`
-| bool
-| `0`
-| Stop Docker after tests
-|===
-
-== Example Configuration
 
 [source,bash]
 ----
-# Neo4j connection
-export NAM_NEO4J__URI=bolt://localhost:7687
-export NAM_NEO4J__USERNAME=neo4j
-export NAM_NEO4J__PASSWORD=my-secure-password
-
-# Embedding (OpenAI)
-export OPENAI_API_KEY=sk-...
-
-# Extraction pipeline
-export NAM_EXTRACTION__ENABLE_SPACY=true
-export NAM_EXTRACTION__ENABLE_GLINER=true
-export NAM_EXTRACTION__GLINER_SCHEMA=podcast
-
-# Background enrichment
-export NAM_ENRICHMENT__ENABLED=true
-export NAM_ENRICHMENT__PROVIDERS='["wikimedia"]'
-
-# Geocoding
-export NAM_GEOCODING__ENABLED=true
-export NAM_GEOCODING__PROVIDER=nominatim
-----
-
-== NAMS
-
-The hosted-backend selection variables.
-
-[cols="1,2,1",options="header"]
-|===
-| Variable | Purpose | Default
-
-| `MEMORY_API_KEY`
-| NAMS API key. When set and `NAM_BACKEND` is unspecified, the backend
-defaults to NAMS. Falls back to bolt when unset.
-| _unset_
-
-| `MEMORY_ENDPOINT`
-| NAMS endpoint base URL. REST mode when the URL contains `/v\d+`.
-| `+https://memory.neo4jlabs.com/v1+`
-
-| `MEMORY_WORKSPACE_ID`
-| NAMS workspace id. Lifted into `NamsConfig.workspace_id` and sent as the
-`X-Workspace-Id` header on every request. Required by header-scoped
-deployments (e.g. staging); harmless on production (which encodes the
-workspace in the API key).
-| _unset_
-
-| `NAM_BACKEND`
-| Force the backend: `bolt` or `nams`. Overrides the
-`MEMORY_API_KEY`-based default.
-| _unset_ (auto-resolved)
-
-| `NAM_NAMS__TIMEOUT`
-| HTTP request timeout in seconds.
-| `30.0`
-
-| `NAM_NAMS__MAX_RETRIES`
-| Retry budget for 429 / 5xx / network errors.
-| `3`
-
-| `NAM_NAMS__VALIDATE_ON_CONNECT`
-| If `true`, `connect()` makes a fail-fast authenticated probe request.
-| `true`
-
-| `NAM_NAMS__TRANSPORT_MODE`
-| Force wire protocol: `auto`, `rest`, or `bridge`.
-| `auto`
-|===
-
-**Example:**
-
-[source,bash]
-----
-export MEMORY_API_KEY=nams_xxxxxxxxxxxxxxxx
-
-# Optional overrides:
-export MEMORY_ENDPOINT=https://nams.internal/v1
+export MEMORY_API_KEY=nams_example_replace_with_your_key
+export NAM_BACKEND=nams
 export NAM_NAMS__TIMEOUT=60
 ----
 
-== See Also
+== Neo4j connection
 
-* xref:reference/configuration.adoc[Configuration Reference] - Full Python configuration API
-* xref:how-to/use-nams.adoc[Use NAMS] - NAMS backend setup
-* xref:how-to/entity-extraction.adoc[Configure Entity Extraction] - Extraction pipeline setup
+
+// settings-fields: Neo4jConfig:neo4j:env
+[cols="2,2,2,1,4",options="header"]
+|===
+| Variable | Type / values | Default | Constraints | Description
+| `NAM_NEO4J__URI` | `str` | `'bolt://localhost:7687'` | — | Neo4j connection URI
+| `NAM_NEO4J__USERNAME` | `str` | `'neo4j'` | — | Neo4j username
+| `NAM_NEO4J__PASSWORD` | `SecretStr` | `required` | — | Neo4j password
+| `NAM_NEO4J__DATABASE` | `str` | `'neo4j'` | — | Neo4j database name
+| `NAM_NEO4J__MAX_CONNECTION_POOL_SIZE` | `int` | `50` | ge 1 | Maximum connection pool size
+| `NAM_NEO4J__CONNECTION_TIMEOUT` | `float` | `30.0` | gt 0 | Connection timeout in seconds
+| `NAM_NEO4J__MAX_TRANSACTION_RETRY_TIME` | `float` | `30.0` | gt 0 | Maximum transaction retry time in seconds
+| `NAM_NEO4J__MAX_CONNECTION_LIFETIME` | `int` | `300` | gt 0 | Maximum lifetime of a pooled connection in seconds. Connections older than this are proactively closed and replaced. Should be shorter than the server's idle timeout (e.g., Neo4j Aura).
+| `NAM_NEO4J__LIVENESS_CHECK_TIMEOUT` | `int` | `60` | gt 0 | Seconds a connection can be idle before the driver checks if it is still alive. Prevents use of stale connections.
+| `NAM_NEO4J__KEEP_ALIVE` | `bool` | `True` | — | Enable TCP keep-alive on connections to prevent idle drops.
+|===
+
+== NAMS connection
+
+
+// settings-fields: NamsConfig:nams:env
+[cols="2,2,2,1,4",options="header"]
+|===
+| Variable | Type / values | Default | Constraints | Description
+| `NAM_NAMS__ENDPOINT` | `str` | `'https://memory.neo4jlabs.com/v1'` | — | Base URL. Auto transport uses REST for a URL containing /v followed by digits; otherwise it uses the conformance bridge.
+| `NAM_NAMS__API_KEY` | `SecretStr \| None` | `None` | — | NAMS API key (format 'nams_...'). When constructed via MemorySettings, an unset value may be populated from MEMORY_API_KEY.
+| `NAM_NAMS__WORKSPACE_ID` | `str \| None` | `None` | — | Sent as X-Workspace-Id when set. Use the workspace authorized by your credentials; the workspace is the tenancy boundary.
+| `NAM_NAMS__TIMEOUT` | `float` | `30.0` | gt 0 | HTTP request timeout in seconds.
+| `NAM_NAMS__MAX_RETRIES` | `int` | `3` | ge 0 | Max retry attempts for 429 (after Retry-After), 5xx, and network errors.
+| `NAM_NAMS__RETRY_BACKOFF_SECONDS` | `float` | `0.5` | gt 0 | Base exponential backoff between retries (0.5 → 0.5, 1.0, 2.0...).
+| `NAM_NAMS__HEADERS` | `dict[str, str]` | `{}` | — | Extra HTTP headers added to every request (e.g. tracing headers).
+| `NAM_NAMS__VALIDATE_ON_CONNECT` | `bool` | `True` | — | Make an authenticated connection probe when connecting. Disabling it defers failures until the first request.
+| `NAM_NAMS__TRANSPORT_MODE` | `Literal['auto', 'rest', 'bridge']` | `'auto'` | — | Wire-protocol override. 'auto' (default) infers from endpoint shape.
+|===
+
+== Embedding configuration
+
+Legacy nested-provider settings; provider strings/instances use adapter-specific configuration.
+
+// settings-fields: EmbeddingConfig:embedding:env
+[cols="2,2,2,1,4",options="header"]
+|===
+| Variable | Type / values | Default | Constraints | Description
+| `NAM_EMBEDDING__PROVIDER` | `openai / anthropic / sentence_transformers / vertex_ai / bedrock / custom` | `'openai'` | — | Embedding provider to use
+| `NAM_EMBEDDING__MODEL` | `str` | `'text-embedding-3-small'` | — | Embedding model name
+| `NAM_EMBEDDING__DIMENSIONS` | `int` | `1536` | ge 1 | Embedding dimensions
+| `NAM_EMBEDDING__API_KEY` | `SecretStr \| None` | `None` | — | API key for embedding provider
+| `NAM_EMBEDDING__BATCH_SIZE` | `int` | `100` | ge 1 | Batch size for embeddings
+| `NAM_EMBEDDING__DEVICE` | `str` | `'cpu'` | — | Device for sentence transformers (cpu/cuda)
+| `NAM_EMBEDDING__PROJECT_ID` | `str \| None` | `None` | — | GCP project ID for Vertex AI
+| `NAM_EMBEDDING__LOCATION` | `str` | `'us-central1'` | — | GCP region for Vertex AI
+| `NAM_EMBEDDING__TASK_TYPE` | `str` | `'RETRIEVAL_DOCUMENT'` | — | Vertex AI task type (RETRIEVAL_QUERY, RETRIEVAL_DOCUMENT, etc.)
+| `NAM_EMBEDDING__OUTPUT_DIMENSIONALITY` | `int \| None` | `None` | ge 1 | Vertex AI output dimensionality. gemini-embedding-001 emits 3072 dimensions natively and can be truncated to 1536 or 768. Defaults to 768 for Vertex AI so existing vector indexes keep working; pass an explicit value to override.
+| `NAM_EMBEDDING__AWS_REGION` | `str \| None` | `None` | — | AWS region for Bedrock
+| `NAM_EMBEDDING__AWS_PROFILE` | `str \| None` | `None` | — | AWS credentials profile name
+|===
+
+== LLM configuration
+
+Legacy nested-provider settings; provider strings/instances use adapter-specific configuration.
+
+// settings-fields: LLMConfig:llm:env
+[cols="2,2,2,1,4",options="header"]
+|===
+| Variable | Type / values | Default | Constraints | Description
+| `NAM_LLM__PROVIDER` | `openai / anthropic / custom` | `'openai'` | — | LLM provider to use
+| `NAM_LLM__MODEL` | `str` | `'gpt-4o-mini'` | — | LLM model name
+| `NAM_LLM__API_KEY` | `SecretStr \| None` | `None` | — | API key for LLM provider
+| `NAM_LLM__TEMPERATURE` | `float` | `0.0` | ge 0.0, le 2.0 | LLM temperature *Not automatically applied by MemoryClient*; see integration limits.
+| `NAM_LLM__MAX_TOKENS` | `int` | `4096` | ge 1 | Maximum tokens for LLM *Not automatically applied by MemoryClient*; see integration limits.
+|===
+
+== Graph schema configuration
+
+
+// settings-fields: SchemaConfig:schema_config:env
+[cols="2,2,2,1,4",options="header"]
+|===
+| Variable | Type / values | Default | Constraints | Description
+| `NAM_SCHEMA_CONFIG__MODEL` | `poleo / legacy / custom` | `'poleo'` | — | Schema model to use *Not automatically applied by MemoryClient*; see integration limits.
+| `NAM_SCHEMA_CONFIG__ENTITY_TYPES` | `list[str] \| None` | `None` | — | Custom entity types (overrides model default when model=custom)
+| `NAM_SCHEMA_CONFIG__ENABLE_SUBTYPES` | `bool` | `True` | — | Whether to track entity subtypes *Not automatically applied by MemoryClient*; see integration limits.
+| `NAM_SCHEMA_CONFIG__STRICT_TYPES` | `bool` | `False` | — | Whether to reject unknown entity types *Not automatically applied by MemoryClient*; see integration limits.
+| `NAM_SCHEMA_CONFIG__CUSTOM_SCHEMA_PATH` | `str \| None` | `None` | — | Accepted path field; not automatically loaded by MemoryClient. Load a schema explicitly and inject an extractor. *Not automatically applied by MemoryClient*; see integration limits.
+|===
+
+== Extraction configuration
+
+
+// settings-fields: ExtractionConfig:extraction:env
+[cols="2,2,2,1,4",options="header"]
+|===
+| Variable | Type / values | Default | Constraints | Description
+| `NAM_EXTRACTION__EXTRACTOR_TYPE` | `llm / gliner / spacy / pipeline / none` | `'pipeline'` | — | Type of entity extractor
+| `NAM_EXTRACTION__ENABLE_SPACY` | `bool` | `True` | — | Enable spaCy in extraction pipeline
+| `NAM_EXTRACTION__ENABLE_GLINER` | `bool` | `True` | — | Enable GLiNER in extraction pipeline
+| `NAM_EXTRACTION__ENABLE_LLM_FALLBACK` | `bool` | `True` | — | Enable LLM as fallback in pipeline
+| `NAM_EXTRACTION__MERGE_STRATEGY` | `union / intersection / confidence / cascade` | `'confidence'` | — | Strategy for merging results from multiple extractors
+| `NAM_EXTRACTION__FALLBACK_ON_EMPTY` | `bool` | `True` | — | Continue to next stage if current stage returns no results
+| `NAM_EXTRACTION__SPACY_MODEL` | `str` | `'en_core_web_sm'` | — | spaCy model name
+| `NAM_EXTRACTION__SPACY_CONFIDENCE` | `float` | `0.85` | ge 0.0, le 1.0 | Default confidence score for spaCy extractions
+| `NAM_EXTRACTION__GLINER_MODEL` | `str` | `'gliner-community/gliner_medium-v2.5'` | — | GLiNER model name (GLiNER2 v2.5 recommended for best accuracy)
+| `NAM_EXTRACTION__GLINER_THRESHOLD` | `float` | `0.5` | ge 0.0, le 1.0 | GLiNER confidence threshold
+| `NAM_EXTRACTION__GLINER_DEVICE` | `str` | `'cpu'` | — | Device for GLiNER model (cpu/cuda/mps)
+| `NAM_EXTRACTION__GLINER_SCHEMA` | `str \| None` | `None` | — | Domain schema for GLiNER extraction (poleo, podcast, news, scientific, business, entertainment, medical, legal)
+| `NAM_EXTRACTION__LLM_MODEL` | `str` | `'gpt-4o-mini'` | — | LLM model for extraction
+| `NAM_EXTRACTION__ENTITY_TYPES` | `list[str]` | `["PERSON", "ORGANIZATION", "LOCATION", "EVENT", "OBJECT"]` | — | Entity types to extract (POLE+O by default)
+| `NAM_EXTRACTION__EXTRACT_RELATIONS` | `bool` | `True` | — | Whether to extract relations
+| `NAM_EXTRACTION__EXTRACT_PREFERENCES` | `bool` | `True` | — | Whether to extract preferences
+| `NAM_EXTRACTION__CONFIDENCE_THRESHOLD` | `float` | `0.5` | ge 0.0, le 1.0 | Minimum confidence threshold for extracted entities *Not automatically applied by MemoryClient*; see integration limits.
+|===
+
+== Resolution configuration
+
+
+// settings-fields: ResolutionConfig:resolution:env
+[cols="2,2,2,1,4",options="header"]
+|===
+| Variable | Type / values | Default | Constraints | Description
+| `NAM_RESOLUTION__STRATEGY` | `exact / fuzzy / semantic / composite / none` | `'composite'` | — | Resolution strategy
+| `NAM_RESOLUTION__EXACT_THRESHOLD` | `float` | `1.0` | ge 0.0, le 1.0 | Exact match threshold
+| `NAM_RESOLUTION__FUZZY_THRESHOLD` | `float` | `0.85` | ge 0.0, le 1.0 | Fuzzy match threshold
+| `NAM_RESOLUTION__SEMANTIC_THRESHOLD` | `float` | `0.8` | ge 0.0, le 1.0 | Semantic match threshold
+| `NAM_RESOLUTION__FUZZY_SCORER` | `str` | `'token_sort_ratio'` | — | Fuzzy matching scorer *Not automatically applied by MemoryClient*; see integration limits.
+|===
+
+== Memory behavior
+
+
+// settings-fields: MemoryConfig:memory:env
+[cols="2,2,2,1,4",options="header"]
+|===
+| Variable | Type / values | Default | Constraints | Description
+| `NAM_MEMORY__DEFAULT_CONVERSATION_LIMIT` | `int` | `50` | ge 1 | Default conversation message limit *Not automatically applied by MemoryClient*; see integration limits.
+| `NAM_MEMORY__MESSAGE_EMBEDDING_ENABLED` | `bool` | `True` | — | Enable message embeddings *Not automatically applied by MemoryClient*; see integration limits.
+| `NAM_MEMORY__PREFERENCE_CONFIDENCE_THRESHOLD` | `float` | `0.7` | ge 0.0, le 1.0 | Preference confidence threshold *Not automatically applied by MemoryClient*; see integration limits.
+| `NAM_MEMORY__FACT_DEDUPLICATION_ENABLED` | `bool` | `True` | — | Enable fact deduplication *Not automatically applied by MemoryClient*; see integration limits.
+| `NAM_MEMORY__TRACE_EMBEDDING_ENABLED` | `bool` | `True` | — | Enable reasoning trace embeddings *Not automatically applied by MemoryClient*; see integration limits.
+| `NAM_MEMORY__TOOL_STATS_ENABLED` | `bool` | `True` | — | Enable tool usage statistics *Not automatically applied by MemoryClient*; see integration limits.
+| `NAM_MEMORY__MULTI_TENANT` | `bool` | `False` | — | Require user_identifier on the guarded bolt writes; does not add read authorization or scope semantic search.
+| `NAM_MEMORY__WRITE_MODE` | `Literal['sync', 'buffered']` | `'sync'` | — | How fire-and-forget writes via `client.buffered.submit(...)` are persisted. `'sync'` (default): each submit awaits the underlying execute_write — useful for tests and small loads. `'buffered'`: submits enqueue and a background task drains to Neo4j; callers use `client.flush()` / `client.wait_for_pending()` at shutdown.
+| `NAM_MEMORY__MAX_PENDING` | `int` | `200` | ge 1 | Maximum number of buffered writes that can be in flight. When the queue is full, `client.buffered.submit(...)` blocks until a worker drains an item.
+| `NAM_MEMORY__CONVERSATION_TTL_DAYS` | `int \| None` | `None` | ge 1 | Available to application code as a TTL value; pass it explicitly to archive_expired_conversations(older_than_days=...). *Not automatically applied by MemoryClient*; see integration limits.
+| `NAM_MEMORY__AUDIT_READ` | `bool` | `False` | — | Available to application code as an audit preference; call consolidation.audit_reads(...) explicitly. *Not automatically applied by MemoryClient*; see integration limits.
+|===
+
+== Search configuration
+
+
+// settings-fields: SearchConfig:search:env
+[cols="2,2,2,1,4",options="header"]
+|===
+| Variable | Type / values | Default | Constraints | Description
+| `NAM_SEARCH__DEFAULT_LIMIT` | `int` | `10` | ge 1 | Default search limit *Not automatically applied by MemoryClient*; see integration limits.
+| `NAM_SEARCH__DEFAULT_THRESHOLD` | `float` | `0.7` | ge 0.0, le 1.0 | Default similarity threshold *Not automatically applied by MemoryClient*; see integration limits.
+| `NAM_SEARCH__HYBRID_SEARCH_ENABLED` | `bool` | `True` | — | Enable hybrid search *Not automatically applied by MemoryClient*; see integration limits.
+| `NAM_SEARCH__GRAPH_DEPTH` | `int` | `2` | ge 1 | Graph traversal depth for search *Not automatically applied by MemoryClient*; see integration limits.
+|===
+
+== Geocoding configuration
+
+
+// settings-fields: GeocodingConfig:geocoding:env
+[cols="2,2,2,1,4",options="header"]
+|===
+| Variable | Type / values | Default | Constraints | Description
+| `NAM_GEOCODING__ENABLED` | `bool` | `False` | — | Enable automatic geocoding of Location entities
+| `NAM_GEOCODING__PROVIDER` | `nominatim / google` | `'nominatim'` | — | Geocoding provider to use
+| `NAM_GEOCODING__API_KEY` | `SecretStr \| None` | `None` | — | API key for geocoding provider (required for Google)
+| `NAM_GEOCODING__CACHE_RESULTS` | `bool` | `True` | — | Cache geocoding results to avoid repeated API calls
+| `NAM_GEOCODING__RATE_LIMIT_PER_SECOND` | `float` | `1.0` | gt 0 | Client request rate limit for the configured geocoder; honor the provider service policy.
+| `NAM_GEOCODING__USER_AGENT` | `str` | `'neo4j-agent-memory'` | — | User-Agent sent by the configured geocoder.
+|===
+
+== Enrichment configuration
+
+
+// settings-fields: EnrichmentConfig:enrichment:env
+[cols="2,2,2,1,4",options="header"]
+|===
+| Variable | Type / values | Default | Constraints | Description
+| `NAM_ENRICHMENT__ENABLED` | `bool` | `False` | — | Enable automatic entity enrichment
+| `NAM_ENRICHMENT__PROVIDERS` | `list[EnrichmentProvider]` | `["wikimedia"]` | — | Enrichment providers to use (in priority order)
+| `NAM_ENRICHMENT__DIFFBOT_API_KEY` | `SecretStr \| None` | `None` | — | API key for Diffbot Knowledge Graph
+| `NAM_ENRICHMENT__WIKIMEDIA_RATE_LIMIT` | `float` | `0.5` | gt 0 | Seconds between Wikimedia API requests
+| `NAM_ENRICHMENT__DIFFBOT_RATE_LIMIT` | `float` | `0.2` | gt 0 | Seconds between Diffbot API requests
+| `NAM_ENRICHMENT__CACHE_RESULTS` | `bool` | `True` | — | Cache enrichment results to avoid repeated API calls
+| `NAM_ENRICHMENT__CACHE_TTL_HOURS` | `int` | `168` | ge 1 | Hours to cache enrichment results
+| `NAM_ENRICHMENT__BACKGROUND_ENABLED` | `bool` | `True` | — | Run enrichment in background (non-blocking)
+| `NAM_ENRICHMENT__QUEUE_MAX_SIZE` | `int` | `1000` | ge 1 | Maximum enrichment queue size
+| `NAM_ENRICHMENT__MAX_RETRIES` | `int` | `3` | ge 0 | Maximum retry attempts for failed enrichments
+| `NAM_ENRICHMENT__RETRY_DELAY_SECONDS` | `float` | `60.0` | ge 1 | Delay between retry attempts
+| `NAM_ENRICHMENT__ENTITY_TYPES` | `list[str]` | `["PERSON", "ORGANIZATION", "LOCATION", "EVENT"]` | — | Entity types to enrich (empty = all types)
+| `NAM_ENRICHMENT__MIN_CONFIDENCE` | `float` | `0.7` | ge 0.0, le 1.0 | Minimum entity confidence to trigger enrichment
+| `NAM_ENRICHMENT__LANGUAGE` | `str` | `'en'` | — | Preferred language for enrichment data
+| `NAM_ENRICHMENT__USER_AGENT` | `str` | `'neo4j-agent-memory/1.0'` | — | User-Agent for API requests
+|===
+
+anchor:integration-limits[]
+
+== Integration limits
+
+The declared field inventory above is not an assertion of runtime wiring. See xref:reference/configuration.adoc#integration-limits[Configuration integration limits] for provider, method-default, schema, TTL, and auditing behavior. The settings family is `NAM_RESOLUTION__SEMANTIC_THRESHOLD`; `NAM_RESOLUTION__EMBEDDING_THRESHOLD` and `NAM_RESOLUTION__MATCH_SAME_TYPE_ONLY` are invalid fields.
+
+There are no `NAM_DEDUPLICATION__...`, `NAM_OBSERVABILITY__...`, or `NAM_CLI__...` settings groups. Batch sizes/concurrency/chunk sizes for extraction belong to method arguments, not ExtractionConfig environment fields.
+
+== CLI and provider environment
+
+These inputs are consumed by command options or external provider adapters rather than becoming nested MemorySettings fields. Provider-specific availability depends on the installed extra.
+
+[cols="2,3",options="header"]
+|===
+| Variable | Consumer
+| `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD`, `NEO4J_DATABASE` | CLI connection options (database is an MCP serve option). The Python settings family instead uses NAM_NEO4J__... and USERNAME.
+| `MCP_USER_ID` | MCP serve `--user-id` option.
+| `NAM_LLM_API_KEY` | MCP serve LLM API-key override; not a MemorySettings field.
+| `OPENAI_API_KEY` | OpenAI adapters/embedder when no explicit key is supplied.
+| `ANTHROPIC_API_KEY` | Anthropic adapter when no explicit key is supplied.
+| `AWS_REGION`, `AWS_DEFAULT_REGION`, `AWS_PROFILE` | Bedrock region/profile selection and AWS SDK configuration.
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` | AWS SDK credential chain.
+| `GOOGLE_APPLICATION_CREDENTIALS` | Google SDK application-default credentials when using Vertex AI.
+| `NAM_GEOCODING__API_KEY` | Google geocoder key. There is no automatic GOOGLE_GEOCODING_API_KEY fallback; pass that application variable explicitly if you use it.
+| `OPIK_API_KEY` | Opik SDK credentials for the configured tracer.
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | External OpenTelemetry exporter convention. The SDK tracer requires an explicit endpoint argument to create an exporter; the variable alone does not enable export.
+|===
+
+The CLI does not automatically load `.neo4j-memory.yaml`. Review xref:reference/cli.adoc[CLI reference] for exact flags, including NAMS backend options.
+
+== Example dotenv configuration
+
+Copy the credentials from xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the Aura connection setup].
+
+This example uses the SDK's native `NAM_NEO4J__...` fields; the tutorial's helper explicitly maps its `NEO4J_*` variables to these settings. Plain `NEO4J_*` keys are not automatic `MemorySettings` aliases.
+
+[source,bash]
+----
+NAM_BACKEND=bolt
+NAM_NEO4J__URI="neo4j+s://<instance-id>.databases.neo4j.io"
+NAM_NEO4J__USERNAME=neo4j
+NAM_NEO4J__PASSWORD=replace-with-your-Aura-password
+NAM_NEO4J__DATABASE=neo4j
+NAM_EXTRACTION__EXTRACTOR_TYPE=pipeline
+NAM_EXTRACTION__ENABLE_SPACY=true
+NAM_EXTRACTION__ENABLE_GLINER=true
+NAM_EXTRACTION__ENABLE_LLM_FALLBACK=false
+NAM_EXTRACTION__GLINER_SCHEMA=podcast
+NAM_ENRICHMENT__ENABLED=false
+NAM_GEOCODING__ENABLED=false
+----
+
+== Test harness switches
+
+Test-only inputs such as `RUN_INTEGRATION_TESTS`, `SKIP_INTEGRATION_TESTS`, `AUTO_START_DOCKER`, and `AUTO_STOP_DOCKER` belong to the test harness, not the SDK configuration API. Read the relevant test fixture before relying on their parsing or defaults.
+
+== See also
+
+* xref:reference/configuration.adoc[Python configuration]
+* xref:how-to/use-nams.adoc[Use NAMS]
+* xref:reference/cli.adoc[CLI options]
+
+== Earlier section links
+
+anchor:_overview[]
+anchor:_provider_strings[]
+anchor:_aws_configuration[]
+anchor:_deduplication_configuration[]
+anchor:_observability[]
+anchor:_testing[]
+anchor:_example_configuration[]
+anchor:_nams[]
+The earlier sections have been consolidated into the current contracts. See xref:reference/environment-variables.adoc#_loading_and_precedence[loading and precedence], xref:reference/environment-variables.adoc#_nams_process_aliases[NAMS aliases], xref:reference/environment-variables.adoc#integration-limits[integration limits], and xref:reference/environment-variables.adoc#_example_dotenv_configuration[the complete dotenv example].

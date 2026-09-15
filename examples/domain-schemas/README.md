@@ -62,10 +62,7 @@ pip install "neo4j-agent-memory[gliner,sentence-transformers]"
 - **GLiREL is opt-in** and is not in any extra (last released 2025-04): `pip install glirel`. Without it `--relations` prints a skip notice instead of running.
 - Neo4j is **optional** — extraction runs with no database. Storage needs one (see below) and uses a local sentence-transformers embedder, so no API key is involved either way.
 
-```bash
-# Optional: environment for the storage step
-cp ../.env.example ../.env     # NEO4J_URI / NEO4J_USERNAME / NEO4J_PASSWORD
-```
+For the optional storage step, follow [Aura setup and cleanup](../AURA_SETUP.md) and export the connection variables. The extraction-only commands below explicitly use `--no-store` so exported credentials do not turn them into writes.
 
 ## Run
 
@@ -74,15 +71,14 @@ cp ../.env.example ../.env     # NEO4J_URI / NEO4J_USERNAME / NEO4J_PASSWORD
 uv run python examples/domain-schemas/run.py --list
 
 # Extraction only, no database
-uv run python examples/domain-schemas/run.py --schema medical
+uv run python examples/domain-schemas/run.py --schema medical --no-store
 
 # Any demo, on any schema
-uv run python examples/domain-schemas/run.py --schema news --relations
-uv run python examples/domain-schemas/run.py --schema legal --batch --streaming
+uv run python examples/domain-schemas/run.py --schema news --relations --no-store
+uv run python examples/domain-schemas/run.py --schema legal --batch --streaming --no-store
 
-# Extract and store the graph in Neo4j (make neo4j-start provides this one)
-NEO4J_URI=bolt://localhost:7687 NEO4J_PASSWORD=test-password \
-  uv run python examples/domain-schemas/run.py --schema poleo --relations --store
+# Extract and store in the dedicated Aura instance configured above
+uv run python examples/domain-schemas/run.py --schema poleo --relations --store
 
 # Tuning
 uv run python examples/domain-schemas/run.py --schema podcast --threshold 0.5 --device mps
@@ -152,7 +148,7 @@ With `--store` the run ends with a graph instead of a list:
 STORING IN NEO4J
 ======================================================================
 
-  backend: bolt (bolt://localhost:7687)
+  backend: bolt (neo4j+s://<instance-id>.databases.neo4j.io)
   Stored 7 entity nodes from 8 extracted mentions (dedup actions: {'none': 7, 'merged': 1})
   Linked all of them to the :Extractor node 'GLiNEREntityExtractor'
 
@@ -348,7 +344,7 @@ Install it and re-run. The first run downloads the model (~500 MB).
 
 ### Neo4j authentication fails
 
-The repo's Docker Neo4j (`make neo4j-start`) uses `test-password`, which is also the runner's default. Export `NEO4J_PASSWORD` for any other instance.
+Verify the generated Aura URI, username and password from [the shared setup](../AURA_SETUP.md). Confirm the instance is **Running** in the Aura console and remove stale connection values from any private `.env` file loaded by the runner.
 
 ### Low confidence scores
 
@@ -369,4 +365,6 @@ The repo's Docker Neo4j (`make neo4j-start`) uses `test-password`, which is also
 
 ---
 
-_Verified against `neo4j-agent-memory` v0.5.0 with gliner 0.2.x on 2026-09-10: all eight schemas run end to end on CPU, and `--store` was exercised against Neo4j 5.26 (GLiREL is not installed in the repo environment, so `--relations` was verified through its skip path and with a stubbed extractor in `tests/examples/test_domain_schemas.py`)._
+**Historical verification report — 2026-09-10.** The following records a prior checkout/test report. Its development-version labels, passing counts, and release-availability statements are historical, not evidence of current package compatibility. See the [current source and artifact evidence](../../DOCUMENTATION_REMEDIATION_STATUS.md) before selecting an SDK artifact.
+
+> _Verified against `neo4j-agent-memory` v0.5.0 with gliner 0.2.x on 2026-09-10: all eight schemas run end to end on CPU, and `--store` was exercised against Neo4j 5.26 (GLiREL is not installed in the repo environment, so `--relations` was verified through its skip path and with a stubbed extractor in `tests/examples/test_domain_schemas.py`)._

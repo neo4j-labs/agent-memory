@@ -1,0 +1,31 @@
+Use Git, Node.js 22 or later with npm, and a POSIX shell. The lesson uses the
+current repository checkout; it does not establish which npm release contains
+these APIs. Keep this checkout for the remaining TypeScript lessons.
+
+*For your first lesson*, clone and build the SDK:
+
+[source,bash]
+----
+git clone https://github.com/neo4j-labs/agent-memory.git
+cd agent-memory
+export AGENT_MEMORY_TUTORIAL_ROOT="$PWD"
+cd typescript
+npm ci
+npm run build
+cd "$AGENT_MEMORY_TUTORIAL_ROOT"
+----
+
+Expected: the build finishes without errors and `typescript/dist/index.js`
+exists. The examples use this built SDK; installing an example does not build it.
+
+*Continuing from another lesson*, keep your existing checkout and skip the
+clone/build block above. From any directory inside that checkout, run:
+
+[source,bash]
+----
+cd "$(git rev-parse --show-toplevel)"
+export AGENT_MEMORY_TUTORIAL_ROOT="$PWD"
+----
+
+Both entry paths finish at the repository root. If you changed the SDK source
+since the preceding lesson, rebuild it before continuing.

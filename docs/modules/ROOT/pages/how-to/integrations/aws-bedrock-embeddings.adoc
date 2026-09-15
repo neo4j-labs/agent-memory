@@ -1,277 +1,109 @@
-= Configure Amazon Bedrock Embeddings
-:description: How to use Amazon Titan embeddings with Neo4j Agent Memory
-:keywords: bedrock, titan, embeddings, aws, neo4j
+= Use Amazon Bedrock embeddings
+:page-product: agent-memory
+:page-pagination:
+:toclevels: 2
+:sectanchors:
 
-This guide shows how to configure Amazon Bedrock embeddings for semantic search in Neo4j Agent Memory.
+Generate Titan V2 vectors, check their size, and persist a message through a MemoryClient using the same embedder. The selected path uses AWS credentials from the normal SDK credential chain and an explicitly configured region.
 
-== Supported Models
+== 1. Prepare the selected environment
 
-Neo4j Agent Memory supports these Bedrock embedding models:
+Install the AWS CLI before running the identity check below.
 
-[cols="2,1,2"]
-|===
-| Model | Dimensions | Notes
+anchor:_prerequisites[]
+anchor:_authentication[]
 
-| `amazon.titan-embed-text-v2:0`
-| 1024
-| **Recommended** - Best quality/performance balance
+Use Python 3.10+ and a POSIX shell. Prepare a dedicated AuraDB instance; its existing vectors and indexes must match the selected model and dimensions. The program disables entity extraction and does not require a chat model.
+Follow xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the Aura connection setup] for a dedicated test instance, then copy its URI, username and password into the exports below.
 
-| `amazon.titan-embed-text-v1`
-| 1536
-| Legacy model, higher dimensionality
-
-| `cohere.embed-english-v3`
-| 1024
-| Optimized for English text
-
-| `cohere.embed-multilingual-v3`
-| 1024
-| Multilingual support (100+ languages)
-|===
-
-== Prerequisites
-
-* AWS account with Bedrock access
-* Model access enabled in AWS Console (Bedrock → Model access)
-* `boto3` installed: `pip install neo4j-agent-memory[bedrock]`
-
-== Basic Configuration
-
-=== Using BedrockEmbedder Directly
-
-[source,python]
-----
-from neo4j_agent_memory.embeddings import BedrockEmbedder
-
-embedder = BedrockEmbedder(
-    model="amazon.titan-embed-text-v2:0",
-    region_name="us-east-1",
-)
-
-# Generate a single embedding
-embedding = await embedder.embed("Hello, world!")
-print(f"Dimensions: {len(embedding)}")  # 1024
-
-# Check model dimensions
-print(f"Model dimensions: {embedder.dimensions}")
-----
-
-=== Using with MemoryClient
-
-[source,python]
-----
-from neo4j_agent_memory import MemoryClient, MemorySettings
-from neo4j_agent_memory.config.settings import (
-    Neo4jConfig,
-    EmbeddingConfig,
-    EmbeddingProvider,
-)
-
-settings = MemorySettings(
-    neo4j=Neo4jConfig(
-        uri="neo4j+s://xxx.databases.neo4j.io",
-        password="your-password",
-    ),
-    embedding=EmbeddingConfig(
-        provider=EmbeddingProvider.BEDROCK,
-        model="amazon.titan-embed-text-v2:0",
-        aws_region="us-east-1",
-    ),
-)
-
-async with MemoryClient(settings) as client:
-    # Embeddings are generated automatically
-    await client.short_term.add_message(
-        session_id="session-1",
-        role="user",
-        content="Hello!",
-        generate_embedding=True,
-    )
-----
-
-=== Using with Environment Variables
+include::partial$python-tutorial-setup.adoc[]
 
 [source,bash]
 ----
-export EMBEDDING_PROVIDER=bedrock
-export EMBEDDING_MODEL=amazon.titan-embed-text-v2:0
-export AWS_REGION=us-east-1
+python -m pip install 'neo4j-agent-memory[bedrock]==0.6.0'
+export AWS_REGION='us-east-1'
+export NEO4J_URI='neo4j+s://<instance-id>.databases.neo4j.io'
+export NEO4J_USERNAME='neo4j'
+export NEO4J_PASSWORD='replace-with-your-Aura-password'
+export NEO4J_DATABASE='neo4j'
+aws sts get-caller-identity
 ----
 
-[source,python]
+Configure an AWS profile, role or environment credentials before the final command. The identity must be allowed to invoke `amazon.titan-embed-text-v2:0` in the selected region; successful STS identity lookup alone does not establish model access. The chosen model emits 1024-dimensional vectors in this adapter configuration.
+
+== 2. Read the complete recipe
+
+Create the subdirectory below, then save both complete files under the displayed names. Run commands from `agent-memory-tutorials/`; Python resolves `common` from the script's `integrations/` directory.
+
+[source,bash]
 ----
-from neo4j_agent_memory import MemoryClient, MemorySettings
-
-# Settings automatically read from environment
-settings = MemorySettings.from_env()
-----
-
-== Authentication
-
-BedrockEmbedder uses the standard AWS credential chain:
-
-1. **Environment variables** (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`)
-2. **Shared credentials file** (`~/.aws/credentials`)
-3. **IAM role** (for EC2, Lambda, ECS)
-
-=== Using a Named Profile
-
-[source,python]
-----
-embedder = BedrockEmbedder(
-    model="amazon.titan-embed-text-v2:0",
-    profile_name="my-profile",
-)
+mkdir -p integrations
 ----
 
-=== Using Explicit Credentials
 
-[source,python]
-----
-embedder = BedrockEmbedder(
-    model="amazon.titan-embed-text-v2:0",
-    aws_access_key_id="AKIA...",
-    aws_secret_access_key="...",
-    region_name="us-east-1",
-)
-----
+The script imports this shared helper from the same directory. It supplies explicit database settings, closes clients through the calling context manager, and fails when expected records are absent. Task traces record the observable outcome of the call; they do not expose hidden model reasoning.
 
-== Batch Processing
-
-BedrockEmbedder supports efficient batch embedding with automatic chunking:
-
-[source,python]
-----
-texts = [
-    "First document about machine learning",
-    "Second document about databases",
-    "Third document about cloud computing",
-]
-
-# Automatically batches in groups of 25
-embeddings = await embedder.embed_batch(texts)
-print(f"Generated {len(embeddings)} embeddings")
-----
-
-[NOTE]
+.Complete `integrations/common.py`
+[%collapsible]
 ====
-Bedrock limits batch size to 25 texts per request. The embedder automatically splits larger batches and processes them sequentially.
+.Save as `integrations/common.py`
+[source,python]
+----
+include::example$integrations/common.py[]
+----
 ====
 
-== Configuration Options
-
-[cols="2,1,3"]
-|===
-| Option | Default | Description
-
-| `model`
-| `amazon.titan-embed-text-v2:0`
-| Bedrock model ID
-
-| `region_name`
-| From env/config
-| AWS region for Bedrock API
-
-| `profile_name`
-| None
-| AWS credentials profile name
-
-| `batch_size`
-| 25
-| Max texts per batch request
-|===
-
-== IAM Permissions
-
-Required IAM policy for Bedrock embedding access:
-
-[source,json]
-----
-{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Effect": "Allow",
-            "Action": [
-                "bedrock:InvokeModel"
-            ],
-            "Resource": [
-                "arn:aws:bedrock:*::foundation-model/amazon.titan-embed-*",
-                "arn:aws:bedrock:*::foundation-model/cohere.embed-*"
-            ]
-        }
-    ]
-}
-----
-
-For Lambda functions, attach this policy to the execution role.
-
-== Choosing a Model
-
-=== Titan Text V2 (Recommended)
-
-Best for most use cases:
-
-* 1024 dimensions - efficient storage in Neo4j
-* Strong semantic understanding
-* Good performance/cost balance
-
+.Complete `integrations/cloud_embeddings_recipe.py`
+[%collapsible]
+====
+.Save as `integrations/cloud_embeddings_recipe.py`
 [source,python]
 ----
-embedder = BedrockEmbedder(model="amazon.titan-embed-text-v2:0")
+include::example$integrations/cloud_embeddings_recipe.py[]
+----
+====
+
+== 3. Run and verify persistence
+
+anchor:_using_bedrockembedder_directly[]
+anchor:_using_with_memoryclient[]
+anchor:_using_a_named_profile[]
+anchor:_using_explicit_credentials[]
+anchor:_batch_processing[]
+anchor:_iam_permissions[]
+anchor:_choosing_a_model[]
+anchor:_titan_text_v2_recommended[]
+anchor:_cohere_multilingual[]
+anchor:_accessdeniedexception[]
+anchor:_validationexception[]
+anchor:_region_not_available[]
+
+[source,bash]
+----
+python integrations/cloud_embeddings_recipe.py bedrock
 ----
 
-=== Cohere Multilingual
+Expected: `Verified 2 vectors of 1024 dimensions`, then stored-message verification. An access, throttling or model-availability error must be resolved before the persistence step; do not substitute a vector of a different dimension into an existing index.
 
-Best for international content:
+== Troubleshooting and cleanup
 
-* Supports 100+ languages
-* Same 1024 dimensions as Titan V2
-* Better cross-lingual search
+anchor:_troubleshooting[]
+anchor:_slow_performance[]
 
-[source,python]
-----
-embedder = BedrockEmbedder(model="cohere.embed-multilingual-v3")
-----
+Stop when the program raises an exception; a printed model response alone does not verify persistence. Check the configured database, provider access and vector dimensions before retrying. The program prints the session or trace IDs needed for inspection and closes the client. Retained example records remain in the dedicated database; follow the Aura tutorial's cleanup procedure for that dedicated instance only when you no longer need them. Reusing a session groups records; it does not authorize a user to read them.
 
-== Troubleshooting
+== Adapt the integration
 
-=== AccessDeniedException
+anchor:_supported_models[]
+anchor:_basic_configuration[]
+anchor:_using_with_environment_variables[]
+anchor:_configuration_options[]
+anchor:_see_also[]
 
-Ensure model access is enabled:
+`BedrockEmbedder` accepts `model`, `region_name`, optional `profile_name`, `batch_size` and `normalize`. The current adapter's `embed_batch()` coordinates individual `embed()` calls in bounded groups; it is not a promise that Titan accepts a 25-document payload. Embedding execution is a remote API operation, not a CPU-bound Lambda workload by definition.
 
-1. Go to AWS Console → Bedrock → Model access
-2. Click "Manage model access"
-3. Enable the embedding models you need
-4. Wait for access to be granted (may take a few minutes)
+The adapter contains mappings for Titan V1/V2 and Cohere embedding models. Mapping a model ID is not proof that it is available in every AWS region or account. Check access for the selected model instead of relying on a static region list. Provider error codes distinguish authentication, access, throttling and invalid configuration; changing regions blindly can make the mismatch worse.
 
-=== ValidationException
+See xref:how-to/integrations/aws-strands.adoc[Use with Strands] for agent integration and xref:how-to/configure-embedding-provider.adoc[Configure embeddings] before changing an existing vector model. The recipe's shared setup accepts the explicit embedder object, so OpenAI credentials are not required here.
 
-Check your model ID format:
-
-* ✅ Correct: `amazon.titan-embed-text-v2:0`
-* ❌ Incorrect: `titan-embed-text-v2` (missing prefix)
-
-=== Region Not Available
-
-Bedrock is not available in all regions. Supported regions:
-
-* `us-east-1` (N. Virginia) - Most models
-* `us-west-2` (Oregon)
-* `eu-west-1` (Ireland)
-* `ap-northeast-1` (Tokyo)
-
-=== Slow Performance
-
-For high-volume embedding:
-
-1. Use `embed_batch()` instead of multiple `embed()` calls
-2. Consider running in the same AWS region as your Neo4j database
-3. For Lambda, increase memory allocation (embedding is CPU-bound)
-
-== See Also
-
-* xref:how-to/integrations/aws-strands.adoc[Strands Agents Integration]
-* xref:how-to/integrations/aws-hybrid-memory.adoc[Hybrid Memory Provider]
-* xref:tutorials/strands-agent-quickstart.adoc[Strands Agent Tutorial]
-* https://docs.aws.amazon.com/bedrock/latest/userguide/embeddings.html[AWS Bedrock Embeddings Documentation]
+See xref:reference/backend-capabilities.adoc[Backend capabilities and scoping] before adding hosted or multi-user behavior. Neo4j Agent Memory is a Neo4j Labs project with community support.

@@ -155,25 +155,12 @@ class TestNavigationConsistency:
             # Should have a link to this quadrant
             assert quadrant in content.lower(), f"No link to {quadrant} in index.adoc"
 
-    def test_quadrant_indexes_link_to_content(self, quadrant_dirs: dict[str, Path]):
-        """Quadrant indexes should link to their content files."""
-        for name, path in quadrant_dirs.items():
-            index = path / "index.adoc"
-            if not index.exists():
-                continue
+    def test_quadrant_indexes_link_to_content(self, docs_dir: Path):
+        """Every leaf is reachable directly or through a linked subindex."""
+        from scripts.check_docs import source_report
 
-            content = index.read_text(encoding="utf-8")
-
-            # Get other files in the quadrant
-            content_files = [f for f in path.glob("*.adoc") if f.name != "index.adoc"]
-
-            # Check that each content file is linked
-            for content_file in content_files[:5]:  # Check first 5
-                file_stem = content_file.stem
-                # Should reference this file somehow
-                if file_stem not in content and content_file.name not in content:
-                    # Allow some files to not be linked (e.g., coming soon)
-                    pass
+        errors = source_report(docs_dir)["errors"]
+        assert not errors, "\n".join(errors)
 
 
 @pytest.mark.docs
@@ -211,12 +198,7 @@ class TestImageReferences:
                             relative_source = adoc_file.name
                         missing_images.append(f"{relative_source}: {image_path}")
 
-        # Allow placeholder images (documented as coming later)
-        if missing_images:
-            # Only fail if there are non-placeholder missing images
-            real_missing = [m for m in missing_images if "placeholder" not in m.lower()]
-            if len(real_missing) > 10:
-                pytest.fail(f"Missing images: {real_missing[:10]}")
+        assert not missing_images, "Missing images:\n" + "\n".join(missing_images)
 
 
 @pytest.mark.docs
@@ -274,16 +256,13 @@ class TestOrphanedFiles:
             # Index files and main landing pages are not orphaned
             if adoc_file.name == "index.adoc":
                 continue
-            if adoc_file.name in ["product-improvements.adoc", "faq.adoc"]:
+            if ":page-role: legacy-redirect" in adoc_file.read_text():
                 continue
 
             if relative not in referenced_files:
                 orphaned.append(relative)
 
-        # Some orphaned files are okay (legacy files, etc.)
-        # But warn if there are many
-        if len(orphaned) > 15:
-            pytest.fail(f"Too many orphaned files ({len(orphaned)}). Examples: {orphaned[:5]}")
+        assert not orphaned, "Unlinked documentation pages:\n" + "\n".join(orphaned)
 
 
 @pytest.mark.docs

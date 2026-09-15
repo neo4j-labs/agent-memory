@@ -12,35 +12,49 @@ archival.
 [.lead]
 All primitives default to ``dry_run=True``: they identify candidates
 without mutating the graph. Pass ``dry_run=False`` to apply changes,
-which writes a ``:ConsolidationRun`` audit node so you can track when
+which writes a ``:ConsolidationRun`` audit node when candidates are applied so you can track when
 each job last ran.
+
+== Prerequisites
+
+* A connected Bolt client and configured `MemorySettings`; run the snippets inside an async function.
+* A representative test graph with embeddings and the relevant vector indexes.
+* A scheduler owned by your application; the library does not start periodic jobs.
+
+Do not apply `detect_superseded_preferences` to a database containing multiple
+users' preferences in the current source. Even with `user_identifier`, its
+candidate query scopes the old preference but does not enforce the same owner
+on the proposed replacement. Review candidates and use explicit, owner-checked
+superseding in xref:how-to/preferences.adoc[Manage Preferences] instead.
 
 == Goal
 
-Run periodic hygiene jobs from a cron / scheduler:
+Preview each hygiene job before scheduling mutations:
 
 [source,python]
 ----
+from neo4j_agent_memory import MemoryClient
+
 async with MemoryClient(settings) as client:
-    # 1. Find near-duplicate entities, merge those above 0.95 similarity.
+    # 1. Find near-duplicate entities above 0.95 similarity.
     report = await client.consolidation.dedupe_entities(
-        similarity_threshold=0.95, dry_run=False
+        similarity_threshold=0.95, dry_run=True
     )
-    log.info("Deduped %d entity pairs", report.actions_taken)
+    print("Candidate pairs:", report.candidate_count)
 
     # 2. Flag long traces for out-of-band summarization.
     await client.consolidation.summarize_long_traces(
-        min_steps=20, dry_run=False
+        min_steps=20, dry_run=True
     )
 
-    # 3. Fold near-duplicate preferences into supersede chains.
+    # 3. Inspect preference candidates on a single-user test graph only.
     await client.consolidation.detect_superseded_preferences(
-        dry_run=False
+        dry_run=True
     )
 
     # 4. Archive conversations older than 90 days.
     await client.consolidation.archive_expired_conversations(
-        ttl_days=90, dry_run=False
+        ttl_days=90, dry_run=True
     )
 ----
 
@@ -48,7 +62,7 @@ async with MemoryClient(settings) as client:
 
 === 1. Always dry-run first
 
-Every primitive returns a :class:`ConsolidationReport` with a
+Every primitive returns a `ConsolidationReport` with a
 ``candidates`` list. Inspect it before applying.
 
 [source,python]
@@ -72,8 +86,8 @@ print(f"Applied: {report.actions_taken}")
 
 When mutations occur, the library writes a
 ``(:ConsolidationRun {id, kind, started_at, completed_at, stats_json})``
-node. Successive runs can pick up where the last left off by querying
-the most recent run for a given kind:
+node. Inspect the most recent run for a given kind. This is an audit record, not a
+transactional checkpoint or an automatic scheduler:
 
 [source,cypher]
 ----
@@ -89,6 +103,14 @@ Each primitive skips work it has already done — for example,
 ``summarization_pending`` is not already true. Re-running on a clean
 graph is a no-op.
 
+=== 4. Verify the applied state
+
+Compare `report.actions_taken` with the candidates you reviewed. When changes
+were applied, query `report.run_id` in `ConsolidationRun` and inspect the
+resulting relationship or marker. A run with no candidates has no run ID.
+Repeat the dry run to confirm those candidates no longer appear. Each operation
+can make multiple writes; a mid-run failure is not an atomic rollback.
+
 == Primitives reference
 
 [cols="1,3"]
@@ -96,16 +118,16 @@ graph is a no-op.
 | Primitive | What it does
 
 | `dedupe_entities`
-| Find entity pairs with embedding similarity above the threshold (defaulting to 0.95) that aren't already linked via `:SAME_AS`. Mutation writes `[:SAME_AS {status: 'auto_consolidated'}]`.
+| Find entity pairs with embedding similarity above the threshold (defaulting to 0.95) that aren't already linked via `:SAME_AS`. Mutation writes `[:SAME_AS {status: 'auto_consolidated'}]`; it does not merge node properties or delete duplicate nodes.
 
 | `summarize_long_traces`
 | Find `:ReasoningTrace` nodes with `>= min_steps` steps that haven't been summarized. Mutation sets `summarization_pending = true` so an out-of-band summarizer can pick them up; the library does not summarize traces itself (that's prompt + LLM choice).
 
 | `detect_superseded_preferences`
-| Find pairs of preferences in the same category with high embedding similarity but different text — likely supersedes. Mutation calls `supersede_preference` (writes `[:SUPERSEDED_BY]` and sets `valid_until`).
+| Find pairs of preferences in the same category with high embedding similarity but different text — likely supersedes. Mutation writes `[:SUPERSEDED_BY]` and sets `valid_until`. Apply only on a verified single-user graph because replacement ownership is not enforced by this query.
 
 | `archive_expired_conversations`
-| Mark `:Conversation` nodes older than `ttl_days` as archived. Sets `archived = true` and `archived_at`; does not delete data. Pair with `MemorySettings.memory.conversation_ttl_days`.
+| Mark `:Conversation` nodes whose creation time is older than `ttl_days` as archived (falling back to update time when creation time is missing). Sets `archived = true` and `archived_at`; does not delete data. Pass `ttl_days` explicitly, for example from `MemorySettings.memory.conversation_ttl_days`; no scheduler or automatic retrieval filter is installed.
 |===
 
 == See Also

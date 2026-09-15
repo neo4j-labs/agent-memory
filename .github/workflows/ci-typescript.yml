@@ -6,11 +6,21 @@ on:
     paths:
       - 'typescript/**'
       - '.github/workflows/ci-typescript.yml'
+      - 'docs/modules/ROOT/pages/tutorials/*typescript.adoc'
+      - 'docs/modules/ROOT/partials/typescript-tutorial*.adoc'
+      - 'docs/modules/ROOT/pages/how-to/typescript/**'
+      - 'docs/modules/ROOT/pages/reference/typescript-api.adoc'
+      - 'docs/modules/ROOT/pages/sdks/typescript.adoc'
   pull_request:
     branches: [main]
     paths:
       - 'typescript/**'
       - '.github/workflows/ci-typescript.yml'
+      - 'docs/modules/ROOT/pages/tutorials/*typescript.adoc'
+      - 'docs/modules/ROOT/partials/typescript-tutorial*.adoc'
+      - 'docs/modules/ROOT/pages/how-to/typescript/**'
+      - 'docs/modules/ROOT/pages/reference/typescript-api.adoc'
+      - 'docs/modules/ROOT/pages/sdks/typescript.adoc'
 
 permissions:
   contents: read
@@ -62,15 +72,15 @@ jobs:
   # it has a build script) built against the freshly built SDK, so API drift
   # fails the PR that introduces it. Mirrored locally by `make ts-test-examples`.
   #
-  # Node 24 across the board: eve-commerce-agent declares engines.node >= 24 and
-  # the other eight declare >= 22, so one runtime covers all of them.
+  # Most examples use Node 24; maintained tutorials also exercise their Node 22 floor.
   type-check-examples:
-    name: Example (${{ matrix.example }})
+    name: Example (${{ matrix.example }}, Node ${{ matrix.node }})
     runs-on: ubuntu-latest
     needs: lint-test
     strategy:
       fail-fast: false
       matrix:
+        node: ['24']
         example:
           - cloudflare-agents-edge
           - eve-commerce-agent
@@ -81,13 +91,20 @@ jobs:
           - ontology-lifecycle
           - strands
           - vercel-ai
+        include:
+          - example: vercel-ai
+            node: '22'
+          - example: mcp
+            node: '22'
+          - example: ontology-lifecycle
+            node: '22'
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: ${{ matrix.node }}
           cache: 'npm'
           cache-dependency-path: typescript/package-lock.json
 

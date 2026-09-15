@@ -14,7 +14,7 @@ This example wires `MemorySettings` for environments where you can't (or don't w
 
 ## When to use this
 
-- Offline or restricted deployments where outbound API calls aren't allowed.
+- Workloads that avoid outbound inference API calls; this Aura-backed example still needs a network connection to its database.
 - Cost-sensitive workloads where every LLM call counts.
 - Deterministic test environments where you want zero variability from a remote model.
 - Bootstrapping a new project before you've decided on an LLM vendor.
@@ -26,7 +26,7 @@ This example wires `MemorySettings` for environments where you can't (or don't w
 - **Provider-string shorthand for local embeddings** — `"sentence-transformers/all-MiniLM-L6-v2"` resolves to a local `SentenceTransformersProvider` via `from_provider`. No embeddings API call.
 - **`ExtractorType.PIPELINE` with `enable_llm_fallback=False`** — multi-stage spaCy + GLiNER pipeline, no LLM rescue.
 - **Configuration-time validation** — pair `llm=None` with an extractor that needs an LLM and `MemorySettings` raises a `ValidationError` naming both fields, rather than failing later at runtime.
-- **All three memory layers, locally** — short-term messages with local NER, long-term preferences/facts/entities with local embeddings, a reasoning trace with a structured `TraceOutcome`, and a `consolidation.dedupe_entities(dry_run=True)` hygiene pass (pure Cypher).
+- **All three memory layers, with local inference and Aura storage** — short-term messages with local NER, long-term preferences/facts/entities with local embeddings, a reasoning trace with a structured `TraceOutcome`, and a `consolidation.dedupe_entities(dry_run=True)` hygiene pass (pure Cypher).
 - **Fail-fast on a broken local stack** — the script checks for spaCy, the spaCy model, GLiNER and sentence-transformers up front, then asserts the pipeline actually extracted something. A missing model otherwise degrades silently to zero entities.
 
 ```python
@@ -51,7 +51,7 @@ This example is **bolt-only by design**. On the hosted backend (NAMS) extraction
 | Capability | Without an LLM |
 |---|---|
 | Messages, conversations, sequential linking | ✅ works |
-| Embeddings + vector search (messages, entities, preferences, facts, traces) | ✅ local sentence-transformers |
+| Embeddings + vector search (messages, entities, preferences, facts, traces) | ✅ local sentence-transformers embeddings; vector search in Aura |
 | Entity extraction and POLE+O typing | ✅ spaCy + GLiNER |
 | Preferences, facts, curated entities, entity resolution/dedup | ✅ works (embedding + fuzzy matching) |
 | Reasoning traces, steps, tool calls, similar-trace retrieval | ✅ works |
@@ -70,18 +70,11 @@ python -m spacy download en_core_web_sm
 
 First run downloads model weights once: sentence-transformers `all-MiniLM-L6-v2` (~90 MB) and the GLiNER model (~500 MB). Both are cached under `~/.cache/huggingface` afterwards.
 
-A running Neo4j 5.x. From the repository root, `make neo4j-start` launches one (password `test-password`) — the defaults in this example point at it. To change the connection, copy the tracked template and edit it:
-
-```bash
-cp examples/.env.example examples/.env
-```
-
-or export `NEO4J_URI` / `NEO4J_USERNAME` / `NEO4J_PASSWORD` directly.
+A dedicated empty AuraDB instance with its connection variables exported; follow [Aura setup and cleanup](../AURA_SETUP.md).
 
 ## Run
 
 ```bash
-make neo4j-start                       # once, from the repository root
 uv run python examples/no_llm/main.py  # safe to re-run
 ```
 
@@ -129,9 +122,9 @@ dedupe candidates (dry run): 0
 
 No `extracted locally:` lines means the local stack is degraded — the script exits with the missing install step instead of printing an empty-looking context. Every repeat run adds one more entry under **Similar Past Tasks**: `clear_session()` removes the conversation and its messages, not reasoning traces.
 
-## Truly offline
+## Use cached model weights
 
-Nothing here calls an inference API, but the first run does download model weights from Hugging Face. To run with no network at all, warm the caches once on a connected machine:
+Inference runs locally, but the first run downloads model weights from Hugging Face. To avoid model-download requests on later runs, warm the caches once:
 
 ```bash
 python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
@@ -147,7 +140,7 @@ export TRANSFORMERS_OFFLINE=1
 uv run python examples/no_llm/main.py
 ```
 
-Neo4j stays wherever you put it — a local container is fine.
+These switches disable model-download access. The example still connects to Aura over the network; they do not make database operations offline.
 
 ## Going further
 
@@ -163,4 +156,6 @@ Neo4j stays wherever you put it — a local container is fine.
 
 ---
 
-_Verified against `neo4j-agent-memory` v0.5.0 with sentence-transformers 6.0.1, gliner 0.2.24, spacy 3.8.11 (`en_core_web_sm`), and Neo4j 5.26 on 2026-09-10._
+**Historical verification report — 2026-09-10.** The following records a prior checkout/test report. Its development-version labels, passing counts, and release-availability statements are historical, not evidence of current package compatibility. See the [current source and artifact evidence](../../DOCUMENTATION_REMEDIATION_STATUS.md) before selecting an SDK artifact.
+
+> _Verified against `neo4j-agent-memory` v0.5.0 with sentence-transformers 6.0.1, gliner 0.2.24, spacy 3.8.11 (`en_core_web_sm`), and Neo4j 5.26 on 2026-09-10._

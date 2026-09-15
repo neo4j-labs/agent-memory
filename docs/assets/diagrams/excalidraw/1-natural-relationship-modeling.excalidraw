@@ -1,0 +1,619 @@
+{
+  "type": "excalidraw",
+  "version": 2,
+  "source": "https://excalidraw.com",
+  "elements": [
+    {
+      "id": "title",
+      "type": "text",
+      "x": 40,
+      "y": 20,
+      "width": 980,
+      "height": 37.800000000000004,
+      "angle": 0,
+      "strokeColor": "#1e1e1e",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "seed": 100,
+      "version": 1,
+      "versionNonce": 1,
+      "isDeleted": false,
+      "groupIds": [],
+      "frameId": null,
+      "roundness": {
+        "type": 3
+      },
+      "boundElements": [],
+      "text": "Neo4j Labs \u00b7 Relationship modeling",
+      "originalText": "Neo4j Labs \u00b7 Relationship modeling",
+      "fontSize": 28,
+      "fontFamily": 2,
+      "textAlign": "left",
+      "verticalAlign": "top",
+      "containerId": null,
+      "lineHeight": 1.35,
+      "autoResize": true
+    },
+    {
+      "id": "customer",
+      "type": "ellipse",
+      "x": 350,
+      "y": 95,
+      "width": 300,
+      "height": 95,
+      "angle": 0,
+      "strokeColor": "#2f9e44",
+      "backgroundColor": "#b2f2bb",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "seed": 101,
+      "version": 1,
+      "versionNonce": 1,
+      "isDeleted": false,
+      "groupIds": [],
+      "frameId": null,
+      "roundness": {
+        "type": 3
+      },
+      "boundElements": [
+        {
+          "id": "purchase",
+          "type": "arrow"
+        },
+        {
+          "id": "preference",
+          "type": "arrow"
+        },
+        {
+          "id": "customer-text",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "id": "customer-text",
+      "type": "text",
+      "x": 368,
+      "y": 113,
+      "width": 264,
+      "height": 27.0,
+      "angle": 0,
+      "strokeColor": "#1e1e1e",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "seed": 102,
+      "version": 1,
+      "versionNonce": 1,
+      "isDeleted": false,
+      "groupIds": [],
+      "frameId": null,
+      "roundness": {
+        "type": 3
+      },
+      "boundElements": [],
+      "text": "Customer",
+      "originalText": "Customer",
+      "fontSize": 20,
+      "fontFamily": 2,
+      "textAlign": "center",
+      "verticalAlign": "middle",
+      "containerId": "customer",
+      "lineHeight": 1.35,
+      "autoResize": true
+    },
+    {
+      "id": "product",
+      "type": "ellipse",
+      "x": 90,
+      "y": 280,
+      "width": 300,
+      "height": 95,
+      "angle": 0,
+      "strokeColor": "#f08c00",
+      "backgroundColor": "#ffec99",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "seed": 103,
+      "version": 1,
+      "versionNonce": 1,
+      "isDeleted": false,
+      "groupIds": [],
+      "frameId": null,
+      "roundness": {
+        "type": 3
+      },
+      "boundElements": [
+        {
+          "id": "purchase",
+          "type": "arrow"
+        },
+        {
+          "id": "classification",
+          "type": "arrow"
+        },
+        {
+          "id": "product-text",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "id": "product-text",
+      "type": "text",
+      "x": 108,
+      "y": 298,
+      "width": 264,
+      "height": 27.0,
+      "angle": 0,
+      "strokeColor": "#1e1e1e",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "seed": 104,
+      "version": 1,
+      "versionNonce": 1,
+      "isDeleted": false,
+      "groupIds": [],
+      "frameId": null,
+      "roundness": {
+        "type": 3
+      },
+      "boundElements": [],
+      "text": "Product",
+      "originalText": "Product",
+      "fontSize": 20,
+      "fontFamily": 2,
+      "textAlign": "center",
+      "verticalAlign": "middle",
+      "containerId": "product",
+      "lineHeight": 1.35,
+      "autoResize": true
+    },
+    {
+      "id": "brand",
+      "type": "ellipse",
+      "x": 610,
+      "y": 280,
+      "width": 300,
+      "height": 95,
+      "angle": 0,
+      "strokeColor": "#9c36b5",
+      "backgroundColor": "#d0bfff",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "seed": 105,
+      "version": 1,
+      "versionNonce": 1,
+      "isDeleted": false,
+      "groupIds": [],
+      "frameId": null,
+      "roundness": {
+        "type": 3
+      },
+      "boundElements": [
+        {
+          "id": "preference",
+          "type": "arrow"
+        },
+        {
+          "id": "brand-text",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "id": "brand-text",
+      "type": "text",
+      "x": 628,
+      "y": 298,
+      "width": 264,
+      "height": 27.0,
+      "angle": 0,
+      "strokeColor": "#1e1e1e",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "seed": 106,
+      "version": 1,
+      "versionNonce": 1,
+      "isDeleted": false,
+      "groupIds": [],
+      "frameId": null,
+      "roundness": {
+        "type": 3
+      },
+      "boundElements": [],
+      "text": "Brand",
+      "originalText": "Brand",
+      "fontSize": 20,
+      "fontFamily": 2,
+      "textAlign": "center",
+      "verticalAlign": "middle",
+      "containerId": "brand",
+      "lineHeight": 1.35,
+      "autoResize": true
+    },
+    {
+      "id": "category",
+      "type": "ellipse",
+      "x": 90,
+      "y": 475,
+      "width": 300,
+      "height": 95,
+      "angle": 0,
+      "strokeColor": "#1971c2",
+      "backgroundColor": "#a5d8ff",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "seed": 107,
+      "version": 1,
+      "versionNonce": 1,
+      "isDeleted": false,
+      "groupIds": [],
+      "frameId": null,
+      "roundness": {
+        "type": 3
+      },
+      "boundElements": [
+        {
+          "id": "classification",
+          "type": "arrow"
+        },
+        {
+          "id": "category-text",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "id": "category-text",
+      "type": "text",
+      "x": 108,
+      "y": 493,
+      "width": 264,
+      "height": 27.0,
+      "angle": 0,
+      "strokeColor": "#1e1e1e",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "seed": 108,
+      "version": 1,
+      "versionNonce": 1,
+      "isDeleted": false,
+      "groupIds": [],
+      "frameId": null,
+      "roundness": {
+        "type": 3
+      },
+      "boundElements": [],
+      "text": "Category",
+      "originalText": "Category",
+      "fontSize": 20,
+      "fontFamily": 2,
+      "textAlign": "center",
+      "verticalAlign": "middle",
+      "containerId": "category",
+      "lineHeight": 1.35,
+      "autoResize": true
+    },
+    {
+      "id": "purchase",
+      "type": "arrow",
+      "x": 500.0,
+      "y": 190,
+      "width": 260.0,
+      "height": 90,
+      "angle": 0,
+      "strokeColor": "#6366f1",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "seed": 109,
+      "version": 1,
+      "versionNonce": 1,
+      "isDeleted": false,
+      "groupIds": [],
+      "frameId": null,
+      "roundness": {
+        "type": 3
+      },
+      "boundElements": [],
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          -260.0,
+          90
+        ]
+      ],
+      "startBinding": {
+        "elementId": "customer",
+        "focus": 0,
+        "gap": 3
+      },
+      "endBinding": {
+        "elementId": "product",
+        "focus": 0,
+        "gap": 3
+      },
+      "startArrowhead": null,
+      "endArrowhead": "arrow"
+    },
+    {
+      "id": "purchase-label",
+      "type": "text",
+      "x": 378.0,
+      "y": 223.0,
+      "width": 200,
+      "height": 20.25,
+      "angle": 0,
+      "strokeColor": "#1e1e1e",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "seed": 110,
+      "version": 1,
+      "versionNonce": 1,
+      "isDeleted": false,
+      "groupIds": [],
+      "frameId": null,
+      "roundness": {
+        "type": 3
+      },
+      "boundElements": [],
+      "text": "PURCHASED",
+      "originalText": "PURCHASED",
+      "fontSize": 15,
+      "fontFamily": 2,
+      "textAlign": "left",
+      "verticalAlign": "top",
+      "containerId": null,
+      "lineHeight": 1.35,
+      "autoResize": true
+    },
+    {
+      "id": "preference",
+      "type": "arrow",
+      "x": 500.0,
+      "y": 190,
+      "width": 260.0,
+      "height": 90,
+      "angle": 0,
+      "strokeColor": "#6366f1",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "seed": 111,
+      "version": 1,
+      "versionNonce": 1,
+      "isDeleted": false,
+      "groupIds": [],
+      "frameId": null,
+      "roundness": {
+        "type": 3
+      },
+      "boundElements": [],
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          260.0,
+          90
+        ]
+      ],
+      "startBinding": {
+        "elementId": "customer",
+        "focus": 0,
+        "gap": 3
+      },
+      "endBinding": {
+        "elementId": "brand",
+        "focus": 0,
+        "gap": 3
+      },
+      "startArrowhead": null,
+      "endArrowhead": "arrow"
+    },
+    {
+      "id": "preference-label",
+      "type": "text",
+      "x": 638.0,
+      "y": 223.0,
+      "width": 200,
+      "height": 20.25,
+      "angle": 0,
+      "strokeColor": "#1e1e1e",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "seed": 112,
+      "version": 1,
+      "versionNonce": 1,
+      "isDeleted": false,
+      "groupIds": [],
+      "frameId": null,
+      "roundness": {
+        "type": 3
+      },
+      "boundElements": [],
+      "text": "HAS_PREFERENCE",
+      "originalText": "HAS_PREFERENCE",
+      "fontSize": 15,
+      "fontFamily": 2,
+      "textAlign": "left",
+      "verticalAlign": "top",
+      "containerId": null,
+      "lineHeight": 1.35,
+      "autoResize": true
+    },
+    {
+      "id": "classification",
+      "type": "arrow",
+      "x": 240.0,
+      "y": 375,
+      "width": 0.0,
+      "height": 100,
+      "angle": 0,
+      "strokeColor": "#6366f1",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "seed": 113,
+      "version": 1,
+      "versionNonce": 1,
+      "isDeleted": false,
+      "groupIds": [],
+      "frameId": null,
+      "roundness": {
+        "type": 3
+      },
+      "boundElements": [],
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          0.0,
+          100
+        ]
+      ],
+      "startBinding": {
+        "elementId": "product",
+        "focus": 0,
+        "gap": 3
+      },
+      "endBinding": {
+        "elementId": "category",
+        "focus": 0,
+        "gap": 3
+      },
+      "startArrowhead": null,
+      "endArrowhead": "arrow"
+    },
+    {
+      "id": "classification-label",
+      "type": "text",
+      "x": 248.0,
+      "y": 413.0,
+      "width": 200,
+      "height": 20.25,
+      "angle": 0,
+      "strokeColor": "#1e1e1e",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "seed": 114,
+      "version": 1,
+      "versionNonce": 1,
+      "isDeleted": false,
+      "groupIds": [],
+      "frameId": null,
+      "roundness": {
+        "type": 3
+      },
+      "boundElements": [],
+      "text": "IN_CATEGORY",
+      "originalText": "IN_CATEGORY",
+      "fontSize": 15,
+      "fontFamily": 2,
+      "textAlign": "left",
+      "verticalAlign": "top",
+      "containerId": null,
+      "lineHeight": 1.35,
+      "autoResize": true
+    },
+    {
+      "id": "note",
+      "type": "text",
+      "x": 50,
+      "y": 635,
+      "width": 970,
+      "height": 24.3,
+      "angle": 0,
+      "strokeColor": "#1e1e1e",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "seed": 115,
+      "version": 1,
+      "versionNonce": 1,
+      "isDeleted": false,
+      "groupIds": [],
+      "frameId": null,
+      "roundness": {
+        "type": 3
+      },
+      "boundElements": [],
+      "text": "Illustrative domain graph. Application labels and relationships are distinct from the SDK memory schema.",
+      "originalText": "Illustrative domain graph. Application labels and relationships are distinct from the SDK memory schema.",
+      "fontSize": 18,
+      "fontFamily": 2,
+      "textAlign": "left",
+      "verticalAlign": "top",
+      "containerId": null,
+      "lineHeight": 1.35,
+      "autoResize": true
+    }
+  ],
+  "appState": {
+    "gridSize": 20,
+    "viewBackgroundColor": "#ffffff"
+  },
+  "files": {}
+}

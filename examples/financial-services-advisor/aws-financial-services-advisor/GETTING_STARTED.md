@@ -15,7 +15,7 @@ Before starting, ensure you have:
 | **Node.js** | 18+ | For the frontend |
 | **npm** | 9+ | Comes with Node.js |
 | **AWS CLI** | v2 | Configured with valid credentials |
-| **Neo4j** | 5.x | Aura Free tier or local Docker instance |
+| **Neo4j AuraDB** | Managed Neo4j | Dedicated empty instance; see Step 2 |
 
 ### AWS Bedrock Access
 
@@ -51,35 +51,11 @@ cd neo4j-agent-memory/examples/financial-services-advisor/aws-financial-services
 
 ---
 
-## Step 2: Set Up Neo4j
+## Step 2: Set Up Neo4j Aura
 
-Choose one of two options:
+Set up a dedicated empty AuraDB instance using [the shared Aura guide](../../AURA_SETUP.md), including its credential exports and connection check. Use the generated `neo4j+s://` URI. The starter data is synthetic; confirm capacity and any additional feature requirements before expanding it.
 
-### Option A: Neo4j Aura Free (Recommended)
-
-1. Create a free account at [neo4j.io/aura](https://neo4j.io/aura)
-2. Create a new **Free** instance
-3. Save the credentials -- you'll need the connection URI and password
-4. The URI will look like: `neo4j+s://xxxxxxxx.databases.neo4j.io`
-
-### Option B: Local Docker
-
-```bash
-docker run -d \
-  --name neo4j \
-  -p 7687:7687 \
-  -p 7474:7474 \
-  -e NEO4J_AUTH=neo4j/your-password-here \
-  neo4j:5
-```
-
-Wait for it to start:
-```bash
-# Check logs until you see "Started."
-docker logs -f neo4j
-```
-
-Your URI will be: `bolt://localhost:7687`
+This application reads `NEO4J_USER` for the username. In the private configuration below, set it to the same value as `NEO4J_USERNAME` from the Aura setup. Replace all template connection values with the credentials for this instance. Keep the backend and frontend running locally against Aura.
 
 ---
 
@@ -95,7 +71,7 @@ Edit `backend/.env` with your credentials:
 
 ```bash
 # Neo4j Configuration
-NEO4J_URI=neo4j+s://xxxx.databases.neo4j.io   # or bolt://localhost:7687
+NEO4J_URI=neo4j+s://xxxx.databases.neo4j.io
 NEO4J_USER=neo4j
 NEO4J_PASSWORD=your-password
 NEO4J_DATABASE=neo4j
@@ -373,12 +349,14 @@ With coverage:
 cd backend && uv run pytest tests/ -m "not integration" --cov=src
 ```
 
-The integration tests load the sample data and run the real Cypher. Point them at a throwaway database — they use `--reset`, which deletes the demo labels:
+The integration tests load the sample data and run the real Cypher. In a separate shell, follow [the shared Aura setup](../../AURA_SETUP.md) for a fresh dedicated test instance and export its URI, username and password. Do not reuse the application instance: the tests use `--reset`, which deletes the demo labels. From this example directory, run:
 
 ```bash
-cd backend && NEO4J_URI=bolt://localhost:7687 NEO4J_USERNAME=neo4j \
-  NEO4J_PASSWORD=your-password uv run pytest tests/ -m integration
+cd backend
+uv run pytest tests/ -m integration
 ```
+
+After the run, follow the shared guide's cleanup for that test instance.
 
 They need no API key and no model download: a deterministic hash-based embedder stands in for Bedrock. Set `EMBEDDING_DIMENSIONS` if the target database's vector indexes are not 384-wide.
 
@@ -481,9 +459,8 @@ make destroy
 This is intentional — the app refuses to start without its database rather than serving a green health check over 503s.
 
 - Check that `NEO4J_URI`, `NEO4J_USER`, and `NEO4J_PASSWORD` are correct in `backend/.env`
-- For Aura: ensure you use `neo4j+s://` (not `bolt://`)
-- For Docker: ensure the container is running: `docker ps`
-- Test connectivity: `cypher-shell -a bolt://localhost:7687 -u neo4j -p your-password "RETURN 1"`
+- In the Aura console, confirm the intended instance is **Running** and its URI uses `neo4j+s://`.
+- In Aura **Query**, select that instance and run `RETURN 1 AS connected`; expect `1`. Recheck the private backend configuration if Aura Query succeeds but the application cannot connect.
 
 ### "Neo4j service not available" on API calls
 

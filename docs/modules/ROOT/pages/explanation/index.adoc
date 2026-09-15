@@ -1,85 +1,23 @@
-= Explanation
+= Concepts
 :page-product: agent-memory
-:page-pagination:
 :toclevels: 2
 
-Understand the concepts, design decisions, and architecture behind neo4j-agent-memory.
+Understand memory models, architecture, and design tradeoffs. Use xref:how-to/index.adoc[how-to guides] for procedures and xref:reference/index.adoc[reference] for complete option lists.
 
-[.lead]
-Explanation is *understanding-oriented*. It clarifies and illuminates a topic. It's about helping you understand why things work the way they do.
+// Retain former section URLs at the current related topic.
+== Memory concepts
 
-== Core Concepts
+anchor:_core_concepts[]anchor:_technical_deep_dives[]anchor:_key_design_decisions[]anchor:_graph_native_memory[]anchor:_three_layer_architecture[]anchor:_poleo_classification[]anchor:_explanation_philosophy[]anchor:_further_reading[]
 
-[cols="1,2", options="header"]
-|===
-| Topic | What You'll Understand
-
-| xref:explanation/memory-types.adoc[The Three Memory Types]
-| Why agent memory is divided into short-term, long-term, and reasoning memory. How they work together.
-
-| xref:explanation/poleo-model.adoc[The POLE+O Data Model]
-| Why we use Person-Object-Location-Event-Organization for entity classification. Origins and benefits.
-
-| xref:explanation/graph-architecture.adoc[Why Neo4j?]
-| Why a graph database is ideal for agent memory. How the schema is designed.
-|===
-
-== Technical Deep Dives
-
-[cols="1,2", options="header"]
-|===
-| Topic | What You'll Understand
-
-| xref:explanation/extraction-pipeline.adoc[How Entity Extraction Works]
-| The multi-stage extraction pipeline. Trade-offs between speed and accuracy.
-
-| xref:explanation/resolution-deduplication.adoc[Entity Resolution Concepts]
-| How entities are matched and merged. Fuzzy matching, embeddings, and confidence thresholds.
-|===
-
-== Key Design Decisions
-
-=== Graph-Native Memory
-
-Traditional agent memory systems use flat key-value stores or vector databases. neo4j-agent-memory uses a *graph-native* approach:
-
-* *Relationships are first-class*: Entities connect to messages, other entities, and reasoning traces
-* *Traversal queries*: Find how entities relate across conversations
-* *Temporal patterns*: Track how knowledge evolves over time
-
-=== Three-Layer Architecture
-
-We separate memory into three distinct layers because they have different:
-
-* *Lifetimes*: Messages are ephemeral, entities persist, reasoning traces are archival
-* *Access patterns*: Recent messages vs. semantic search vs. tool usage stats
-* *Schemas*: Conversations have structure, entities have types, traces have steps
-
-=== POLE+O Classification
-
-The POLE+O model (Person, Object, Location, Event, Organization) comes from law enforcement and intelligence analysis. We adopted it because:
-
-* *Universal*: These five categories cover most real-world entities
-* *Hierarchical*: Subtypes allow fine-grained classification
-* *Relationships*: The model defines expected relationships between types
-
-== Explanation Philosophy
-
-Explanation documentation:
-
-* *Discusses*: The "why" behind design choices
-* *Contextualizes*: Connects to broader concepts and alternatives
-* *Reflective*: Can be read and pondered, not just executed
-* *Honest*: Acknowledges trade-offs and limitations
-
-For hands-on learning, see the xref:tutorials/index.adoc[Tutorials].
-
-For solving specific problems, see the xref:how-to/index.adoc[How-To Guides].
-
-For technical details and API documentation, see the xref:reference/index.adoc[Reference] section.
-
-== Further Reading
-
-* https://diataxis.fr/explanation/[Diataxis: Explanation] - The documentation framework we follow
-* https://neo4j.com/developer/graph-database/[Neo4j Graph Database Concepts]
-* https://en.wikipedia.org/wiki/POLE_model[Wikipedia: POLE Model]
+* xref:explanation/backends.adoc[Backends: Bolt and NAMS]
+* xref:explanation/extraction-pipeline.adoc[How entity extraction works]
+* xref:explanation/framework-comparison.adoc[Choosing an agent framework integration]
+* xref:explanation/graph-architecture.adoc[Why Neo4j? Graph memory architecture]
+* xref:explanation/memory-types.adoc[Understanding the three memory types]
+* xref:explanation/multi-agent-sharing.adoc[Cross-agent memory sharing]
+* xref:explanation/ontologies.adoc[Ontologies]
+* xref:explanation/poleo-model.adoc[The POLE+O data model]
+* xref:explanation/resolution-deduplication.adoc[Entity resolution and deduplication]
+* xref:explanation/skills.adoc[Agent Skills]
+* xref:explanation/structured-extraction.adoc[Structured Extraction]
+* xref:explanation/why-provider-protocol.adoc[Why the Provider Protocol?]

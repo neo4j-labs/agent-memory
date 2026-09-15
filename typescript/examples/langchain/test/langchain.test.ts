@@ -57,7 +57,7 @@ describe("LangChain v1 agent backed by NAMS", () => {
     );
     expect(systemTexts.some((text) => text.includes("## Memory"))).toBe(true);
     expect(systemTexts.some((text) => text.includes("Earlier in this conversation"))).toBe(true);
-    expect(systemTexts.some((text) => text.includes("Known user preferences"))).toBe(true);
+    expect(systemTexts.some((text) => text.includes("Relevant workspace entities"))).toBe(true);
 
     // The agent called the retriever tool.
     expect(lines.some((line) => line.startsWith("tool search_memory_entities"))).toBe(true);
@@ -71,6 +71,7 @@ describe("LangChain v1 agent backed by NAMS", () => {
     // One hop of the graph was expanded, and the client was closed.
     expect(transport.calls.some((c) => c.method === "expand_graph")).toBe(true);
     expect(transport.closed).toBe(true);
+    expect(transport.calls.some((c) => /preference|add_fact/.test(c.method))).toBe(false);
   });
 
   it("fails fast with a named error when no API key is configured", async () => {

@@ -2,145 +2,54 @@
 :page-product: agent-memory
 :toclevels: 2
 
-A reference for the terminology used in `neo4j-agent-memory` and how it
-relates to terms from neighbouring projects in the agent-memory space.
+The product terms below describe stored records and the operations that use them. Human-memory analogies and vocabulary from other projects do not imply identical APIs, retention policies, or access boundaries.
 
+[[_library_terminology]]
 == Library terminology
 
-[cols="1,3"]
+[cols="1,3",options="header"]
 |===
-| Term | Meaning in `neo4j-agent-memory`
-
-| Short-term memory
-| Conversations and messages, with sequential `FIRST_MESSAGE` /
-`NEXT_MESSAGE` linking and embedded message content for similarity
-search. Accessed via `client.short_term`.
-
-| Long-term memory
-| Entities (POLE+O or custom typed), preferences, and facts. The
-declarative knowledge layer. Accessed via `client.long_term`.
-
-| Reasoning memory
-| Reasoning traces, reasoning steps, and tool calls — captured per
-agent task. The "how did we get there" layer that complements the
-"what we know" of long-term memory. Accessed via `client.reasoning`.
-
-| POLE+O
-| The default entity ontology — Person, Object, Location, Event,
-Organization. See xref:explanation/poleo-model.adoc[POLE+O Model].
-
-| `:Entity` super-label
-| The label every long-term memory entity carries in addition to its
-type/subtype labels (e.g. `:Entity:Person:Individual`). The library
-MERGEs on `(:Entity {name, type})` for deduplication.
-
-| Adoption
-| The process of attaching the `:Entity` super-label and library-managed
-properties (`id`, `type`, `name`) to nodes from a pre-existing domain
-graph, so the library's writes link to the existing nodes instead of
-duplicating them. See xref:how-to/adopt-existing-graph.adoc[].
-
-| Backend
-| Which storage `MemoryClient` talks to: *bolt* (your own Neo4j, the
-historical default) or *NAMS* (the hosted service). Selected at config
-time; the high-level API is identical. See
-xref:explanation/backends.adoc[Bolt vs NAMS].
-
-| NAMS
-| Neo4j Agent Memory Service — the hosted, multi-tenant backend at
-link:https://memory.neo4jlabs.com[memory.neo4jlabs.com]. A managed REST
-API; you bring an API key, not a database.
-
-| Workspace
-| The unit of hard isolation on NAMS — its own graph. A *workspace key* is
-bound to one workspace; an *admin key* selects it per request via the
-`X-Workspace-Id` header. The `user_identifier=` axis sub-divides users
-within a workspace. See xref:explanation/backends.adoc#tenancy[Tenancy &
-scoping] and xref:reference/authentication.adoc[key categories].
-
-| Bridge protocol
-| The non-REST wire format (`POST /{snake_case_method}`) used by the
-cross-language link:https://github.com/neo4j-labs/agent-memory-tck[TCK]
-reference clients. The SDK transport auto-selects REST (for `/v{n}`
-endpoints) or bridge; override with `NamsConfig(transport_mode=...)`.
-
-| Provider string
-| A shorthand for an LLM or embedding model — `"anthropic/claude-3-5-sonnet-latest"`,
-`"openai/text-embedding-3-small"` — resolved to a native adapter or
-LiteLLM. Used on the bolt backend; on NAMS, embedding runs server-side.
-See xref:how-to/bring-your-own-model.adoc[Bring Your Own Model].
-
-| Agent Skill _(Preview)_
-| A portable, self-contained procedure — an agentskills.io `SKILL.md`
-package — that NAMS distils from a workspace's accumulated memory so
-another agent can load and reuse it. See xref:explanation/skills.adoc[Agent Skills].
-
-| Skill distillation _(Preview)_
-| The server-side NAMS pipeline that turns a scoped slice of memory
-(messages, entities, reasoning traces) into an Agent Skill: scope →
-snapshot → grounded synthesis → quality gates → package. Reachable over
-REST + MCP only.
-
-| Provenance grounding
-| The rule that every claim and procedure step in a distilled skill is
-`GROUNDED_IN` specific source nodes — the graph is the authority and the
-LLM only writes from cited sources, so a skill is auditable, not invented.
-
-| Attestation
-| A detached JWS signature over a published skill's contents, verifiable
-offline against the public JWKS at `/.well-known/skill-attest-jwks.json`.
+|Term |Meaning in Neo4j Agent Memory
+|Short-term memory |Persisted conversations and messages. The name describes conversational use, not automatic expiry or in-process storage. On Bolt, sequence uses edges including `:FIRST_MESSAGE` and `:NEXT_MESSAGE`.
+|Long-term memory |Reusable declarative knowledge: entities and, on supported backend surfaces, preferences and facts. See xref:reference/backend-capabilities.adoc[Backend capabilities].
+|Reasoning memory |Recorded task steps, tool calls, observations, and outcomes. It contains what the application or integration records, not a model's private internal reasoning.
+|POLE+O |Person, Object, Location, Event, and Organization: the default broad entity categories. See xref:explanation/poleo-model.adoc[POLE+O].
+|`:Entity` |A label for managed entity nodes. On Bolt it accompanies type/subtype labels and identifying properties. It does not by itself establish ownership or authorization.
+|Adoption |Attaching the managed entity label and required properties to a compatible existing graph. See xref:how-to/adopt-existing-graph.adoc[Adopt an existing graph].
+|Backend |The storage interface used by a client: direct Neo4j through Bolt, or hosted NAMS. Shared concepts do not imply identical operations, parameters, or result shapes.
+|NAMS |Neo4j Agent Memory Service, the hosted REST service. Its service API and a particular SDK release are distinct versioned surfaces.
+|Workspace |The NAMS tenancy boundary. A workspace key is bound to it; an admin key selects a workspace according to xref:reference/authentication.adoc[the authentication contract].
+|Conversation or session |A grouping of conversation/task records. Identifier terminology and creation differ by backend. A conversation ID is not itself an access-control boundary.
+|User identifier |An application user identifier accepted by specific operations. It is not a universal filter on every record or method. See xref:reference/backend-capabilities.adoc[Scope by operation].
+|Bridge protocol |The separate method-oriented transport used by conformance reference services. It is not the hosted NAMS REST API. Use the documented REST transport for hosted examples.
+|Provider string |A model identifier resolved by the Python provider factory, such as `openai/text-embedding-3-small`. It configures client-side providers; NAMS manages its own extraction and embeddings.
+|Agent Skill (preview) |A portable procedure package derived from a scoped set of NAMS memory records. See xref:explanation/skills.adoc[Agent Skills].
+|Skill distillation |The server-side process that selects memory, synthesizes a procedure, checks grounding, and packages a skill. It is separate from executing the procedure.
+|Provenance grounding |Links from a generated claim or step to its source records, such as `:GROUNDED_IN` edges. These aid review; they do not prove that the source is true or the generated interpretation is correct.
+|Attestation |A signature used to check a published skill package's integrity and signer. It does not validate the factual correctness of its contents. See xref:reference/skills-api.adoc[Skills API].
 |===
 
-== Industry-glossary alignment
+[[_industry_glossary_alignment]]
+== Memory analogies
 
-The agent-memory space uses overlapping terminology. Mappings to closely
-related concepts in other ecosystems:
+These are approximate conceptual mappings, not a compatibility table for other products.
 
-[cols="1,1,3"]
+[cols="1,2,3",options="header"]
 |===
-| External term | Closest concept here | Notes
-
-| Context graph
-| The full three-layer graph this library builds (short-term + long-term
-+ reasoning).
-| Zep uses "context graph" to describe a persisted graph attached to a
-session. `neo4j-agent-memory`'s closest analogue is the unified graph
-spanning the three memory layers, with cross-layer edges like
-`(ReasoningTrace)-[:INITIATED_BY]->(Message)`.
-
-| Memify / memification
-| Long-term memory ingestion (`add_entity`, `add_preference`,
-`add_fact`) plus the entity-extraction pipeline.
-| Cognee's "memify" pipeline corresponds roughly to entity extraction +
-deduplication + embedding here. The library does not bundle a
-single-call "memify(text)" entry point — extraction and storage are
-separate by design.
-
-| Core memory
-| Long-term memory (entities, preferences, facts) — the persistent,
-queryable layer.
-| Letta's "core memory" maps to long-term memory, especially preferences
-and entity-attached attributes that persist across sessions.
-
-| Episodic memory
-| Short-term memory (messages and conversations).
-| Several agent frameworks distinguish "semantic" (long-term) from
-"episodic" (per-session). `neo4j-agent-memory` uses short-term /
-long-term, with reasoning memory as a third axis that doesn't fit
-either label cleanly.
-
-| Working memory
-| Not a first-class concept here.
-| What other systems call "working memory" (current-turn context) is
-typically assembled per-call via `client.get_context(...)` rather than
-persisted as its own layer.
+|Term |Closest concept here |Limit of the analogy
+|Context graph |Connected records across the memory layers |The useful context for one call is a selected subset, not necessarily the whole graph.
+|Semantic memory |Reusable declarative knowledge in long-term memory |Semantic search is a retrieval technique and can also search messages or traces.
+|Episodic memory |Records of events, including conversations and task traces |The product does not assign this term exclusively to short-term or reasoning memory.
+|Procedural memory |Reusable knowledge about performing a task |A recorded trace describes one execution; deriving a reusable procedure or skill is a separate step.
+|Working memory |The context assembled for the current model call |It is not a separately persisted fourth layer. Stored records influence the call only when the application retrieves and supplies them.
+|Core memory |Application-selected durable information |No product-wide mapping to a specific prompt region or automatic retrieval behavior is implied.
+|Memification |A loose term for memory ingestion and transformation |Use the concrete operation name here: extraction, resolution, embedding, storage, or retrieval.
 |===
 
-== See Also
+[[_see_also]]
+== See also
 
-* xref:explanation/memory-types.adoc[Memory Types] — concept-level
-description of short-term, long-term, and reasoning memory.
-* xref:explanation/poleo-model.adoc[POLE+O Model] — the default
-entity ontology.
-* xref:explanation/framework-comparison.adoc[Framework Comparison] —
-how the library compares to other agent-memory tools.
+* xref:explanation/memory-types.adoc[The three memory layers]
+* xref:explanation/poleo-model.adoc[POLE+O classification]
+* xref:explanation/multi-agent-sharing.adoc[Storage and scope]
+* xref:explanation/framework-comparison.adoc[Framework integration approaches]

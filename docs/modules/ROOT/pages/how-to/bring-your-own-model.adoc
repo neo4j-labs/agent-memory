@@ -6,19 +6,41 @@
 :icons: font
 :source-highlighter: highlight.js
 
-How to plug in any LLM or embedding provider — native adapters for OpenAI, Anthropic, Bedrock, Vertex AI, and sentence-transformers; LiteLLM universal fallback for everything else.
+include::partial$backend-bolt-only.adoc[]
+
+Configure an LLM or embedding provider — native adapters for OpenAI, Anthropic, Bedrock, Vertex AI, and sentence-transformers; LiteLLM universal fallback for everything else.
 
 [.lead]
-`neo4j-agent-memory` is provider-pluggable. You pass either a provider-string shorthand (`"anthropic/claude-3-5-sonnet-latest"`), an explicit Provider instance, or hand off your already-configured framework model. The library picks the most reliable backend available.
+`neo4j-agent-memory` is provider-pluggable. You pass either a provider-string shorthand (`"anthropic/claude-3-5-sonnet-latest"`), an explicit Provider instance, or hand off your already-configured framework model. The factory chooses an installed native adapter when supported, then falls back to LiteLLM when available.
 
-== TL;DR — string shorthand
+== Prerequisites
+
+* Install the extras for each selected provider and configure its credentials. Quote package extras in shell commands, for example `pip install 'neo4j-agent-memory[openai]==0.6.0'`.
+* Use a dedicated AuraDB instance and export `NEO4J_URI`, `NEO4J_USERNAME`, and `NEO4J_PASSWORD` as shown in xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the Aura connection setup]. These examples use the `bolt` backend; `NEO4J_DATABASE` defaults to `neo4j` when omitted.
+* Model identifiers below illustrate adapter routing. Confirm the chosen model is available to your account before making a live request; successful provider construction does not verify model access.
+* Run snippets containing `await` in an async function. The `provider`, `messages`, and connected `client` in later fragments come from your application's setup.
+
+== Procedure
+
+. Choose a string, explicit adapter, or framework pass-through from the options below.
+. Configure both the LLM and embedding provider; changing one does not configure the other.
+. Run the verification at the end before applying the configuration to an existing graph.
+
+== Configure a provider string
 
 [source,python]
 ----
+import os
 from neo4j_agent_memory import MemoryClient, MemorySettings
 
 settings = MemorySettings(
-    neo4j={"password": "p"},
+    backend="bolt",
+    neo4j={
+        "uri": os.environ["NEO4J_URI"],
+        "username": os.environ["NEO4J_USERNAME"],
+        "password": os.environ["NEO4J_PASSWORD"],
+        "database": os.getenv("NEO4J_DATABASE", "neo4j"),
+    },
     llm="anthropic/claude-3-5-sonnet-latest",
     embedding="openai/text-embedding-3-small",
 )
@@ -27,7 +49,7 @@ async with MemoryClient(settings) as client:
     ...
 ----
 
-* Install: `pip install neo4j-agent-memory[anthropic,openai]`
+* Install: `pip install 'neo4j-agent-memory[anthropic,openai]==0.6.0'`
 * The factory picks a native adapter when the matching extra is installed, and falls back to LiteLLM for unsupported providers.
 * Returned Providers implement the `LLMProvider` / `EmbeddingProvider` Protocols.
 
@@ -69,7 +91,7 @@ For models not in the defaults table, pass an explicit `dimensions=N` when const
 When you call `from_provider("openai/gpt-4o-mini")`:
 
 . Parse `openai` as the provider prefix.
-. If `[openai]` is installed and the prefix is one of `{openai, anthropic, bedrock}`, use the native adapter.
+. If the matching SDK for the `openai`, `anthropic`, or `bedrock` prefix is installed, use its native adapter.
 . Otherwise, if `[litellm]` is installed, route through `LiteLLMProvider`.
 . Otherwise, raise `ImportError` with an install hint for both the native extra and the universal fallback.
 
@@ -95,8 +117,15 @@ Simplest. The factory resolves the string.
 
 [source,python]
 ----
+import os
 settings = MemorySettings(
-    neo4j={"password": "p"},
+    backend="bolt",
+    neo4j={
+        "uri": os.environ["NEO4J_URI"],
+        "username": os.environ["NEO4J_USERNAME"],
+        "password": os.environ["NEO4J_PASSWORD"],
+        "database": os.getenv("NEO4J_DATABASE", "neo4j"),
+    },
     llm="anthropic/claude-3-5-sonnet-latest",
 )
 ----
@@ -107,11 +136,18 @@ When you need adapter-specific kwargs (`api_base`, `cache_system`, `aws_region`)
 
 [source,python]
 ----
+import os
 from neo4j_agent_memory.llm.adapters.anthropic import AnthropicProvider
 from neo4j_agent_memory.llm.adapters.litellm import LiteLLMProvider
 
 settings = MemorySettings(
-    neo4j={"password": "p"},
+    backend="bolt",
+    neo4j={
+        "uri": os.environ["NEO4J_URI"],
+        "username": os.environ["NEO4J_USERNAME"],
+        "password": os.environ["NEO4J_PASSWORD"],
+        "database": os.getenv("NEO4J_DATABASE", "neo4j"),
+    },
     llm=AnthropicProvider(
         "anthropic/claude-3-5-sonnet-latest",
         cache_system=True,           # opt-in prompt caching
@@ -131,6 +167,7 @@ Hand off a model you've already configured with your agent framework:
 
 [source,python]
 ----
+import os
 from langchain_anthropic import ChatAnthropic
 from neo4j_agent_memory.integrations.langchain import (
     llm_provider_from_langchain,
@@ -139,7 +176,13 @@ from neo4j_agent_memory.integrations.langchain import (
 chat = ChatAnthropic(model_name="claude-3-5-sonnet-latest")
 
 settings = MemorySettings(
-    neo4j={"password": "p"},
+    backend="bolt",
+    neo4j={
+        "uri": os.environ["NEO4J_URI"],
+        "username": os.environ["NEO4J_USERNAME"],
+        "password": os.environ["NEO4J_PASSWORD"],
+        "database": os.getenv("NEO4J_DATABASE", "neo4j"),
+    },
     llm=llm_provider_from_langchain(chat),
 )
 ----
@@ -168,9 +211,9 @@ If you change embedding model after creating data, see xref:how-to/migrate-embed
 
 == Structured extraction
 
-The library's entity extractor calls `complete_structured()` when the provider implements `StructuredExtractor`. This is what makes extraction quality high across providers:
+The library's entity extractor calls `complete_structured()` when the provider implements `StructuredExtractor`. Supported adapters use these structured-output strategies; validate both schema conformance and extraction quality with your own data:
 
-* **OpenAI**: strict mode (`response_format={"type": "json_schema", "strict": True}`) — schema-conforming output guaranteed.
+* **OpenAI**: strict mode (`response_format={"type": "json_schema", "strict": True}`) — uses the strict schema mode; refusals, request errors, and validation failures still require handling.
 * **Anthropic**: forced tool use — the model is required to call a single tool whose input is your Pydantic schema.
 * **LiteLLM**: schema-aligned retry (`schema_aligned_extract`) — feeds validation errors back to the LLM as feedback for up to 2 retries.
 
@@ -209,20 +252,23 @@ city = await schema_aligned_extract(
 
 == Error handling
 
-Every adapter translates SDK-specific exceptions to the provider-agnostic hierarchy in `neo4j_agent_memory.llm.errors`:
+The adapters translate recognized SDK-specific exceptions to the provider hierarchy in `neo4j_agent_memory.llm.errors`:
 
 [source,python]
 ----
-from neo4j_agent_memory.llm import ProviderRateLimitError, ProviderTimeoutError
+import asyncio
 
+from neo4j_agent_memory.llm import ChatMessage, ProviderRateLimitError, ProviderTimeoutError
+
+messages = [ChatMessage(role="user", content="Reply with the word ready.")]
 try:
-    result = await provider.complete([...])
+    result = await provider.complete(messages)
 except ProviderRateLimitError as e:
     # Same except clause works across OpenAI, Anthropic, Bedrock, LiteLLM.
     await asyncio.sleep(e.retry_after or 1.0)
-    result = await provider.complete([...])
+    result = await provider.complete(messages)
 except ProviderTimeoutError:
-    ...
+    raise
 ----
 
 The full hierarchy:
@@ -241,12 +287,12 @@ The full hierarchy:
 [cols="2,1,1,1,1",options="header"]
 |===
 | Adapter                                       | LLM Bronze | Structured Silver | Embedding | Notes
-| `OpenAIProvider`                              | ✓          | ✓ (strict mode)   |           | Most reliable.
+| `OpenAIProvider`                              | ✓          | ✓ (strict mode)   |           | Native SDK adapter.
 | `OpenAIEmbeddingProvider`                     |            |                   | ✓         | Dimension reduction supported.
 | `AnthropicProvider`                           | ✓          | ✓ (forced tool)   |           | Optional prompt caching.
 | `BedrockProvider`                             | ✓          | ✓ (tool use)      |           | Boto3 credential chain.
 | `BedrockEmbeddingProvider`                    |            |                   | ✓         | Titan + Cohere via Bedrock.
-| `LiteLLMProvider`                             | ✓          | ✓ (via SAP)       |           | 100+ providers.
+| `LiteLLMProvider`                             | ✓          | ✓ (via SAP)       |           | LiteLLM routing.
 | `LiteLLMEmbeddingProvider`                    |            |                   | ✓         | Cohere, Voyage, etc.
 | `SentenceTransformersProvider`                |            |                   | ✓         | Local, no API key.
 | `VertexAIEmbeddingProvider`                   |            |                   | ✓         | Wraps existing Vertex AI embedder.
@@ -260,7 +306,7 @@ Match the Python API surface from the command line:
 [source,bash]
 ----
 neo4j-agent-memory mcp serve \
-  --password mypw \
+  --backend bolt --uri "$NEO4J_URI" --user "$NEO4J_USERNAME" \
   --llm anthropic/claude-3-5-sonnet-latest \
   --embedding BAAI/bge-small-en-v1.5 \
   --llm-api-key $ANTHROPIC_API_KEY
@@ -272,10 +318,18 @@ Or via env vars:
 ----
 export NAM_LLM=anthropic/claude-3-5-sonnet-latest
 export NAM_EMBEDDING=BAAI/bge-small-en-v1.5
-neo4j-agent-memory mcp serve --password mypw
+neo4j-agent-memory mcp serve --backend bolt --uri "$NEO4J_URI" --user "$NEO4J_USERNAME"
 ----
 
 See xref:reference/cli.adoc[CLI Reference] for the full flag set.
+
+== Verify the configuration
+
+Print the configured provider class and make one small completion request.
+For embeddings, compare `len(await embedder.embed_one("test"))` with
+`embedder.dimensions`. Run a labeled extraction example before changing
+production settings. Model changes require retrieval validation even if the
+vector dimension stays the same; see xref:how-to/migrate-embedding-model.adoc[the migration runbook].
 
 == Related
 
@@ -284,3 +338,6 @@ See xref:reference/cli.adoc[CLI Reference] for the full flag set.
 * xref:how-to/configure-embedding-provider.adoc[Configure Embedding Provider].
 * xref:explanation/why-provider-protocol.adoc[Why the Provider Protocol?] — design rationale.
 * xref:how-to/migrate-to-providers.adoc[Migrate to Pluggable Providers] — backward compat and side-by-side examples.
+
+// Preserve historical section links after the procedure was reorganized.
+anchor:_tldr_string_shorthand[]

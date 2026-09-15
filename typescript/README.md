@@ -4,7 +4,7 @@
 ![Status: Beta](https://img.shields.io/badge/Status-Beta-6366F1)
 ![Community Supported](https://img.shields.io/badge/Support-Community-6B7280)
 
-> **Now on npm.** Install with `npm install @neo4j-labs/agent-memory`
+> **Package installation.** Install with `npm install @neo4j-labs/agent-memory`
 > ([package page](https://www.npmjs.com/package/@neo4j-labs/agent-memory)).
 > Source lives alongside the Python SDK at
 > [`neo4j-labs/agent-memory`](https://github.com/neo4j-labs/agent-memory)
@@ -16,15 +16,15 @@
 > ⚠️ **Neo4j Labs Project**
 >
 > This project is part of Neo4j Labs and is actively maintained, but not
-> officially supported. There are no SLAs or guarantees around backwards
-> compatibility and deprecation. For questions and support, please use
+> officially supported. There are no SLAs, backward-compatibility guarantees,
+> or scheduled deprecation commitments. APIs may change without notice. For questions and support, please use
 > the [Neo4j Community Forum](https://community.neo4j.com).
 
 ## ✨ Features
 
 - Three memory subclients in one client: **short-term** (conversations,
   messages, three-tier context), **long-term** (entities, search,
-  relationships, graph view), and **reasoning** (steps, traces,
+  returned graph views), and **reasoning** (steps, traces,
   provenance, tool calls).
 - Zero-config construction — reads `MEMORY_API_KEY` from the
   environment and defaults to the hosted service.
@@ -43,7 +43,9 @@
 npm install @neo4j-labs/agent-memory
 ```
 
-Requires Node.js 22+.
+Requires Node.js 22+. This README maps current source; verify a selected npm
+artifact before assuming it includes newer in-tree APIs. The [source examples](https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples)
+build the SDK before installing their local `file:` dependency.
 
 ## 🚀 Quick start
 
@@ -69,8 +71,8 @@ console.log(ctx.recentMessages, ctx.observations, ctx.reflections);
 ### On the edge
 
 Edge runtimes (Cloudflare Workers, Vercel Edge) expose environment
-variables via the request handler scope, not `process.env`. Pass the key
-explicitly:
+differ by runtime; Cloudflare exposes bindings through the handler, while other
+runtimes may provide `process.env`. Pass the key explicitly:
 
 ```ts
 export default {
@@ -83,21 +85,22 @@ export default {
 
 ## 🧩 Integrations
 
-All four ship as subpath exports. See each integration's
-[example](./examples) and how-to guide for a runnable walkthrough.
+All five ship as subpath exports. See each integration's
+[example](https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples) and how-to guide for a runnable walkthrough.
 
 | Integration | Import | Example |
 |---|---|---|
-| **Vercel AI SDK** | `@neo4j-labs/agent-memory/middleware/vercel-ai` | [`examples/vercel-ai`](./examples/vercel-ai) |
-| **MCP tools** | `@neo4j-labs/agent-memory/mcp`, `…/mcp/register` | [`examples/mcp`](./examples/mcp) |
-| **LangChain JS** | `@neo4j-labs/agent-memory/integrations/langchain` | [`examples/langchain`](./examples/langchain) |
-| **Mastra** | `@neo4j-labs/agent-memory/integrations/mastra` | [`examples/mastra`](./examples/mastra) |
-| **AWS Strands** | `@neo4j-labs/agent-memory/integrations/strands` | [`examples/strands`](./examples/strands) |
+| **Vercel AI SDK** | `@neo4j-labs/agent-memory/middleware/vercel-ai` | [`examples/vercel-ai`](https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/vercel-ai) |
+| **MCP tools** | `@neo4j-labs/agent-memory/mcp`, `…/mcp/register` | [`examples/mcp`](https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/mcp) |
+| **LangChain JS** | `@neo4j-labs/agent-memory/integrations/langchain` | [`examples/langchain`](https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/langchain) |
+| **Mastra** | `@neo4j-labs/agent-memory/integrations/mastra` | [`examples/mastra`](https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/mastra) |
+| **AWS Strands** | `@neo4j-labs/agent-memory/integrations/strands` | [`examples/strands`](https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/strands) |
 
 ## 📖 Documentation
 
 - [TypeScript SDK landing page](https://neo4j.com/labs/agent-memory/sdks/typescript)
-- [Tutorial: First Agent Memory (TypeScript)](https://neo4j.com/labs/agent-memory/tutorials/first-agent-memory-typescript)
+- [Start here: store and read back hosted memory](../docs/modules/ROOT/pages/tutorials/hosted-quickstart-typescript.adoc)
+- [Build an agent with memory](../docs/modules/ROOT/pages/tutorials/first-agent-memory-typescript.adoc)
 - [How-to guides](https://neo4j.com/labs/agent-memory/how-to/typescript) — authentication,
   edge deployment, error handling, observability, framework integrations
 - [Concept: short-term vs long-term vs reasoning memory](https://neo4j.com/labs/agent-memory/explanation/memory-types)

@@ -14,43 +14,43 @@ Neo4j Agent Memory provides official integrations for five popular agent framewo
 
 | xref:how-to/integrations/langchain.adoc[LangChain]
 | Chains and agents with conversation memory
-| ✅ Production Ready
+| Experimental · Community supported
 
 | xref:how-to/integrations/pydantic-ai.adoc[PydanticAI]
 | Modern type-safe agents with automatic tracing
-| ✅ Production Ready
+| Experimental · Community supported
 
 | xref:how-to/integrations/llamaindex.adoc[LlamaIndex]
 | RAG applications with document + graph retrieval
-| ✅ Production Ready
+| Experimental · Community supported
 
 | xref:how-to/integrations/crewai.adoc[CrewAI]
 | Multi-agent systems with shared memory
-| ✅ Production Ready
+| Experimental · Community supported
 
 | xref:how-to/integrations/openai-agents.adoc[OpenAI Agents SDK]
 | OpenAI function calling with persistent memory
-| ✅ Production Ready
+| Experimental · Community supported
 
 | xref:how-to/integrations/google-cloud.adoc[Google Cloud]
 | Vertex AI embeddings, ADK agents, MCP server
-| ✅ Production Ready
+| Experimental · Community supported
 
 | xref:how-to/integrations/aws-strands.adoc[AWS Strands Agents]
 | AWS Strands SDK with Bedrock and Context Graph tools
-| ✅ Production Ready
+| Experimental · Community supported
 
 | xref:how-to/integrations/aws-bedrock-embeddings.adoc[Amazon Bedrock Embeddings]
 | Titan and Cohere embeddings via Bedrock
-| ✅ Production Ready
+| Experimental · Community supported
 
 | xref:how-to/integrations/aws-hybrid-memory.adoc[AWS Hybrid Memory]
 | AgentCore + Context Graphs combined
-| ✅ Production Ready
+| Experimental · Community supported
 
 | xref:how-to/integrations/microsoft-agent.adoc[Microsoft Agent Framework]
 | Context providers, GDS algorithms, and graph-enhanced memory
-| ✅ Production Ready
+| Experimental · Community supported
 |===
 
 == Quick Start
@@ -60,28 +60,28 @@ Choose your framework and install:
 [source,bash]
 ----
 # LangChain
-pip install neo4j-agent-memory[langchain]
+pip install 'neo4j-agent-memory[langchain]==0.6.0'
 
 # PydanticAI
-pip install neo4j-agent-memory[pydantic-ai]
+pip install 'neo4j-agent-memory[pydantic-ai]==0.6.0'
 
 # LlamaIndex
-pip install neo4j-agent-memory[llamaindex]
+pip install 'neo4j-agent-memory[llamaindex]==0.6.0'
 
 # CrewAI
-pip install neo4j-agent-memory[crewai]
+pip install 'neo4j-agent-memory[crewai]==0.6.0'
 
 # OpenAI Agents SDK
-pip install neo4j-agent-memory[openai-agents]
+pip install 'neo4j-agent-memory[openai-agents]==0.6.0'
 
 # Google Cloud (Vertex AI + ADK + MCP)
-pip install neo4j-agent-memory[google,mcp]
+pip install 'neo4j-agent-memory[google,mcp]==0.6.0'
 
 # AWS Strands Agents
-pip install neo4j-agent-memory[aws,strands]
+pip install 'neo4j-agent-memory[aws,strands]==0.6.0'
 
 # All frameworks
-pip install neo4j-agent-memory[all]
+pip install 'neo4j-agent-memory[all]==0.6.0'
 ----
 
 == Quick Examples
@@ -150,14 +150,19 @@ results = await memory_service.search_memory("query")
 
 === AWS Strands Agents
 
+Export the connection values from xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the Aura connection setup]. The tool factory uses the direct Neo4j backend.
+
 [source,python]
 ----
+import os
 from strands import Agent
 from neo4j_agent_memory.integrations.strands import context_graph_tools
 
 tools = context_graph_tools(
-    neo4j_uri="neo4j+s://...",
-    neo4j_password="...",
+    neo4j_uri=os.environ["NEO4J_URI"],
+    neo4j_user=os.environ["NEO4J_USERNAME"],
+    neo4j_password=os.environ["NEO4J_PASSWORD"],
+    neo4j_database=os.getenv("NEO4J_DATABASE", "neo4j"),
     embedding_provider="bedrock",
 )
 

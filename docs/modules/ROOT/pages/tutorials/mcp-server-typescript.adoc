@@ -1,4 +1,4 @@
-= Connect Claude Desktop to Your Memory (TypeScript MCP Server)
+= Connect Claude Desktop to memory with a TypeScript MCP server
 :page-product: agent-memory
 :page-pagination:
 :toclevels: 3
@@ -6,44 +6,60 @@
 :icons: font
 :source-highlighter: highlight.js
 
-A step-by-step tutorial to run a TypeScript MCP server that exposes the 12 standard memory tools to Claude Desktop, Cursor, or any MCP-aware client — backed by the hosted NAMS service.
+We will run a local TypeScript MCP server, connect Claude Desktop to it, and
+explicitly store and recall a message and entity in a dedicated NAMS workspace.
+We will retain the returned IDs so we can verify the same records in a new chat
+and account for the resources we create.
 
-[.lead]
-In this tutorial we will stand up an MCP server in ~50 lines of TypeScript, register it with Claude Desktop, and watch Claude store entities, recall preferences, and add reasoning traces during a normal chat — all backed by your NAMS account.
+This lesson teaches a local stdio server with a selected set of tools. For the
+separate hosted MCP service, see xref:reference/nams-mcp.adoc[Hosted NAMS MCP].
 
-[TIP]
-====
-**Do you actually need to self-host?** Probably not. NAMS operates its own MCP server at `https://mcp.memory.neo4jlabs.com/mcp`, and it is a *larger* surface than the one you are about to build: 47 scope-gated tools spanning memory, entity review, ontology, workspace administration and Skills, with OAuth 2.0 so no long-lived key ends up in a config file. Adding it as a remote MCP server in your client is zero code — see xref:reference/nams-mcp.adoc[the hosted NAMS MCP server reference].
+anchor:_what_youll_learn[]
 
-Self-hosting is the right choice when you want to **wrap, filter, or log tool calls** before they hit NAMS — to audit every call, expose a restricted subset to a particular client, add custom tools alongside the 12 memory ones, or proxy traffic from a network that can't reach `memory.neo4jlabs.com` directly. That's what this tutorial covers.
-====
+== What we will learn
 
-== What You'll Learn
+* Register memory tools with `@neo4j-labs/agent-memory/mcp/register`.
+* Connect that server to Claude Desktop through stdio.
+* Verify explicit tool results and reuse the returned conversation ID.
+* Inspect call logs, restrict tools, and add a scoped custom query.
 
-* How to use `@neo4j-labs/agent-memory/mcp/register` to register the 12 standard memory tools on an MCP server in one call.
-* How to wire that server to Claude Desktop via stdio.
-* How to verify memory operations from a Claude chat.
-* How to audit and restrict tool calls, and how to add a custom tool alongside the standard 12.
+anchor:_prerequisites[]
 
-== Prerequisites
+== Before you begin
 
-* Node.js 22 or later.
-* Claude Desktop (latest version).
-* `MEMORY_API_KEY` — get one at link:https://memory.neo4jlabs.com[memory.neo4jlabs.com].
+* macOS, Git, Node.js 22 or later with npm, and a POSIX shell.
+* Claude Desktop with local stdio-server support.
+* A workspace-scoped `MEMORY_API_KEY` for a dedicated NAMS test workspace.
 
-== Time Required
+The local server uses that NAMS data key, not Aura credentials. No OpenAI key is
+required by this server. See xref:reference/authentication.adoc[Authentication]
+for the distinction between workspace data access and owner key management.
 
-About 15 minutes.
+anchor:_time_required[]
 
 == Step 1: Project setup
 
+include::partial$typescript-tutorial-checkout.adoc[]
+
+Create a separate project at the repository root:
+
 [source,bash]
 ----
-mkdir my-memory-mcp && cd my-memory-mcp
+mkdir my-memory-mcp
+cd my-memory-mcp
 npm init -y
-npm install @neo4j-labs/agent-memory @modelcontextprotocol/sdk zod
-npm install --save-dev typescript tsx @types/node
+npm install ../typescript @modelcontextprotocol/sdk@^1.30 zod@^4
+npm install --save-dev typescript@^5.9 tsx@^4 @types/node@^22
+mkdir src
+cp ../typescript/examples/shared/tutorial-state.ts src/
+cp ../typescript/examples/shared/tutorial-cleanup.ts src/
+cp ../typescript/examples/shared/tutorial-mcp.ts src/
 ----
+
+The three maintained helpers are copied into `src/`, inside this project's
+TypeScript `rootDir`. They retain lesson IDs, verify saved records and clean up
+only resources whose ownership is established. Keep this project for the restart
+and cleanup steps; do not recreate it midway through the lesson.
 
 `zod` is what `McpServer` validates tool arguments with; it is an optional peer of the memory SDK and a direct dependency of the MCP SDK.
 
@@ -56,17 +72,52 @@ Add `"type": "module"`, an engine floor and the scripts to `package.json`:
   "engines": { "node": ">=22.0.0" },
   "scripts": {
     "start": "tsx --env-file-if-exists=.env src/server.ts",
-    "build": "tsc --outDir dist"
+    "build": "tsc -p tsconfig.json"
   }
 }
 ----
 
-`--env-file-if-exists` is what loads `.env`; `tsx` does not read it on its own. Put your key there:
+Create `tsconfig.json` in `my-memory-mcp/`:
+
+[source,json]
+----
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": "src",
+    "outDir": "dist",
+    "strict": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts"]
+}
+----
+
+Merge the package fields above into the generated file; keep the dependency entries.
+Create the private environment file only if it does not already exist:
 
 [source,bash]
 ----
-echo 'MEMORY_API_KEY=nams_your_key_here' > .env
+if [ ! -e .env ]; then
+  (umask 077; set -C; cat ../typescript/examples/mcp/.env.tutorial.example > .env)
+fi
+chmod 600 .env
+if [ ! -e .gitignore ]; then
+  (set -C; printf '.env\n.tutorial-state/\n' > .gitignore)
+fi
 ----
+
+Edit `.env` with the workspace data key. Keep `.env` and `.tutorial-state/`
+ignored by Git; if this project already had a `.gitignore`, add any missing
+entries. An existing `.env` is preserved. `--env-file-if-exists=.env` loads it
+for terminal commands; exported variables take precedence. Desktop receives
+its own explicit environment in Step 4.
+
+All following terminal commands run in `my-memory-mcp/`. When returning from
+another lesson in this checkout, use
+`cd "$AGENT_MEMORY_TUTORIAL_ROOT/my-memory-mcp"` instead of recreating the project.
 
 == Step 2: Write the MCP server
 
@@ -78,6 +129,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { MemoryClient, VERSION } from "@neo4j-labs/agent-memory";
 import { registerMemoryTools } from "@neo4j-labs/agent-memory/mcp/register";
+import { resolveTutorialConfig } from "./tutorial-state.js";
 
 async function main() {
   // Fail fast on stderr: thrown later, a missing key looks to the client like
@@ -87,14 +139,18 @@ async function main() {
     process.exit(1);
   }
 
-  // Reads MEMORY_API_KEY from the environment Claude Desktop passes in.
-  const memory = new MemoryClient();
+  // The server and record/verify/cleanup CLI resolve the same environment.
+  const memory = new MemoryClient({ ...resolveTutorialConfig(), transport: "rest", timeout: 30_000 });
 
   const server = new McpServer({ name: "my-memory-mcp", version: VERSION });
 
-  // Registers all 12 memory tools: Zod-validated inputs, read/write
-  // annotations, and dispatch to the matching MemoryClient method.
+  // Expose only the six storage/retrieval tools used by this lesson.
   const toolNames = registerMemoryTools(server, memory, {
+    only: [
+      "memory_create_conversation", "memory_add_messages", "memory_get_context",
+      "memory_search_messages", "memory_get_entity",
+      "memory_add_entity",
+    ],
     // One audit line per call — tool name and argument *keys*, never values.
     onCall: ({ tool, argKeys, durationMs, ok }) =>
       console.error(`[mcp] ${tool} keys=[${argKeys.join(",")}] ${durationMs}ms ok=${ok}`),
@@ -102,7 +158,7 @@ async function main() {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error(`my-memory-mcp listening on stdio with ${toolNames.length} tools`);
+  console.error(`my-memory-mcp listening on stdio; registered ${toolNames.length} SDK memory tools`);
 
   // Ctrl+C should close the MCP session and the memory client, not just die.
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
@@ -122,9 +178,17 @@ main().catch((err) => {
 });
 ----
 
-That's the whole server. `registerMemoryTools` covers the entire memory surface — definitions, schemas, annotations and dispatch — so the only code you own is policy: what to expose, what to log, and what to add.
+The SDK defines 12 standard memory tools. This lesson registers six of them,
+with validation and dispatch supplied by `registerMemoryTools`. Reasoning writes
+are excluded because the service does not provide a verified complete cleanup
+route for those records. The SDK APIs remain available for applications with an
+established retention policy; see xref:reference/typescript-api.adoc[the API
+reference] before adding them.
 
-Two things to note. Everything diagnostic goes to **stderr**: with the stdio transport, stdout is the protocol channel and a stray `console.log` corrupts it. And a dispatch failure comes back as a tool result with `isError: true` rather than a thrown protocol error, so Claude can read what went wrong and retry.
+Diagnostics go to **stderr** because stdout carries the stdio protocol. A
+dispatch failure returns a tool result with `isError: true`. Inspect that
+result before continuing; do not repeat an uncertain write until its resource
+ID and disposition are established.
 
 == Step 3: Test the server locally
 
@@ -133,19 +197,16 @@ Two things to note. Everything diagnostic goes to **stderr**: with the stdio tra
 npm start
 ----
 
-The process should print `my-memory-mcp listening on stdio with 12 tools` to stderr and then sit waiting for JSON-RPC over stdin/stdout. Press Ctrl+C to stop it.
+The process should print `my-memory-mcp listening on stdio; registered 6 SDK memory tools` to stderr and then sit waiting for JSON-RPC over stdin/stdout. Press Ctrl+C to stop it.
 
 If it exits 1 with `MEMORY_API_KEY is not set`, check that `.env` exists and that the `start` script carries `--env-file-if-exists=.env`.
 
 == Step 4: Register the server with Claude Desktop
 
-Locate `claude_desktop_config.json`:
-
-* **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-* **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
-* **Linux**: `~/.config/Claude/claude_desktop_config.json`
-
-Add (or merge) the server config:
+This selected path uses Claude Desktop on macOS. Merge the server entry below
+into `~/Library/Application Support/Claude/claude_desktop_config.json`,
+preserving any existing server entries. Client UI labels can change
+independently of this SDK.
 
 [source,json]
 ----
@@ -154,9 +215,9 @@ Add (or merge) the server config:
     "neo4j-memory": {
       "command": "node",
       "args": ["/absolute/path/to/my-memory-mcp/dist/server.js"],
-      "cwd": "/absolute/path/to/my-memory-mcp",
       "env": {
-        "MEMORY_API_KEY": "nams_..."
+        "MEMORY_API_KEY": "nams_your_workspace_key_here",
+        "MEMORY_ENDPOINT": "https://memory.neo4jlabs.com/v1"
       }
     }
   }
@@ -165,15 +226,25 @@ Add (or merge) the server config:
 
 Run `npm run build` first so `dist/server.js` exists. Pointing Desktop at compiled output keeps a TypeScript loader out of the launch path, which is the most common reason a server silently fails to start.
 
-Use **absolute paths**, and set `cwd`. Relative paths don't work — Claude Desktop launches the process from its own working directory, which is also why a bare `tsx` specifier can fail to resolve.
+Use an absolute entry-point path and, if needed, an absolute Node executable
+path. This server does not depend on a client-specific `cwd` setting.
 
-`claude_desktop_config.json` is plaintext and its `env` block is the only way to get a key into a self-hosted stdio server, so use a workspace-scoped data-plane key rather than an admin key, and rotate it with `client.auth.rotateApiKey()` if the file leaks. If you would rather not keep a long-lived key on disk at all, use the hosted MCP server — it supports OAuth and this pattern cannot.
+`claude_desktop_config.json` stores its `env` values as plaintext. Use the
+workspace-scoped data key and keep the file private. If it leaks, ask the key
+owner to rotate or revoke that exact key through their authenticated management
+interface, then replace the value in Desktop and verify that the old key is
+rejected. The API alternative requires the key's `keyId` and a separately
+authenticated owner-user or administrator client; this workspace-key client
+cannot manage its own key. See
+xref:reference/authentication.adoc#_key_lifecycle[Key rotation and revocation].
+Never put an owner or administrator credential in Desktop.
 
 Restart Claude Desktop.
 
 == Step 5: Verify the connection
 
-In Claude Desktop, click the hammer icon (or "tools" indicator) near the message input. You should see 12 tools listed under `neo4j-memory`:
+Inspect the connected server's `tools/list` response in your MCP client. The
+lesson registers these six tools before the custom-tool step:
 
 [listing]
 ----
@@ -181,107 +252,186 @@ memory_create_conversation
 memory_add_messages
 memory_get_context
 memory_search_messages
-memory_search_entities
 memory_get_entity
 memory_add_entity
-memory_get_entity_history
-memory_record_step
-memory_record_tool_call
-memory_get_trace
-memory_explain_decision
 ----
 
-If the indicator is missing or shows an error, check Claude Desktop's MCP log: **Settings → Developer → Open MCP Logs** (on macOS the file is `~/Library/Logs/Claude/mcp-server-neo4j-memory.log`). The most common issues:
+If connection fails, inspect the client's MCP logs and the server's stderr.
+The usual setup issues are:
 
 * Wrong absolute path in `args`, or `dist/` not built yet.
 * Missing or invalid `MEMORY_API_KEY` in `env` — the server exits 1 and says so in the log.
 * Node not on the PATH that Claude Desktop sees — use the absolute path to the binary, e.g. `"command": "/usr/local/bin/node"`.
 
-== Step 6: Have a memory-aware conversation
+anchor:_step_6_have_a_memory_aware_conversation[]
 
-In a fresh Claude conversation, paste this:
+== Step 6: Store and read back a concrete memory
+
+First initialize the private ledger in the terminal:
+
+[source,bash]
+----
+npx tsx --env-file-if-exists=.env src/tutorial-mcp.ts init .tutorial-state/mcp.json
+----
+
+Expected: JSON with a unique `runId`, `userId` and `entityName`. Keep those
+actual values. Ask Desktop to perform *one write at a time*, then record the
+returned ID in the terminal before requesting another write.
+
+. Ask Desktop to call `memory_create_conversation` with the printed `userId`
+  and metadata `{"run": "<the printed runId>"}`. Copy its returned conversation
+  ID into the command below; do not invent an ID.
++
+[source,bash]
+----
+export CONVERSATION_ID='<the returned conversation ID>'
+npx tsx --env-file-if-exists=.env src/tutorial-mcp.ts record .tutorial-state/mcp.json conversation "$CONVERSATION_ID"
+----
++
+Expected: `Recorded conversation ID` followed by that ID. The helper checks
+its user, run marker and creation time against the ledger.
+
+. Ask Desktop to call `memory_add_entity` with the printed `entityName` and
+  type `organization`, before adding the message that will mention it. Copy the
+  exact returned entity JSON object from the tool result's text content to the
+  macOS clipboard, then save it privately and record its ID:
++
+[source,bash]
+----
+(umask 077; set -C; pbpaste > .tutorial-state/mcp-entity-result.json)
+npx tsx --env-file-if-exists=.env src/tutorial-mcp.ts record .tutorial-state/mcp.json entity '<the returned entity ID>' .tutorial-state/mcp-entity-result.json
+----
++
+Copy the JSON entity object, not the enclosing MCP result or Desktop's prose.
+Keep the create result unchanged: a later `memory_get_entity` response can omit
+merge evidence needed for cleanup. The command stops if the receipt file
+already exists, so an earlier receipt is not overwritten.
++
+Expected: `Recorded entity ID`. Ask Desktop to call `memory_get_entity` with
+that ID and inspect its returned name and type. Recording an ID does not by
+itself authorize deletion. A merged entity, or one without a matching create
+receipt, is retained; cleanup checks creation and provenance separately.
+
+. Ask Desktop to call `memory_add_messages` for that conversation with one
+  user message: `My fictional project is <the printed entityName>.` Record the
+  actual message ID returned by the tool, supplying the same conversation ID:
++
+[source,bash]
+----
+npx tsx --env-file-if-exists=.env src/tutorial-mcp.ts record .tutorial-state/mcp.json message '<the returned message ID>' "$CONVERSATION_ID"
+----
++
+Expected: `Recorded message ID`. The helper reads back its content and stores
+its digest. Ask Desktop to call `memory_get_context` for the same conversation
+and inspect the stored message in the successful tool result.
+
+Inspect the ledger and verify all recorded messages from a separate process:
+
+[source,bash]
+----
+npx tsx --env-file-if-exists=.env src/tutorial-mcp.ts inspect .tutorial-state/mcp.json
+npx tsx --env-file-if-exists=.env src/tutorial-mcp.ts verify .tutorial-state/mcp.json
+----
+
+Expected: `Verified stored messages:` reports this conversation and its one
+message. These commands make no model calls or new memory writes. Desktop's
+prose is not the storage assertion: inspect the actual tool results and CLI
+readback. This selected surface creates neither preference records nor
+reasoning steps.
+
+The ledger does not intercept Desktop calls. If a chat or terminal is
+interrupted between a write and its `record` command, retain the tool result
+and record its exact ID before continuing. If the ID or ownership is uncertain,
+stop and resolve that resource with the workspace owner. Do not claim complete
+cleanup of writes that were never recorded or ask Desktop to repeat them as a
+recovery shortcut.
+
+anchor:_step_7_verify_in_your_nams_dashboard[]
+
+== Step 7: Recall in a new client chat
+
+Keep the NAMS conversation ID from Step 6. In a new chat, supply that ID and ask:
 
 [listing]
 ----
-I'm Alice. I work at Acme Corp as a software engineer. I love writing Rust
-and I'm allergic to peanuts.
-
-Please remember this and confirm what you stored.
+Use memory_get_context for NAMS conversation <the returned ID>.
+Search messages for "project" within that same conversation.
+What project name was stored?
 ----
 
-Claude will call several memory tools and respond with something like:
+A new client chat does not automatically select the earlier NAMS conversation.
+Message search requires its ID; this lesson retrieves entities by their returned
+IDs instead of searching the workspace.
+Successful protocol dispatch, actual Desktop behavior and hosted extraction are
+separate checks. Verify the original message again with the CLI after the new
+chat; its `verify` command neither repeats teaching nor creates another record.
 
-[listing]
-----
-I've stored the following in your memory:
-
-- **Entity**: Alice (person) — software engineer at Acme Corp
-- **Entity**: Acme Corp (organization)
-- **Preference** (programming): Loves writing Rust
-- **Preference** (dietary): Allergic to peanuts
-
-You can ask me to recall any of this in a future conversation.
-----
-
-Open a *new* Claude conversation (so the chat history is empty) and ask:
-
-[listing]
-----
-What do you remember about me?
-----
-
-Claude will call `memory_search_entities` and `memory_search_messages`, see the entities and preferences from the prior chat, and recite them back.
-
-== Step 7: Verify in your NAMS dashboard
-
-Open link:https://memory.neo4jlabs.com[memory.neo4jlabs.com] and navigate to **Entities**. You should see Alice and Acme Corp. Navigate to **Preferences** to see the Rust and peanut entries. Both will be timestamped with this session.
+Keep the ledger for the scoped custom query below. Cleanup follows the last
+verification step.
 
 == Step 8: Add a custom tool
 
-The standard 12 tools cover memory, but you can register tools of your own that live alongside them. Add a read-only Cypher console — the single most useful thing a self-hosted server can expose, because it answers aggregate questions (`how many entities of each type?`) that no individual memory tool can:
+Add these imports beside the existing imports in `src/server.ts`:
 
 [source,typescript]
 ----
-// In src/server.ts, after registerMemoryTools(...):
+import { isAbsolute } from "node:path";
+import { TutorialRun } from "./tutorial-state.js";
+import { inspectGraph } from "./tutorial-cleanup.js";
+----
 
-import { z } from "zod";
+Then insert this registration inside `main()`, after
+`registerMemoryTools(...)` and before connecting the transport:
 
+[source,typescript]
+----
+// In src/server.ts, inside main(), after registerMemoryTools(...):
 server.registerTool(
-  "memory_cypher",
+  "memory_tutorial_graph",
   {
-    description:
-      "Run a read-only Cypher query against the memory graph. Hosted NAMS only; " +
-      "writes are rejected.",
-    inputSchema: {
-      cypher: z.string().describe("A read-only Cypher query."),
-      params: z.record(z.string(), z.unknown()).optional(),
-    },
+    description: "Inspect graph records linked only to this tutorial's recorded messages.",
+    inputSchema: {},
     annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
   },
-  async ({ cypher, params }) => {
+  async () => {
+    let run: TutorialRun | undefined;
     try {
-      const result = await memory.query.cypher({ cypher, params });
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      const path = process.env.TUTORIAL_STATE_PATH;
+      if (!path || !isAbsolute(path)) {
+        throw new Error("Set TUTORIAL_STATE_PATH to the absolute path of this lesson's state file.");
+      }
+      run = TutorialRun.load(path, resolveTutorialConfig(), "mcp");
+      const rows = await inspectGraph(run);
+      return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return { content: [{ type: "text", text: message }], isError: true };
+    } finally {
+      await run?.client.close();
     }
   },
 );
 ----
 
-`inputSchema` here is a Zod *raw shape* — a plain object of field schemas, not `z.object({...})`. `McpServer` turns it into the JSON Schema clients see and validates arguments against it before your callback runs, so `cypher` is already a `string` by the time you use it.
+The tool accepts no model-supplied Cypher or resource IDs. Its helper verifies
+the saved conversation and message ownership, then uses those message IDs as
+parameters in the scoped graph query. An empty graph can mean extraction is
+still pending; it does not negate the exact message readback from Step 6.
 
-Treat this tool as privileged: anything the model writes runs against your graph. `client.query.cypher` rejects writes with HTTP 400, but you should still decide per client whether to register it at all.
+Print the absolute state-file path without exposing its contents:
 
-Restart Claude Desktop. The tool count should now be 13. Ask Claude:
-
-[listing]
+[source,bash]
 ----
-How many entities of each type do I have in memory?
+printf '%s/.tutorial-state/mcp.json\n' "$PWD"
+npm run build
 ----
 
-Claude will call `memory_cypher` with something like `MATCH (e:Entity) RETURN e.type AS type, count(*) AS n ORDER BY n DESC` and read the rows back. You've just extended the MCP surface without touching the SDK.
+Add `TUTORIAL_STATE_PATH` to this server's private Desktop `env` block using
+that exact printed path, alongside the same NAMS credential and endpoint.
+Reconnect Desktop. Expect seven tools including `memory_tutorial_graph`, then
+ask it to invoke that tool. Any returned graph rows must refer to the recorded
+message IDs. A state/credential mismatch is a tool error, not permission to
+inspect another workspace.
 
 == Step 9: Restrict what a client can reach
 
@@ -290,51 +440,69 @@ Claude will call `memory_cypher` with something like `MATCH (e:Entity) RETURN e.
 [source,typescript]
 ----
 const toolNames = registerMemoryTools(server, memory, {
-  // e.g. MCP_TOOLS=memory_get_context,memory_search_entities
-  only: process.env.MCP_TOOLS?.split(","),
+  only: ["memory_get_context", "memory_search_messages"],
   onCall: ({ tool, argKeys, durationMs, ok }) =>
     console.error(`[mcp] ${tool} keys=[${argKeys.join(",")}] ${durationMs}ms ok=${ok}`),
 });
 ----
 
-Combined with the audit hook you already wired in Step 2, that is the pair of controls the hosted server cannot give you: a surface you chose, and a log of everything that crossed it.
+Replace the original registration block with this one; do not register the same
+tools twice. The audit hook and allow-list apply to the registered memory tools.
+Remove the custom `memory_tutorial_graph` registration for this restricted variant,
+then rebuild and reconnect. Expect exactly two listed tools; an attempted
+`memory_create_conversation` call must be rejected. The CLI cleanup below does
+not depend on exposing deletion tools to Desktop.
 
-== What You've Built
+== Step 10: Clean up and inspect retained resources
 
-* An MCP server that exposes 12 (or 13) tools backed by NAMS memory, with validated arguments and read/write annotations.
-* A wired-up Claude Desktop that reads and writes that memory automatically.
-* An audit line per call and an allow-list — the two reasons to self-host rather than use the hosted server.
-* A pattern for adding custom tools alongside the standard memory surface.
+Stop Desktop's lesson server so it cannot add more records, then run:
 
-== Extending the Server
-
-* **Filter what gets stored.** Wrap `registerMemoryTools` with your own `registerTool` for the writes you care about, and reject arguments that look like secrets or card numbers before dispatching.
-* **Add per-tenant scoping.** Set `MEMORY_API_KEY` per Claude Desktop profile via different `mcpServers` entries — each profile reads and writes its own workspace.
-* **Switch to Streamable HTTP.** Replace `StdioServerTransport` with `StreamableHTTPServerTransport` to run the server out-of-process (a sidecar, Cloud Run) and share it between clients:
-
-[source,typescript]
+[source,bash]
 ----
-import { StreamableHTTPServerTransport }
-  from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-
-const transport = new StreamableHTTPServerTransport({
-  sessionIdGenerator: () => crypto.randomUUID(),
-});
-await server.connect(transport);
-
-// Then forward POST / GET / DELETE on your MCP route:
-//   await transport.handleRequest(req, res, body);
+npx tsx --env-file-if-exists=.env src/tutorial-mcp.ts cleanup .tutorial-state/mcp.json
+npx tsx --env-file-if-exists=.env src/tutorial-mcp.ts inspect .tutorial-state/mcp.json
 ----
 
-The transport does not authenticate callers — put your own auth in front of the route. See xref:how-to/typescript/mcp.adoc[the MCP how-to] for the full listener, and the runnable example below for one you can copy.
+The helper waits for terminal extraction of the recorded messages, checks
+entity creation and provenance, deletes only proven-owned entities and the
+conversation, then verifies their absence. Its `Cleanup:` result reports
+`complete`, `retainedIds` and `residualIds`. A retained shared or uncertain
+entity means the run is not fully removed; exit status 2 reports that incomplete
+disposition. A failed request or residual check is an error, not a cleanup pass.
 
-== Next Steps
+Keep the private ledger until every resource has a verified disposition. No
+step or skill delete route, broad workspace reset, or entity-name deletion is
+assumed. If manual ID recording was interrupted, resolve that gap before making
+a full-cleanup claim.
 
-* xref:tutorials/conversation-memory-typescript.adoc[Add Conversation Memory to a Chatbot (TypeScript)] — build an in-app chatbot using the same memory.
-* xref:tutorials/knowledge-graph-typescript.adoc[Build a Knowledge Graph from Documents (TypeScript)] — populate the entity graph that Claude will then search via MCP.
+anchor:_what_youve_built[]
+
+== What we built
+
+* A local stdio server exposing the selected NAMS tools, with validated inputs
+  and logs that record argument keys rather than secret values.
+* A Claude Desktop workflow using explicit tool calls and the same conversation
+  ID in a fresh chat, checked independently by a separate CLI process.
+* A scoped custom query, a two-tool policy, and an explicit record/verify/cleanup
+  procedure for the resources created during the exercise.
+
+anchor:_extending_the_server[]
+
+== Extending the server
+
+See xref:how-to/typescript/mcp.adoc[the MCP how-to] for custom policies and a
+complete Streamable HTTP listener. The HTTP transport needs caller
+authentication before exposure beyond the local machine. For multiple
+workspaces, keep each server's credential and ledger separate; a different
+Desktop chat alone does not create a workspace boundary.
+
+== Next steps
+
+* xref:tutorials/conversation-memory-typescript.adoc[Recall conversation memory after a restart] — verify an application uses its saved conversation.
+* xref:tutorials/knowledge-graph-typescript.adoc[Ingest documents and inspect extracted entities] — inspect extraction through the lesson’s scoped message IDs.
 * xref:how-to/typescript/mcp.adoc[MCP tools how-to] — every option for `registerMemoryTools`, `createMemoryTools()` and `handleMemoryToolCall()`.
 
-== See Also
+== See also
 
 * xref:reference/nams-mcp.adoc[Hosted NAMS MCP server] — the larger, OAuth-capable surface you do not have to run.
 * xref:reference/mcp-tools.adoc[MCP tools reference] — the standard tool definitions.

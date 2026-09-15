@@ -3,6 +3,11 @@
 :toclevels: 2
 :icons: font
 
+[NOTE]
+====
+This page describes the service contract used by this checkout. The SDK source alone does not verify a deployed service, dashboard, quota or authentication configuration. Check the authenticated service response and current workspace settings when following operational instructions.
+====
+
 How the hosted NAMS backend authenticates requests, where API keys come from, and how to handle them safely. This page is language-neutral; for SDK-specific setup see xref:how-to/use-nams.adoc[Use NAMS] (Python) and xref:how-to/typescript/authenticate.adoc[Authentication] (TypeScript).
 
 [NOTE]
@@ -80,9 +85,9 @@ Keys are created and managed from the dashboard at link:https://memory.neo4jlabs
 
 | Create | `POST /v1/auth/api-keys` — body `{label, category, workspaceId?}`. Returns the raw key once; also stored encrypted-at-rest so it can be revealed later.
 | List | `GET /v1/auth/api-keys`
-| Reveal | `GET /v1/auth/api-keys/{id}/reveal` — owner-only (non-owners get `404`; revoked or pre-encryption keys get `410`).
-| Rotate | `POST /v1/auth/api-keys/{id}/rotate` — mints a new key and revokes the old one.
-| Revoke | `DELETE /v1/auth/api-keys/{id}` — added to a blocklist for 30 days; effective on the next request.
+| Reveal | `GET /v1/auth/api-keys/\{id}/reveal` — owner-only (non-owners get `404`; revoked or pre-encryption keys get `410`).
+| Rotate | `POST /v1/auth/api-keys/\{id}/rotate` — mints a new key and revokes the old one.
+| Revoke | `DELETE /v1/auth/api-keys/\{id}` — added to a blocklist for 30 days; effective on the next request.
 |===
 
 Key management requires a **user token or an admin key**, so a leaked workspace

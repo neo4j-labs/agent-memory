@@ -1,752 +1,184 @@
-= Build a Knowledge Graph from Documents
+= Build a knowledge graph from documents
 :page-product: agent-memory
 :page-pagination:
-:toclevels: 3
+:toclevels: 2
 :sectanchors:
-:icons: font
-:source-highlighter: highlight.js
-:page-ad-icon: mortarboard
-:page-ad-title: Context Graphs: Agent Memory with Neo4j
-:page-ad-description: Build an AI agent that records its reasoning into Neo4j and query the trace to understand what it did and why.
-:page-ad-link: https://graphacademy.neo4j.com/courses/genai-context-graphs/?ref=docs-ad-genai-context-graphs
-:page-ad-underline-role: button
-:page-ad-underline: Enroll now
 
-Extract entities and relationships from documents to build a queryable knowledge graph.
+We will extract candidate entities and relationships from two fictional business documents, store their message provenance, inspect the graph after restarting Python, and pass that evidence to a chat model. We will inspect model output rather than assume every extraction is correct.
 
-[.lead]
-In this tutorial, we'll process a collection of documents to automatically extract entities, discover relationships, and build a knowledge graph that agents can query. We'll use a financial services example, but the same approach works for any domain.
+This lesson uses `neo4j-agent-memory` 0.6.0 from PyPI, the complete programs on this page, and a dedicated Neo4j AuraDB instance over Bolt. Offline contract tests exercise their assembly and control flow; provider and database success still need to be observed in your environment.
 
-== What You'll Learn
+anchor:_prerequisites[]
 
-* How to configure domain-specific entity extraction
-* How to process documents in batch
-* How to build relationships between entities
-* How to query the knowledge graph
-* How to visualize the extracted knowledge
+== Before you begin
 
-== Prerequisites
+* Python 3.10 or newer and a POSIX shell such as Bash or Zsh.
+* An OpenAI API key with access to `text-embedding-3-small`.
+* A Neo4j Aura account with capacity for a dedicated AuraDB Free instance.
 
-* Completed xref:tutorials/first-agent-memory.adoc[Build Your First Memory-Enabled Agent] tutorial
-* Neo4j running (Docker or Aura)
-* Basic understanding of entity extraction
+The embedding calls send the supplied text to OpenAI. This exercise uses fictional data. Neo4j Agent Memory is an experimental Neo4j Labs project; see xref:reference/backend-capabilities.adoc[backend capabilities] before adapting the example to NAMS.
 
-== Time Required
+You also need an OpenAI chat-model ID and disk space/network access for the GLiNER, GLiREL, and spaCy model downloads. CPU inference and the first download can take several minutes. GLiREL is installed separately because the SDK does not define a `glirel` extra. Its current package also requires `loguru` at import time without declaring that dependency, so the command includes it explicitly.
 
-Approximately 45 minutes.
+anchor:_step_1_project_setup[]
+anchor:_step_1_install_dependencies[]
 
-== What We're Building
+== 1. Install the lesson dependencies
 
-A knowledge graph that:
-
-1. Extracts entities (companies, people, securities) from financial documents
-2. Discovers relationships (works at, invested in, located in)
-3. Enables semantic queries across the knowledge
-4. Powers intelligent agent responses
-
-== Step 1: Project Setup
-
-Create a new project:
+include::partial$python-tutorial-setup.adoc[]
 
 [source,bash]
 ----
-mkdir knowledge-graph-demo
-cd knowledge-graph-demo
-python -m venv venv
-source venv/bin/activate
-
-pip install neo4j-agent-memory[all] python-dotenv
+python -m pip install 'neo4j-agent-memory[openai,gliner,spacy]==0.6.0' glirel 'loguru>=0.7,<1'
+python -m spacy download en_core_web_sm
+python -c "from importlib.metadata import version; import neo4j_agent_memory; assert version('neo4j-agent-memory') == '0.6.0'; print('SDK 0.6.0 import verified')"
 ----
 
-Create `.env`:
+Expected: `SDK 0.6.0 import verified`. Keep `agent-memory-tutorials` as your working directory for every command below.
+
+anchor:_step_2_set_up_neo4j[]
+
+== 2. Create and connect to the Aura database
+
+include::partial$aura-tutorial-setup.adoc[]
+
+anchor:_step_3_configure_environment[]
+
+== 3. Configure the provider and inspect the shared settings
 
 [source,bash]
 ----
-NEO4J_URI=bolt://localhost:7687
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=password123
-OPENAI_API_KEY=your-openai-api-key
+export OPENAI_API_KEY="replace-with-your-key"
+export OPENAI_MODEL="replace-with-your-accessible-chat-model-id"
+python -c "import os; assert os.environ['OPENAI_API_KEY']; print('Provider key present')"
 ----
 
-== Step 2: Prepare Sample Documents
+Expected: `Provider key present`. This checks presence; the requests in the program verify access. Set `OPENAI_MODEL` to a chat model available to your account. Do not put the API key in the program.
 
-Create a `documents` folder with sample financial documents. For this tutorial, we'll create synthetic documents:
+The maintained helper `core_memory_settings.py` is imported by the program in this lesson:
 
+.Save as `core_memory_settings.py`
 [source,python]
 ----
-# create_sample_docs.py
-import os
-
-os.makedirs("documents", exist_ok=True)
-
-DOCUMENTS = {
-    "company_profile_acme.txt": """
-Acme Investment Holdings LLC is a mid-sized investment firm headquartered in
-New York City. Founded in 2010 by CEO Sarah Johnson, the firm manages
-approximately $2 billion in assets for institutional and high-net-worth clients.
-
-The firm specializes in technology and healthcare sector investments. Their
-flagship fund, Acme Growth Fund, has consistently outperformed the S&P 500
-benchmark over the past five years.
-
-Key personnel include:
-- Sarah Johnson, CEO and Founder
-- Michael Chen, Chief Investment Officer
-- Lisa Park, Head of Research
-- Robert Williams, Chief Compliance Officer
-
-The firm has offices in New York, Boston, and San Francisco.
-""",
-
-    "earnings_report_q4.txt": """
-Q4 2024 Earnings Summary - Tech Sector Overview
-
-Apple Inc. (AAPL) reported record quarterly revenue of $119.6 billion,
-driven by strong iPhone 15 sales. CEO Tim Cook highlighted growth in
-services revenue and the Apple Vision Pro launch.
-
-Microsoft Corporation (MSFT) exceeded expectations with $62 billion in
-revenue. CEO Satya Nadella emphasized AI integration across products and
-strong Azure cloud growth of 28% year-over-year.
-
-NVIDIA Corporation (NVDA) continues to dominate the AI chip market with
-$22 billion in data center revenue. CEO Jensen Huang announced expanded
-partnerships with major cloud providers.
-
-Amazon.com Inc. (AMZN) reported $170 billion in revenue with AWS growing
-13%. CEO Andy Jassy highlighted AI services adoption and retail efficiency
-improvements.
-
-Alphabet Inc. (GOOGL) achieved $86 billion revenue with YouTube and Cloud
-showing strong momentum. CEO Sundar Pichai announced Gemini AI integration
-across Google products.
-""",
-
-    "market_analysis.txt": """
-2024 Technology Sector Analysis
-
-The technology sector experienced significant transformation in 2024,
-driven primarily by artificial intelligence investments. Morgan Stanley
-analyst Brian Nowak raised price targets for several AI-focused companies.
-
-Goldman Sachs technology analyst Eric Sheridan maintains overweight ratings
-on Microsoft, Alphabet, and Amazon, citing cloud computing and AI tailwinds.
-
-JPMorgan's semiconductor team, led by analyst Harlan Sur, upgraded NVIDIA
-to overweight following strong data center demand. The firm also initiated
-coverage on AMD with a buy rating.
-
-BlackRock, the world's largest asset manager, increased technology sector
-allocation in their model portfolios. CEO Larry Fink cited AI as a
-"defining technology trend" in the recent quarterly letter.
-
-Regional focus:
-- Silicon Valley remains the primary hub for AI innovation
-- Austin, Texas emerging as secondary tech hub
-- Seattle maintaining cloud computing leadership
-- New York strengthening fintech presence
-""",
-
-    "client_meeting_notes.txt": """
-Client Meeting Notes - Acme Investment Holdings
-Date: January 15, 2024
-Attendees: Sarah Johnson (Acme), Michael Chen (Acme), John Smith (Client)
-
-Discussion Summary:
-
-John Smith, portfolio manager at Riverside Capital, discussed rebalancing
-their $50 million technology allocation. Current holdings include Apple,
-Microsoft, and NVIDIA representing 60% of the portfolio.
-
-Key points discussed:
-1. Reduce concentration in NVIDIA given valuation concerns
-2. Add exposure to cloud infrastructure through Amazon AWS
-3. Consider Alphabet for AI/advertising diversification
-4. Maintain Apple position for dividend income
-
-Sarah Johnson recommended a phased rebalancing over Q1 2024 to minimize
-market impact. Michael Chen will prepare detailed trade recommendations.
-
-Action items:
-- Michael Chen to send trade proposal by January 20
-- John Smith to review with Riverside's risk committee
-- Follow-up call scheduled for January 25
-
-Next meeting: February 15, 2024 for Q1 review
-"""
-}
-
-for filename, content in DOCUMENTS.items():
-    with open(f"documents/{filename}", "w") as f:
-        f.write(content.strip())
-
-print(f"Created {len(DOCUMENTS)} sample documents in ./documents/")
+include::example$core_memory_settings.py[]
 ----
 
-Run it:
+The helper uses the exported Aura connection, explicitly selects the Bolt backend, disables automatic extraction and enrichment, and selects the embedding adapter. The complete program in the next step imports this helper from the tutorial folder.
 
-[source,bash]
-----
-python create_sample_docs.py
-----
+anchor:_step_2_prepare_sample_documents[]
+anchor:_step_3_configure_domain_specific_extraction[]
 
-== Step 3: Configure Domain-Specific Extraction
+== 4. Inspect the documents and custom extractor
 
-Create a custom financial services schema:
+The file `knowledge_graph.py` includes the two source documents, the custom `DomainSchema`, storage and query functions, and the complete command-line entry point:
 
+.Save as `knowledge_graph.py`
 [source,python]
 ----
-# extract.py
-import asyncio
-import os
-from pathlib import Path
-from dotenv import load_dotenv
-from neo4j_agent_memory import MemoryClient, MemorySettings
-from neo4j_agent_memory.extraction import (
-    GLiNEREntityExtractor,
-    GLiNERWithRelationsExtractor,
-)
-from neo4j_agent_memory.schema import EntitySchemaConfig, EntityTypeConfig
-
-load_dotenv()
-
-
-def create_financial_schema() -> EntitySchemaConfig:
-    """Create a schema optimized for financial documents."""
-
-    return EntitySchemaConfig(
-        name="financial_services",
-        version="1.0",
-        description="Schema for financial services knowledge graph",
-        entity_types=[
-            EntityTypeConfig(
-                name="PERSON",
-                description="Individual people including executives, analysts, clients",
-                examples=["Tim Cook", "Sarah Johnson", "Brian Nowak"],
-            ),
-            EntityTypeConfig(
-                name="COMPANY",
-                description="Companies, corporations, firms",
-                examples=["Apple Inc.", "Acme Investment Holdings", "Goldman Sachs"],
-            ),
-            EntityTypeConfig(
-                name="SECURITY",
-                description="Stocks, bonds, ETFs with ticker symbols",
-                examples=["Apple (AAPL)", "Microsoft stock", "S&P 500"],
-            ),
-            EntityTypeConfig(
-                name="FUND",
-                description="Investment funds, ETFs, mutual funds",
-                examples=["Acme Growth Fund", "Vanguard 500 Index"],
-            ),
-            EntityTypeConfig(
-                name="LOCATION",
-                description="Cities, regions, offices",
-                examples=["New York City", "Silicon Valley", "Austin, Texas"],
-            ),
-            EntityTypeConfig(
-                name="FINANCIAL_METRIC",
-                description="Revenue, earnings, amounts, percentages",
-                examples=["$119.6 billion revenue", "28% growth", "$50 million"],
-            ),
-            EntityTypeConfig(
-                name="DATE",
-                description="Dates, quarters, years",
-                examples=["Q4 2024", "January 15, 2024", "2024"],
-            ),
-            EntityTypeConfig(
-                name="SECTOR",
-                description="Industry sectors and categories",
-                examples=["technology sector", "healthcare", "AI"],
-            ),
-        ],
-    )
-
-
-async def extract_from_documents():
-    """Extract entities and relationships from all documents."""
-
-    # Initialize
-    settings = MemorySettings(
-        neo4j={"uri": os.getenv("NEO4J_URI", "bolt://localhost:7687"), "username": os.getenv("NEO4J_USER", "neo4j"), "password": os.getenv("NEO4J_PASSWORD", "password123")}
-    )
-    client = MemoryClient(settings)
-    await client.connect()
-
-    # Create extractor with custom schema
-    schema = create_financial_schema()
-    extractor = GLiNERWithRelationsExtractor.for_schema(schema)
-
-    print("✓ Extractor initialized with financial schema")
-    print(f"  Entity types: {[t.name for t in schema.entity_types]}")
-
-    # Process each document
-    doc_path = Path("documents")
-    documents = list(doc_path.glob("*.txt"))
-
-    print(f"\n📄 Processing {len(documents)} documents...")
-
-    all_entities = []
-    all_relations = []
-
-    for doc_file in documents:
-        print(f"\n  Processing: {doc_file.name}")
-
-        # Read document
-        content = doc_file.read_text()
-
-        # Extract entities and relations
-        result = await extractor.extract(content)
-
-        print(f"    Entities: {len(result.entities)}")
-        print(f"    Relations: {len(result.relations)}")
-
-        # Store document as entity
-        doc_entity, _ = await client.long_term.add_entity(
-            name=doc_file.stem.replace("_", " ").title(),
-            entity_type="DOCUMENT",
-            attributes={
-                "filename": doc_file.name,
-                "content_preview": content[:200] + "...",
-            },
-        )
-
-        # Store entities with deduplication
-        for entity in result.entities:
-            stored, dedup = await client.long_term.add_entity(
-                name=entity.name,
-                entity_type=entity.type,
-                attributes={
-                    "confidence": entity.confidence,
-                    "source_doc": doc_file.name,
-                },
-            )
-
-            # Link entity to source document
-            await client.long_term.add_relationship(
-                from_entity=stored.id,
-                to_entity=doc_entity.id,
-                relationship_type="MENTIONED_IN",
-            )
-
-            all_entities.append(stored)
-
-            if entity.type == "PERSON":
-                print(f"      👤 {entity.name}")
-            elif entity.type == "COMPANY":
-                print(f"      🏢 {entity.name}")
-            elif entity.type == "SECURITY":
-                print(f"      📈 {entity.name}")
-            elif entity.type == "LOCATION":
-                print(f"      📍 {entity.name}")
-
-        # Store relationships
-        for relation in result.relations:
-            # Find source and target entities
-            source_entities = await client.long_term.search_entities(
-                query=relation.source,
-                limit=1,
-            )
-            target_entities = await client.long_term.search_entities(
-                query=relation.target,
-                limit=1,
-            )
-
-            if source_entities and target_entities:
-                await client.long_term.add_relationship(
-                    from_entity=source_entities[0].id,
-                    to_entity=target_entities[0].id,
-                    relationship_type=relation.type.upper().replace(" ", "_"),
-                    properties={
-                        "confidence": relation.confidence,
-                        "source_doc": doc_file.name,
-                    },
-                )
-                all_relations.append(relation)
-                print(f"      🔗 {relation.source} --[{relation.type}]--> {relation.target}")
-
-    # Summary
-    print("\n" + "="*60)
-    print("📊 Knowledge Graph Summary")
-    print("="*60)
-    print(f"Documents processed: {len(documents)}")
-    print(f"Entities extracted: {len(all_entities)}")
-    print(f"Relationships discovered: {len(all_relations)}")
-
-    # Count by type
-    from collections import Counter
-    type_counts = Counter(e.type for e in all_entities)
-    print("\nEntities by type:")
-    for entity_type, count in type_counts.most_common():
-        print(f"  {entity_type}: {count}")
-
-    await client.close()
-    return all_entities, all_relations
-
-
-if __name__ == "__main__":
-    asyncio.run(extract_from_documents())
+include::example$knowledge_graph.py[]
 ----
 
-Run the extraction:
+We construct `GLiNEREntityExtractor(schema=SCHEMA)` and `GLiRELExtractor(relation_types=SCHEMA.relation_types)` explicitly, then compose them. `for_schema()` accepts a registered schema name, not an arbitrary schema object. The label mapping maps custom labels to `(TYPE, SUBTYPE)` tuples.
+
+Check the command assembly without downloading models:
 
 [source,bash]
 ----
-python extract.py
+python knowledge_graph.py --help
 ----
 
-You should see output like:
+Expected: the help output lists `ingest`, `inspect`, and `answer`. The source documents are constants in the file; there is no missing input directory to create.
 
-[source]
-----
-✓ Extractor initialized with financial schema
-  Entity types: ['PERSON', 'COMPANY', 'SECURITY', 'FUND', 'LOCATION', ...]
-
-📄 Processing 4 documents...
-
-  Processing: company_profile_acme.txt
-    Entities: 12
-    Relations: 5
-      🏢 Acme Investment Holdings LLC
-      📍 New York City
-      👤 Sarah Johnson
-      👤 Michael Chen
-      ...
-
-==================================================
-📊 Knowledge Graph Summary
-==================================================
-Documents processed: 4
-Entities extracted: 45
-Relationships discovered: 18
-
-Entities by type:
-  PERSON: 15
-  COMPANY: 12
-  LOCATION: 8
-  SECURITY: 6
-  ...
-----
-
-== Step 4: Query the Knowledge Graph
-
-Create a query interface:
-
-[source,python]
-----
-# query.py
-import asyncio
-import os
-from dotenv import load_dotenv
-from neo4j_agent_memory import MemoryClient, MemorySettings
-
-load_dotenv()
-
-
-async def main():
-    settings = MemorySettings(
-        neo4j={"uri": os.getenv("NEO4J_URI", "bolt://localhost:7687"), "username": os.getenv("NEO4J_USER", "neo4j"), "password": os.getenv("NEO4J_PASSWORD", "password123")}
-    )
-    client = MemoryClient(settings)
-    await client.connect()
-
-    print("🔍 Knowledge Graph Query Interface")
-    print("="*50)
-
-    # Query 1: Find all companies
-    print("\n1. All Companies in the Knowledge Graph:")
-    companies = await client.long_term.search_entities(
-        query="",
-        entity_types=["COMPANY"],
-        limit=20,
-    )
-    for company in companies:
-        print(f"   🏢 {company.name}")
-
-    # Query 2: Find people and their roles
-    print("\n2. Key People Mentioned:")
-    people = await client.long_term.search_entities(
-        query="CEO executive analyst",
-        entity_types=["PERSON"],
-        limit=10,
-    )
-    for person in people:
-        print(f"   👤 {person.name}")
-
-    # Query 3: Semantic search - AI companies
-    print("\n3. Entities Related to AI:")
-    ai_entities = await client.long_term.search_entities(
-        query="artificial intelligence machine learning AI",
-        limit=10,
-    )
-    for entity in ai_entities:
-        print(f"   [{entity.type}] {entity.name} (score: {entity.score:.2f})")
-
-    # Query 4: Find relationships using Cypher
-    print("\n4. Person-Company Relationships:")
-    results = await client.graph.execute_read(
-        """
-        MATCH (p:Entity {type: 'PERSON'})-[r]->(c:Entity {type: 'COMPANY'})
-        RETURN p.name as person, type(r) as relationship, c.name as company
-        LIMIT 10
-        """,
-    )
-    for row in results:
-        print(f"   {row['person']} --[{row['relationship']}]--> {row['company']}")
-
-    # Query 5: Find entities mentioned in multiple documents
-    print("\n5. Cross-Document Entities (mentioned in 2+ docs):")
-    results = await client.graph.execute_read(
-        """
-        MATCH (e:Entity)-[:MENTIONED_IN]->(d:Entity {type: 'DOCUMENT'})
-        WITH e, count(DISTINCT d) as doc_count
-        WHERE doc_count >= 2
-        RETURN e.name as entity, e.type as type, doc_count
-        ORDER BY doc_count DESC
-        LIMIT 10
-        """,
-    )
-    for row in results:
-        print(f"   [{row['type']}] {row['entity']} - {row['doc_count']} documents")
-
-    # Query 6: Find path between two entities
-    print("\n6. Connection Path: Sarah Johnson to Apple:")
-    results = await client.graph.execute_read(
-        """
-        MATCH path = shortestPath(
-            (a:Entity {name: 'Sarah Johnson'})-[*..5]-(b:Entity)
-        )
-        WHERE b.name CONTAINS 'Apple'
-        RETURN [n in nodes(path) | n.name] as path_nodes
-        LIMIT 1
-        """,
-    )
-    for row in results:
-        print(f"   Path: {' → '.join(row['path_nodes'])}")
-
-    await client.close()
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
-----
-
-Run the queries:
+== 5. Extract and store the documents
 
 [source,bash]
 ----
-python query.py
+python knowledge_graph.py ingest
 ----
 
-== Step 5: Visualize in Neo4j Browser
+Expected: candidate names and stored/skipped counts for each document, followed by `Verified: extraction produced storable relationships`. Entity names and relationship counts can vary. If no entities or resolved relationships are produced, the program stops with a diagnostic; inspect the text and extraction settings before starting again with a fresh database.
 
-Open Neo4j Browser at http://localhost:7474 and run these queries:
+Every extracted mention receives an `EXTRACTED_FROM` link to its source message. Relationship endpoints must match unambiguous names in the same extraction result. Unresolved or ambiguous endpoints are reported and skipped. Bolt merges exact name/type matches across documents even when semantic deduplication is disabled. In SDK 0.6.0, `add_entity()` returns the canonical stored ID. The program additionally reads the exact name/type match to verify its identity and reject ambiguity before attaching links. Variants and aliases remain a separate xref:how-to/deduplication.adoc[deduplication] task.
 
-=== View Full Knowledge Graph
+anchor:_step_4_query_the_knowledge_graph[]
+
+== 6. Verify graph and provenance after restart
+
+[source,bash]
+----
+python knowledge_graph.py inspect
+----
+
+Expected: the stored source/relation/target triples and `Verified: 2 source documents and ... relationships read back`. The query discovers entity names from source-message provenance, so it does not require the model to reproduce a hard-coded entity list.
+
+anchor:_step_5_visualize_in_neo4j_browser[]
+
+== 7. Inspect the physical graph
+
+In the Aura console, open *Query*, select the lesson instance and database, and connect with the credentials exported in step 2. Run:
 
 [source,cypher]
 ----
-MATCH (n:Entity)
-OPTIONAL MATCH (n)-[r]->(m:Entity)
-RETURN n, r, m
-LIMIT 100
+MATCH (c:Conversation {session_id: 'docs-knowledge-sources'})-[:HAS_MESSAGE]->(m:Message)<-[:EXTRACTED_FROM]-(e:Entity)
+RETURN c, m, e
 ----
 
-=== View Person-Company Network
+Expected: both source messages linked to extracted entities. Then inspect relationship properties:
 
 [source,cypher]
 ----
-MATCH (p:Entity {type: 'PERSON'})-[r]->(c:Entity {type: 'COMPANY'})
-RETURN p, r, c
+MATCH (a:Entity)-[r:RELATED_TO]->(b:Entity)
+RETURN a.name, r.type, b.name, r.confidence
 ----
 
-=== View Document-Entity Connections
+Expected: the same stored triples printed by `inspect`, each with a nonempty logical relationship name. This lesson saves extracted candidates through explicit `add_relationship` calls, which store that name in `RELATED_TO.type`; they do not create a physical `works_at` relationship type. Automatic message extraction uses the separate `RELATED_TO.relation_type` property. `attributes` passed to `add_relationship` are currently not persisted by this write path, so provenance is stored through the dedicated message link instead.
 
-[source,cypher]
-----
-MATCH (e:Entity)-[r:MENTIONED_IN]->(d:Entity {type: 'DOCUMENT'})
-RETURN e, r, d
-LIMIT 50
-----
+anchor:_step_6_use_the_knowledge_graph_with_an_agent[]
 
-image::diagrams/graph-schema.png[Financial knowledge graph with PERSON, COMPANY, and SECURITY nodes connected by relationships,width=540,align=left]
-
-== Step 6: Use the Knowledge Graph with an Agent
-
-Create an agent that queries the knowledge graph:
-
-[source,python]
-----
-# agent_with_kg.py
-import asyncio
-import os
-import json
-from dotenv import load_dotenv
-from openai import AsyncOpenAI
-from neo4j_agent_memory import MemoryClient, MemorySettings
-
-load_dotenv()
-
-openai_client = AsyncOpenAI()
-memory_client = None
-
-
-async def initialize():
-    global memory_client
-    settings = MemorySettings(
-        neo4j={"uri": os.getenv("NEO4J_URI", "bolt://localhost:7687"), "username": os.getenv("NEO4J_USER", "neo4j"), "password": os.getenv("NEO4J_PASSWORD", "password123")}
-    )
-    memory_client = MemoryClient(settings)
-    await memory_client.connect()
-
-
-async def search_knowledge_graph(query: str, entity_type: str = None) -> str:
-    """Search the knowledge graph for relevant entities."""
-    entities = await memory_client.long_term.search_entities(
-        query=query,
-        entity_types=[entity_type] if entity_type else None,
-        limit=10,
-    )
-
-    return json.dumps([
-        {"name": e.name, "type": e.type, "score": round(e.score, 2)}
-        for e in entities
-    ])
-
-
-async def find_relationships(entity_name: str) -> str:
-    """Find relationships for an entity."""
-    results = await memory_client.graph.execute_read(
-        """
-        MATCH (e:Entity)-[r]-(related:Entity)
-        WHERE e.name CONTAINS $name
-        RETURN e.name as entity, type(r) as relation, related.name as related_entity, related.type as related_type
-        LIMIT 10
-        """,
-        parameters={"name": entity_name},
-    )
-
-    return json.dumps(results)
-
-
-async def answer_question(question: str) -> str:
-    """Answer a question using the knowledge graph."""
-
-    # First, search for relevant entities
-    entities = await search_knowledge_graph(question)
-
-    # Build context from knowledge graph
-    context = f"""
-Knowledge Graph Results for: "{question}"
-
-Relevant Entities:
-{entities}
-"""
-
-    # If question mentions a specific entity, find its relationships
-    keywords = question.lower().split()
-    for keyword in keywords:
-        if len(keyword) > 3:
-            relationships = await find_relationships(keyword)
-            if relationships and relationships != "[]":
-                context += f"\nRelationships for '{keyword}':\n{relationships}"
-
-    # Generate answer using LLM with knowledge graph context
-    response = await openai_client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {
-                "role": "system",
-                "content": """You are a financial research assistant with access to a knowledge graph.
-Use the provided knowledge graph data to answer questions accurately.
-If the knowledge graph doesn't have the information, say so clearly."""
-            },
-            {
-                "role": "user",
-                "content": f"{context}\n\nQuestion: {question}"
-            }
-        ],
-        temperature=0.3,
-    )
-
-    return response.choices[0].message.content
-
-
-async def main():
-    await initialize()
-
-    print("🤖 Knowledge Graph Q&A Agent")
-    print("="*50)
-    print("Ask questions about the financial documents.")
-    print("Type 'quit' to exit.\n")
-
-    questions = [
-        "Who is the CEO of Acme Investment Holdings?",
-        "Which companies are mentioned in the earnings report?",
-        "What is the relationship between Sarah Johnson and Michael Chen?",
-        "What locations are mentioned in the documents?",
-        "Tell me about NVIDIA's performance.",
-    ]
-
-    print("Sample questions you can ask:")
-    for q in questions:
-        print(f"  • {q}")
-    print()
-
-    while True:
-        question = input("You: ").strip()
-
-        if question.lower() == "quit":
-            break
-
-        if not question:
-            continue
-
-        answer = await answer_question(question)
-        print(f"\n🤖 Agent: {answer}\n")
-
-    await memory_client.close()
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
-----
-
-Run the agent:
+== 8. Answer from retrieved evidence
 
 [source,bash]
 ----
-python agent_with_kg.py
+python knowledge_graph.py answer
 ----
 
-== What You've Built
+Expected: readback milestones followed by `Answer using retrieved evidence (inspect its factual accuracy):` and the model response. Compare the answer to the two fictional source texts, including Maya Chen's role and Denver. The program sends both stored triples and source text to the model; a nonempty response is not proof that the model interpreted them correctly.
 
-You now have a complete knowledge graph system that:
+anchor:_what_youve_built[]
 
-1. **Extracts entities** using a domain-specific schema
-2. **Discovers relationships** between entities automatically
-3. **Links to source documents** for provenance tracking
-4. **Enables semantic search** across all knowledge
-5. **Powers intelligent Q&A** with LLM integration
+== What we built
 
-== Extending the Knowledge Graph
+We constructed a custom extraction pipeline, preserved document provenance, verified the persisted graph in a separate process, and used retrieved evidence in a model request. See xref:how-to/entity-extraction-schemas.adoc[custom extraction schemas], xref:how-to/entity-extraction-batch.adoc[batch extraction], and xref:reference/extractors.adoc[extractor contracts] for task-specific extensions.
 
-Ideas for enhancement:
+anchor:_clean_up[]
 
-* **Add more document types**: PDFs, web pages, emails
-* **Enrich with external data**: Wikipedia, company databases
-* **Build custom relationship types**: competitor_of, invested_in, partner_with
-* **Add temporal tracking**: When relationships were valid
-* **Create domain dashboards**: Visualize sector trends
+== Clean up
 
-== Next Steps
+include::partial$aura-tutorial-cleanup.adoc[]
 
-* xref:how-to/batch-processing.adoc[Process Documents in Batch] - Scale to thousands of documents
-* xref:how-to/entity-extraction.adoc[Configure Entity Extraction] - Advanced extraction settings
-* xref:how-to/deduplication.adoc[Handle Duplicate Entities] - Clean up your graph
+anchor:_troubleshooting[]
 
-== See Also
+== If a check fails
 
-* xref:explanation/extraction-pipeline.adoc[How Entity Extraction Works]
-* xref:explanation/poleo-model.adoc[The POLE+O Data Model]
-* xref:reference/schemas.adoc[Domain Schemas Reference]
+* A connection or authentication failure: confirm the Aura instance is Running, check the exported connection settings, and rerun the readiness command from step 2.
+* An OpenAI access or quota error: correct the account/model configuration and rerun on a fresh tutorial database if the prior write stopped midway.
+* Missing readback data: verify that the write command completed against this Aura instance. The program stops on missing data rather than treating an empty result as success.
+
+* If GLiREL reports a missing tokenizer, rerun `python -m spacy download en_core_web_sm` in this virtual environment. If a model download fails, resolve its network/cache access before rerunning ingestion on a fresh database.
+
+anchor:_see_also[]
+
+== Related tasks
+
+* xref:reference/api/memory-client.adoc[Python API reference]
+* xref:reference/backend-capabilities.adoc#scope[Identity and retrieval scope]
+
+// Retain section URLs from the earlier fragmented lesson.
+anchor:_what_youll_learn[]
+anchor:_time_required[]
+anchor:_what_were_building[]
+anchor:_view_full_knowledge_graph[]
+anchor:_view_person_company_network[]
+anchor:_view_document_entity_connections[]
+anchor:_extending_the_knowledge_graph[]
+anchor:_next_steps[]

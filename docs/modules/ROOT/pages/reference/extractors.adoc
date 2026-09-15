@@ -1,128 +1,129 @@
-= Extractor Classes Reference
+= Extractor classes reference
 :page-product: agent-memory
 :page-pagination:
 :toclevels: 2
 
-Reference for entity extraction classes and the extraction pipeline.
+Local Python extraction classes and result models. They can be used independently or injected into a bolt MemoryClient; they do not configure the hosted NAMS pipeline.
 
-== EntityExtractor Protocol
+Signatures below show types, keyword-only arguments (`*`), and defaults. They are reference declarations; the examples show calls to execute.
 
-All extractors implement the `EntityExtractor` protocol:
+See xref:reference/backend-capabilities.adoc[Backend capabilities] for availability and data scope.
+
+== EntityExtractor protocol
+
+The protocol requires `extract`, not `extract_batch`. Batch methods are concrete capabilities with different signatures on GLiNER and ExtractionPipeline; check the selected class.
+
+// contract: extraction/base.py:EntityExtractor.extract
+[source,python]
+----
+async def extract(
+    text: str,
+    *,
+    entity_types: list[str] | None=None,
+    extract_relations: bool=True,
+    extract_preferences: bool=True,
+) -> ExtractionResult: ...
+----
+
+== Result models
+
+These are Pydantic models imported from `neo4j_agent_memory.extraction`. `ExtractedEntity` uses `type` and `attributes`, not `entity_type` and `metadata`. ExtractionResult has entities, relations, preferences, and source_text; it has no metadata envelope.
+
+=== ExtractionResult
+
+Fields and defaults:
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `entities` | `list[ExtractedEntity]` | `[]` |
+| `relations` | `list[ExtractedRelation]` | `[]` |
+| `preferences` | `list[ExtractedPreference]` | `[]` |
+| `source_text` | `str \| None` | `None` | Original source text
+|===
+
+=== ExtractedEntity
+
+Fields and defaults:
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `name` | `str` | `required` | Entity name
+| `type` | `str` | `required` | Entity type (PERSON, OBJECT, LOCATION, EVENT, ORGANIZATION)
+| `subtype` | `str \| None` | `None` | Entity subtype (e.g., VEHICLE for OBJECT, ADDRESS for LOCATION)
+| `start_pos` | `int \| None` | `None` | Start position in text
+| `end_pos` | `int \| None` | `None` | End position in text
+| `confidence` | `float` | `1.0` | Confidence score
+| `context` | `str \| None` | `None` | Surrounding context
+| `attributes` | `dict[str, Any]` | `{}` | Additional attributes extracted for this entity
+| `extractor` | `str \| None` | `None` | Name of the extractor that produced this entity
+|===
+
+=== ExtractedRelation
+
+Fields and defaults:
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `source` | `str` | `required` | Source entity name
+| `target` | `str` | `required` | Target entity name
+| `relation_type` | `str` | `required` | Type of relationship
+| `confidence` | `float` | `1.0` | Confidence score
+|===
+
+=== ExtractedPreference
+
+Fields and defaults:
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `category` | `str` | `required` | Preference category
+| `preference` | `str` | `required` | The preference statement
+| `context` | `str \| None` | `None` | Context where preference applies
+| `confidence` | `float` | `1.0` | Confidence score
+|===
+
+`ExtractionResult.entity_count`, `relation_count`, and `preference_count` are properties. `entities_by_type()` groups entities into a dictionary; `get_entities_of_type(type)` returns a list using case-insensitive type matching. `filter_invalid_entities()` returns a new result with invalid names and affected relations removed. There are no `filter_by_type` or `filter_by_confidence` methods.
 
 [source,python]
 ----
-from typing import Protocol
-from neo4j_agent_memory.extraction import ExtractionResult
-
-class EntityExtractor(Protocol):
-    async def extract(self, text: str) -> ExtractionResult:
-        """Extract entities from text."""
-        ...
-
-    async def extract_batch(
-        self,
-        texts: list[str],
-        batch_size: int = 10,
-        max_concurrency: int = 5,
-    ) -> BatchExtractionResult:
-        """Extract entities from multiple texts."""
-        ...
+people = result.get_entities_of_type("PERSON")
+high_confidence = [entity for entity in result.entities if entity.confidence >= 0.7]
+print(result.entities_by_type())
 ----
 
-== ExtractionResult
-
-Result of entity extraction:
-
-[source,python]
-----
-@dataclass
-class ExtractionResult:
-    entities: list[ExtractedEntity]
-    source_text: str | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-    @property
-    def entity_count(self) -> int: ...
-
-    def filter_by_type(self, entity_type: str) -> ExtractionResult: ...
-    def filter_by_confidence(self, min_confidence: float) -> ExtractionResult: ...
-    def filter_invalid_entities(self) -> ExtractionResult: ...
-----
-
-== ExtractedEntity
-
-Individual extracted entity:
-
-[source,python]
-----
-@dataclass
-class ExtractedEntity:
-    name: str
-    entity_type: str
-    confidence: float
-    subtype: str | None = None
-    start_pos: int | None = None
-    end_pos: int | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-    @property
-    def full_type(self) -> str:
-        """Returns 'TYPE:SUBTYPE' or just 'TYPE'."""
-        ...
-----
+`ExtractedEntity.normalized_name` lowercases/normalizes its name and `full_type` includes its subtype. `ExtractedRelation.as_triple` returns source, relation type, and target.
 
 == SpacyEntityExtractor
 
-Statistical NER using spaCy models.
+Statistical NER using a separately installed spaCy model. Import from `neo4j_agent_memory.extraction`. Install the matching extraction extra and model before running inference.
 
-=== Constructor
-
+// contract: extraction/spacy_extractor.py:SpacyEntityExtractor.__init__
 [source,python]
 ----
-SpacyEntityExtractor(
-    model: str = "en_core_web_sm",
-    type_mapping: dict[str, str] | None = None,
-)
+def SpacyEntityExtractor(
+    model: str='en_core_web_sm',
+    type_mapping: dict[str, str] | None=None,
+    subtype_mapping: dict[str, str] | None=None,
+    default_confidence: float=0.85,
+    context_window: int=50,
+): ...
 ----
 
-=== Parameters
-
-[cols="1,1,3", options="header"]
+[cols="1,4",options="header"]
 |===
-| Parameter | Default | Description
-
-| `model`
-| `en_core_web_sm`
-| spaCy model name (requires installation)
-
-| `type_mapping`
-| _default mapping_
-| Map spaCy labels to POLE+O types
+| Parameter | Description
+| `model` | spaCy model name (e.g., "en_core_web_sm", "en_core_web_lg")
+| `type_mapping` | Custom mapping from spaCy labels to POLE+O types
+| `subtype_mapping` | Custom mapping from spaCy labels to subtypes
+| `default_confidence` | Default confidence score (spaCy doesn't provide per-entity scores)
+| `context_window` | Number of characters of context to include around entities
 |===
 
-=== Default Type Mapping
-
-[cols="1,1", options="header"]
-|===
-| spaCy Label | POLE+O Type
-
-| `PERSON`
-| `PERSON`
-
-| `ORG`
-| `ORGANIZATION`
-
-| `GPE`, `LOC`
-| `LOCATION`
-
-| `EVENT`
-| `EVENT`
-
-| `PRODUCT`, `WORK_OF_ART`
-| `OBJECT`
-|===
-
-=== Example
+The default mappings include PERSON → PERSON, ORG → ORGANIZATION, GPE/LOC → LOCATION, EVENT → EVENT, and PRODUCT/WORK_OF_ART → OBJECT. Subtype mappings are retained on results. Override the mapping explicitly for your domain.
 
 [source,python]
 ----
@@ -134,176 +135,457 @@ result = await extractor.extract("John works at Apple in California")
 
 == GLiNEREntityExtractor
 
-Zero-shot NER using GLiNER models with domain schemas.
+Zero-shot entity extraction with labels or domain descriptions. The constructor accepts a DomainSchema object; use `for_schema(name)` for a built-in schema name. Models load lazily when inference is requested.
 
-=== Constructor
-
+// contract: extraction/gliner_extractor.py:GLiNEREntityExtractor.__init__
 [source,python]
 ----
-GLiNEREntityExtractor(
-    model: str = "gliner-community/gliner_medium-v2.5",
-    schema: DomainSchema | str | None = None,
-    threshold: float = 0.5,
-    device: str = "cpu",
-)
+def GLiNEREntityExtractor(
+    model: str=DEFAULT_GLINER2_MODEL,
+    entity_labels: list[str] | dict[str, str] | None=None,
+    threshold: float=0.5,
+    flat_ner: bool=True,
+    multi_label: bool=False,
+    device: str='cpu',
+    context_window: int=50,
+    label_mapping: dict[str, tuple[str, str | None]] | None=None,
+    schema: DomainSchema | None=None,
+): ...
 ----
 
-=== Parameters
-
-[cols="1,1,3", options="header"]
+[cols="1,4",options="header"]
 |===
-| Parameter | Default | Description
-
-| `model`
-| `gliner-community/gliner_medium-v2.5`
-| GLiNER model name
-
-| `schema`
-| `None`
-| Domain schema (name or object)
-
-| `threshold`
-| `0.5`
-| Confidence threshold (0.0-1.0)
-
-| `device`
-| `cpu`
-| Device for inference (`cpu`, `cuda`)
+| Parameter | Description
+| `model` | GLiNER model name from HuggingFace (default: gliner-community/gliner_medium-v2.5)
+| `entity_labels` | Entity labels (list) or labels with descriptions (dict). Descriptions improve extraction accuracy with GLiNER2.
+| `threshold` | Confidence threshold for including entities (0.0-1.0)
+| `flat_ner` | Use flat NER (no nested entities)
+| `multi_label` | Allow multiple labels per entity
+| `device` | Device to run on (cpu, cuda, mps)
+| `context_window` | Characters of context to include around entities
+| `label_mapping` | Custom mapping from GLiNER labels to (TYPE, SUBTYPE)
+| `schema` | Pre-defined DomainSchema to use (overrides entity_labels)
 |===
 
-=== Factory Methods
+=== extract
 
+Extract entities from text using GLiNER zero-shot NER.
+
+// contract: extraction/gliner_extractor.py:GLiNEREntityExtractor.extract
 [source,python]
 ----
-# Create with named schema
-extractor = GLiNEREntityExtractor.for_schema("podcast")
-extractor = GLiNEREntityExtractor.for_schema("poleo", threshold=0.6)
-
-# Create for POLE+O model
-extractor = GLiNEREntityExtractor.for_poleo()
+async def extract(
+    text: str,
+    *,
+    entity_types: list[str] | None=None,
+    extract_relations: bool=True,
+    extract_preferences: bool=True,
+) -> ExtractionResult: ...
 ----
 
-=== Example
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `text` | The text to extract from
+| `entity_types` | Optional list of POLE+O entity types to extract
+| `extract_relations` | Ignored (GLiNER doesn't extract relations)
+| `extract_preferences` | Ignored (GLiNER doesn't extract preferences)
+|===
+
+=== extract_batch
+
+Extract entities from multiple texts using GLiNER batch inference.
+
+// contract: extraction/gliner_extractor.py:GLiNEREntityExtractor.extract_batch
+[source,python]
+----
+async def extract_batch(
+    texts: list[str],
+    *,
+    entity_types: list[str] | None=None,
+    batch_size: int=32,
+    on_progress: Callable[[int, int], None] | None=None,
+) -> list[ExtractionResult]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `texts` | List of texts to extract from
+| `entity_types` | Optional list of POLE+O entity types to filter
+| `batch_size` | Number of texts to process in each batch (for memory management)
+| `on_progress` | Optional callback called after each batch. Receives (completed_count, total_count).
+|===
+
+=== for_schema
+
+Create extractor using a pre-defined domain schema.
+
+// contract: extraction/gliner_extractor.py:GLiNEREntityExtractor.for_schema
+[source,python]
+----
+def for_schema(
+    schema_name: str,
+    model: str=DEFAULT_GLINER2_MODEL,
+    threshold: float=0.5,
+    device: str='cpu',
+) -> GLiNEREntityExtractor: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `schema_name` | Name of the schema (poleo, podcast, news, scientific, business, entertainment, medical, legal)
+| `model` | GLiNER2 model to use
+| `threshold` | Confidence threshold
+| `device` | Device to run on
+|===
+
+=== for_poleo
+
+Create extractor optimized for POLE+O entity extraction.
+
+// contract: extraction/gliner_extractor.py:GLiNEREntityExtractor.for_poleo
+[source,python]
+----
+def for_poleo(
+    model: str=DEFAULT_GLINER2_MODEL,
+    threshold: float=0.5,
+    device: str='cpu',
+    use_descriptions: bool=True,
+) -> GLiNEREntityExtractor: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `model` | GLiNER2 model to use (default: gliner_medium-v2.5)
+| `threshold` | Confidence threshold
+| `device` | Device to run on
+| `use_descriptions` | Whether to use the poleo schema with descriptions (recommended for better accuracy)
+|===
+
+=== from_config
+
+Create extractor from configuration.
+
+// contract: extraction/gliner_extractor.py:GLiNEREntityExtractor.from_config
+[source,python]
+----
+def from_config(config: GLiNERConfig) -> GLiNEREntityExtractor: ...
+----
+
+=== update_labels
+
+Update entity labels for extraction.
+
+// contract: extraction/gliner_extractor.py:GLiNEREntityExtractor.update_labels
+[source,python]
+----
+def update_labels(labels: list[str]) -> None: ...
+----
+
+=== add_label_mapping
+
+Add a custom label mapping.
+
+// contract: extraction/gliner_extractor.py:GLiNEREntityExtractor.add_label_mapping
+[source,python]
+----
+def add_label_mapping(label: str, entity_type: str, subtype: str | None=None) -> None: ...
+----
+
+`DEFAULT_GLINER2_MODEL` is `gliner-community/gliner_medium-v2.5`. A named domain schema is a local label/description set; it is distinct from a persisted schema or hosted ontology.
 
 [source,python]
 ----
 from neo4j_agent_memory.extraction import GLiNEREntityExtractor
 
-# With domain schema
-extractor = GLiNEREntityExtractor.for_schema("podcast")
+extractor = GLiNEREntityExtractor.for_schema("podcast", threshold=0.6)
 result = await extractor.extract("Marc Andreessen discusses AI on the show")
 ----
 
 == LLMEntityExtractor
 
-LLM-based extraction using OpenAI models.
+LLM-based entity, relation, and preference extraction. Inject an LLMProvider or StructuredExtractor through `provider`; without one, the model/API-key path uses the provider factory. This class is not limited to OpenAI.
 
-=== Constructor
-
+// contract: extraction/llm_extractor.py:LLMEntityExtractor.__init__
 [source,python]
 ----
-LLMEntityExtractor(
-    model: str = "gpt-4o-mini",
-    api_key: str | None = None,
-    entity_types: list[str] | None = None,
-    temperature: float = 0.0,
-)
+def LLMEntityExtractor(
+    provider: LLMProvider | StructuredExtractor | None=None,
+    *,
+    model: str | None=None,
+    api_key: str | None=None,
+    entity_types: list[str] | None=None,
+    subtypes: dict[str, list[str]] | None=None,
+    extraction_prompt: str | None=None,
+    temperature: float=0.0,
+    extract_relations: bool=True,
+    extract_preferences: bool=True,
+) -> None: ...
 ----
 
-=== Parameters
+=== extract
 
-[cols="1,1,3", options="header"]
-|===
-| Parameter | Default | Description
+Extract entities, relations, and preferences from text.
 
-| `model`
-| `gpt-4o-mini`
-| OpenAI model name
+// contract: extraction/llm_extractor.py:LLMEntityExtractor.extract
+[source,python]
+----
+async def extract(
+    text: str,
+    *,
+    entity_types: list[str] | None=None,
+    extract_relations: bool | None=None,
+    extract_preferences: bool | None=None,
+) -> ExtractionResult: ...
+----
 
-| `api_key`
-| _from env_
-| OpenAI API key
+=== for_poleo
 
-| `entity_types`
-| _POLE+O types_
-| Entity types to extract
+Create extractor configured for POLE+O model.
 
-| `temperature`
-| `0.0`
-| LLM temperature
-|===
+// contract: extraction/llm_extractor.py:LLMEntityExtractor.for_poleo
+[source,python]
+----
+def for_poleo(
+    provider: LLMProvider | StructuredExtractor | None=None,
+    *,
+    model: str='openai/gpt-4o-mini',
+    api_key: str | None=None,
+) -> LLMEntityExtractor: ...
+----
 
-=== Example
+=== for_custom_types
+
+Create extractor for custom entity types.
+
+// contract: extraction/llm_extractor.py:LLMEntityExtractor.for_custom_types
+[source,python]
+----
+def for_custom_types(
+    entity_types: list[str],
+    provider: LLMProvider | StructuredExtractor | None=None,
+    *,
+    model: str='openai/gpt-4o-mini',
+    api_key: str | None=None,
+) -> LLMEntityExtractor: ...
+----
 
 [source,python]
 ----
 from neo4j_agent_memory.extraction import LLMEntityExtractor
+from neo4j_agent_memory.llm import from_provider
 
-extractor = LLMEntityExtractor(model="gpt-4o")
+provider = from_provider("openai/gpt-4o-mini")
+extractor = LLMEntityExtractor(provider=provider)
 result = await extractor.extract("John Smith, CEO of Acme, spoke at the conference")
 ----
 
 == ExtractionPipeline
 
-Multi-stage extraction combining multiple extractors.
+Run stages and merge their results. Import the direct `MergeStrategy` from `neo4j_agent_memory.extraction.pipeline`. Its values are distinct from the smaller settings enum.
 
-=== Constructor
+// contract: extraction/pipeline.py:ExtractionPipeline.__init__
+[source,python]
+----
+def ExtractionPipeline(
+    stages: list[ExtractionStage | EntityExtractor],
+    merge_strategy: MergeStrategy=MergeStrategy.CONFIDENCE,
+    stop_on_success: bool=False,
+    min_entities_for_success: int=1,
+    fallback_on_error: bool=True,
+): ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `stages` | List of extraction stages or extractors to run
+| `merge_strategy` | Strategy for merging results from stages
+| `stop_on_success` | Stop after first stage that returns entities
+| `min_entities_for_success` | Minimum entities to consider a stage successful
+| `fallback_on_error` | Continue to next stage if current stage errors
+|===
+
+[cols="1,3",options="header"]
+|===
+| Strategy | Behavior
+| `UNION` | Keep unique entities across results.
+| `INTERSECTION` | Keep entities found by multiple results.
+| `CONFIDENCE` | Keep the highest-confidence entity for each matching name/type.
+| `CASCADE` | Keep earlier-stage entities and fill gaps from later results.
+| `FIRST_SUCCESS` | Stop after a stage reaches min_entities_for_success and return the first nonempty successful result.
+|===
+
+`stop_on_success=True` also enables early stopping with the other merge strategies. `FIRST_SUCCESS` is not `FIRST` or `LAST`, and cannot be selected through the config.settings MergeStrategy enum.
 
 [source,python]
 ----
-ExtractionPipeline(
-    stages: list[EntityExtractor],
-    merge_strategy: MergeStrategy = MergeStrategy.CONFIDENCE,
-)
-----
-
-=== Merge Strategies
-
-[cols="1,3", options="header"]
-|===
-| Strategy | Description
-
-| `CONFIDENCE`
-| Keep entity with highest confidence
-
-| `UNION`
-| Keep all unique entities from all stages
-
-| `INTERSECTION`
-| Keep only entities found by multiple stages
-
-| `FIRST`
-| Use first stage's result, fallback to later stages
-
-| `LAST`
-| Use last stage's result, override earlier
-|===
-
-=== Example
-
-[source,python]
-----
-from neo4j_agent_memory.extraction import (
-    ExtractionPipeline,
-    SpacyEntityExtractor,
-    GLiNEREntityExtractor,
-    MergeStrategy,
-)
+from neo4j_agent_memory.extraction import ExtractionPipeline, SpacyEntityExtractor, GLiNEREntityExtractor
+from neo4j_agent_memory.extraction.pipeline import MergeStrategy
 
 pipeline = ExtractionPipeline(
-    stages=[
-        SpacyEntityExtractor(),
-        GLiNEREntityExtractor.for_schema("podcast"),
-    ],
+    stages=[SpacyEntityExtractor(), GLiNEREntityExtractor.for_schema("podcast")],
     merge_strategy=MergeStrategy.CONFIDENCE,
 )
-
-result = await pipeline.extract(text)
+result = await pipeline.extract("John discussed Acme in the podcast")
 ----
+
+=== extract
+
+Run extraction through all stages.
+
+// contract: extraction/pipeline.py:ExtractionPipeline.extract
+[source,python]
+----
+async def extract(
+    text: str,
+    *,
+    entity_types: list[str] | None=None,
+    extract_relations: bool=True,
+    extract_preferences: bool=True,
+) -> ExtractionResult: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `text` | Text to extract from
+| `entity_types` | Optional list of entity types to extract
+| `extract_relations` | Whether to extract relations
+| `extract_preferences` | Whether to extract preferences
+|===
+
+=== extract_with_details
+
+Run extraction with detailed stage information.
+
+// contract: extraction/pipeline.py:ExtractionPipeline.extract_with_details
+[source,python]
+----
+async def extract_with_details(
+    text: str,
+    *,
+    entity_types: list[str] | None=None,
+    extract_relations: bool=True,
+    extract_preferences: bool=True,
+) -> PipelineResult: ...
+----
+
+=== extract_batch
+
+Extract entities from multiple texts in parallel.
+
+// contract: extraction/pipeline.py:ExtractionPipeline.extract_batch
+[source,python]
+----
+async def extract_batch(
+    texts: list[str],
+    *,
+    batch_size: int=10,
+    max_concurrency: int=5,
+    entity_types: list[str] | None=None,
+    extract_relations: bool=True,
+    extract_preferences: bool=True,
+    on_progress: ProgressCallback | None=None,
+    fail_fast: bool=False,
+) -> BatchExtractionResult: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `texts` | List of texts to extract from
+| `batch_size` | Number of texts to process in each batch (for memory management)
+| `max_concurrency` | Maximum number of concurrent extractions
+| `entity_types` | Optional list of entity types to extract
+| `extract_relations` | Whether to extract relations
+| `extract_preferences` | Whether to extract preferences
+| `on_progress` | Optional callback called after each text is processed. Receives (completed_count, total_count).
+| `fail_fast` | If True, stop on first error. If False, continue and collect errors.
+|===
+
+=== add_stage
+
+Add a stage to the pipeline.
+
+// contract: extraction/pipeline.py:ExtractionPipeline.add_stage
+[source,python]
+----
+def add_stage(stage: ExtractionStage | EntityExtractor) -> None: ...
+----
+
+=== remove_stage
+
+Remove a stage by name. Returns True if found and removed.
+
+// contract: extraction/pipeline.py:ExtractionPipeline.remove_stage
+[source,python]
+----
+def remove_stage(name: str) -> bool: ...
+----
+
+`stage_names` lists configured stage names. `extract_with_details` returns PipelineResult with merged results and per-stage timing/error details; `extract` returns just ExtractionResult. BatchExtractionResult retains per-item results/errors.
+
+=== StageResult
+
+Fields and defaults:
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `stage_name` | `str` | `required` |
+| `result` | `ExtractionResult` | `required` |
+| `success` | `bool` | `True` |
+| `error` | `str \| None` | `None` |
+| `duration_ms` | `float` | `0.0` |
+|===
+
+=== PipelineResult
+
+Fields and defaults:
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `final_result` | `ExtractionResult` | `required` |
+| `stage_results` | `list[StageResult]` | `field(default_factory=list)` |
+| `merge_strategy` | `MergeStrategy` | `MergeStrategy.CONFIDENCE` |
+| `total_duration_ms` | `float` | `0.0` |
+|===
+
+=== BatchItemResult
+
+Fields and defaults:
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `index` | `int` | `required` |
+| `result` | `ExtractionResult` | `required` |
+| `success` | `bool` | `True` |
+| `error` | `str \| None` | `None` |
+| `duration_ms` | `float` | `0.0` |
+|===
+
+=== BatchExtractionResult
+
+Fields and defaults:
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `results` | `list[BatchItemResult]` | `field(default_factory=list)` |
+| `total_duration_ms` | `float` | `0.0` |
+|===
+
+BatchExtractionResult exposes `total_items`, `successful_items`, `failed_items`, `success_rate`, `total_entities`, and `total_relations` properties plus `get_extraction_results()`, `get_all_entities()`, and `get_errors()` helpers.
 
 == ExtractorBuilder
 
-Fluent builder for creating extraction pipelines.
+Build a local extractor from enabled stages. `build()` returns NoOpExtractor when no stage is enabled, the concrete extractor for one stage, or ExtractionPipeline for multiple stages.
 
 [source,python]
 ----
@@ -319,80 +601,347 @@ extractor = (
 )
 ----
 
-=== Builder Methods
+The union method is `merge_by_union()`. `with_schema(EntitySchemaConfig)` copies entity type names into extraction labels; it does not apply relation endpoints, properties, constraints, or indexes. Use the explicit schema/validation APIs for those purposes.
 
-[cols="2,3", options="header"]
+=== with_spacy
+
+Add spaCy extractor to pipeline.
+
+// contract: extraction/factory.py:ExtractorBuilder.with_spacy
+[source,python]
+----
+def with_spacy(model: str='en_core_web_sm') -> ExtractorBuilder: ...
+----
+
+=== with_gliner
+
+Add GLiNER2 extractor to pipeline with simple labels.
+
+// contract: extraction/factory.py:ExtractorBuilder.with_gliner
+[source,python]
+----
+def with_gliner(
+    model: str | None=None,
+    threshold: float=0.5,
+    device: str='cpu',
+    *,
+    model_name: str | None=None,
+) -> ExtractorBuilder: ...
+----
+
+[cols="1,4",options="header"]
 |===
-| Method | Description
-
-| `.with_spacy(model)`
-| Add spaCy extractor
-
-| `.with_gliner(threshold)`
-| Add GLiNER with default schema
-
-| `.with_gliner_schema(name, threshold)`
-| Add GLiNER with domain schema
-
-| `.with_llm(model)`
-| Add LLM extractor
-
-| `.with_llm_fallback(model)`
-| Add LLM as fallback stage
-
-| `.merge_by_confidence()`
-| Use confidence merge strategy
-
-| `.merge_union()`
-| Use union merge strategy
-
-| `.build()`
-| Create extractor/pipeline
+| Parameter | Description
+| `model` | GLiNER model identifier (e.g. `gliner-community/gliner_medium-v2.5`).
+| `threshold` | Confidence threshold.
+| `device` | Inference device (`cpu` / `cuda` / `mps`).
+| `model_name` | Alias for `model` (kept for compatibility with the CLI and older call sites).
 |===
+
+=== with_gliner_schema
+
+Add GLiNER2 extractor with a domain schema for better accuracy.
+
+// contract: extraction/factory.py:ExtractorBuilder.with_gliner_schema
+[source,python]
+----
+def with_gliner_schema(
+    schema_name: str,
+    model: str='gliner-community/gliner_medium-v2.5',
+    threshold: float=0.5,
+    device: str='cpu',
+) -> ExtractorBuilder: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `schema_name` | Name of the schema (poleo, podcast, news, scientific, business, entertainment, medical, legal)
+| `model` | GLiNER2 model to use
+| `threshold` | Confidence threshold
+| `device` | Device to run on (cpu, cuda, mps)
+|===
+
+=== with_llm
+
+Add an LLM extractor (alias of :meth:`with_llm_fallback`).
+
+// contract: extraction/factory.py:ExtractorBuilder.with_llm
+[source,python]
+----
+def with_llm(model: str='gpt-4o-mini') -> ExtractorBuilder: ...
+----
+
+=== with_llm_fallback
+
+Add LLM extractor as fallback.
+
+// contract: extraction/factory.py:ExtractorBuilder.with_llm_fallback
+[source,python]
+----
+def with_llm_fallback(model: str='gpt-4o-mini') -> ExtractorBuilder: ...
+----
+
+=== with_entity_types
+
+Set entity types to extract.
+
+// contract: extraction/factory.py:ExtractorBuilder.with_entity_types
+[source,python]
+----
+def with_entity_types(types: list[str]) -> ExtractorBuilder: ...
+----
+
+=== with_schema
+
+Configure entity types from an :class:`EntitySchemaConfig`.
+
+// contract: extraction/factory.py:ExtractorBuilder.with_schema
+[source,python]
+----
+def with_schema(schema_config: EntitySchemaConfig) -> ExtractorBuilder: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `schema_config` | Entity schema configuration. Each `EntityTypeConfig` contributes its `name` to the extractor's type set.
+|===
+
+=== with_confidence_threshold
+
+Set the confidence threshold for entity extraction.
+
+// contract: extraction/factory.py:ExtractorBuilder.with_confidence_threshold
+[source,python]
+----
+def with_confidence_threshold(threshold: float) -> ExtractorBuilder: ...
+----
+
+=== merge_by_union
+
+Use union strategy for merging.
+
+// contract: extraction/factory.py:ExtractorBuilder.merge_by_union
+[source,python]
+----
+def merge_by_union() -> ExtractorBuilder: ...
+----
+
+=== merge_by_intersection
+
+Use intersection strategy for merging.
+
+// contract: extraction/factory.py:ExtractorBuilder.merge_by_intersection
+[source,python]
+----
+def merge_by_intersection() -> ExtractorBuilder: ...
+----
+
+=== merge_by_confidence
+
+Use confidence strategy for merging.
+
+// contract: extraction/factory.py:ExtractorBuilder.merge_by_confidence
+[source,python]
+----
+def merge_by_confidence() -> ExtractorBuilder: ...
+----
+
+=== merge_by_cascade
+
+Use cascade strategy for merging.
+
+// contract: extraction/factory.py:ExtractorBuilder.merge_by_cascade
+[source,python]
+----
+def merge_by_cascade() -> ExtractorBuilder: ...
+----
+
+=== extract_relations
+
+Enable/disable relation extraction.
+
+// contract: extraction/factory.py:ExtractorBuilder.extract_relations
+[source,python]
+----
+def extract_relations(enabled: bool=True) -> ExtractorBuilder: ...
+----
+
+=== extract_preferences
+
+Enable/disable preference extraction.
+
+// contract: extraction/factory.py:ExtractorBuilder.extract_preferences
+[source,python]
+----
+def extract_preferences(enabled: bool=True) -> ExtractorBuilder: ...
+----
+
+=== build
+
+Build the extractor based on configuration.
+
+// contract: extraction/factory.py:ExtractorBuilder.build
+[source,python]
+----
+def build() -> EntityExtractor: ...
+----
 
 == GLiRELExtractor
 
-Relation extraction using GLiREL (requires GLiNER entities first).
+Relation extraction consumes previously extracted entities with span positions. Import from `neo4j_agent_memory.extraction`.
 
-=== Constructor
+// contract: extraction/gliner_extractor.py:GLiRELExtractor.__init__
+[source,python]
+----
+def GLiRELExtractor(
+    model: str=DEFAULT_GLIREL_MODEL,
+    relation_types: dict[str, str] | list[str] | None=None,
+    threshold: float=0.5,
+    device: str='cpu',
+): ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `model` | GLiREL model name from HuggingFace
+| `relation_types` | Relation types to extract. Can be: - dict[str, str]: Relation names with descriptions (recommended) - list[str]: Simple list of relation names - None: Use default POLE+O relation types
+| `threshold` | Confidence threshold for including relations
+| `device` | Device to run on (cpu, cuda, mps)
+|===
+
+=== extract_relations
+
+Extract relations between entities using GLiREL.
+
+// contract: extraction/gliner_extractor.py:GLiRELExtractor.extract_relations
+[source,python]
+----
+async def extract_relations(
+    text: str,
+    entities: list[ExtractedEntity],
+    *,
+    relation_types: list[str] | None=None,
+) -> list[ExtractedRelation]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `text` | The source text
+| `entities` | Pre-extracted entities (from GLiNER or other extractor)
+| `relation_types` | Optional list of relation types to extract. Defaults to all configured relation types.
+|===
 
 [source,python]
 ----
-GLiRELExtractor(
-    model: str = "jackboyla/glirel_base",
-    relation_types: dict[str, str] | None = None,
-    threshold: float = 0.5,
-    device: str = "cpu",
-)
-----
+from neo4j_agent_memory.extraction import GLiNEREntityExtractor, GLiRELExtractor
 
-=== Example
-
-[source,python]
-----
-from neo4j_agent_memory.extraction import (
-    GLiNEREntityExtractor,
-    GLiRELExtractor,
-)
-
-# Extract entities first
-entity_extractor = GLiNEREntityExtractor.for_poleo()
-entity_result = await entity_extractor.extract(text)
-
-# Then extract relations
-relation_extractor = GLiRELExtractor()
-relations = await relation_extractor.extract_relations(
-    text,
-    entities=entity_result.entities,
-)
-
-for rel in relations:
-    print(f"{rel.source} -[{rel.relation_type}]-> {rel.target}")
+entity_result = await GLiNEREntityExtractor.for_poleo().extract(text)
+relations = await GLiRELExtractor().extract_relations(text, entities=entity_result.entities)
+for relation in relations:
+    print(relation.source, relation.relation_type, relation.target)
 ----
 
 == GLiNERWithRelationsExtractor
 
-Combined entity and relation extraction.
+Combine entity and relation extractors. `for_schema` takes a built-in schema *name*, not an EntitySchemaConfig. For custom descriptions, construct a GLiNEREntityExtractor with DomainSchema and a GLiRELExtractor with relation types, then compose them.
+
+// contract: extraction/gliner_extractor.py:GLiNERWithRelationsExtractor.__init__
+[source,python]
+----
+def GLiNERWithRelationsExtractor(
+    entity_extractor: GLiNEREntityExtractor,
+    relation_extractor: GLiRELExtractor,
+): ...
+----
+
+=== extract
+
+Extract entities and relations from text.
+
+// contract: extraction/gliner_extractor.py:GLiNERWithRelationsExtractor.extract
+[source,python]
+----
+async def extract(
+    text: str,
+    *,
+    entity_types: list[str] | None=None,
+    relation_types: list[str] | None=None,
+    extract_relations: bool=True,
+    extract_preferences: bool=False,
+) -> ExtractionResult: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `text` | The text to extract from
+| `entity_types` | Optional list of entity types to extract
+| `relation_types` | Optional list of relation types to extract
+| `extract_relations` | Whether to extract relations (default True)
+| `extract_preferences` | Ignored (GLiNER/GLiREL don't extract preferences)
+|===
+
+=== for_schema
+
+Create combined extractor for a domain schema.
+
+// contract: extraction/gliner_extractor.py:GLiNERWithRelationsExtractor.for_schema
+[source,python]
+----
+def for_schema(
+    schema_name: str,
+    *,
+    gliner_model: str=DEFAULT_GLINER2_MODEL,
+    glirel_model: str=DEFAULT_GLIREL_MODEL,
+    entity_threshold: float=0.5,
+    relation_threshold: float=0.5,
+    device: str='cpu',
+    relation_types: dict[str, str] | None=None,
+) -> GLiNERWithRelationsExtractor: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `schema_name` | Domain schema name (poleo, podcast, news, etc.)
+| `gliner_model` | GLiNER model for entity extraction
+| `glirel_model` | GLiREL model for relation extraction
+| `entity_threshold` | Confidence threshold for entities
+| `relation_threshold` | Confidence threshold for relations
+| `device` | Device to run models on
+| `relation_types` | Custom relation types (defaults to POLE+O relations)
+|===
+
+=== for_poleo
+
+Create combined extractor optimized for POLE+O extraction.
+
+// contract: extraction/gliner_extractor.py:GLiNERWithRelationsExtractor.for_poleo
+[source,python]
+----
+def for_poleo(
+    *,
+    gliner_model: str=DEFAULT_GLINER2_MODEL,
+    glirel_model: str=DEFAULT_GLIREL_MODEL,
+    entity_threshold: float=0.5,
+    relation_threshold: float=0.5,
+    device: str='cpu',
+) -> GLiNERWithRelationsExtractor: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `gliner_model` | GLiNER model for entity extraction
+| `glirel_model` | GLiREL model for relation extraction
+| `entity_threshold` | Confidence threshold for entities
+| `relation_threshold` | Confidence threshold for relations
+| `device` | Device to run models on
+|===
 
 [source,python]
 ----
@@ -400,36 +949,167 @@ from neo4j_agent_memory.extraction import GLiNERWithRelationsExtractor
 
 extractor = GLiNERWithRelationsExtractor.for_poleo()
 result = await extractor.extract("John works at Acme Corp")
-
-print(result.entities)   # [John, Acme Corp]
-print(result.relations)  # [John -[WORKS_AT]-> Acme Corp]
+print(result.entities, result.relations)
 ----
+
+`DEFAULT_GLIREL_MODEL` is `jackboyla/glirel_base`. Model output varies; validate entity names, types, and relation endpoints on representative data.
 
 == StreamingExtractor
 
-Process long documents in chunks.
+Chunk long documents and combine extraction results. Import from `neo4j_agent_memory.extraction`. `DEFAULT_CHUNK_SIZE` is 4000 characters and `DEFAULT_OVERLAP` is 200, unless token-based chunking is selected.
+
+// contract: extraction/streaming.py:StreamingExtractor.__init__
+[source,python]
+----
+def StreamingExtractor(
+    extractor: EntityExtractor,
+    *,
+    chunk_size: int=DEFAULT_CHUNK_SIZE,
+    overlap: int=DEFAULT_OVERLAP,
+    chunk_by_tokens: bool=False,
+    split_on_sentences: bool=True,
+): ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `extractor` | Base extractor to use for each chunk
+| `chunk_size` | Size of each chunk (chars or tokens)
+| `overlap` | Overlap between chunks (chars or tokens)
+| `chunk_by_tokens` | If True, chunk by tokens instead of characters
+| `split_on_sentences` | Try to split on sentence boundaries
+|===
+
+=== chunk_document
+
+Chunk a document according to settings.
+
+// contract: extraction/streaming.py:StreamingExtractor.chunk_document
+[source,python]
+----
+def chunk_document(text: str) -> list[ChunkInfo]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `text` | Text to chunk
+|===
+
+=== extract_streaming
+
+Stream extraction results chunk by chunk.
+
+// contract: extraction/streaming.py:StreamingExtractor.extract_streaming
+[source,python]
+----
+async def extract_streaming(
+    text: str,
+    *,
+    entity_types: list[str] | None=None,
+    extract_relations: bool=True,
+    on_chunk_complete: Callable[[StreamingChunkResult], None] | None=None,
+) -> AsyncIterator[StreamingChunkResult]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `text` | Text to extract from
+| `entity_types` | Optional list of entity types to extract
+| `extract_relations` | Whether to extract relations
+| `on_chunk_complete` | Optional callback for each completed chunk Yields: StreamingChunkResult for each chunk
+|===
+
+=== extract
+
+Extract from a long document with automatic chunking.
+
+// contract: extraction/streaming.py:StreamingExtractor.extract
+[source,python]
+----
+async def extract(
+    text: str,
+    *,
+    entity_types: list[str] | None=None,
+    extract_relations: bool=True,
+    deduplicate: bool=True,
+    on_progress: Callable[[int, int], None] | None=None,
+) -> StreamingExtractionResult: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `text` | Text to extract from
+| `entity_types` | Optional list of entity types to extract
+| `extract_relations` | Whether to extract relations
+| `deduplicate` | Whether to deduplicate entities across chunks
+| `on_progress` | Optional progress callback (completed_chunks, total_chunks)
+|===
+
+=== extract_to_result
+
+Extract and return standard ExtractionResult.
+
+// contract: extraction/streaming.py:StreamingExtractor.extract_to_result
+[source,python]
+----
+async def extract_to_result(
+    text: str,
+    *,
+    entity_types: list[str] | None=None,
+    extract_relations: bool=True,
+    deduplicate: bool=True,
+    on_progress: Callable[[int, int], None] | None=None,
+) -> ExtractionResult: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `text` | Text to extract from
+| `entity_types` | Optional list of entity types to extract
+| `extract_relations` | Whether to extract relations
+| `deduplicate` | Whether to deduplicate entities
+| `on_progress` | Optional progress callback
+|===
 
 [source,python]
 ----
 from neo4j_agent_memory.extraction import StreamingExtractor
 
-streamer = StreamingExtractor(
-    base_extractor,
-    chunk_size=4000,
-    overlap=200,
-    split_on_sentences=True,
-)
-
-# Stream results
+streamer = StreamingExtractor(extractor, chunk_size=4000, overlap=200)
 async for chunk_result in streamer.extract_streaming(long_document):
-    print(f"Chunk {chunk_result.chunk.index}: {chunk_result.entity_count} entities")
-
-# Or get complete result with deduplication
-result = await streamer.extract(long_document, deduplicate=True)
+    print(chunk_result.chunk.index, chunk_result.entity_count)
+# extract returns StreamingExtractionResult; extract_to_result returns ExtractionResult.
+result = await streamer.extract_to_result(long_document, deduplicate=True)
 ----
 
-== See Also
+== See also
 
-* xref:reference/schemas.adoc[Domain Schemas Reference] - Available schemas
-* xref:how-to/entity-extraction.adoc[Configure Entity Extraction] - Pipeline setup
-* xref:how-to/batch-processing.adoc[Process Documents in Batch] - Batch extraction
+* xref:reference/schemas.adoc[Domain schemas]
+* xref:how-to/entity-extraction.adoc[Configure entity extraction]
+* xref:how-to/batch-processing.adoc[Batch processing]
+
+== Earlier section links
+
+anchor:_constructor[]
+anchor:_parameters[]
+anchor:_default_type_mapping[]
+anchor:_example[]
+anchor:_constructor_2[]
+anchor:_parameters_2[]
+anchor:_factory_methods[]
+anchor:_example_2[]
+anchor:_constructor_3[]
+anchor:_parameters_3[]
+anchor:_example_3[]
+anchor:_constructor_4[]
+anchor:_merge_strategies[]
+anchor:_example_4[]
+anchor:_builder_methods[]
+anchor:_constructor_5[]
+anchor:_example_5[]
+The earlier sections have been consolidated into the current contracts. See xref:reference/extractors.adoc#_spacyentityextractor[spaCy], xref:reference/extractors.adoc#_glinerentityextractor[GLiNER], xref:reference/extractors.adoc#_llmentityextractor[LLM extraction], xref:reference/extractors.adoc#_extractionpipeline[pipeline/merge contracts], xref:reference/extractors.adoc#_extractorbuilder[builder methods], and xref:reference/extractors.adoc#_streamingextractor[streaming]. Runnable examples are in xref:how-to/entity-extraction.adoc[the extraction tasks].

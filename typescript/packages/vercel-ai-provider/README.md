@@ -9,11 +9,13 @@ Community provider for the [Vercel AI SDK](https://sdk.vercel.ai) that adds pers
 > ⚠️ **Neo4j Labs Project**
 >
 > This project is part of Neo4j Labs and is actively maintained, but not
-> officially supported. There are no SLAs or guarantees around backwards
-> compatibility and deprecation. For questions and support, please use
+> officially supported. There are no SLAs, backward-compatibility guarantees,
+> or scheduled deprecation commitments. APIs may change without notice. For questions and support, please use
 > the [Neo4j Community Forum](https://community.neo4j.com).
 
-On every turn, NAMS automatically retrieves relevant memories from the user's history and injects them into the prompt — then persists the response so future sessions remember it. No Neo4j infrastructure to manage.
+The wrapper retrieves selected conversation history, workspace entities and
+configured cross-conversation results, then attempts to store the exchange.
+Retrieval scope and persistence/error behavior depend on the selected mode. No Neo4j infrastructure to manage.
 
 ## What does it do?
 
@@ -21,10 +23,13 @@ Without this package, every chat session starts fresh — the model has no recol
 
 `@neo4j-labs/nams-ai-provider` wraps your existing AI model and transparently adds memory to every call:
 
-1. **Before the model responds** — NAMS searches its memory store for facts, preferences, and past interactions relevant to the current message, then injects them into the prompt automatically.
+1. **Before the model responds** — the package searches conversation messages, workspace entities, recorded steps and selected prior conversations, then injects the returned content. Facts or preferences represented in that content are not calls to the bridge-only preference/fact endpoints.
 2. **After the model responds** — NAMS persists the exchange so the next session can recall it, and extracts entities from those messages into a Neo4j knowledge graph server-side.
 
-The result: your AI remembers users across sessions without you changing your application logic.
+Cross-conversation selection is this package's application policy, not automatic
+behavior of the core middleware. Workspace entity retrieval can return shared
+data; do not treat a user id or conversation id as authorization. Verify failure
+handling and stream completion before promising durable storage to callers.
 
 ```
 User message
@@ -49,29 +54,40 @@ User message
 
 ## Setup
 
-**1. Install the provider and its peer dependencies**
+**1. Choose an artifact and install its peer dependencies**
+
+The commands below name the package, but this source review does not verify npm
+publication or deployed-service behavior. Check the selected artifact before
+using the registry command, or build this checkout using the source instructions.
+The provider manifest is version 0.2.0 and declares Node >=20; its core SDK peer
+currently requires Node >=22, so use Node 22+ for this combination. Respect the
+declared AI SDK 7 / provider 4 peer versions.
 
 ```bash
 npm install @neo4j-labs/nams-ai-provider ai @ai-sdk/provider @neo4j-labs/agent-memory zod
 ```
 
 <details>
-<summary>Working from source (package not yet on npm)</summary>
+<summary>Working from the current source checkout</summary>
 
 ```bash
 # from the repo root
-cd typescript/packages/vercel-ai-provider
-npm install
+cd typescript
+npm ci
 npm run build
-npm pack   # then `npm install ../path/to/neo4j-labs-nams-ai-provider-0.1.0.tgz` in your app
+cd packages/vercel-ai-provider
+npm ci
+npm install --no-save --package-lock=false ../..
+npm run build
+npm pack   # install the exact .tgz filename printed by this command in your app
 ```
 
 </details>
 
-**2. Get a free API key** at [memory.neo4jlabs.com](https://memory.neo4jlabs.com)
+**2. Get an API key** at [memory.neo4jlabs.com](https://memory.neo4jlabs.com)
 
 ```env
-MEMORY_API_KEY=sk-nams-...
+MEMORY_API_KEY=nams_...
 ```
 
 ---
@@ -155,7 +171,7 @@ There are four ways to integrate NAMS depending on how much control you want:
 | **Provider** | Swap your model for a NAMS-wrapped one | Simplest integration, fully transparent |
 | **Middleware** | Wrap an existing model instance | When you already have a model configured |
 | **Tools** | Expose memory as explicit AI SDK tools (optionally merged with tools from an MCP server) | When you want the model to decide when to remember |
-| **Hooks** | The runtime reads/writes the session transcript around every generation via AI SDK hooks — nothing memory-related is shown to the LLM | Production agents that need a deterministic, complete transcript |
+| **Hooks** | The runtime reads/writes the session transcript around every generation via AI SDK hooks — nothing memory-related is shown to the LLM | Applications that explicitly coordinate transcript writes |
 
 Switching modes is purely a code-level choice — all four use the same API key
 and environment variables (see [Environment variables](#environment-variables)).
@@ -168,11 +184,12 @@ Middleware and tools modes can also be
 injected baseline context plus explicit memory tools.
 
 > **How does this relate to `@neo4j-labs/agent-memory/middleware/vercel-ai`?**
-> The core SDK ships a minimal middleware for the AI SDK 4.x-era
-> `LanguageModelV1Middleware` shape that injects current-conversation context.
-> This package targets AI SDK v7 / `LanguageModelV4` and adds a registrable
-> `ProviderV4`, cross-session retrieval, optional graph extraction, explicit
-> memory tools, and MCP tool merging. New projects should prefer this package.
+> Both the current core middleware and this provider package target AI SDK 7 /
+> provider specification 4. The core middleware reads the selected conversation
+> and persists messages. This separate package adds a registrable `ProviderV4`,
+> retrieval policies, optional graph extraction, explicit tools, and MCP tool
+> merging. Choose by those features and validate the selected artifact; the
+> core middleware is not obsolete because of its model-interface version.
 
 ---
 
@@ -315,7 +332,7 @@ without the query having run; `{ graceSteps: 0 }` forces it as the literal
 first step. Keep `graceSteps` at least two below your `stopWhen` budget so the
 forced query and the final answer both fit.
 
-### Guaranteeing persistence with `ensureMemoryStored()`
+### Requesting fallback persistence with `ensureMemoryStored()`
 
 `prepareStep` cannot guarantee the *write* side: the loop ends when the model
 emits final text, so there is no later step to force `store_memory` into.
@@ -329,8 +346,8 @@ const tools = nams.tools({ userId: session.userId });
 const agent = new ToolLoopAgent({
   model:       openai('gpt-5.4-mini'),
   tools,
-  prepareStep: enforceQueryMemory(),      // retrieval guaranteed mid-loop
-  onFinish:    ensureMemoryStored(tools), // persistence guaranteed after it
+  prepareStep: enforceQueryMemory(),      // requests retrieval mid-loop
+  onFinish:    ensureMemoryStored(tools), // attempts storage after the loop
   stopWhen:    stepCountIs(10),
 });
 ```
@@ -421,7 +438,7 @@ const agent = new ToolLoopAgent({
 });
 ```
 
-In this setup, skip `enforceQueryMemory()` — the middleware already guarantees
+In this setup, skip `enforceQueryMemory()` — the middleware already attempts
 retrieval unconditionally in code, so forcing `query_memory` as well would
 just spend an extra step re-fetching similar context. The enforcement hook is
 for pure tools mode, where the tool call is the *only* retrieval path.

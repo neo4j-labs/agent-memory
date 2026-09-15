@@ -1,0 +1,11 @@
+Save the complete program below in `agent-memory-tutorials/`. It has no local helper imports. The next section explains the selected function.
+
+.Complete `extraction_recipes.py`
+[%collapsible]
+====
+.Save as `extraction_recipes.py`
+[source,python]
+----
+include::example$extraction_recipes.py[]
+----
+====

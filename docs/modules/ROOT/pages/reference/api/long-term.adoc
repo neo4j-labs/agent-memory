@@ -1,437 +1,1022 @@
-= LongTermMemory API Reference
+= LongTermMemory API reference
 :page-product: agent-memory
 :page-pagination:
 :toclevels: 2
 
-API for entity, preference, and fact storage.
+Entity, preference, fact, relationship, provenance, and location operations exposed through `client.long_term`. The main signatures describe the bolt implementation; hosted differences are listed separately.
+
+Signatures below show types, keyword-only arguments (`*`), and defaults. They are reference declarations; the examples show calls to execute.
+
+See xref:reference/backend-capabilities.adoc[Backend capabilities] for availability and data scope.
 
 == Overview
 
-`LongTermMemory` handles the knowledge graph: entities (POLE+O), user preferences, and facts with relationships.
+The default POLE+O entity types are `PERSON`, `OBJECT`, `LOCATION`, `EVENT`, and `ORGANIZATION`. Subtypes and custom types depend on the configured domain schema.
 
 [source,python]
 ----
-async with MemoryClient(settings) as client:
-    # Access via client
-    long_term = client.long_term
-
-    # Add an entity
-    entity, dedup_result = await long_term.add_entity(
-        "John Smith",
-        "PERSON",
-        subtype="INDIVIDUAL"
-    )
+# Bolt: add_entity returns an entity and its deduplication result.
+person, dedup = await client.long_term.add_entity(
+    "John Smith", "PERSON", subtype="INDIVIDUAL"
+)
+company, _ = await client.long_term.add_entity(
+    "Acme Corp", "ORGANIZATION", subtype="COMPANY"
+)
+await client.long_term.add_relationship(person, company, "WORKS_AT")
+for entity in await client.long_term.search_entities("software company"):
+    print(entity.name, entity.metadata.get("similarity"))
 ----
 
-== Entity Operations
+Search methods return models, not `(model, score)` tuples. Bolt semantic-search scores are stored in `metadata["similarity"]`. Entity search is not user-scoped; see the backend capability and scope reference before designing tenancy.
+
+== Entity operations (bolt)
 
 === add_entity
 
-Add an entity to the knowledge graph.
+On Bolt, entity writes merge by exact `(name, type)`, including when `deduplicate=False`. On an existing-node match, the current method can return a newly allocated ID instead of the persisted node ID. Before linking repeated entities, read the persisted ID with an exact name/type Cypher lookup and check that it resolves unambiguously. The xref:tutorials/knowledge-graph.adoc[document tutorial] includes this readback.
 
+Add an entity and return `(Entity, DeduplicationResult)`. Geocoding and enrichment flags default to True, but run only when their providers are configured. There is no `confidence` keyword; `attributes` and `metadata` are distinct fields.
+
+// contract: memory/long_term.py:LongTermMemory.add_entity
 [source,python]
 ----
-entity, dedup_result = await long_term.add_entity(
+async def add_entity(
     name: str,
-    entity_type: str,
-    subtype: str | None = None,
-    description: str | None = None,
-    metadata: dict[str, Any] | None = None,
-    confidence: float = 1.0,
-    coordinates: tuple[float, float] | None = None,
-    geocode: bool = False,
-    deduplicate: bool = True,
-)
+    entity_type: EntityType | str,
+    *,
+    subtype: str | None=None,
+    description: str | None=None,
+    aliases: list[str] | None=None,
+    attributes: dict[str, Any] | None=None,
+    resolve: bool=True,
+    generate_embedding: bool=True,
+    deduplicate: bool=True,
+    geocode: bool=True,
+    enrich: bool=True,
+    coordinates: tuple[float, float] | None=None,
+    metadata: dict[str, Any] | None=None,
+) -> tuple[Entity, DeduplicationResult]: ...
 ----
 
-==== Parameters
-
-[cols="1,1,1,3", options="header"]
+[cols="1,4",options="header"]
 |===
-| Parameter | Type | Default | Description
-
-| `name`
-| `str`
-| _required_
-| Entity name
-
-| `entity_type`
-| `str`
-| _required_
-| POLE+O type: `PERSON`, `OBJECT`, `LOCATION`, `EVENT`, `ORGANIZATION`
-
-| `subtype`
-| `str`
-| `None`
-| Subtype (e.g., `VEHICLE`, `COMPANY`)
-
-| `description`
-| `str`
-| `None`
-| Entity description
-
-| `metadata`
-| `dict`
-| `None`
-| Additional metadata
-
-| `confidence`
-| `float`
-| `1.0`
-| Confidence score (0.0-1.0)
-
-| `coordinates`
-| `tuple`
-| `None`
-| Latitude, longitude for locations
-
-| `geocode`
-| `bool`
-| `False`
-| Auto-geocode location entities
-
-| `deduplicate`
-| `bool`
-| `True`
-| Check for duplicates
+| Parameter | Description
+| `name` | Entity name
+| `entity_type` | Entity type (PERSON, OBJECT, LOCATION, EVENT, ORGANIZATION)
+| `subtype` | Optional subtype (e.g., VEHICLE for OBJECT)
+| `description` | Optional description
+| `aliases` | Optional list of alternative names
+| `attributes` | Optional additional attributes
+| `resolve` | Whether to resolve against existing entities
+| `generate_embedding` | Whether to generate embedding
+| `deduplicate` | Whether to check for duplicate entities
+| `geocode` | Whether to geocode LOCATION entities (requires geocoder)
+| `enrich` | Whether to queue for background enrichment
+| `coordinates` | Optional (latitude, longitude) tuple to set directly
+| `metadata` | Optional metadata
 |===
 
-==== Returns
-
-Tuple of `(Entity, DeduplicationResult)`:
-
-[source,python]
-----
-@dataclass
-class DeduplicationResult:
-    action: str  # "created", "merged", "flagged"
-    matched_entity_id: str | None
-    matched_entity_name: str | None
-    confidence: float | None
-    match_type: str | None  # "embedding", "fuzzy", "both"
-----
-
-=== get_entity
-
-Get an entity by ID.
-
-[source,python]
-----
-entity = await long_term.get_entity(entity_id: str)
-----
+anchor:_get_entity[]
 
 === get_entity_by_name
 
-Get an entity by name.
+Return an exact name match or None. This method does not accept an entity-type filter.
 
+// contract: memory/long_term.py:LongTermMemory.get_entity_by_name
 [source,python]
 ----
-entity = await long_term.get_entity_by_name(
-    name: str,
-    entity_type: str | None = None,
-)
+async def get_entity_by_name(name: str) -> Entity | None: ...
 ----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `name` | Entity name to search for (checks name, canonical_name, aliases)
+|===
 
 === search_entities
 
-Semantic search for entities.
+Semantic search with type, subtype, and similarity controls.
 
+// contract: memory/long_term.py:LongTermMemory.search_entities
 [source,python]
 ----
-results = await long_term.search_entities(
+async def search_entities(
     query: str,
-    entity_types: list[str] | None = None,
-    limit: int = 10,
-    threshold: float = 0.7,
-)
+    *,
+    entity_types: list[EntityType | str] | None=None,
+    limit: int=10,
+    threshold: float=0.7,
+) -> list[Entity]: ...
 ----
 
-=== update_entity
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `query` | Search query
+| `entity_types` | Optional filter by entity types
+| `limit` | Maximum results
+| `threshold` | Minimum similarity threshold
+|===
 
-Update an entity's properties.
+anchor:_update_entity[]
+anchor:_delete_entity[]
+There are no public `get_entity`, `update_entity`, or `delete_entity` wrappers in these Python stores. For bolt, use an application-specific graph query when the supported operations do not cover a mutation. NAMS endpoint existence does not imply a Python wrapper; consult xref:reference/rest-api.adoc[REST API mappings].
 
-[source,python]
-----
-entity = await long_term.update_entity(
-    entity_id: str,
-    description: str | None = None,
-    metadata: dict[str, Any] | None = None,
-)
-----
-
-=== delete_entity
-
-Delete an entity.
-
-[source,python]
-----
-await long_term.delete_entity(entity_id: str)
-----
-
-== Preference Operations
+== Preference operations (bolt only)
 
 === add_preference
 
-Add a user preference.
+Store a preference. Use `preference`, not `value`, as the keyword. `user_identifier` creates an explicit user association; `applies_to` targets an entity.
 
+// contract: memory/long_term.py:LongTermMemory.add_preference
 [source,python]
 ----
-preference = await long_term.add_preference(
+async def add_preference(
     category: str,
-    value: str,
-    confidence: float = 0.5,
-    metadata: dict[str, Any] | None = None,
-)
+    preference: str,
+    *,
+    context: str | None=None,
+    confidence: float=1.0,
+    generate_embedding: bool=True,
+    metadata: dict[str, Any] | None=None,
+    user_identifier: str | None=None,
+    applies_to: list[Any] | None=None,
+) -> Preference: ...
 ----
 
-==== Parameters
-
-[cols="1,1,1,3", options="header"]
+[cols="1,4",options="header"]
 |===
-| Parameter | Type | Default | Description
-
-| `category`
-| `str`
-| _required_
-| Preference category (e.g., `food`, `style`)
-
-| `value`
-| `str`
-| _required_
-| Preference value/description
-
-| `confidence`
-| `float`
-| `0.5`
-| Confidence score (0.0-1.0)
-
-| `metadata`
-| `dict`
-| `None`
-| Additional metadata
+| Parameter | Description
+| `category` | Preference category (food, music, communication, etc.)
+| `preference` | The preference statement
+| `context` | When/where preference applies
+| `confidence` | Confidence score
+| `generate_embedding` | Whether to generate embedding
+| `metadata` | Optional metadata
+| `user_identifier` | When provided, writes a `(:User)-[:HAS_PREFERENCE]->(:Preference)` edge linking the preference to the user's :User node. Multi-tenant deployments should pass this on every call.
+| `applies_to` | Optional list of `EntityRef` describing the entities this preference scopes to. Each ref is materialized as a `(:Preference)-[:APPLIES_TO]->(:Entity)` edge so `get_preferences_for(user, applies_to=...)` queries can find scoped preferences efficiently.
 |===
 
-=== get_preferences
+anchor:_get_preferences[]
 
-Get preferences, optionally filtered.
+=== get_preferences_by_category
 
+Return preferences in a category. This is the category-listing operation; `get_preferences` does not exist.
+
+// contract: memory/long_term.py:LongTermMemory.get_preferences_by_category
 [source,python]
 ----
-preferences = await long_term.get_preferences(
-    category: str | None = None,
-    limit: int = 100,
-)
+async def get_preferences_by_category(category: str, *, limit: int=100) -> list[Preference]: ...
 ----
 
-=== delete_preference
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `category` | The preference category
+| `limit` | Maximum results
+|===
 
-Delete a preference.
+=== get_preferences_for
 
+Retrieve preferences with explicit user/entity filters and optional superseded preferences.
+
+// contract: memory/long_term.py:LongTermMemory.get_preferences_for
 [source,python]
 ----
-await long_term.delete_preference(preference_id: str)
+async def get_preferences_for(
+    user_identifier: str,
+    *,
+    applies_to: Any | None=None,
+    active_only: bool=True,
+    as_of: datetime | None=None,
+) -> list[Preference]: ...
 ----
 
-== Fact Operations
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `user_identifier` | The user whose preferences to return.
+| `applies_to` | Optional `EntityRef` to scope further (e.g. preferences scoped to a particular Industry).
+| `active_only` | When `True` (default), exclude preferences that have been superseded.
+| `as_of` | When provided, only preferences whose validity interval contains this timestamp are returned. Implements the v0.5 bi-temporal time-travel API on top of valid_from / valid_until set by `add_preference` and `supersede_preference`.
+|===
+
+=== search_preferences
+
+Semantic preference search. The optional category filter is not a user boundary.
+
+// contract: memory/long_term.py:LongTermMemory.search_preferences
+[source,python]
+----
+async def search_preferences(
+    query: str,
+    *,
+    category: str | None=None,
+    limit: int=10,
+    threshold: float=0.7,
+) -> list[Preference]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `query` | Search query
+| `category` | Optional filter by category
+| `limit` | Maximum results
+| `threshold` | Minimum similarity threshold
+|===
+
+anchor:_delete_preference[]
+
+=== supersede_preference
+
+Mark a preference as superseded. This is not deletion; there is no `delete_preference` wrapper.
+
+// contract: memory/long_term.py:LongTermMemory.supersede_preference
+[source,python]
+----
+async def supersede_preference(old_preference_id: UUID | str, new_preference_id: UUID | str) -> None: ...
+----
+
+== Fact operations (bolt only)
 
 === add_fact
 
-Add a fact (statement with optional validity period).
+Store a subject–predicate–object statement. The object parameter is named `obj`; validity bounds and confidence are optional.
 
+// contract: memory/long_term.py:LongTermMemory.add_fact
 [source,python]
 ----
-fact = await long_term.add_fact(
+async def add_fact(
     subject: str,
     predicate: str,
-    object: str,
-    confidence: float = 1.0,
-    valid_from: datetime | None = None,
-    valid_until: datetime | None = None,
-)
+    obj: str,
+    *,
+    confidence: float=1.0,
+    valid_from: datetime | None=None,
+    valid_until: datetime | None=None,
+    generate_embedding: bool=True,
+    metadata: dict[str, Any] | None=None,
+) -> Fact: ...
 ----
 
-=== get_facts
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `subject` | Fact subject
+| `predicate` | Fact predicate/relationship
+| `obj` | Fact object
+| `confidence` | Confidence score
+| `valid_from` | Start of validity
+| `valid_until` | End of validity
+| `generate_embedding` | Whether to generate embedding
+| `metadata` | Optional metadata
+|===
 
-Get facts about a subject.
+anchor:_get_facts[]
 
+=== get_facts_about
+
+Return facts where the entity name occurs as the subject or object. There is no `get_facts` wrapper.
+
+// contract: memory/long_term.py:LongTermMemory.get_facts_about
 [source,python]
 ----
-facts = await long_term.get_facts(
-    subject: str | None = None,
-    predicate: str | None = None,
-    limit: int = 100,
-)
+async def get_facts_about(subject: str, *, limit: int=100) -> list[Fact]: ...
 ----
 
-== Deduplication Operations
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `subject` | The fact subject
+| `limit` | Maximum results
+|===
+
+=== search_facts
+
+Return matching Fact models with semantic similarity in metadata.
+
+// contract: memory/long_term.py:LongTermMemory.search_facts
+[source,python]
+----
+async def search_facts(
+    query: str,
+    *,
+    limit: int=10,
+    threshold: float=0.7,
+) -> list[Fact]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `query` | Search query
+| `limit` | Maximum results
+| `threshold` | Minimum similarity threshold
+|===
+
+== Relationships (bolt)
+
+=== add_relationship
+
+Create an entity relationship. `source` and `target` accept Entity models or UUIDs.
+
+// contract: memory/long_term.py:LongTermMemory.add_relationship
+[source,python]
+----
+async def add_relationship(
+    source: Entity | UUID,
+    target: Entity | UUID,
+    relationship_type: str,
+    *,
+    description: str | None=None,
+    confidence: float=1.0,
+    valid_from: datetime | None=None,
+    valid_until: datetime | None=None,
+    attributes: dict[str, Any] | None=None,
+) -> Relationship: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `source` | Source entity or ID
+| `target` | Target entity or ID
+| `relationship_type` | Type of relationship
+| `description` | Optional description
+| `confidence` | Confidence score
+| `valid_from` | Start of validity
+| `valid_until` | End of validity
+| `attributes` | Optional additional attributes
+|===
+
+The current implementation includes `attributes` on the returned model but does not pass them to the graph write. Do not depend on arbitrary relationship attributes surviving a later read through this method.
+
+=== get_related_entities
+
+Get entities related to a given entity.
+
+// contract: memory/long_term.py:LongTermMemory.get_related_entities
+[source,python]
+----
+async def get_related_entities(
+    entity: Entity | UUID,
+    *,
+    relationship_types: list[str] | None=None,
+    depth: int=1,
+) -> list[tuple[Entity, Relationship]]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `entity` | Entity or ID to find relations for
+| `relationship_types` | Optional filter by relationship types
+| `depth` | Traversal depth
+|===
+
+=== get_entity_relationships
+
+Get relationships for an entity by name.
+
+// contract: memory/long_term.py:LongTermMemory.get_entity_relationships
+[source,python]
+----
+async def get_entity_relationships(entity_name: str) -> list[tuple[Entity, Relationship]]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `entity_name` | Name of the entity
+|===
+
+== Deduplication (bolt only)
+
+Ingestion deduplication uses `DeduplicationConfig` from `neo4j_agent_memory.memory.long_term`. There is no top-level `DeduplicationStrategy` or `NAM_DEDUPLICATION` settings group. See xref:reference/configuration.adoc#deduplication[Configuration and integration limits].
 
 === find_potential_duplicates
 
-Find entities flagged as potential duplicates.
+Find entities that are flagged as potential duplicates.
 
+// contract: memory/long_term.py:LongTermMemory.find_potential_duplicates
 [source,python]
 ----
-duplicates = await long_term.find_potential_duplicates(limit: int = 100)
-# Returns: [(entity1, entity2, confidence), ...]
+async def find_potential_duplicates(*, limit: int=100) -> list[tuple[Entity, Entity, float]]: ...
 ----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `limit` | Maximum number of duplicate pairs to return
+|===
+
+=== merge_duplicate_entities
+
+Merge two entities, keeping the target and marking source as merged. The current Bolt query adds the source name as a target alias and copies incoming `MENTIONS` and eligible `SAME_AS` links. It does not transfer every relationship type or delete the source; review `RELATED_TO`, provenance, and custom links separately.
+
+// contract: memory/long_term.py:LongTermMemory.merge_duplicate_entities
+[source,python]
+----
+async def merge_duplicate_entities(source_id: UUID, target_id: UUID) -> tuple[Entity, Entity] | None: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `source_id` | ID of entity to merge from (will be marked as merged)
+| `target_id` | ID of entity to merge into (will be kept)
+|===
 
 === review_duplicate
 
-Confirm or reject a duplicate pair.
+Review a potential duplicate pair.
 
+// contract: memory/long_term.py:LongTermMemory.review_duplicate
 [source,python]
 ----
-await long_term.review_duplicate(
-    source_id: str,
-    target_id: str,
-    confirm: bool,  # True to merge, False to reject
-)
+async def review_duplicate(
+    source_id: UUID,
+    target_id: UUID,
+    *,
+    confirm: bool,
+) -> bool: ...
 ----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `source_id` | ID of first entity
+| `target_id` | ID of second entity
+| `confirm` | True to confirm as duplicate (merge), False to reject
+|===
 
 === get_same_as_cluster
 
-Get all entities in a SAME_AS cluster.
+Get all entities in the same SAME_AS cluster as the given entity.
 
+// contract: memory/long_term.py:LongTermMemory.get_same_as_cluster
 [source,python]
 ----
-cluster = await long_term.get_same_as_cluster(entity_id: str)
+async def get_same_as_cluster(entity_id: UUID) -> list[Entity]: ...
 ----
 
-== Provenance Operations
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `entity_id` | Entity ID to find cluster for
+|===
+
+=== get_deduplication_stats
+
+Get statistics about entity deduplication.
+
+// contract: memory/long_term.py:LongTermMemory.get_deduplication_stats
+[source,python]
+----
+async def get_deduplication_stats() -> DeduplicationStats: ...
+----
+
+`DeduplicationResult.action` is `none`, `merged`, or `flagged`; an ordinary new entity uses `none`. Thresholds are inclusive. The flag, auto-merge, and fuzzy thresholds must be between 0 and 1, and auto-merge must be at least the flag threshold.
+
+=== DeduplicationConfig
+
+Fields and defaults:
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `enabled` | `bool` | `True` |
+| `auto_merge_threshold` | `float` | `0.95` |
+| `flag_threshold` | `float` | `0.85` |
+| `use_fuzzy_matching` | `bool` | `True` |
+| `fuzzy_threshold` | `float` | `0.9` |
+| `max_candidates` | `int` | `10` |
+| `match_same_type_only` | `bool` | `True` |
+|===
+
+=== DeduplicationResult
+
+Fields and defaults:
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `is_duplicate` | `bool` | `False` |
+| `action` | `str` | `'none'` |
+| `matched_entity_id` | `UUID \| None` | `None` |
+| `matched_entity_name` | `str \| None` | `None` |
+| `similarity_score` | `float` | `0.0` |
+| `match_type` | `str \| None` | `None` |
+|===
+
+=== DuplicateCandidate
+
+Fields and defaults:
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `entity_id` | `UUID` | `required` |
+| `entity_name` | `str` | `required` |
+| `canonical_name` | `str \| None` | `required` |
+| `entity_type` | `str` | `required` |
+| `similarity_score` | `float` | `required` |
+| `fuzzy_score` | `float \| None` | `None` |
+| `relationship_status` | `str` | `'pending'` |
+|===
+
+=== DeduplicationStats
+
+Fields and defaults:
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `total_entities` | `int` | `0` |
+| `merged_entities` | `int` | `0` |
+| `same_as_relationships` | `int` | `0` |
+| `pending_reviews` | `int` | `0` |
+|===
+
+== Provenance and extraction records (bolt)
+
+=== register_extractor
+
+Register an extractor for provenance tracking.
+
+// contract: memory/long_term.py:LongTermMemory.register_extractor
+[source,python]
+----
+async def register_extractor(
+    name: str,
+    *,
+    version: str | None=None,
+    config: dict[str, Any] | None=None,
+) -> dict[str, Any]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `name` | Unique extractor name (e.g., "GLiNEREntityExtractor", "SpacyNER")
+| `version` | Optional version string
+| `config` | Optional configuration dict (will be JSON serialized)
+|===
 
 === link_entity_to_message
 
-Link an entity to its source message.
+Link an entity to its source message (EXTRACTED_FROM relationship).
 
+// contract: memory/long_term.py:LongTermMemory.link_entity_to_message
 [source,python]
 ----
-await long_term.link_entity_to_message(
-    entity: Entity,
-    message_id: str,
-    confidence: float = 1.0,
-    start_pos: int | None = None,
-    end_pos: int | None = None,
-    context: str | None = None,
-)
+async def link_entity_to_message(
+    entity: Entity | UUID,
+    message_id: UUID | str,
+    *,
+    confidence: float=1.0,
+    start_pos: int | None=None,
+    end_pos: int | None=None,
+    context: str | None=None,
+) -> bool: ...
 ----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `entity` | Entity or entity ID
+| `message_id` | ID of the source message
+| `confidence` | Extraction confidence score
+| `start_pos` | Start character position in the message
+| `end_pos` | End character position in the message
+| `context` | Surrounding text context
+|===
 
 === link_entity_to_extractor
 
-Link an entity to the extractor that created it.
+Link an entity to its extractor (EXTRACTED_BY relationship).
 
+// contract: memory/long_term.py:LongTermMemory.link_entity_to_extractor
 [source,python]
 ----
-await long_term.link_entity_to_extractor(
-    entity: Entity,
+async def link_entity_to_extractor(
+    entity: Entity | UUID,
     extractor_name: str,
-    confidence: float = 1.0,
-    extraction_time_ms: float | None = None,
-)
+    *,
+    confidence: float=1.0,
+    extraction_time_ms: float | None=None,
+) -> bool: ...
 ----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `entity` | Entity or entity ID
+| `extractor_name` | Name of the extractor
+| `confidence` | Extraction confidence score
+| `extraction_time_ms` | Time taken for extraction in milliseconds
+|===
 
 === get_entity_provenance
 
 Get provenance information for an entity.
 
+// contract: memory/long_term.py:LongTermMemory.get_entity_provenance
 [source,python]
 ----
-provenance = await long_term.get_entity_provenance(entity: Entity)
-# Returns: {"sources": [...], "extractors": [...]}
+async def get_entity_provenance(entity_id: Entity | UUID | str) -> dict[str, Any]: ...
 ----
 
-== Geospatial Operations
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `entity_id` | Entity, entity UUID, or entity id string. (`str` is accepted to match `LongTermProtocol.get_entity_provenance`; an `Entity` is also accepted for convenience.)
+|===
+
+=== get_entities_from_message
+
+Get all entities extracted from a message.
+
+// contract: memory/long_term.py:LongTermMemory.get_entities_from_message
+[source,python]
+----
+async def get_entities_from_message(message_id: UUID | str) -> list[tuple[Entity, dict[str, Any]]]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `message_id` | ID of the source message
+|===
+
+=== get_entities_by_extractor
+
+Get all entities extracted by a specific extractor.
+
+// contract: memory/long_term.py:LongTermMemory.get_entities_by_extractor
+[source,python]
+----
+async def get_entities_by_extractor(extractor_name: str, *, limit: int=100) -> list[tuple[Entity, dict[str, Any]]]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `extractor_name` | Name of the extractor
+| `limit` | Maximum number of entities to return
+|===
+
+=== list_extractors
+
+List all registered extractors with entity counts.
+
+// contract: memory/long_term.py:LongTermMemory.list_extractors
+[source,python]
+----
+async def list_extractors() -> list[dict[str, Any]]: ...
+----
+
+=== get_extraction_stats
+
+Get overall extraction statistics.
+
+// contract: memory/long_term.py:LongTermMemory.get_extraction_stats
+[source,python]
+----
+async def get_extraction_stats() -> dict[str, Any]: ...
+----
+
+=== get_extractor_stats
+
+Get per-extractor statistics.
+
+// contract: memory/long_term.py:LongTermMemory.get_extractor_stats
+[source,python]
+----
+async def get_extractor_stats() -> list[dict[str, Any]]: ...
+----
+
+=== delete_entity_provenance
+
+Delete all provenance links for an entity.
+
+// contract: memory/long_term.py:LongTermMemory.delete_entity_provenance
+[source,python]
+----
+async def delete_entity_provenance(entity: Entity | UUID) -> int: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `entity` | Entity or entity ID
+|===
+
+== Geospatial operations (bolt only)
 
 === search_locations_near
 
-Find locations near a point.
+Find Location entities within a radius of a point.
 
+// contract: memory/long_term.py:LongTermMemory.search_locations_near
 [source,python]
 ----
-locations = await long_term.search_locations_near(
+async def search_locations_near(
     latitude: float,
     longitude: float,
-    radius_km: float = 10.0,
-    limit: int = 10,
-)
+    *,
+    radius_km: float=10.0,
+    session_id: str | None=None,
+    limit: int=10,
+) -> list[Entity]: ...
 ----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `latitude` | Latitude of the center point
+| `longitude` | Longitude of the center point
+| `radius_km` | Search radius in kilometers (default 10km)
+| `session_id` | Optional session ID to filter locations by conversation
+| `limit` | Maximum number of results
+|===
+
+=== search_locations_in_bounding_box
+
+Find Location entities within a bounding box.
+
+// contract: memory/long_term.py:LongTermMemory.search_locations_in_bounding_box
+[source,python]
+----
+async def search_locations_in_bounding_box(
+    min_lat: float,
+    min_lon: float,
+    max_lat: float,
+    max_lon: float,
+    *,
+    session_id: str | None=None,
+    limit: int=100,
+) -> list[Entity]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `min_lat` | Minimum latitude (south)
+| `min_lon` | Minimum longitude (west)
+| `max_lat` | Maximum latitude (north)
+| `max_lon` | Maximum longitude (east)
+| `session_id` | Optional session ID to filter locations by conversation
+| `limit` | Maximum number of results
+|===
+
+=== get_location_coordinates
+
+Get coordinates for a Location entity.
+
+// contract: memory/long_term.py:LongTermMemory.get_location_coordinates
+[source,python]
+----
+async def get_location_coordinates(entity_id: UUID | str) -> tuple[float, float] | None: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `entity_id` | Entity ID
+|===
 
 === geocode_locations
 
-Batch geocode location entities.
+Batch geocode location entities without coordinates. Returns only `processed` and `geocoded` counts; without a configured geocoder both counts are zero.
+
+// contract: memory/long_term.py:LongTermMemory.geocode_locations
+[source,python]
+----
+async def geocode_locations(
+    *,
+    batch_size: int=50,
+    skip_existing: bool=True,
+    on_progress: Callable[[int, int], None] | None=None,
+) -> dict[str, int]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `batch_size` | Number of locations to process per batch
+| `skip_existing` | Skip locations that already have coordinates
+| `on_progress` | Progress callback (processed_count, total_count)
+|===
+
+Although `skip_existing` is accepted, the current query always selects locations without coordinates. Passing False does not refresh previously geocoded locations.
+
+== Context (bolt)
+
+=== get_context
+
+Return a formatted string of matching entities and preferences. Consumed kwargs are `include_entities=True`, `include_preferences=True`, and `max_items=10`; facts are not included by this formatter.
+
+// contract: memory/long_term.py:LongTermMemory.get_context
+[source,python]
+----
+async def get_context(query: str, **kwargs: Any) -> str: ...
+----
+
+== NAMS behavior
+
+NAMS manages extraction and resolution on the server. These are the client wrapper differences, not service versions or pricing tiers.
+
+[cols="1,3",options="header"]
+|===
+| Operation | Hosted behavior
+| `add_entity` | Returns one `Entity`, not a deduplication tuple. Sends only name, type, and description. Bolt subtype, aliases, attributes, metadata, and provider-control kwargs are not sent.
+| `search_entities` | Sends query, limit, and a single type via `entity_type` (aliases `type` and `label`). Bolt `entity_types`, `subtypes`, and `threshold` are not sent. Search is workspace-wide.
+| `get_entity_by_name` | Searches up to 20 results and returns the first exact case-sensitive name match, or None.
+| `get_related_entities` | Returns identifying relationship dictionaries (`relType`, `targetId`, `targetName`, `targetType`), not full Entity models. Traversal kwargs are not sent.
+| `get_entity_relationships` | Adapts inline relationships into Relationship models. IDs and creation times are synthesized locally; they are not stable server relationship identities.
+| `get_context` | Returns an empty string. Use entity search and conversation context explicitly.
+| Preferences, facts, `add_relationship` | Raise `NotSupportedError`; no corresponding hosted public operation is provided by these wrappers.
+| Deduplication administration, local geocoding, extractor registration/linking/statistics | Bolt-only methods; not exposed by `NamsLongTermMemory`.
+|===
 
 [source,python]
 ----
-stats = await long_term.geocode_locations(skip_existing: bool = True)
-# Returns: {"processed": 100, "geocoded": 85, "skipped": 10, "failed": 5}
+# NAMS: retain the entity directly; no tuple unpacking.
+entity = await client.long_term.add_entity("Acme Corp", "ORGANIZATION")
 ----
 
-== Graph Operations (NAMS)
+=== wait_for_extraction
+
+Wait for asynchronous extraction. Pass a conversation ID for pipeline status and optionally `expected_names` or `predicate` for entity confirmation. Returns False on timeout; check the result. A query with `min_results=1` alone can match unrelated existing workspace entities. On bolt, this method is a no-op returning True.
+
+// contract: nams/long_term.py:NamsLongTermMemory.wait_for_extraction
+[source,python]
+----
+async def wait_for_extraction(
+    *,
+    query: str | None=None,
+    expected_names: list[str] | None=None,
+    min_results: int=1,
+    predicate: Callable[[list[Entity]], bool] | None=None,
+    timeout: float=30.0,
+    interval: float=1.0,
+    session_id: str | None=None,
+    **kwargs: Any,
+) -> bool: ...
+----
 
 === expand_graph
 
-Fetch the 1-hop neighbourhood of an entity node for incremental graph
-visualization ("expand this node"), excluding nodes you already have.
+NAMS only. Return one-hop graph expansion as a dictionary with `nodes` and `edges`, excluding supplied `loaded_ids`.
 
+// contract: nams/long_term.py:NamsLongTermMemory.expand_graph
 [source,python]
 ----
-result = await client.long_term.expand_graph(node_id, loaded_ids=["id1", "id2"])
-result["nodes"]  # neighbouring nodes not already in loaded_ids
-result["edges"]  # connecting relationships
+async def expand_graph(node_id: str, *, loaded_ids: list[str] | None=None) -> dict[str, list[dict[str, Any]]]: ...
 ----
 
-NAMS only (backed by `POST /v1/graph/expand`); mirrored in the TypeScript SDK as
-`longTerm.expandGraph(nodeId, loadedIds)`.
+=== get_entity_provenance (NAMS)
 
-== Entity Model
+NAMS: return the entity reasoning provenance dictionary from the reasoning endpoint. Its server shape differs from bolt message/extractor provenance.
 
+// contract: nams/long_term.py:NamsLongTermMemory.get_entity_provenance
 [source,python]
 ----
-@dataclass
-class Entity:
-    id: str
-    name: str
-    type: str
-    subtype: str | None
-    description: str | None
-    metadata: dict[str, Any]
-    confidence: float
-    created_at: datetime
-    updated_at: datetime
-    embedding: list[float] | None
-    aliases: list[str]
-
-    @property
-    def full_type(self) -> str:
-        """Returns 'TYPE:SUBTYPE' or just 'TYPE'."""
+async def get_entity_provenance(entity_id: UUID | str) -> dict[str, Any]: ...
 ----
 
-== Example
+=== set_entity_feedback
 
+NAMS only. `positive` maps to userScore 1.0 and confirmed True; `negative` maps to 0.0 and False; a numeric string maps to userScore. Explicit `user_score` and `confirmed` kwargs override this mapping. This does not store an arbitrary feedback comment.
+
+// contract: nams/long_term.py:NamsLongTermMemory.set_entity_feedback
 [source,python]
 ----
-async with MemoryClient(settings) as client:
-    # Add entities
-    person, _ = await client.long_term.add_entity(
-        "John Smith", "PERSON", subtype="INDIVIDUAL"
-    )
-    company, _ = await client.long_term.add_entity(
-        "Acme Corp", "ORGANIZATION", subtype="COMPANY"
-    )
-
-    # Add preference
-    await client.long_term.add_preference(
-        "food", "Loves Italian cuisine", confidence=0.9
-    )
-
-    # Search entities
-    results = await client.long_term.search_entities("software company")
-    for entity, score in results:
-        print(f"[{score:.2f}] {entity.name} ({entity.full_type})")
+async def set_entity_feedback(entity_id: UUID | str, feedback: str, **kwargs: Any) -> None: ...
 ----
 
-== See Also
+=== get_entity_history
 
-* xref:reference/api/memory-client.adoc[MemoryClient API]
-* xref:how-to/entities.adoc[Work with Entities]
-* xref:how-to/deduplication.adoc[Handle Duplicate Entities]
-* xref:explanation/poleo-model.adoc[POLE+O Model Explained]
+NAMS only. Return the endpoint's `mentions` array as dictionaries.
+
+// contract: nams/long_term.py:NamsLongTermMemory.get_entity_history
+[source,python]
+----
+async def get_entity_history(entity_id: UUID | str, **kwargs: Any) -> list[dict[str, Any]]: ...
+----
+
+== Models
+
+Import these Pydantic models from `neo4j_agent_memory.memory.long_term`. IDs are UUIDs, and inherited memory fields are shown below.
+
+=== Entity
+
+Pydantic model; inherited memory-entry fields are included.
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `id` | `UUID` | `new UUID` |
+| `created_at` | `datetime` | `current UTC time` |
+| `updated_at` | `datetime \| None` | `None` |
+| `embedding` | `list[float] \| None` | `None` |
+| `metadata` | `dict[str, Any]` | `{}` |
+| `name` | `str` | `required` | Entity name
+| `canonical_name` | `str \| None` | `None` | Resolved canonical name
+| `type` | `str` | `required` | Entity type (PERSON, OBJECT, LOCATION, EVENT, ORGANIZATION)
+| `subtype` | `str \| None` | `None` | Entity subtype (e.g., VEHICLE for OBJECT)
+| `description` | `str \| None` | `None` | Entity description
+| `confidence` | `float` | `1.0` | Confidence score
+| `aliases` | `list[str]` | `[]` | Alternative names
+| `attributes` | `dict[str, Any]` | `{}` | Additional entity attributes
+| `source_id` | `UUID \| None` | `None` | Source message/document ID
+|===
+
+=== Relationship
+
+Pydantic model; inherited memory-entry fields are included.
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `id` | `UUID` | `new UUID` |
+| `created_at` | `datetime` | `current UTC time` |
+| `updated_at` | `datetime \| None` | `None` |
+| `embedding` | `list[float] \| None` | `None` |
+| `metadata` | `dict[str, Any]` | `{}` |
+| `source_id` | `UUID` | `required` | Source entity ID
+| `target_id` | `UUID` | `required` | Target entity ID
+| `type` | `str` | `required` | Relationship type
+| `description` | `str \| None` | `None` | Relationship description
+| `confidence` | `float` | `1.0` | Confidence score
+| `valid_from` | `datetime \| None` | `None` | Start of validity
+| `valid_until` | `datetime \| None` | `None` | End of validity
+| `attributes` | `dict[str, Any]` | `{}` | Additional relationship attributes
+|===
+
+=== Preference
+
+Pydantic model; inherited memory-entry fields are included.
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `id` | `UUID` | `new UUID` |
+| `created_at` | `datetime` | `current UTC time` |
+| `updated_at` | `datetime \| None` | `None` |
+| `embedding` | `list[float] \| None` | `None` |
+| `metadata` | `dict[str, Any]` | `{}` |
+| `category` | `str` | `required` | Preference category
+| `preference` | `str` | `required` | The preference statement
+| `context` | `str \| None` | `None` | When/where preference applies
+| `confidence` | `float` | `1.0` | Confidence score
+| `linked_entities` | `list[UUID]` | `[]` | Linked entity IDs
+|===
+
+=== Fact
+
+Pydantic model; inherited memory-entry fields are included.
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `id` | `UUID` | `new UUID` |
+| `created_at` | `datetime` | `current UTC time` |
+| `updated_at` | `datetime \| None` | `None` |
+| `embedding` | `list[float] \| None` | `None` |
+| `metadata` | `dict[str, Any]` | `{}` |
+| `subject` | `str` | `required` | Fact subject
+| `predicate` | `str` | `required` | Fact predicate/relationship
+| `object` | `str` | `required` | Fact object
+| `confidence` | `float` | `1.0` | Confidence score
+| `source_id` | `UUID \| None` | `None` | Source message/document ID
+| `valid_from` | `datetime \| None` | `None` | Start of validity
+| `valid_until` | `datetime \| None` | `None` | End of validity
+|===
+
+`Entity.display_name` prefers its canonical name; `Entity.full_type` returns type plus optional subtype. `Entity.entity_type` resolves a known enum value or None for custom types. `Fact.as_triple` returns `(subject, predicate, object)`.
+
+== See also
+
+* xref:how-to/entities.adoc[Work with entities]
+* xref:how-to/deduplication.adoc[Handle duplicate entities]
+* xref:explanation/poleo-model.adoc[POLE+O model]
+
+== Earlier section links
+
+anchor:_entity_operations[]
+anchor:_parameters[]
+anchor:_returns[]
+anchor:_preference_operations[]
+anchor:_parameters_2[]
+anchor:_fact_operations[]
+anchor:_deduplication_operations[]
+anchor:_provenance_operations[]
+anchor:_geospatial_operations[]
+anchor:_graph_operations_nams[]
+anchor:_entity_model[]
+anchor:_example[]
+The earlier sections have been consolidated into the current contracts. See xref:reference/api/long-term.adoc#_entity_operations_bolt[entity operations], xref:reference/api/long-term.adoc#_preference_operations_bolt_only[preferences], xref:reference/api/long-term.adoc#_fact_operations_bolt_only[facts], xref:reference/api/long-term.adoc#_deduplication_bolt_only[deduplication], xref:reference/api/long-term.adoc#_provenance_and_extraction_records_bolt[provenance], xref:reference/api/long-term.adoc#_geospatial_operations_bolt_only[geospatial operations], and xref:reference/api/long-term.adoc#_nams_behavior[NAMS behavior]. For a complete runnable example, use xref:how-to/entities.adoc[the entity task].

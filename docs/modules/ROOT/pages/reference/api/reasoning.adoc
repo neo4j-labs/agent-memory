@@ -1,416 +1,679 @@
-= ReasoningMemory API Reference
+= ReasoningMemory API reference
 :page-product: agent-memory
 :page-pagination:
 :toclevels: 2
 
-API for reasoning trace and tool call storage.
+Reasoning trace, step, and tool-call operations exposed through `client.reasoning`. The main signatures are for bolt; NAMS stores conversation-level steps and tool calls and synthesizes the trace lifecycle locally.
+
+Signatures below show types, keyword-only arguments (`*`), and defaults. They are reference declarations; the examples show calls to execute.
+
+See xref:reference/backend-capabilities.adoc[Backend capabilities] for availability and data scope.
 
 == Overview
 
-`ReasoningMemory` records how agents solve problems: reasoning steps, tool calls, and outcomes.
+A bolt trace records a task and optional outcome. Its ordered steps can hold thoughts, actions, observations, and tool calls.
 
 [source,python]
 ----
-async with MemoryClient(settings) as client:
-    # Access via client
-    reasoning = client.reasoning
+from neo4j_agent_memory.core.memory import ToolCallStatus
 
-    # Start a reasoning trace
-    trace = await reasoning.start_trace(
-        session_id="user-123",
-        task="Find restaurant recommendations"
-    )
+trace = await client.reasoning.start_trace("example", "Find Italian restaurants")
+step = await client.reasoning.add_step(
+    trace.id, thought="Search nearby restaurants", action="search_restaurants"
+)
+await client.reasoning.record_tool_call(
+    step.id, "search_api", {"cuisine": "Italian"},
+    result=[{"name": "La Trattoria"}], duration_ms=234,
+    status=ToolCallStatus.SUCCESS,
+)
+await client.reasoning.complete_trace(
+    trace.id, outcome="Recommended La Trattoria", success=True
+)
 ----
 
-== Trace Operations
+For NAMS, first create a conversation and replace `example` with its server-issued ID. Read the hosted lifecycle limits below before relying on trace persistence.
+
+== Trace operations (bolt)
 
 === start_trace
 
 Start a new reasoning trace.
 
+// contract: memory/reasoning.py:ReasoningMemory.start_trace
 [source,python]
 ----
-trace = await reasoning.start_trace(
+async def start_trace(
     session_id: str,
     task: str,
-    triggered_by_message_id: str | None = None,
-    metadata: dict[str, Any] | None = None,
-)
+    *,
+    generate_embedding: bool=True,
+    metadata: dict[str, Any] | None=None,
+    triggered_by_message_id: UUID | str | None=None,
+    user_identifier: str | None=None,
+) -> ReasoningTrace: ...
 ----
 
-==== Parameters
-
-[cols="1,1,1,3", options="header"]
+[cols="1,4",options="header"]
 |===
-| Parameter | Type | Default | Description
-
-| `session_id`
-| `str`
-| _required_
-| Session identifier
-
-| `task`
-| `str`
-| _required_
-| Task description
-
-| `triggered_by_message_id`
-| `str`
-| `None`
-| Message that triggered this trace
-
-| `metadata`
-| `dict`
-| `None`
-| Additional metadata
+| Parameter | Description
+| `session_id` | Session identifier
+| `task` | Task description
+| `generate_embedding` | Whether to generate task embedding
+| `metadata` | Optional metadata
+| `triggered_by_message_id` | Optional message ID that initiated this trace. Creates an INITIATED_BY relationship from ReasoningTrace to Message.
+| `user_identifier` | When provided, scopes the trace to a :User node via `(:User)-[:HAS_TRACE]->(:ReasoningTrace)` and denormalizes `user_identifier` onto the trace node for fast filtering. Required when `MemorySettings.memory.multi_tenant=True`.
 |===
-
-==== Returns
-
-`ReasoningTrace` object with generated `id`.
 
 === complete_trace
 
-Complete a reasoning trace with outcome.
+Complete a reasoning trace.
 
+// contract: memory/reasoning.py:ReasoningMemory.complete_trace
 [source,python]
 ----
-trace = await reasoning.complete_trace(
-    trace_id: str,
-    outcome: str,
-    success: bool = True,
-)
+async def complete_trace(
+    trace_id: UUID | str,
+    *,
+    outcome: str | TraceOutcome | None=None,
+    success: bool | None=None,
+    generate_step_embeddings: bool=False,
+) -> ReasoningTrace: ...
 ----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `trace_id` | Trace ID to complete
+| `outcome` | Final outcome. Either a free-text string (legacy) or a `TraceOutcome` for structured outcomes with `error_kind`, `related_entities`, and metrics. A `TraceOutcome` overrides any `success=` argument.
+| `success` | Whether the task succeeded. Ignored when `outcome` is a `TraceOutcome`.
+| `generate_step_embeddings` | If True, batch generate embeddings for all steps that don't have them yet. Useful when steps were recorded with generate_embedding=False during streaming.
+|===
 
 === get_trace
 
-Get a trace by ID.
+Get a trace by ID (alias for get_trace_with_steps).
 
+// contract: memory/reasoning.py:ReasoningMemory.get_trace
 [source,python]
 ----
-trace = await reasoning.get_trace(trace_id: str)
+async def get_trace(trace_id: UUID | str) -> ReasoningTrace | None: ...
 ----
 
-=== get_traces
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `trace_id` | Trace ID to retrieve (UUID or string)
+|===
 
-Get traces for a session.
+=== get_trace_with_steps
 
+Get a complete trace with all steps and tool calls.
+
+// contract: memory/reasoning.py:ReasoningMemory.get_trace_with_steps
 [source,python]
 ----
-traces = await reasoning.get_traces(
-    session_id: str | None = None,
-    limit: int = 50,
-)
+async def get_trace_with_steps(trace_id: UUID) -> ReasoningTrace | None: ...
 ----
 
-=== delete_trace
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `trace_id` | Trace ID to retrieve
+|===
 
-Delete a trace and its steps.
+=== get_session_traces
 
+Get all traces for a session.
+
+// contract: memory/reasoning.py:ReasoningMemory.get_session_traces
 [source,python]
 ----
-await reasoning.delete_trace(trace_id: str)
+async def get_session_traces(session_id: str, *, limit: int=100) -> list[ReasoningTrace]: ...
 ----
 
-== Step Operations
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `session_id` | Session identifier
+| `limit` | Maximum traces to return
+|===
+
+=== list_traces
+
+List reasoning traces with filtering and pagination.
+
+// contract: memory/reasoning.py:ReasoningMemory.list_traces
+[source,python]
+----
+async def list_traces(
+    *,
+    session_id: str | None=None,
+    success_only: bool | None=None,
+    since: datetime | None=None,
+    until: datetime | None=None,
+    limit: int=100,
+    offset: int=0,
+    order_by: Literal['started_at', 'completed_at']='started_at',
+    order_dir: Literal['asc', 'desc']='desc',
+) -> list[ReasoningTrace]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `session_id` | Filter by session (optional)
+| `success_only` | Filter by success status (None for all, True for successful, False for failed)
+| `since` | Only traces started after this time
+| `until` | Only traces started before this time
+| `limit` | Maximum traces to return
+| `offset` | Number of traces to skip (for pagination)
+| `order_by` | Field to order by ('started_at' or 'completed_at')
+| `order_dir` | Sort direction ('asc' or 'desc')
+|===
+
+anchor:_get_traces[]
+anchor:_delete_trace[]
+There are no public `get_traces` or `delete_trace` methods. Use `get_session_traces` or `list_traces` to list traces. `get_trace_with_steps` loads steps and their tool calls; `list_traces` returns trace metadata without loading steps. Clearing a bolt session deletes traces connected through its conversation's `HAS_TRACE` relationship.
+
+== Step and tool-call operations (bolt)
 
 === add_step
 
 Add a reasoning step to a trace.
 
+// contract: memory/reasoning.py:ReasoningMemory.add_step
 [source,python]
 ----
-step = await reasoning.add_step(
-    trace_id: str,
-    thought: str,
-    action: str | None = None,
-    observation: str | None = None,
-)
+async def add_step(
+    trace_id: UUID | str,
+    *,
+    thought: str | None=None,
+    action: str | None=None,
+    observation: str | None=None,
+    generate_embedding: bool=True,
+    metadata: dict[str, Any] | None=None,
+) -> ReasoningStep: ...
 ----
 
-==== Parameters
-
-[cols="1,1,1,3", options="header"]
+[cols="1,4",options="header"]
 |===
-| Parameter | Type | Default | Description
-
-| `trace_id`
-| `str`
-| _required_
-| Parent trace ID
-
-| `thought`
-| `str`
-| _required_
-| Agent's reasoning/thought
-
-| `action`
-| `str`
-| `None`
-| Action taken
-
-| `observation`
-| `str`
-| `None`
-| Result observed
+| Parameter | Description
+| `trace_id` | Parent trace ID
+| `thought` | Agent's thought/reasoning
+| `action` | Action taken
+| `observation` | Observation from action
+| `generate_embedding` | Whether to generate step embedding
+| `metadata` | Optional metadata
 |===
-
-=== get_steps
-
-Get steps for a trace.
-
-[source,python]
-----
-steps = await reasoning.get_steps(trace_id: str)
-----
-
-== Tool Call Operations
 
 === record_tool_call
 
-Record a tool call within a step.
+Record a tool call using a `ToolCallStatus`, not a `success` boolean. `duration_ms` is an integer duration; result is optional.
 
+// contract: memory/reasoning.py:ReasoningMemory.record_tool_call
 [source,python]
 ----
-tool_call = await reasoning.record_tool_call(
-    step_id: str,
+async def record_tool_call(
+    step_id: UUID,
     tool_name: str,
     arguments: dict[str, Any],
-    result: Any,
-    duration_ms: float | None = None,
-    success: bool = True,
-    error: str | None = None,
-    message_id: str | None = None,
-)
+    *,
+    result: Any | None=None,
+    status: ToolCallStatus=ToolCallStatus.SUCCESS,
+    duration_ms: int | None=None,
+    error: str | None=None,
+    auto_observation: bool=False,
+    message_id: UUID | str | None=None,
+    touched_entities: list[EntityRef] | None=None,
+) -> ToolCall: ...
 ----
 
-==== Parameters
-
-[cols="1,1,1,3", options="header"]
+[cols="1,4",options="header"]
 |===
-| Parameter | Type | Default | Description
-
-| `step_id`
-| `str`
-| _required_
-| Parent step ID
-
-| `tool_name`
-| `str`
-| _required_
-| Name of the tool called
-
-| `arguments`
-| `dict`
-| _required_
-| Tool arguments
-
-| `result`
-| `Any`
-| _required_
-| Tool result
-
-| `duration_ms`
-| `float`
-| `None`
-| Execution time in milliseconds
-
-| `success`
-| `bool`
-| `True`
-| Whether the call succeeded
-
-| `error`
-| `str`
-| `None`
-| Error message if failed
-
-| `message_id`
-| `str`
-| `None`
-| Message that triggered the call
+| Parameter | Description
+| `step_id` | Parent reasoning step ID
+| `tool_name` | Name of the tool
+| `arguments` | Tool arguments
+| `result` | Tool result
+| `status` | Call status
+| `duration_ms` | Duration in milliseconds
+| `error` | Error message if failed
+| `auto_observation` | If True, automatically set the step's observation field from the tool result. Useful for ReAct-style agents where the observation is the tool's output.
+| `message_id` | Optional message ID that triggered this tool call. Creates a TRIGGERED_BY relationship from ToolCall to Message.
+| `touched_entities` | Optional list of `EntityRef` describing entities this tool call touched. Each ref is materialized as a `(:ReasoningStep)-[:TOUCHED]->(:Entity)` edge so audit queries can reach the entity in one hop instead of three. See `how-to/audit-reasoning.adoc`.
 |===
 
-=== get_tool_calls
+anchor:_get_steps[]
+anchor:_get_tool_calls[]
+There are no public `get_steps` or `get_tool_calls` methods. Read `trace.steps` after `get_trace_with_steps(trace_id)`, and read each step's `tool_calls`.
 
-Get tool calls for a step.
+Statuses are `pending`, `success`, `failure`, `error`, `timeout`, and `cancelled`. Import `ToolCallStatus` from `neo4j_agent_memory.core.memory` (also re-exported by `memory.reasoning`).
 
+=== on_tool_call_recorded
+
+Register an async callback that receives `(tool_call, HookContext)` after a call is recorded. Hooks are awaited in registration order; hook errors are logged and do not fail the memory write. The returned hook enables decorator usage. Use `HookContext.add_touched_edge(EntityRef(...))` to attach explicit provenance.
+
+// contract: memory/reasoning.py:ReasoningMemory.on_tool_call_recorded
 [source,python]
 ----
-tool_calls = await reasoning.get_tool_calls(step_id: str)
+def on_tool_call_recorded(hook: ToolCallHook) -> ToolCallHook: ...
 ----
 
-== Search Operations
+== Search (bolt only)
 
-=== search_traces
+anchor:_search_traces[]
+anchor:_find_similar_traces[]
 
-Semantic search for similar reasoning traces.
+=== get_similar_traces
 
+Search trace task embeddings. Returns ReasoningTrace models with `metadata["similarity"]`, not score tuples.
+
+// contract: memory/reasoning.py:ReasoningMemory.get_similar_traces
 [source,python]
 ----
-results = await reasoning.search_traces(
+async def get_similar_traces(
+    task: str,
+    *,
+    limit: int=5,
+    success_only: bool=True,
+    threshold: float=0.7,
+) -> list[ReasoningTrace]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `task` | Task description to match
+| `limit` | Maximum number of results
+| `success_only` | Only return successful traces
+| `threshold` | Minimum similarity threshold
+|===
+
+=== search_steps
+
+Search step embeddings. Returns `ReasoningStepWithContext` wrappers with `step`, `similarity`, and parent task/outcome fields. Generate step embeddings with `complete_trace(..., generate_step_embeddings=True)` before relying on step search.
+
+// contract: memory/reasoning.py:ReasoningMemory.search_steps
+[source,python]
+----
+async def search_steps(
     query: str,
-    session_id: str | None = None,
-    limit: int = 10,
-    min_score: float = 0.0,
-)
+    *,
+    limit: int=10,
+    success_only: bool=True,
+    threshold: float=0.7,
+) -> list[ReasoningStepWithContext]: ...
 ----
 
-==== Returns
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `query` | Free-text query. Embedded via the configured embedder.
+| `limit` | Maximum number of results.
+| `success_only` | When `True`, only steps whose parent trace completed successfully are returned. Filtering on the trace level (not the step) because individual steps don't carry their own outcome.
+| `threshold` | Minimum cosine similarity, 0-1.
+|===
 
-List of `(ReasoningTrace, score)` tuples.
-
-=== find_similar_traces
-
-Find traces similar to a given trace.
+Trace and step semantic searches are global: neither accepts a session filter. There are no `search_traces` or `find_similar_traces` methods.
 
 [source,python]
 ----
-similar = await reasoning.find_similar_traces(
-    trace_id: str,
-    limit: int = 5,
-)
+for trace in await client.reasoning.get_similar_traces("restaurant recommendations"):
+    print(trace.task, trace.metadata.get("similarity"), trace.outcome)
+for match in await client.reasoning.search_steps("find a nearby restaurant"):
+    print(match.similarity, match.step.thought, match.parent_task)
 ----
 
-== Statistics
+== Statistics (bolt only)
 
 === get_tool_stats
 
-Get tool usage statistics.
+Return a list of `ToolStats` models, optionally filtered by tool name. There is no session argument and the result is not a dictionary keyed by tool name.
 
+// contract: memory/reasoning.py:ReasoningMemory.get_tool_stats
 [source,python]
 ----
-stats = await reasoning.get_tool_stats(
-    session_id: str | None = None,
-)
+async def get_tool_stats(tool_name: str | None=None) -> list[ToolStats]: ...
 ----
 
-==== Returns
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `tool_name` | Optional filter by specific tool name
+|===
 
+=== migrate_tool_stats
+
+Recalculate Tool aggregates from existing ToolCall nodes. Returns a dictionary with migration counts.
+
+// contract: memory/reasoning.py:ReasoningMemory.migrate_tool_stats
 [source,python]
 ----
-{
-    "search_api": {"calls": 42, "successes": 40, "failures": 2, "avg_duration_ms": 150.5},
-    "weather_tool": {"calls": 10, "successes": 10, "failures": 0, "avg_duration_ms": 80.2},
-    ...
-}
+async def migrate_tool_stats() -> dict[str, int]: ...
 ----
 
-== Message Linking
+=== get_tool_usage_stats
+
+Deprecated compatibility operation returning a dictionary of tool name to minimal Tool models. Use `get_tool_stats` for aggregate counts and durations.
+
+// contract: memory/reasoning.py:ReasoningMemory.get_tool_usage_stats
+[source,python]
+----
+async def get_tool_usage_stats(tool_name: str | None=None) -> dict[str, Tool]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `tool_name` | Optional filter by tool name
+|===
+
+== Context and message links (bolt)
+
+=== get_context
+
+Return formatted similar traces. Consumed kwargs are `max_traces=3` and `include_successful_only=True`; no session scoping is applied.
+
+// contract: memory/reasoning.py:ReasoningMemory.get_context
+[source,python]
+----
+async def get_context(query: str, **kwargs: Any) -> str: ...
+----
 
 === link_trace_to_message
 
-Link an existing trace to a message.
+Create an `INITIATED_BY` relationship from the trace to the triggering Message. This operation is a no-op on NAMS.
 
+// contract: memory/reasoning.py:ReasoningMemory.link_trace_to_message
 [source,python]
 ----
-await reasoning.link_trace_to_message(
-    trace_id: str,
-    message_id: str,
-)
+async def link_trace_to_message(trace_id: UUID | str, message_id: UUID | str) -> None: ...
 ----
 
-Creates an `INITIATED_BY` relationship:
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `trace_id` | The reasoning trace ID
+| `message_id` | The message ID that initiated this trace
+|===
 
-[source]
+== StreamingTraceRecorder (bolt)
+
+Import `StreamingTraceRecorder` from `neo4j_agent_memory.memory.reasoning`. Its async context manager creates a trace, records incremental steps/tool calls, and completes the trace on exit.
+// contract: memory/reasoning.py:StreamingTraceRecorder.__init__
+[source,python]
 ----
-(ReasoningTrace) -[:INITIATED_BY]-> (Message)
+def StreamingTraceRecorder(
+    reasoning_memory: ReasoningMemory,
+    session_id: str,
+    task: str,
+    *,
+    generate_task_embedding: bool=True,
+    generate_step_embeddings: bool=False,
+): ...
 ----
+
+=== start_step
+
+Start a new reasoning step.
+
+// contract: memory/reasoning.py:StreamingTraceRecorder.start_step
+[source,python]
+----
+async def start_step(*, thought: str | None=None, action: str | None=None) -> ReasoningStep: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `thought` | The agent's reasoning/thought
+| `action` | The action being taken
+|===
+
+=== record_tool_call
+
+Record a tool call with optional automatic timing.
+
+// contract: memory/reasoning.py:StreamingTraceRecorder.record_tool_call
+[source,python]
+----
+async def record_tool_call(
+    tool_name: str,
+    arguments: dict[str, Any],
+    *,
+    result: Any=None,
+    status: ToolCallStatus=ToolCallStatus.SUCCESS,
+    duration_ms: int | None=None,
+    error: str | None=None,
+    auto_observation: bool=False,
+) -> ToolCall: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `tool_name` | Name of the tool
+| `arguments` | Tool arguments
+| `result` | Tool result
+| `status` | Call status
+| `duration_ms` | Duration in milliseconds (if not provided, calculated from step start)
+| `error` | Error message if failed
+| `auto_observation` | If True, set the step's observation from the result
+|===
+
+=== add_observation
+
+Add an observation to the current step.
+
+// contract: memory/reasoning.py:StreamingTraceRecorder.add_observation
+[source,python]
+----
+async def add_observation(observation: str) -> None: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `observation` | The observation text
+|===
+
+=== set_outcome
+
+Set the outcome for the trace (will be applied on context exit).
+
+// contract: memory/reasoning.py:StreamingTraceRecorder.set_outcome
+[source,python]
+----
+def set_outcome(outcome: str, success: bool=True) -> None: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `outcome` | The outcome description
+| `success` | Whether the task succeeded
+|===
+
+Its `trace_id` and `step_id` properties expose the current IDs.
+
+== NAMS lifecycle and operations
+
+NAMS exposes flat steps belonging to a conversation and tool calls belonging to a step. The Python wrapper holds a trace-ID-to-conversation mapping in this client instance; it does not create a server Trace record.
+
+[cols="1,3",options="header"]
+|===
+| Operation | Hosted behavior
+| `start_trace(session_id, task, **kwargs)` | Creates local trace metadata and a UUID; `metadata` is held locally. No request stores a trace, task, trigger link, or outcome.
+| `add_step(trace_id, **kwargs)` | Requires a trace started by this client instance. Sends `thought` as `reasoning`, `action` as `actionTaken`, and `observation` as `result` with the conversation ID. Empty thought/action become a single space.
+| `record_tool_call(step_id, tool_name, arguments, **kwargs)` | Sends status, result, and duration when supplied. Arguments and result are JSON strings in the request; bolt error/auto-observation/message/provenance kwargs are not sent.
+| `complete_trace(trace_id, **kwargs)` | Updates local outcome, success, and completion time; returns None. It does not persist completion to the service.
+| `get_trace(trace_id)` | Returns local trace metadata, or None when unknown to this client instance.
+| `get_trace_with_steps(trace_id)` | Requires the local mapping, then fetches all steps for that conversation. Two synthetic traces in the same conversation do not partition the server's steps.
+| `get_session_traces(session_id)` | Fetches the conversation's steps as one aggregate trace with a new local ID and task text `Aggregated session reasoning`.
+| `get_context` | Returns an empty string.
+| `link_trace_to_message` | No-op.
+| `search_steps`, `get_similar_traces`, `list_traces`, tool statistics | Raise `NotSupportedError`.
+|===
+
+Save conversation IDs for later retrieval. Synthetic trace IDs, task labels, and outcomes are not durable across client instances. For durable hosted reasoning data, consume the recorded conversation steps and tool calls. See xref:reference/rest-api.adoc[REST endpoint mappings].
 
 == Models
 
+These are Pydantic models, not dataclasses. Inherited fields include UUID IDs and `created_at`; there is no `timestamp` alias. `ReasoningStep` uses `step_number`, and `ToolCall` uses `status` rather than `success`.
+
 === ReasoningTrace
 
-[source,python]
-----
-@dataclass
-class ReasoningTrace:
-    id: str
-    session_id: str
-    task: str
-    outcome: str | None
-    success: bool | None
-    started_at: datetime
-    completed_at: datetime | None
-    metadata: dict[str, Any]
-    embedding: list[float] | None
-----
+Pydantic model; inherited memory-entry fields are included.
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `id` | `UUID` | `new UUID` |
+| `created_at` | `datetime` | `current UTC time` |
+| `updated_at` | `datetime \| None` | `None` |
+| `embedding` | `list[float] \| None` | `None` |
+| `metadata` | `dict[str, Any]` | `{}` |
+| `session_id` | `str` | `required` | Session identifier
+| `task` | `str` | `required` | Task description
+| `task_embedding` | `list[float] \| None` | `None` | Task embedding
+| `steps` | `list[ReasoningStep]` | `[]` | Reasoning steps
+| `outcome` | `str \| None` | `None` | Final outcome
+| `success` | `bool \| None` | `None` | Whether task succeeded
+| `started_at` | `datetime` | `current UTC time` | Start time
+| `completed_at` | `datetime \| None` | `None` | Completion time
+|===
 
 === ReasoningStep
 
-[source,python]
-----
-@dataclass
-class ReasoningStep:
-    id: str
-    trace_id: str
-    thought: str
-    action: str | None
-    observation: str | None
-    sequence: int
-    timestamp: datetime
-----
+Pydantic model; inherited memory-entry fields are included.
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `id` | `UUID` | `new UUID` |
+| `created_at` | `datetime` | `current UTC time` |
+| `updated_at` | `datetime \| None` | `None` |
+| `embedding` | `list[float] \| None` | `None` |
+| `metadata` | `dict[str, Any]` | `{}` |
+| `trace_id` | `UUID \| str` | `required` | Parent trace ID
+| `step_number` | `int` | `required` | Step number in sequence
+| `thought` | `str \| None` | `None` | Agent's thought/reasoning
+| `action` | `str \| None` | `None` | Action taken
+| `observation` | `str \| None` | `None` | Observation from action
+| `tool_calls` | `list[ToolCall]` | `[]` | Tool calls in this step
+|===
 
 === ToolCall
 
-[source,python]
-----
-@dataclass
-class ToolCall:
-    id: str
-    step_id: str
-    tool_name: str
-    arguments: dict[str, Any]
-    result: Any
-    duration_ms: float | None
-    success: bool
-    error: str | None
-    timestamp: datetime
-----
+Pydantic model; inherited memory-entry fields are included.
 
-== Example
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `id` | `UUID` | `new UUID` |
+| `created_at` | `datetime` | `current UTC time` |
+| `updated_at` | `datetime \| None` | `None` |
+| `embedding` | `list[float] \| None` | `None` |
+| `metadata` | `dict[str, Any]` | `{}` |
+| `tool_name` | `str` | `required` | Name of the tool
+| `arguments` | `dict[str, Any]` | `{}` | Tool arguments
+| `result` | `Any \| None` | `None` | Tool result
+| `status` | `ToolCallStatus` | `ToolCallStatus.PENDING` | Call status
+| `duration_ms` | `int \| None` | `None` | Duration in milliseconds
+| `error` | `str \| None` | `None` | Error message if failed
+| `step_id` | `UUID \| None` | `None` | Parent reasoning step ID
+|===
 
-[source,python]
-----
-async with MemoryClient(settings) as client:
-    # Start reasoning trace linked to user message
-    trace = await client.reasoning.start_trace(
-        session_id="user-123",
-        task="Find Italian restaurants nearby",
-        triggered_by_message_id=message.id,
-    )
+=== Tool
 
-    # Add reasoning step
-    step = await client.reasoning.add_step(
-        trace.id,
-        thought="User wants Italian food. I should search for nearby restaurants.",
-        action="search_restaurants",
-    )
+Fields and defaults:
 
-    # Record tool call
-    await client.reasoning.record_tool_call(
-        step.id,
-        tool_name="search_api",
-        arguments={"cuisine": "Italian", "location": "nearby"},
-        result=[{"name": "La Trattoria", "rating": 4.5}],
-        duration_ms=234.5,
-    )
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `name` | `str` | `required` | Unique tool name
+|===
 
-    # Complete trace
-    await client.reasoning.complete_trace(
-        trace.id,
-        outcome="Recommended La Trattoria based on high rating",
-        success=True,
-    )
+=== ToolStats
 
-    # Later: find similar past reasoning
-    similar = await client.reasoning.search_traces("restaurant recommendations")
-    for trace, score in similar:
-        print(f"[{score:.2f}] {trace.task}: {trace.outcome}")
-----
+Fields and defaults:
 
-== See Also
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `name` | `str` | `required` | Tool name
+| `description` | `str \| None` | `None` | Tool description
+| `total_calls` | `int` | `0` | Total number of calls
+| `successful_calls` | `int` | `0` | Number of successful calls
+| `failed_calls` | `int` | `0` | Number of failed calls (error/timeout)
+| `success_rate` | `float` | `0.0` | Success rate (0.0 to 1.0)
+| `avg_duration_ms` | `float \| None` | `None` | Average duration in ms
+| `last_used_at` | `datetime \| None` | `None` | Last time tool was used
+|===
 
-* xref:reference/api/memory-client.adoc[MemoryClient API]
-* xref:how-to/reasoning-traces.adoc[Record Reasoning Traces]
-* xref:explanation/memory-types.adoc[Understanding Memory Types]
+=== ReasoningStepWithContext
+
+Fields and defaults:
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `step` | `ReasoningStep` | `required` |
+| `similarity` | `float` | `required` | Cosine similarity to the query (0-1)
+| `parent_task` | `str` | `required` | Task of the parent ReasoningTrace
+| `parent_outcome` | `str \| None` | `None` | Outcome of the parent ReasoningTrace, if completed
+| `parent_success` | `bool \| None` | `None` | Success flag of the parent ReasoningTrace
+|===
+
+== Structured outcomes and entity references (bolt)
+
+Import `TraceOutcome` and `EntityRef` from `neo4j_agent_memory.schema.models`. A structured outcome overrides a separate `success=` argument. EntityRef requires at least a name or ID; the operation using the reference determines how it resolves identity. NAMS does not persist these trace outcome fields through its compatibility lifecycle.
+
+=== EntityRef
+
+Fields and defaults:
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `label` | `str \| None` | `None` | Optional source domain label (e.g. 'Client'). Used when adopting an existing graph and the caller wants to disambiguate by label.
+| `name` | `str \| None` | `None` | Entity display name (matches Entity.name)
+| `type` | `str \| None` | `None` | POLE+O or custom entity type (matches Entity.type)
+| `id` | `str \| None` | `None` | Optional explicit entity id. When set, the reference identifies exactly one entity regardless of name/type.
+|===
+
+=== TraceOutcome
+
+Fields and defaults:
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `success` | `bool` | `required` | Whether the task succeeded
+| `summary` | `str` | `required` | Human-readable outcome summary
+| `error_kind` | `str \| None` | `None` | Indexed error category, e.g. 'timeout', 'no_results', 'user_aborted'. Stored on the ReasoningTrace for fast filtering.
+| `related_entities` | `list[EntityRef]` | `[]` | Entities the trace touched (for case-based retrieval)
+| `metrics` | `dict[str, float]` | `{}` | Arbitrary numeric metrics keyed by name (e.g. 'latency_ms', 'tools_called')
+|===
+
+== See also
+
+* xref:how-to/reasoning-traces.adoc[Record reasoning traces]
+* xref:explanation/memory-types.adoc[Memory types]
+
+== Earlier section links
+
+anchor:_trace_operations[]
+anchor:_parameters[]
+anchor:_returns[]
+anchor:_step_operations[]
+anchor:_parameters_2[]
+anchor:_tool_call_operations[]
+anchor:_parameters_3[]
+anchor:_search_operations[]
+anchor:_returns_2[]
+anchor:_statistics[]
+anchor:_returns_3[]
+anchor:_message_linking[]
+anchor:_example[]
+The earlier sections have been consolidated into the current contracts. See xref:reference/api/reasoning.adoc#_trace_operations_bolt[trace operations], xref:reference/api/reasoning.adoc#_step_and_tool_call_operations_bolt[steps and tool calls], xref:reference/api/reasoning.adoc#_search_bolt_only[search], xref:reference/api/reasoning.adoc#_statistics_bolt_only[statistics], and xref:reference/api/reasoning.adoc#_context_and_message_links_bolt[message links]. Runnable verification is in xref:how-to/reasoning-traces.adoc[the trace task].

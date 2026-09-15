@@ -36,9 +36,7 @@ manager" section for combining both on one agent.
 
 ## Prerequisites
 
-- Neo4j 5.26 (or later) reachable at `bolt://localhost:7687`, with the
-  credentials in `.env.example` — copy it and adjust, or export
-  `NEO4J_URI` / `NEO4J_USERNAME` / `NEO4J_PASSWORD`.
+- A dedicated empty AuraDB instance with its connection variables exported; follow [Aura setup and cleanup](../AURA_SETUP.md).
 - `strands-agents` 1.52–1.55 (the range this integration is pinned to).
 - No LLM or API key of any kind.
 
@@ -60,18 +58,13 @@ once the release carrying `Neo4jMemoryStore` is on PyPI.
 ## Run
 
 ```bash
-make neo4j-start
-NEO4J_PASSWORD=test-password uv run python examples/strands-memory-store/main.py
+uv run python examples/strands-memory-store/main.py
 ```
 
 No LLM API key required — `llm=None` plus a local `sentence-transformers`
 embedder.
 
-The container's data volume persists across `make neo4j-stop` / `neo4j-start`
-(only `neo4j-clean` wipes it). If this container previously ran against a
-different-dimension embedder (e.g. OpenAI's 1536-dim default), connecting
-here fails with `EmbeddingDimensionMismatchError`, not a silent problem —
-run `make neo4j-clean && make neo4j-start` to reset.
+Start with an empty dedicated Aura instance. Existing vector indexes from a different embedding model can cause `EmbeddingDimensionMismatchError`; follow the shared cleanup/setup instructions to replace only an instance created for this example, or migrate an existing graph deliberately.
 
 Expected output **on a fresh database**. Recall is database-wide, not
 session-scoped, so an already-populated Neo4j adds its own `[entity]` /
@@ -158,7 +151,9 @@ agent = Agent(
 
 ---
 
-_Verified against `neo4j-agent-memory` 0.6.0-dev (branch `examples-updates`),
-`strands-agents` 1.55.1, `sentence-transformers` 6.0.1 and Neo4j 5.26
-(Docker, with APOC) on 2026-09-10. `Neo4jMemoryStore` is unreleased — it is
-not in PyPI 0.5.0._
+**Historical verification report — 2026-09-10.** The following records a prior checkout/test report. Its development-version labels, passing counts, and release-availability statements are historical, not evidence of current package compatibility. See the [current source and artifact evidence](../../DOCUMENTATION_REMEDIATION_STATUS.md) before selecting an SDK artifact.
+
+> _Verified against `neo4j-agent-memory` 0.6.0-dev (branch `examples-updates`),
+> `strands-agents` 1.55.1, `sentence-transformers` 6.0.1 and Neo4j 5.26
+> (Docker, with APOC) on 2026-09-10. `Neo4jMemoryStore` is unreleased — it is
+> not in PyPI 0.5.0._

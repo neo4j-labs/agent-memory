@@ -18,8 +18,8 @@ live memory panel backed by the example's FastAPI backend.
 
 ## Prerequisites
 
-- **Node.js >= 22** (`engines.node` is enforced; Next 16 requires >= 20.9 and
-  Node 20 went end-of-life on 2026-04-30)
+- **Node.js 22.13+ on the 22 release line, or Node.js 24**, for development and checks.
+  The locked lint/test toolchain sets this floor independently of the TypeScript memory SDK.
 - The example's **backend running on `http://localhost:8000`** — see
   [`../README.md`](../README.md) for Neo4j, data loading and backend setup. The
   frontend talks to it over REST + SSE and never connects to Neo4j itself.
@@ -129,6 +129,8 @@ Apache 2.0 — see the main `neo4j-agent-memory` repository.
 
 ---
 
-**Verified against:** `neo4j-agent-memory` 0.6.0-dev (backend), Next 16.3.4,
-React 19.3.0, Chakra UI 3.37.0, `@neo4j-nvl/*` 1.2.1, react-leaflet 5.0.0,
-TypeScript 5.9, Vitest 5.0.0, Node 25 — 2026-09-10.
+**Historical verification report — 2026-09-10.** The following records a prior checkout/test report. Its development-version labels, passing counts, and release-availability statements are historical, not evidence of current package compatibility. See the [current source and artifact evidence](../../../DOCUMENTATION_REMEDIATION_STATUS.md) before selecting an SDK artifact.
+
+> **Verified against:** `neo4j-agent-memory` 0.6.0-dev (backend), Next 16.3.4,
+> React 19.3.0, Chakra UI 3.37.0, `@neo4j-nvl/*` 1.2.1, react-leaflet 5.0.0,
+> TypeScript 5.9, Vitest 5.0.0, Node 25 — 2026-09-10.

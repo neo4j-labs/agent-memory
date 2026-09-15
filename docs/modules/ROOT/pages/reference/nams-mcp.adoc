@@ -1,7 +1,12 @@
-= Hosted NAMS MCP Server
+= Hosted NAMS MCP server
 :page-product: agent-memory
 :toclevels: 2
 :icons: font
+
+[NOTE]
+====
+This page describes the service contract used by this checkout. The SDK source alone does not verify a deployed service, dashboard, quota or authentication configuration. Check the authenticated service response and current workspace settings when following operational instructions.
+====
 
 The hosted NAMS backend ships its own Model Context Protocol (MCP) server, so an
 MCP-capable agent (Claude Desktop, Claude Code, Cursor, …) can use a NAMS
@@ -13,8 +18,8 @@ SDK.
 This is **not** the same as the self-hosted Python MCP server
 (`neo4j-agent-memory mcp serve`) documented in xref:reference/mcp-tools.adoc[MCP
 Tools]. That one you run yourself against a bolt or NAMS backend and it exposes
-6/16 memory tools. The server described here is *operated by NAMS*, authenticated
-with OAuth, and exposes the full hosted surface (47 tools).
+6 core tools, or 16 Bolt / 20 NAMS extended registrations. The server described here is *operated by NAMS*, authenticated
+with API keys or OAuth. Its visible tool surface depends on the service deployment and caller scopes.
 ====
 
 == Two hosts
@@ -68,9 +73,9 @@ wiring a client.
 
 == Tool surface & scope-filtered visibility
 
-The server registers **47 tools** spanning memory, entity resolution/review,
-ontology, workspace management, and xref:reference/skills-api.adoc[Skills]
-(13 skill tools).
+The documented service contract groups tools into memory, entity resolution/review,
+ontology, workspace management, and xref:reference/skills-api.adoc[Skills].
+Use authenticated `tools/list` to obtain the actual inventory; a fixed count in this SDK repository is not a deployment guarantee.
 
 The surface a caller sees is **scope-dependent**. `tools/list` returns only the
 tools the principal's scopes permit it to invoke — so a data-plane *workspace
@@ -86,7 +91,7 @@ reflects your key category (see xref:reference/authentication.adoc[key categorie
 | Memory | `memory_add_message`, `memory_search`, `memory_get_context`, `memory_add_entity`, `memory_resolve_entity`, `memory_extraction_status`
 | Ontology | `ontology_list`, `ontology_activate`, `ontology_preview`, ontology write + pending-type tools
 | Workspace _(admin scope)_ | `workspace_create`, `workspace_get`, `workspace_reprovision`, `workspace_set_external_db`, `workspace_list_backups`, `workspace_update`, `workspace_delete`, `workspace_get_database` (plus the ungated `workspace_list`)
-| Skills _(Preview)_ | the 13 `skill_*` tools — see xref:reference/skills-api.adoc[Skills API]
+| Skills _(Preview)_ | the `skill_*` tools in the service contract — see xref:reference/skills-api.adoc[Skills API]
 |===
 
 == See also

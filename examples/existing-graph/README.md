@@ -38,7 +38,7 @@ This is the headline example for the *adopt an existing graph* workflow. By defa
 ## Prerequisites
 
 - **Bolt only.** `client.schema.adopt_existing_graph()` raises `NotSupportedError` on the hosted NAMS backend, where schema is server-managed. See [`explanation/backends.adoc`](../../docs/modules/ROOT/pages/explanation/backends.adoc).
-- Neo4j 5.26 LTS or 2026.x. Start the repo's test container with `make neo4j-start` from the repo root (it listens on `bolt://localhost:7687` with `neo4j` / `test-password` — the defaults used here), or export `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`.
+- A dedicated empty AuraDB instance with its connection variables exported; follow [Aura setup and cleanup](../AURA_SETUP.md).
 - `neo4j-agent-memory` installed with the `sentence-transformers` extra so the local embedder works: `uv sync --extra sentence-transformers` (or `uv sync --all-extras`).
 
 > **Where to run the seed.** `seed.py` is MERGE-only and never deletes anything, but it *does* write `:Person` / `:Movie` / `:Genre` nodes — run it against a scratch database. `adopt.py`, `memory_io.py` and `retrieve.py` are the parts you can point at a graph you care about (start with `adopt.py --dry-run`).
@@ -122,4 +122,6 @@ These are library limitations the example works around rather than hides:
 
 ---
 
-_Verified against `neo4j-agent-memory` v0.5.0 with Neo4j 5.26.19 on 2026-09-10._
+**Historical verification report — 2026-09-10.** The following records a prior checkout/test report. Its development-version labels, passing counts, and release-availability statements are historical, not evidence of current package compatibility. See the [current source and artifact evidence](../../DOCUMENTATION_REMEDIATION_STATUS.md) before selecting an SDK artifact.
+
+> _Verified against `neo4j-agent-memory` v0.5.0 with Neo4j 5.26.19 on 2026-09-10._

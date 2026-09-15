@@ -243,7 +243,7 @@ export class FakeNams {
     if (method === "GET" && path === "/ontologies/active") {
       const active = this.active();
       if (!active) return json({ detail: "no active ontology" }, 404);
-      return json({ ontology: JSON.parse(active.schema_json) });
+      return json({ ontology: JSON.parse(active.schema_json), version: active });
     }
     if (method === "POST" && path === "/ontologies/active") {
       this.activeVersionId = String(body.version_id);

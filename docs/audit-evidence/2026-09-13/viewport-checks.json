@@ -1,0 +1,128 @@
+[
+  {
+    "page": "index",
+    "width": 1440,
+    "bodyWidth": 1440,
+    "viewport": 1440,
+    "articleWidth": 840,
+    "images": [
+      {
+        "src": "_images/diagrams/the-three-layer-memory-architecture.png",
+        "alt": "Conversations, entities and reasoning records connected through the selected memory backend",
+        "width": 808,
+        "naturalWidth": 1073,
+        "linked": true
+      }
+    ]
+  },
+  {
+    "page": "tutorials/first-agent-memory",
+    "width": 1440,
+    "bodyWidth": 1440,
+    "viewport": 1440,
+    "articleWidth": 840,
+    "images": [
+      {
+        "src": "../_images/diagrams/message-chain.svg",
+        "alt": "A conversation linked to an ordered chain of messages",
+        "width": 808,
+        "naturalWidth": 1168,
+        "linked": true
+      }
+    ]
+  },
+  {
+    "page": "reference/api/memory-client",
+    "width": 1440,
+    "bodyWidth": 1440,
+    "viewport": 1440,
+    "articleWidth": 840,
+    "images": []
+  },
+  {
+    "page": "how-to/integrations/microsoft-agent",
+    "width": 1440,
+    "bodyWidth": 1440,
+    "viewport": 1440,
+    "articleWidth": 840,
+    "images": [
+      {
+        "src": "../../_images/diagrams/microsoft-agent-architecture.png",
+        "alt": "Microsoft Agent Framework context hooks and optional memory tools connect to Neo4j Agent Memory",
+        "width": 600,
+        "naturalWidth": 1088,
+        "linked": true
+      },
+      {
+        "src": "../../_images/diagrams/tfl-explorer-app-screenshot.png",
+        "alt": "TfL Explorer example interface showing a route-planning conversation",
+        "width": 540,
+        "naturalWidth": 1024,
+        "linked": true
+      }
+    ]
+  },
+  {
+    "page": "index",
+    "width": 390,
+    "bodyWidth": 390,
+    "viewport": 390,
+    "articleWidth": 390,
+    "images": [
+      {
+        "src": "_images/diagrams/the-three-layer-memory-architecture.png",
+        "alt": "Conversations, entities and reasoning records connected through the selected memory backend",
+        "width": 356,
+        "naturalWidth": 1073,
+        "linked": true
+      }
+    ]
+  },
+  {
+    "page": "tutorials/first-agent-memory",
+    "width": 390,
+    "bodyWidth": 390,
+    "viewport": 390,
+    "articleWidth": 390,
+    "images": [
+      {
+        "src": "../_images/diagrams/message-chain.svg",
+        "alt": "A conversation linked to an ordered chain of messages",
+        "width": 356,
+        "naturalWidth": 1168,
+        "linked": true
+      }
+    ]
+  },
+  {
+    "page": "reference/api/memory-client",
+    "width": 390,
+    "bodyWidth": 390,
+    "viewport": 390,
+    "articleWidth": 390,
+    "images": []
+  },
+  {
+    "page": "how-to/integrations/microsoft-agent",
+    "width": 390,
+    "bodyWidth": 390,
+    "viewport": 390,
+    "articleWidth": 390,
+    "images": [
+      {
+        "src": "../../_images/diagrams/microsoft-agent-architecture.png",
+        "alt": "Microsoft Agent Framework context hooks and optional memory tools connect to Neo4j Agent Memory",
+        "width": 356,
+        "naturalWidth": 1088,
+        "linked": true
+      },
+      {
+        "src": "../../_images/diagrams/tfl-explorer-app-screenshot.png",
+        "alt": "TfL Explorer example interface showing a route-planning conversation",
+        "width": 356,
+        "naturalWidth": 1024,
+        "linked": true
+      }
+    ]
+  }
+]

@@ -13,19 +13,19 @@ MCP server extension for Claude Desktop that provides persistent graph memory ba
 
 ## Requirements
 
-- Neo4j 5.x instance (local or remote)
+- A dedicated [AuraDB instance and its connection credentials](../../examples/AURA_SETUP.md)
 - Python 3.10+ (for `uvx` runtime)
-- Optional: OpenAI API key for embeddings
+- An OpenAI API key for the default embedding provider
 
 ## Quick Start
 
 1. Install from Claude Desktop extension directory
-2. Set `NEO4J_PASSWORD` environment variable
-3. Start a conversation - the server loads memory context automatically
+2. Configure `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD`, `NEO4J_DATABASE` and `OPENAI_API_KEY` in the extension environment. Copy the Aura setup's username into `NEO4J_USER`.
+3. Request a storage tool call and verify its record in Aura Query. The [maintained Claude Desktop tutorial](../../docs/modules/ROOT/pages/tutorials/mcp-server.adoc) gives the complete storage/readback flow.
 
 ## Alternative Installation (Developer Path)
 
-Add to your Claude Desktop configuration (`claude_desktop_config.json`):
+Add to your Claude Desktop configuration (`claude_desktop_config.json`). Replace the literal placeholders with the Aura credentials; Desktop does not inherit terminal exports. Keep the populated configuration private:
 
 ```json
 {
@@ -33,14 +33,17 @@ Add to your Claude Desktop configuration (`claude_desktop_config.json`):
     "neo4j-agent-memory": {
       "command": "uvx",
       "args": [
-        "neo4j-agent-memory[mcp]",
+        "neo4j-agent-memory[mcp,openai]",
         "mcp",
         "serve",
-        "--uri", "bolt://localhost:7687",
-        "--password", "your-password"
+        "--backend", "bolt"
       ],
       "env": {
-        "OPENAI_API_KEY": "sk-..."
+        "NEO4J_URI": "neo4j+s://<instance-id>.databases.neo4j.io",
+        "NEO4J_USER": "neo4j",
+        "NEO4J_PASSWORD": "replace-with-your-Aura-password",
+        "NEO4J_DATABASE": "neo4j",
+        "OPENAI_API_KEY": "replace-with-your-OpenAI-key"
       }
     }
   }

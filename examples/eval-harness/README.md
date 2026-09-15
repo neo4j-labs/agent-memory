@@ -45,7 +45,7 @@ The harness intentionally pairs with `tests/integration/test_eval_harness.py` �
 
 ## Prerequisites
 
-- Neo4j 5.26 LTS or 2026.x running at `bolt://localhost:7687` (or set `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`). `make neo4j-start` from the repo root starts a suitable container.
+- A dedicated empty AuraDB instance with its connection variables exported; follow [Aura setup and cleanup](../AURA_SETUP.md).
 - `neo4j-agent-memory` installed with the `sentence-transformers` extra (`uv sync --extra sentence-transformers`) — the demo uses a local embedder and no LLM, and the retrieval dimension needs real embeddings.
 
 ## Run
@@ -97,12 +97,14 @@ Copy that into a fixture and you have a regression test.
 
 ## Use it in CI
 
-`ci_gate.py` writes `eval-report.json` (overall, per-dimension scores, every case's expected-vs-actual) and exits 1 below the threshold, 2 if the run itself failed:
+`ci_gate.py` writes `eval-report.json` (overall, per-dimension scores, every case's expected-vs-actual) and exits 1 below the threshold, 2 if the run itself failed. Create a dedicated Aura test instance using [the shared setup](../AURA_SETUP.md), then store its URI, username and generated password in the CI secrets below. This runner uses the `neo4j` database; it does not read a `NEO4J_DATABASE` override. Keep this instance separate from application data and clean it up when finished. Ensure the CI runner can reach Aura:
 
 ```yaml
 - name: Memory-quality gate
   env:
-    NEO4J_URI: bolt://localhost:7687
+    NAM_BACKEND: bolt
+    NEO4J_URI: ${{ secrets.NEO4J_URI }}
+    NEO4J_USERNAME: ${{ secrets.NEO4J_USERNAME }}
     NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
   run: uv run python examples/eval-harness/ci_gate.py --min-score 0.9 --report eval-report.json
 
@@ -139,4 +141,6 @@ On NAMS, seed through the memory APIs and run `--dimensions retrieval,preference
 
 ---
 
-_Verified against `neo4j-agent-memory` v0.5.0, sentence-transformers 6.0.1, the `neo4j` 6.3.0 driver and Neo4j 5.26 (Docker) on 2026-09-10. The evaluation harness shipped in v0.2.0._
+**Historical verification report — 2026-09-10.** The following records a prior checkout/test report. Its development-version labels, passing counts, and release-availability statements are historical, not evidence of current package compatibility. See the [current source and artifact evidence](../../DOCUMENTATION_REMEDIATION_STATUS.md) before selecting an SDK artifact.
+
+> _Verified against `neo4j-agent-memory` v0.5.0, sentence-transformers 6.0.1, the `neo4j` 6.3.0 driver and Neo4j 5.26 (Docker) on 2026-09-10. The evaluation harness shipped in v0.2.0._

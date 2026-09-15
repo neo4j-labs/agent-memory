@@ -1,348 +1,328 @@
-= MemoryClient API Reference
+= MemoryClient API reference
 :page-product: agent-memory
 :page-pagination:
 :toclevels: 2
 
-The main entry point for all memory operations.
+`MemoryClient` connects to the configured backend and exposes its memory stores. The concrete stores and supported operations differ between bolt and NAMS.
+
+Signatures below show types, keyword-only arguments (`*`), and defaults. They are reference declarations; the examples show calls to execute.
+
+See xref:reference/backend-capabilities.adoc[Backend capabilities] for availability and data scope.
 
 == Overview
 
-`MemoryClient` manages the Neo4j connection and provides access to all three memory types.
+Export the connection values for a dedicated AuraDB instance using xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the Aura connection setup]. `BoltSettings` selects the direct Neo4j backend for Aura.
 
 [source,python]
 ----
-from neo4j_agent_memory import MemoryClient, MemorySettings
+import asyncio
+import os
+from neo4j_agent_memory import BoltSettings, MemoryClient
 
-settings = MemorySettings(
-    neo4j={"uri": "bolt://localhost:7687", "password": "password"}
-)
+async def main():
+    settings = BoltSettings(
+        neo4j={
+            "uri": os.environ["NEO4J_URI"],
+            "username": os.environ["NEO4J_USERNAME"],
+            "password": os.environ["NEO4J_PASSWORD"],
+            "database": os.getenv("NEO4J_DATABASE", "neo4j"),
+        },
+    )
+    async with MemoryClient(settings) as client:
+        message = await client.short_term.add_message("example", "user", "Hello")
+        print(message.id)
 
-async with MemoryClient(settings) as client:
-    # Access memory types
-    client.short_term  # ShortTermMemory
-    client.long_term   # LongTermMemory
-    client.reasoning   # ReasoningMemory
+asyncio.run(main())
 ----
+
+For hosted setup use `NamsSettings` and the returned conversation ID, as shown in xref:tutorials/nams-quickstart.adoc[NAMS quickstart]. `connect(settings)` is also available as an async construction helper: it returns an already-connected `BoltMemoryClient` or `NamsMemoryClient` for the corresponding settings type. Close that client in `finally`. The SDK aliases improve static typing; they do not change the service.
 
 == Constructor
 
+// contract: __init__.py:MemoryClient.__init__
 [source,python]
 ----
-MemoryClient(
-    settings: MemorySettings,
-    embedder: Embedder | None = None,
-    extractor: EntityExtractor | None = None,
-    resolver: EntityResolver | None = None,
-)
+def MemoryClient(
+    settings: MemorySettings | None=None,
+    *,
+    embedder: Embedder | None=None,
+    extractor: EntityExtractor | None=None,
+    resolver: EntityResolver | None=None,
+    geocoder: Geocoder | None=None,
+    enrichment_provider: _EnrichmentProviderProtocol | None=None,
+) -> None: ...
 ----
 
-=== Parameters
-
-[cols="1,1,3", options="header"]
+[cols="1,4",options="header"]
 |===
-| Parameter | Type | Description
-
-| `settings`
-| `MemorySettings`
-| Configuration settings (required)
-
-| `embedder`
-| `Embedder`
-| Custom embedder (optional, created from settings if not provided)
-
-| `extractor`
-| `EntityExtractor`
-| Custom extractor (optional, created from settings if not provided)
-
-| `resolver`
-| `EntityResolver`
-| Custom resolver (optional, created from settings if not provided)
+| Parameter | Description
+| `settings` | Memory settings (uses defaults if not provided)
+| `embedder` | Optional embedder override (for testing)
+| `extractor` | Optional extractor override (for testing)
+| `resolver` | Optional resolver override (for testing)
+| `geocoder` | Optional geocoder override (for testing)
+| `enrichment_provider` | Optional enrichment provider override (for testing)
 |===
 
 == Properties
 
-[cols="1,1,3", options="header"]
+[cols="1,2,3",options="header"]
 |===
-| Property | Type | Description
-
-| `short_term`
-| `ShortTermMemory`
-| Access to conversation and message operations
-
-| `long_term`
-| `LongTermMemory`
-| Access to entity, preference, and fact operations
-
-| `reasoning`
-| `ReasoningMemory`
-| Access to reasoning trace operations
-
-| `settings`
-| `MemorySettings`
-| Current configuration settings
-
-| `graph`
-| `Neo4jClient`
-| Access the underlying Neo4j graph client for custom Cypher queries (bolt; being retired in favour of `query.cypher` — see xref:how-to/migrate-to-nams.adoc[Migrate to NAMS])
-
-| `query`
-| `QueryConsole`
-| Read-only Cypher against the active workspace graph: `await client.query.cypher(...)`
-
-| `ontology`
-| `NamsOntology`
-| Typed, versioned domain ontologies. NAMS only — raises `NotSupportedError` on bolt. See xref:reference/ontology-api.adoc[Ontology API]
-
-| `auth`
-| `NamsAuth`
-| API-key management (list / create / reveal / rotate / revoke / refresh). NAMS only — raises `NotSupportedError` on bolt. See xref:reference/authentication.adoc[Authentication]
+| Property | Type / backend | Description
+| `short_term` | `ShortTermMemory` / `NamsShortTermMemory` | Conversation operations; connection required.
+| `long_term` | `LongTermMemory` / `NamsLongTermMemory` | Entity operations; preferences and facts are bolt-only.
+| `reasoning` | `ReasoningMemory` / `NamsReasoningMemory` | Reasoning operations; NAMS assembles conversation-level steps into compatibility traces.
+| `backend` | `str` | Resolved `bolt` or `nams` backend.
+| `is_nams` | `bool` | Whether NAMS is selected.
+| `is_connected` | `bool` | Whether the backend is connected.
+| `query` | `CypherQueryProtocol` | Read-only `await client.query.cypher(query, parameters)` on either backend; returns records as dictionaries.
+| `graph` | `Neo4jClient`, bolt only | Deprecated direct graph access; see <<graph>>.
+| `schema` | Graph `SchemaManager`, bolt only | Constraints/index inspection and management; see xref:reference/schema-objects.adoc[Schema objects].
+| `users` | `UserMemory`, bolt only | User nodes and explicit user-scoped operations; see xref:how-to/multi-tenancy.adoc[Multi-tenant memory].
+| `buffered` | `BufferedWriter`, bolt only | Explicit buffered writes; see xref:how-to/buffered-writes.adoc[Buffered writes].
+| `consolidation` | `ConsolidationMemory`, bolt only | Conversation hygiene and audit operations; see xref:how-to/consolidation.adoc[Consolidation].
+| `eval` | `EvalMemory` | Retrieval evaluation; the operations evaluated must be supported by the selected backend.
+| `ontology` | `NamsOntology`, NAMS only | Versioned domain ontologies; see xref:reference/ontology-api.adoc[Ontology API].
+| `auth` | `NamsAuth`, NAMS only | Key management; see xref:reference/authentication.adoc[Authentication].
+| `write_errors` | `list[BufferedWriteError]` | Errors collected by explicit buffered writes on bolt; always an empty list on NAMS.
 |===
+
+Store access before connection raises `NotConnectedError`. Unsupported accessors or calls raise `NotSupportedError`; a property being present is not evidence of backend support. Keep the `MemorySettings` object you passed to the constructor if you need to inspect configuration; there is no public `client.settings` property.
 
 == Methods
 
 === connect
 
-Establish connection to Neo4j.
+Connect to the configured backend. Called by `async with`; bolt initializes schema and providers, while NAMS configures HTTP transport and optionally validates the connection.
 
+// contract: __init__.py:MemoryClient.connect
 [source,python]
 ----
-await client.connect()
+async def connect() -> None: ...
 ----
-
-NOTE: Called automatically when using `async with`.
 
 === close
 
-Close the Neo4j connection.
+Close backend resources. Called when leaving `async with`, including on exceptions.
 
+// contract: __init__.py:MemoryClient.close
 [source,python]
 ----
-await client.close()
+async def close() -> None: ...
 ----
 
-NOTE: Called automatically when exiting `async with`.
+anchor:graph[]
 
 === graph
 
-Access the underlying `Neo4jClient` for custom Cypher queries alongside memory operations.
-This allows applications to query domain-specific data stored in the same Neo4j database without creating a separate database connection.
+On bolt, `client.graph` exposes the existing connection for domain-specific Cypher. `execute_read` emits a deprecation warning; prefer `client.query.cypher` for read-only queries. Direct write access remains bolt-only.
 
 [source,python]
 ----
-async with MemoryClient(settings) as client:
-    # Run custom Cypher queries on the same connection used for memory
-    results = await client.graph.execute_read(
-        "MATCH (c:Customer {id: $id}) RETURN c.name AS name",
-        {"id": "CUST-001"}
-    )
-
-    # Write operations
-    await client.graph.execute_write(
-        "CREATE (n:MyNode {name: $name})",
-        {"name": "example"}
-    )
+rows = await client.query.cypher(
+    "MATCH (c:Customer {id: $id}) RETURN c.name AS name",
+    {"id": "CUST-001"},
+)
+# Bolt only: writes require the direct graph client.
+await client.graph.execute_write(
+    "CREATE (n:MyNode {name: $name})", {"name": "example"}
+)
 ----
 
-The `Neo4jClient` provides:
-
-* `execute_read(query, parameters)` - Run read-only Cypher queries
-* `execute_write(query, parameters)` - Run write Cypher queries
-* `execute_batch(queries)` - Run multiple queries in a single transaction
-* `vector_search(...)` - Run vector similarity searches
-
-[CAUTION]
-====
-Raises `NotConnectedError` if the client is not connected. Always use within `async with` or after calling `connect()`.
-====
+`Neo4jClient` also provides `execute_batch` and `vector_search`. Use graph operations only while the client is connected. NAMS does not expose direct bolt access or write Cypher.
 
 === get_context
 
-Get combined context from all memory types for LLM prompts.
+Return a formatted *string* assembled from the enabled stores. There is no `MemoryContext` object or `to_prompt()` conversion.
 
+// contract: __init__.py:MemoryClient.get_context
 [source,python]
 ----
-context = await client.get_context(
+async def get_context(
     query: str,
-    session_id: str | None = None,
-    user_id: str | None = None,
-    limit: int = 10,
-    include_short_term: bool = True,
-    include_long_term: bool = True,
-    include_reasoning: bool = True,
-)
+    *,
+    session_id: str | None=None,
+    include_short_term: bool=True,
+    include_long_term: bool=True,
+    include_reasoning: bool=True,
+    max_items: int=10,
+) -> str: ...
 ----
 
-==== Parameters
-
-[cols="1,1,1,3", options="header"]
+[cols="1,4",options="header"]
 |===
-| Parameter | Type | Default | Description
-
-| `query`
-| `str`
-| _required_
-| Search query for semantic matching
-
-| `session_id`
-| `str`
-| `None`
-| Filter to specific session
-
-| `user_id`
-| `str`
-| `None`
-| Filter to specific user
-
-| `limit`
-| `int`
-| `10`
-| Maximum items per memory type
-
-| `include_short_term`
-| `bool`
-| `True`
-| Include recent messages
-
-| `include_long_term`
-| `bool`
-| `True`
-| Include entities and preferences
-
-| `include_reasoning`
-| `bool`
-| `True`
-| Include similar reasoning traces
+| Parameter | Description
+| `query` | The query to search for relevant context
+| `session_id` | Optional session ID for short-term filtering
+| `include_short_term` | Whether to include conversation history
+| `include_long_term` | Whether to include facts and preferences
+| `include_reasoning` | Whether to include similar task traces
+| `max_items` | Maximum items per memory type
 |===
 
-==== Returns
-
-`MemoryContext` object containing:
-
-[source,python]
-----
-@dataclass
-class MemoryContext:
-    messages: list[Message]
-    entities: list[Entity]
-    preferences: list[Preference]
-    reasoning_traces: list[ReasoningTrace]
-
-    def to_prompt(self) -> str:
-        """Format context for LLM prompt."""
-        ...
-----
-
-==== Example
+`session_id` is passed to short-term context retrieval, which also appends global semantic matches on bolt when an embedder is configured. It does not scope long-term or reasoning retrieval. This method is not an authorization boundary. On NAMS, a conversation ID is required when short-term context is enabled; the server-provided short-term context does not use `query` to filter its contents.
 
 [source,python]
 ----
 context = await client.get_context(
-    "restaurant recommendations",
-    session_id="user-123",
-    limit=5,
+    "restaurant recommendations", session_id="example", max_items=5
 )
-
-# Use in LLM prompt
-prompt = f"""
-Context from memory:
-{context.to_prompt()}
-
-User question: What's a good Italian restaurant?
-"""
+prompt = f"Context from memory:\n{context}\nUser question: Suggest a restaurant."
 ----
 
 === get_stats
 
-Get memory statistics.
+Bolt only. Return a flat dictionary of counts; NAMS raises `NotSupportedError`. Use a supported read-only counting query when hosted statistics are needed.
+
+// contract: __init__.py:MemoryClient.get_stats
+[source,python]
+----
+async def get_stats() -> dict[str, Any]: ...
+----
 
 [source,python]
 ----
 stats = await client.get_stats()
+print(stats["messages"], stats["entities"], stats["traces"])
 ----
 
-==== Returns
+The count keys are `conversations`, `messages`, `entities`, `preferences`, `facts`, and `traces`.
 
+anchor:_export_graph[]
+
+=== get_graph
+
+Bolt only. Return a `MemoryGraph` for visualization, containing `nodes`, `relationships`, and `metadata`. The limit applies per memory type.
+
+// contract: __init__.py:MemoryClient.get_graph
 [source,python]
 ----
-@dataclass
-class MemoryStats:
-    short_term: ShortTermStats
-    long_term: LongTermStats
-    reasoning: ReasoningStats
-
-@dataclass
-class ShortTermStats:
-    conversation_count: int
-    message_count: int
-
-@dataclass
-class LongTermStats:
-    entity_count: int
-    entity_counts_by_type: dict[str, int]
-    preference_count: int
-    fact_count: int
-
-@dataclass
-class ReasoningStats:
-    trace_count: int
-    step_count: int
-    tool_call_count: int
+async def get_graph(
+    *,
+    memory_types: list[Literal['short_term', 'long_term', 'reasoning']] | None=None,
+    session_id: str | None=None,
+    since: datetime | None=None,
+    until: datetime | None=None,
+    include_embeddings: bool=False,
+    limit: int=1000,
+) -> MemoryGraph: ...
 ----
 
-=== export_graph
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `memory_types` | Which memory types to include. Defaults to all.
+| `session_id` | Filter by session ID (for short_term and reasoning)
+| `since` | Only include data created/updated after this time
+| `until` | Only include data created/updated before this time
+| `include_embeddings` | Whether to include embedding vectors in properties. Set to False (default) for smaller payloads.
+| `limit` | Maximum number of nodes to return per memory type
+|===
 
-Export memory graph as a subgraph.
+`export_graph` is not a Python SDK method. For NAMS, use `long_term.expand_graph` or a supported read-only Cypher query.
 
+=== get_locations
+
+Bolt only. Return location dictionaries with coordinates, enrichment details, and conversation references for map rendering.
+
+// contract: __init__.py:MemoryClient.get_locations
 [source,python]
 ----
-graph = await client.export_graph(
-    session_id: str | None = None,
-    include_entities: bool = True,
-    include_messages: bool = True,
-    include_reasoning: bool = True,
-)
+async def get_locations(
+    *,
+    session_id: str | None=None,
+    has_coordinates: bool=True,
+    limit: int=500,
+) -> list[dict[str, Any]]: ...
 ----
 
-==== Returns
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `session_id` | Filter to locations mentioned in this conversation. When provided, only returns locations that have an EXTRACTED_FROM relationship to messages in this session.
+| `has_coordinates` | Only return locations with lat/lon coordinates. Defaults to True for map visualization use cases.
+| `limit` | Maximum number of locations to return. Defaults to 500.
+|===
 
-Dictionary with `nodes` and `relationships` lists.
+=== flush
 
-== Context Manager
+Wait for writes submitted through `client.buffered`. Bolt only; ordinary store methods do not become buffered automatically.
 
-The recommended way to use `MemoryClient` is as an async context manager:
-
+// contract: __init__.py:MemoryClient.flush
 [source,python]
 ----
-async with MemoryClient(settings) as client:
-    # Connection is established
-    await client.short_term.add_message(...)
-# Connection is closed automatically
+async def flush() -> None: ...
 ----
 
-This ensures proper connection handling and resource cleanup.
+=== wait_for_pending
 
-== Thread Safety
+Alias for flushing explicit buffered writes. Bolt only.
 
-`MemoryClient` is not thread-safe. Create separate instances for concurrent access:
-
+// contract: __init__.py:MemoryClient.wait_for_pending
 [source,python]
 ----
-# In async context - OK (single thread)
-async with MemoryClient(settings) as client:
-    await asyncio.gather(
-        client.short_term.add_message(...),
-        client.long_term.add_entity(...),
-    )
-
-# For multiple threads - create separate clients
-async def worker(settings):
-    async with MemoryClient(settings) as client:
-        await client.short_term.add_message(...)
+async def wait_for_pending() -> None: ...
 ----
 
-== See Also
+== Context manager and concurrency
 
-* xref:reference/api/short-term.adoc[ShortTermMemory API]
-* xref:reference/api/long-term.adoc[LongTermMemory API]
-* xref:reference/api/reasoning.adoc[ReasoningMemory API]
-* xref:reference/configuration.adoc[Configuration Reference]
+Use `async with MemoryClient(settings)` to connect and close reliably. Async calls may share one client within the same event loop; create separate clients for separate threads/event loops. Flush submitted buffered work before consuming its results and inspect `write_errors` as described in the buffered-write guide.
+
+== Graph models
+
+=== GraphNode
+
+Fields and defaults:
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `id` | `str` | `required` | Node identifier
+| `labels` | `list[str]` | `required` | Node labels (e.g., ['Message'], ['Entity'])
+| `properties` | `dict[str, Any]` | `{}` | Node properties
+|===
+
+=== GraphRelationship
+
+Fields and defaults:
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `id` | `str` | `required` | Relationship identifier
+| `type` | `str` | `required` | Relationship type (e.g., 'HAS_MESSAGE', 'MENTIONS')
+| `from_node` | `str` | `required` | Source node ID
+| `to_node` | `str` | `required` | Target node ID
+| `properties` | `dict[str, Any]` | `{}` | Relationship properties
+|===
+
+=== MemoryGraph
+
+Fields and defaults:
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `nodes` | `list[GraphNode]` | `[]` | Graph nodes
+| `relationships` | `list[GraphRelationship]` | `[]` | Graph relationships
+| `metadata` | `dict[str, Any]` | `{}` | Export metadata (filters applied, counts, etc.)
+|===
+
+== See also
+
+* xref:reference/api/short-term.adoc[Short-term API]
+* xref:reference/api/long-term.adoc[Long-term API]
+* xref:reference/api/reasoning.adoc[Reasoning API]
+* xref:reference/configuration.adoc[Configuration]
+
+== Earlier section links
+
+anchor:_parameters[]
+anchor:_parameters_2[]
+anchor:_returns[]
+anchor:_example[]
+anchor:_returns_2[]
+anchor:_returns_3[]
+anchor:_context_manager[]
+anchor:_thread_safety[]
+The earlier sections have been consolidated into the current contracts. See xref:reference/api/memory-client.adoc#_constructor[constructor parameters], xref:reference/api/memory-client.adoc#_methods[method contracts and results], xref:reference/api/memory-client.adoc#_context_manager_and_concurrency[lifecycle and concurrency], and xref:tutorials/first-agent-memory.adoc[the complete memory-context example].

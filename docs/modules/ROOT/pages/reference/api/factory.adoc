@@ -1,4 +1,4 @@
-= `from_provider` Factory
+= from_provider factory reference
 :page-product: agent-memory
 :page-pagination:
 :toclevels: 3
@@ -9,7 +9,7 @@
 Reference for the `from_provider` string-shorthand factory.
 
 [.lead]
-`from_provider` is the canonical entry point for the provider-string API. It implements *native-first resolution*: when both a native adapter and the LiteLLM universal adapter are installed, the native adapter is preferred. The factory file imports no SDKs at module load — all adapter imports happen inside the function.
+`from_provider` is the entry point for the provider-string API. It implements *native-first resolution*: when both a native adapter and the LiteLLM universal adapter are installed, the native adapter is preferred. The factory file imports no SDKs at module load — all adapter imports happen inside the function.
 
 == Signature
 
@@ -66,10 +66,12 @@ No adapter is available for the requested provider. The error message includes a
 .. For `kind="embedding"`: if the bare name looks like an OpenAI embedding (`text-embedding-*`), default to `openai/`; otherwise treat as a HuggingFace ID and default to sentence-transformers.
 . HuggingFace IDs (org/model where `org` is not a known provider prefix) always route to sentence-transformers for `kind="embedding"`.
 . Native-first dispatch: if `prefer_litellm=False` and the prefix is in the native set, and the corresponding extra is installed, return the native adapter.
-.. LLM native set: `{openai, anthropic, bedrock}`.
-.. Embedding native set: `{openai, sentence-transformers, vertex_ai, bedrock}`.
+.. LLM native set: `openai`, `anthropic`, `bedrock`.
+.. Embedding native set: `openai`, `sentence-transformers`, `vertex_ai`, `bedrock`.
 . LiteLLM universal fallback: if `[litellm]` is installed, return `LiteLLMProvider` / `LiteLLMEmbeddingProvider`.
 . Otherwise, raise `ImportError` with an install hint.
+
+Model strings below illustrate routing; confirm the chosen model is available for your provider account. Adapter selection does not validate a remote model until a request is made.
 
 == Examples
 
@@ -143,6 +145,9 @@ Install one of the following:
   pip install 'neo4j-agent-memory[litellm]'        # universal adapter (recommended)
 ----
 
+For the version used by these docs, install the selected extra with a release
+pin, for example `python -m pip install 'neo4j-agent-memory[anthropic]==0.6.0'`.
+
 == Debugging which adapter you got
 
 Enable debug logging:
@@ -165,9 +170,14 @@ print(type(provider).__name__)
 # OpenAIProvider
 ----
 
-== Related
+== See also
 
 * xref:reference/api/llm-provider.adoc[LLM Provider API] — the Protocols.
 * xref:reference/api/adapters.adoc[Adapters] — constructor signatures.
 * xref:how-to/configure-llm-provider.adoc[Configure LLM Provider].
 * xref:how-to/configure-embedding-provider.adoc[Configure Embedding Provider].
+
+== Earlier section links
+
+anchor:_related[]
+The earlier sections have been consolidated into the current contracts. See xref:reference/api/factory.adoc#_see_also[related provider and protocol references].

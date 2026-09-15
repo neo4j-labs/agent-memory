@@ -1,0 +1,1062 @@
+{
+  "source": {
+    "pages": [
+      {
+        "page": "configuration.adoc",
+        "purpose": "entry",
+        "title": "Configuration reference has moved",
+        "code_blocks": 0
+      },
+      {
+        "page": "explanation/backends.adoc",
+        "purpose": "explanation",
+        "title": "Backends: Bolt and NAMS",
+        "code_blocks": 0
+      },
+      {
+        "page": "explanation/extraction-pipeline.adoc",
+        "purpose": "explanation",
+        "title": "How entity extraction works",
+        "code_blocks": 0
+      },
+      {
+        "page": "explanation/framework-comparison.adoc",
+        "purpose": "explanation",
+        "title": "Choosing an agent framework integration",
+        "code_blocks": 0
+      },
+      {
+        "page": "explanation/graph-architecture.adoc",
+        "purpose": "explanation",
+        "title": "Why Neo4j? Graph memory architecture",
+        "code_blocks": 1
+      },
+      {
+        "page": "explanation/index.adoc",
+        "purpose": "explanation",
+        "title": "Concepts",
+        "code_blocks": 0
+      },
+      {
+        "page": "explanation/memory-types.adoc",
+        "purpose": "explanation",
+        "title": "Understanding the three memory types",
+        "code_blocks": 0
+      },
+      {
+        "page": "explanation/multi-agent-sharing.adoc",
+        "purpose": "explanation",
+        "title": "Cross-agent memory sharing",
+        "code_blocks": 0
+      },
+      {
+        "page": "explanation/ontologies.adoc",
+        "purpose": "explanation",
+        "title": "Ontologies",
+        "code_blocks": 0
+      },
+      {
+        "page": "explanation/poleo-model.adoc",
+        "purpose": "explanation",
+        "title": "The POLE+O data model",
+        "code_blocks": 0
+      },
+      {
+        "page": "explanation/resolution-deduplication.adoc",
+        "purpose": "explanation",
+        "title": "Entity resolution and deduplication",
+        "code_blocks": 0
+      },
+      {
+        "page": "explanation/skills.adoc",
+        "purpose": "explanation",
+        "title": "Agent Skills",
+        "code_blocks": 0
+      },
+      {
+        "page": "explanation/structured-extraction.adoc",
+        "purpose": "explanation",
+        "title": "Structured extraction",
+        "code_blocks": 0
+      },
+      {
+        "page": "explanation/why-provider-protocol.adoc",
+        "purpose": "explanation",
+        "title": "Why the provider protocol?",
+        "code_blocks": 0
+      },
+      {
+        "page": "faq.adoc",
+        "purpose": "entry",
+        "title": "Frequently asked questions",
+        "code_blocks": 0
+      },
+      {
+        "page": "getting-started.adoc",
+        "purpose": "entry",
+        "title": "Getting started",
+        "code_blocks": 0
+      },
+      {
+        "page": "glossary.adoc",
+        "purpose": "entry",
+        "title": "Glossary",
+        "code_blocks": 0
+      },
+      {
+        "page": "how-to/adopt-existing-graph.adoc",
+        "purpose": "how-to",
+        "title": "Adopt an Existing Domain Graph",
+        "code_blocks": 4
+      },
+      {
+        "page": "how-to/audit-reasoning.adoc",
+        "purpose": "how-to",
+        "title": "Audit Reasoning with `:TOUCHED` Edges",
+        "code_blocks": 6
+      },
+      {
+        "page": "how-to/batch-processing.adoc",
+        "purpose": "how-to",
+        "title": "Process Documents in Batch",
+        "code_blocks": 18
+      },
+      {
+        "page": "how-to/bring-your-own-model.adoc",
+        "purpose": "how-to",
+        "title": "Bring Your Own Model",
+        "code_blocks": 11
+      },
+      {
+        "page": "how-to/buffered-writes.adoc",
+        "purpose": "how-to",
+        "title": "Buffered (Fire-and-Forget) Writes",
+        "code_blocks": 6
+      },
+      {
+        "page": "how-to/configure-embedding-provider.adoc",
+        "purpose": "how-to",
+        "title": "Configure an Embedding Provider",
+        "code_blocks": 10
+      },
+      {
+        "page": "how-to/configure-llm-provider.adoc",
+        "purpose": "how-to",
+        "title": "Configure an LLM Provider",
+        "code_blocks": 11
+      },
+      {
+        "page": "how-to/consolidation.adoc",
+        "purpose": "how-to",
+        "title": "Memory Consolidation",
+        "code_blocks": 4
+      },
+      {
+        "page": "how-to/create-context-graph-mcp.adoc",
+        "purpose": "how-to",
+        "title": "Add an MCP server to a context graph project",
+        "code_blocks": 2
+      },
+      {
+        "page": "how-to/deduplication.adoc",
+        "purpose": "how-to",
+        "title": "Merge a reviewed entity pair",
+        "code_blocks": 3
+      },
+      {
+        "page": "how-to/entities.adoc",
+        "purpose": "how-to",
+        "title": "Store entities, relationships, and facts",
+        "code_blocks": 3
+      },
+      {
+        "page": "how-to/entity-extraction-batch.adoc",
+        "purpose": "how-to",
+        "title": "Account for batch and chunk extraction results",
+        "code_blocks": 5
+      },
+      {
+        "page": "how-to/entity-extraction-schemas.adoc",
+        "purpose": "how-to",
+        "title": "Apply a custom entity extraction schema",
+        "code_blocks": 3
+      },
+      {
+        "page": "how-to/entity-extraction.adoc",
+        "purpose": "how-to",
+        "title": "Extract and inspect entity candidates",
+        "code_blocks": 3
+      },
+      {
+        "page": "how-to/evaluation.adoc",
+        "purpose": "how-to",
+        "title": "Evaluating Memory Quality",
+        "code_blocks": 7
+      },
+      {
+        "page": "how-to/index.adoc",
+        "purpose": "how-to",
+        "title": "How-to guides",
+        "code_blocks": 0
+      },
+      {
+        "page": "how-to/integrations/aws-bedrock-embeddings.adoc",
+        "purpose": "how-to",
+        "title": "Use Amazon Bedrock embeddings",
+        "code_blocks": 4
+      },
+      {
+        "page": "how-to/integrations/aws-hybrid-memory.adoc",
+        "purpose": "how-to",
+        "title": "Route memory searches with the hybrid provider",
+        "code_blocks": 4
+      },
+      {
+        "page": "how-to/integrations/aws-strands.adoc",
+        "purpose": "how-to",
+        "title": "Use with Strands agents",
+        "code_blocks": 3
+      },
+      {
+        "page": "how-to/integrations/crewai.adoc",
+        "purpose": "how-to",
+        "title": "Use with CrewAI",
+        "code_blocks": 4
+      },
+      {
+        "page": "how-to/integrations/google-adk.adoc",
+        "purpose": "how-to",
+        "title": "Use with Google ADK",
+        "code_blocks": 4
+      },
+      {
+        "page": "how-to/integrations/google-cloud.adoc",
+        "purpose": "how-to",
+        "title": "Use Vertex AI embeddings with Neo4j",
+        "code_blocks": 4
+      },
+      {
+        "page": "how-to/integrations/index.adoc",
+        "purpose": "how-to",
+        "title": "Agent Framework Integrations",
+        "code_blocks": 9
+      },
+      {
+        "page": "how-to/integrations/langchain.adoc",
+        "purpose": "how-to",
+        "title": "Use with LangChain",
+        "code_blocks": 4
+      },
+      {
+        "page": "how-to/integrations/llamaindex.adoc",
+        "purpose": "how-to",
+        "title": "Use with LlamaIndex",
+        "code_blocks": 4
+      },
+      {
+        "page": "how-to/integrations/microsoft-agent.adoc",
+        "purpose": "how-to",
+        "title": "Use with Microsoft Agent Framework",
+        "code_blocks": 3
+      },
+      {
+        "page": "how-to/integrations/openai-agents.adoc",
+        "purpose": "how-to",
+        "title": "Use with the OpenAI Agents SDK",
+        "code_blocks": 4
+      },
+      {
+        "page": "how-to/integrations/pydantic-ai.adoc",
+        "purpose": "how-to",
+        "title": "Use with PydanticAI",
+        "code_blocks": 4
+      },
+      {
+        "page": "how-to/messages.adoc",
+        "purpose": "how-to",
+        "title": "Store, retrieve, and summarize messages",
+        "code_blocks": 3
+      },
+      {
+        "page": "how-to/migrate-embedding-model.adoc",
+        "purpose": "how-to",
+        "title": "Migrate to a New Embedding Model",
+        "code_blocks": 4
+      },
+      {
+        "page": "how-to/migrate-to-nams.adoc",
+        "purpose": "how-to",
+        "title": "Migrate a Python application to NAMS",
+        "code_blocks": 1
+      },
+      {
+        "page": "how-to/migrate-to-providers.adoc",
+        "purpose": "how-to",
+        "title": "Migrate to Pluggable Providers",
+        "code_blocks": 8
+      },
+      {
+        "page": "how-to/multi-tenancy.adoc",
+        "purpose": "how-to",
+        "title": "Associate memory with users and select scoped reads",
+        "code_blocks": 5
+      },
+      {
+        "page": "how-to/preferences.adoc",
+        "purpose": "how-to",
+        "title": "Store and revise a user preference",
+        "code_blocks": 3
+      },
+      {
+        "page": "how-to/privacy-and-audit.adoc",
+        "purpose": "how-to",
+        "title": "Privacy and Audit",
+        "code_blocks": 3
+      },
+      {
+        "page": "how-to/reasoning-traces.adoc",
+        "purpose": "how-to",
+        "title": "Record and verify a failed tool call",
+        "code_blocks": 3
+      },
+      {
+        "page": "how-to/running-without-an-llm.adoc",
+        "purpose": "how-to",
+        "title": "Run Without an LLM",
+        "code_blocks": 3
+      },
+      {
+        "page": "how-to/team-memory-in-your-editor.adoc",
+        "purpose": "how-to",
+        "title": "Share team memory with an editor",
+        "code_blocks": 4
+      },
+      {
+        "page": "how-to/typescript/authenticate.adoc",
+        "purpose": "how-to",
+        "title": "Authenticate a TypeScript Client",
+        "code_blocks": 2
+      },
+      {
+        "page": "how-to/typescript/edge-runtime.adoc",
+        "purpose": "how-to",
+        "title": "How to: deploy to edge runtimes",
+        "code_blocks": 3
+      },
+      {
+        "page": "how-to/typescript/handle-errors.adoc",
+        "purpose": "how-to",
+        "title": "Handle TypeScript REST Errors",
+        "code_blocks": 2
+      },
+      {
+        "page": "how-to/typescript/integrations-overview.adoc",
+        "purpose": "how-to",
+        "title": "Framework Integrations",
+        "code_blocks": 9
+      },
+      {
+        "page": "how-to/typescript/langchain.adoc",
+        "purpose": "how-to",
+        "title": "How to: integrate with LangChain JS",
+        "code_blocks": 4
+      },
+      {
+        "page": "how-to/typescript/mastra.adoc",
+        "purpose": "how-to",
+        "title": "How to: store Mastra threads in NAMS",
+        "code_blocks": 3
+      },
+      {
+        "page": "how-to/typescript/mcp.adoc",
+        "purpose": "how-to",
+        "title": "How to: use the MCP tools",
+        "code_blocks": 4
+      },
+      {
+        "page": "how-to/typescript/nextjs-memory-chat.adoc",
+        "purpose": "how-to",
+        "title": "How to: build a Next.js chat app with a memory rail",
+        "code_blocks": 12
+      },
+      {
+        "page": "how-to/typescript/observability.adoc",
+        "purpose": "how-to",
+        "title": "How to: enable request logging",
+        "code_blocks": 6
+      },
+      {
+        "page": "how-to/typescript/strands.adoc",
+        "purpose": "how-to",
+        "title": "How to: integrate with AWS Strands Agents",
+        "code_blocks": 4
+      },
+      {
+        "page": "how-to/typescript/troubleshooting.adoc",
+        "purpose": "how-to",
+        "title": "Troubleshooting",
+        "code_blocks": 1
+      },
+      {
+        "page": "how-to/typescript/vercel-ai.adoc",
+        "purpose": "how-to",
+        "title": "How to: integrate with the Vercel AI SDK",
+        "code_blocks": 5
+      },
+      {
+        "page": "how-to/use-nams.adoc",
+        "purpose": "how-to",
+        "title": "Connect a Python application to NAMS",
+        "code_blocks": 3
+      },
+      {
+        "page": "how-to/use-ontologies.adoc",
+        "purpose": "how-to",
+        "title": "Activate and verify a workspace ontology",
+        "code_blocks": 2
+      },
+      {
+        "page": "index.adoc",
+        "purpose": "entry",
+        "title": "Neo4j Agent Memory",
+        "code_blocks": 0
+      },
+      {
+        "page": "reference/api/adapters.adoc",
+        "purpose": "reference",
+        "title": "Adapters reference",
+        "code_blocks": 10
+      },
+      {
+        "page": "reference/api/factory.adoc",
+        "purpose": "reference",
+        "title": "from_provider factory reference",
+        "code_blocks": 10
+      },
+      {
+        "page": "reference/api/llm-provider.adoc",
+        "purpose": "reference",
+        "title": "LLM provider API reference",
+        "code_blocks": 8
+      },
+      {
+        "page": "reference/api/long-term.adoc",
+        "purpose": "reference",
+        "title": "LongTermMemory API reference",
+        "code_blocks": 41
+      },
+      {
+        "page": "reference/api/memory-client.adoc",
+        "purpose": "reference",
+        "title": "MemoryClient API reference",
+        "code_blocks": 13
+      },
+      {
+        "page": "reference/api/reasoning.adoc",
+        "purpose": "reference",
+        "title": "ReasoningMemory API reference",
+        "code_blocks": 23
+      },
+      {
+        "page": "reference/api/short-term.adoc",
+        "purpose": "reference",
+        "title": "ShortTermMemory API reference",
+        "code_blocks": 21
+      },
+      {
+        "page": "reference/authentication.adoc",
+        "purpose": "reference",
+        "title": "Authentication & API Keys",
+        "code_blocks": 2
+      },
+      {
+        "page": "reference/backend-capabilities.adoc",
+        "purpose": "reference",
+        "title": "Backend capabilities and data scope",
+        "code_blocks": 0
+      },
+      {
+        "page": "reference/cli.adoc",
+        "purpose": "reference",
+        "title": "CLI reference",
+        "code_blocks": 16
+      },
+      {
+        "page": "reference/configuration.adoc",
+        "purpose": "reference",
+        "title": "Configuration reference",
+        "code_blocks": 9
+      },
+      {
+        "page": "reference/deployment.adoc",
+        "purpose": "reference",
+        "title": "Documentation publication and application deployment",
+        "code_blocks": 0
+      },
+      {
+        "page": "reference/environment-variables.adoc",
+        "purpose": "reference",
+        "title": "Environment variables reference",
+        "code_blocks": 2
+      },
+      {
+        "page": "reference/extractors.adoc",
+        "purpose": "reference",
+        "title": "Extractor classes reference",
+        "code_blocks": 55
+      },
+      {
+        "page": "reference/index.adoc",
+        "purpose": "reference",
+        "title": "Reference",
+        "code_blocks": 0
+      },
+      {
+        "page": "reference/mcp-tools.adoc",
+        "purpose": "reference",
+        "title": "Self-hosted Python MCP reference",
+        "code_blocks": 2
+      },
+      {
+        "page": "reference/nams-limits.adoc",
+        "purpose": "reference",
+        "title": "NAMS Limits & Behavior",
+        "code_blocks": 0
+      },
+      {
+        "page": "reference/nams-mcp.adoc",
+        "purpose": "reference",
+        "title": "Hosted NAMS MCP server",
+        "code_blocks": 0
+      },
+      {
+        "page": "reference/ontology-api.adoc",
+        "purpose": "reference",
+        "title": "Ontology API reference",
+        "code_blocks": 0
+      },
+      {
+        "page": "reference/rest-api.adoc",
+        "purpose": "reference",
+        "title": "REST API reference",
+        "code_blocks": 1
+      },
+      {
+        "page": "reference/schema-objects.adoc",
+        "purpose": "reference",
+        "title": "Schema objects reference",
+        "code_blocks": 1
+      },
+      {
+        "page": "reference/schemas.adoc",
+        "purpose": "reference",
+        "title": "Domain schemas reference",
+        "code_blocks": 17
+      },
+      {
+        "page": "reference/skills-api.adoc",
+        "purpose": "reference",
+        "title": "Skills API (Preview)",
+        "code_blocks": 0
+      },
+      {
+        "page": "reference/typescript-api.adoc",
+        "purpose": "reference",
+        "title": "TypeScript SDK API Reference",
+        "code_blocks": 4
+      },
+      {
+        "page": "sdks/python.adoc",
+        "purpose": "sdks",
+        "title": "Python SDK",
+        "code_blocks": 1
+      },
+      {
+        "page": "sdks/typescript.adoc",
+        "purpose": "sdks",
+        "title": "TypeScript SDK \u2014 @neo4j-labs/agent-memory",
+        "code_blocks": 2
+      },
+      {
+        "page": "tutorials/anthropic-and-local-embeddings.adoc",
+        "purpose": "tutorials",
+        "title": "Extract memory with Anthropic and local embeddings",
+        "code_blocks": 8
+      },
+      {
+        "page": "tutorials/conversation-memory-typescript.adoc",
+        "purpose": "tutorials",
+        "title": "Recall Conversation Memory After a Restart (TypeScript)",
+        "code_blocks": 5
+      },
+      {
+        "page": "tutorials/conversation-memory.adoc",
+        "purpose": "tutorials",
+        "title": "Add persistent conversation context to a chatbot",
+        "code_blocks": 10
+      },
+      {
+        "page": "tutorials/first-agent-memory-typescript.adoc",
+        "purpose": "tutorials",
+        "title": "Build Your First TypeScript Agent with Memory",
+        "code_blocks": 4
+      },
+      {
+        "page": "tutorials/first-agent-memory.adoc",
+        "purpose": "tutorials",
+        "title": "Build your first memory context",
+        "code_blocks": 10
+      },
+      {
+        "page": "tutorials/hosted-quickstart-typescript.adoc",
+        "purpose": "tutorials",
+        "title": "Hosted TypeScript Quickstart",
+        "code_blocks": 4
+      },
+      {
+        "page": "tutorials/index.adoc",
+        "purpose": "tutorials",
+        "title": "Tutorials",
+        "code_blocks": 0
+      },
+      {
+        "page": "tutorials/knowledge-graph-typescript.adoc",
+        "purpose": "tutorials",
+        "title": "Ingest Documents and Inspect Extracted Entities (TypeScript)",
+        "code_blocks": 4
+      },
+      {
+        "page": "tutorials/knowledge-graph.adoc",
+        "purpose": "tutorials",
+        "title": "Build a knowledge graph from documents",
+        "code_blocks": 12
+      },
+      {
+        "page": "tutorials/mcp-server-typescript.adoc",
+        "purpose": "tutorials",
+        "title": "Connect Claude Desktop to Your Memory (TypeScript MCP Server)",
+        "code_blocks": 10
+      },
+      {
+        "page": "tutorials/mcp-server.adoc",
+        "purpose": "tutorials",
+        "title": "Store and recall a message from Claude Desktop",
+        "code_blocks": 7
+      },
+      {
+        "page": "tutorials/microsoft-agent-memory.adoc",
+        "purpose": "tutorials",
+        "title": "Build a shopping response with Microsoft Agent Framework memory",
+        "code_blocks": 7
+      },
+      {
+        "page": "tutorials/nams-quickstart.adoc",
+        "purpose": "tutorials",
+        "title": "Store and read back memory on NAMS",
+        "code_blocks": 4
+      },
+      {
+        "page": "tutorials/ontology-quickstart.adoc",
+        "purpose": "tutorials",
+        "title": "Activate and restore a NAMS ontology",
+        "code_blocks": 3
+      },
+      {
+        "page": "tutorials/skills-quickstart.adoc",
+        "purpose": "tutorials",
+        "title": "Distil and download a skill from a recorded procedure",
+        "code_blocks": 8
+      },
+      {
+        "page": "tutorials/strands-agent-quickstart.adoc",
+        "purpose": "tutorials",
+        "title": "Restore a Strands conversation after a process restart",
+        "code_blocks": 7
+      }
+    ],
+    "errors": []
+  },
+  "diagrams": {
+    "diagrams": [
+      {
+        "output": "docs/modules/ROOT/images/diagrams/1-natural-relationship-modeling.png",
+        "source": "docs/assets/diagrams/excalidraw/1-natural-relationship-modeling.excalidraw",
+        "referring_pages": [],
+        "owner": "documentation maintainers",
+        "status": "exported-and-visually-reviewed",
+        "source_sha256": "b7f556a55d3a15a47dd9ffeb63b42406442604ac5d07c4564ac1ede8eaad01c8",
+        "output_sha256": "805ee5e2aa78a92a2a300cc932ad3b217d0138acd18f7df6d73b9e76960f5b2e",
+        "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+        "reviewed_on": "2026-09-13",
+        "referring_documents": []
+      },
+      {
+        "output": "docs/modules/ROOT/images/diagrams/background-entity-enrichment.png",
+        "source": "docs/assets/diagrams/excalidraw/background-entity-enrichment.excalidraw",
+        "referring_pages": [],
+        "owner": "documentation maintainers",
+        "status": "exported-and-visually-reviewed",
+        "source_sha256": "16990f00d00443bd0f00aa385434090dc1c87dac974316b7932780a362f0d561",
+        "output_sha256": "b081c2ee6d32fa34b11a80137f591189dafa04069af114ac1127eac7c268deee",
+        "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+        "reviewed_on": "2026-09-13",
+        "referring_documents": []
+      },
+      {
+        "output": "docs/modules/ROOT/images/diagrams/buffered-write-flow.png",
+        "source": "docs/assets/diagrams/excalidraw/buffered-write-flow.excalidraw",
+        "referring_pages": [
+          "docs/modules/ROOT/pages/how-to/buffered-writes.adoc"
+        ],
+        "owner": "documentation maintainers",
+        "status": "exported-and-visually-reviewed",
+        "source_sha256": "8ad67d8042f6e64fdd8a15b745a0bf6e52934fd8824e2f27f609ba430ed128d3",
+        "output_sha256": "6d273b987c3d5dc73c2b7867c8bbc5aadd9da37b6ee49a4c1918978156cbda1a",
+        "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+        "reviewed_on": "2026-09-13",
+        "referring_documents": []
+      },
+      {
+        "output": "docs/modules/ROOT/images/diagrams/embedding-based-similarity.png",
+        "source": "docs/assets/diagrams/excalidraw/embedding-based-similarity.excalidraw",
+        "referring_pages": [
+          "docs/modules/ROOT/pages/explanation/resolution-deduplication.adoc"
+        ],
+        "owner": "documentation maintainers",
+        "status": "exported-and-visually-reviewed",
+        "source_sha256": "c1f0667999c3fbe613e3a1d7e83bab1b58cea47ad30b2c298fa766ebc70ae0ff",
+        "output_sha256": "9bf0824ed9b810766987835b94bedf73803b07e63696eaddf253892f9b1c5b9a",
+        "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+        "reviewed_on": "2026-09-13",
+        "referring_documents": []
+      },
+      {
+        "output": "docs/modules/ROOT/images/diagrams/entity-dedup-flow.png",
+        "source": "docs/assets/diagrams/excalidraw/entity-dedup-flow.excalidraw",
+        "referring_pages": [],
+        "owner": "documentation maintainers",
+        "status": "exported-and-visually-reviewed",
+        "source_sha256": "20d2b4369f01d798c4e8dee31325775b81a34e8b5546812b39a8fb64a2f28261",
+        "output_sha256": "12b3ab31a6c6a38e8313c51f01b25f742c3f17d3ee76ea70fad4f3c2765fb8fc",
+        "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+        "reviewed_on": "2026-09-13",
+        "referring_documents": []
+      },
+      {
+        "output": "docs/modules/ROOT/images/diagrams/extraction-pipeline.png",
+        "source": "docs/assets/diagrams/excalidraw/three-extraction-approaches.excalidraw",
+        "referring_pages": [
+          "docs/modules/ROOT/pages/explanation/extraction-pipeline.adoc"
+        ],
+        "owner": "documentation maintainers",
+        "status": "exported-and-visually-reviewed",
+        "source_sha256": "8792cca88078222a685acc1ce53172464ab0a9038c22d0b22bb5515e6dcd5130",
+        "output_sha256": "b1d95bda37ae3a0d689664b1dd734a2b9b95bfdf1a8748c2569885a64696113f",
+        "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+        "reviewed_on": "2026-09-13",
+        "referring_documents": []
+      },
+      {
+        "output": "docs/modules/ROOT/images/diagrams/graph-provenance-tracing-decisions-to-sources.png",
+        "source": "docs/assets/diagrams/excalidraw/graph-provenance-tracing-decisions-to-sources.excalidraw",
+        "referring_pages": [
+          "docs/modules/ROOT/pages/how-to/audit-reasoning.adoc"
+        ],
+        "owner": "documentation maintainers",
+        "status": "exported-and-visually-reviewed",
+        "source_sha256": "8fa5de44c9c86e2737c7fcdf8dcd9d50ba6d859a6a9499bd8209f00429bbd4bb",
+        "output_sha256": "a5385492362e048ddc8240df14a03ff3c7ec6e3aca30150288d9720692600b05",
+        "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+        "reviewed_on": "2026-09-13",
+        "referring_documents": []
+      },
+      {
+        "output": "docs/modules/ROOT/images/diagrams/graph-schema.png",
+        "source": "docs/assets/diagrams/excalidraw/graph-schema.excalidraw",
+        "referring_pages": [],
+        "owner": "documentation maintainers",
+        "status": "exported-and-visually-reviewed",
+        "source_sha256": "5c18d62a35166af8ed63d6d814e15168f3689d9b88d8a6c19d754cbcd24828c9",
+        "output_sha256": "72433bc7232f821323610c9eac212b003d76e3265e8beb4cebd011c0f12ce398",
+        "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+        "reviewed_on": "2026-09-13",
+        "referring_documents": []
+      },
+      {
+        "output": "docs/modules/ROOT/images/diagrams/mcp-server-architecture.png",
+        "source": "docs/assets/diagrams/excalidraw/mcp-server-architecture.excalidraw",
+        "referring_pages": [
+          "docs/modules/ROOT/pages/reference/mcp-tools.adoc"
+        ],
+        "owner": "documentation maintainers",
+        "status": "exported-and-visually-reviewed",
+        "source_sha256": "ec8eb7ca282a3721ae627b2d05052a0a16940cc9110d94e5cba2d408a4a88e48",
+        "output_sha256": "a1ff7f37d7c14a6f66398d26d940dde184e7cb4e2015e14908faff5de4fec268",
+        "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+        "reviewed_on": "2026-09-13",
+        "referring_documents": [
+          "README.md"
+        ]
+      },
+      {
+        "output": "docs/modules/ROOT/images/diagrams/memory-architecture.png",
+        "source": "docs/assets/diagrams/excalidraw/memory-architecture.excalidraw",
+        "referring_pages": [
+          "docs/modules/ROOT/pages/explanation/graph-architecture.adoc"
+        ],
+        "owner": "documentation maintainers",
+        "status": "exported-and-visually-reviewed",
+        "source_sha256": "6b22858d6adacbef79b5c727f75afe63a0ab3014ceadf118f64c9d8b846fc38f",
+        "output_sha256": "4bb2bdc80fffc649eef26bb1c2fa3e35085e1f0cfca1c04e0df840f6bbd763a1",
+        "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+        "reviewed_on": "2026-09-13",
+        "referring_documents": []
+      },
+      {
+        "output": "docs/modules/ROOT/images/diagrams/message-chain.png",
+        "source": "docs/assets/diagrams/excalidraw/message-chain.excalidraw",
+        "referring_pages": [],
+        "owner": "documentation maintainers",
+        "status": "exported-and-visually-reviewed",
+        "source_sha256": "758eec8996f5745e9d010cc56bc2e26b45480c29b2b6e367f665fda0f3be838f",
+        "output_sha256": "37b161fe597d219a07faf82d603078c74c54b7e7e981cf7144dbea841ed33039",
+        "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+        "reviewed_on": "2026-09-13",
+        "referring_documents": []
+      },
+      {
+        "output": "docs/modules/ROOT/images/diagrams/multi-agent-architecture-aws-neo4j.png",
+        "source": "examples/financial-services-advisor/aws-financial-services-advisor/img/architecture.excalidraw",
+        "referring_pages": [
+          "docs/modules/ROOT/pages/how-to/integrations/aws-strands.adoc"
+        ],
+        "owner": "documentation maintainers",
+        "status": "exported-and-visually-reviewed",
+        "source_sha256": "0f965865b5993c685ee1db33b2ac672abff46e95cf9ef8e4a692ad0b0d1c0f31",
+        "output_sha256": "eae9388f44d328d7fea912e26fc4ffb50f10e0153b644fb12768470218730581",
+        "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+        "reviewed_on": "2026-09-13",
+        "referring_documents": []
+      },
+      {
+        "output": "docs/modules/ROOT/images/diagrams/poleo-model.png",
+        "source": "docs/assets/diagrams/excalidraw/poleo-model.excalidraw",
+        "referring_pages": [
+          "docs/modules/ROOT/pages/explanation/poleo-model.adoc"
+        ],
+        "owner": "documentation maintainers",
+        "status": "exported-and-visually-reviewed",
+        "source_sha256": "d0c304f63cde0342f12afe6e53651f0c8c22e44b80604c31a2839546a8c1b653",
+        "output_sha256": "7acf6f1316ac29386a79f07e2b84557a706978bf5be2bfa36ecb361dd4c61917",
+        "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+        "reviewed_on": "2026-09-13",
+        "referring_documents": []
+      },
+      {
+        "output": "docs/modules/ROOT/images/diagrams/preference-aware-context-graph.png",
+        "source": "docs/assets/diagrams/excalidraw/preference-aware-context-graph.excalidraw",
+        "referring_pages": [],
+        "owner": "documentation maintainers",
+        "status": "exported-and-visually-reviewed",
+        "source_sha256": "559f49bea83c19f3e69639db0f6c2618ba386cc99f368b03386d234772dbffee",
+        "output_sha256": "41c782f4e81941efbca68c7e7afa9db581f04e7868e06fd6484bcc890c7eb31a",
+        "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+        "reviewed_on": "2026-09-13",
+        "referring_documents": []
+      },
+      {
+        "output": "docs/modules/ROOT/images/diagrams/provenance-chain-graph-auditability.png",
+        "source": "docs/assets/diagrams/excalidraw/provenance-chain-graph-auditability.excalidraw",
+        "referring_pages": [
+          "docs/modules/ROOT/pages/how-to/audit-reasoning.adoc"
+        ],
+        "owner": "documentation maintainers",
+        "status": "exported-and-visually-reviewed",
+        "source_sha256": "35d35d5face3eee972d879c55fc5d9465a11d3cb93ec351275a7d7e7bb65f925",
+        "output_sha256": "a47e921f15a5c5b12ac5fa1845cc02160b4feb653db6a3dafecfe0284ecc3336",
+        "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+        "reviewed_on": "2026-09-13",
+        "referring_documents": []
+      },
+      {
+        "output": "docs/modules/ROOT/images/diagrams/reasoning-trace-graph.png",
+        "source": "docs/assets/diagrams/excalidraw/reasoning-trace-graph.excalidraw",
+        "referring_pages": [],
+        "owner": "documentation maintainers",
+        "status": "exported-and-visually-reviewed",
+        "source_sha256": "2f87a426335a08fc67f590055613911a5bd97e9383d0e28c9cbcd29ece995b14",
+        "output_sha256": "aa8fe32569046353ad2eb406bae53eb5a6416c10c599988722f4d8b90f157d36",
+        "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+        "reviewed_on": "2026-09-13",
+        "referring_documents": []
+      },
+      {
+        "output": "docs/modules/ROOT/images/diagrams/shared-memory-data-flow-kyc-graph-credit.png",
+        "source": "docs/assets/diagrams/excalidraw/shared-memory-data-flow-kyc-graph-credit.excalidraw",
+        "referring_pages": [
+          "docs/modules/ROOT/pages/how-to/integrations/aws-strands.adoc"
+        ],
+        "owner": "documentation maintainers",
+        "status": "exported-and-visually-reviewed",
+        "source_sha256": "7902090eac90d1ed0a4186852103cb9888f259e06f20964f09c134c9d4d0bbed",
+        "output_sha256": "0eae76e96c79750c9327e3ac8fc59e01de9becc20586e4ab3428d8fb784b9491",
+        "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+        "reviewed_on": "2026-09-13",
+        "referring_documents": []
+      },
+      {
+        "output": "docs/modules/ROOT/images/diagrams/tfl-explorer-app-screenshot.png",
+        "source": null,
+        "referring_pages": [
+          "docs/modules/ROOT/pages/how-to/integrations/microsoft-agent.adoc"
+        ],
+        "owner": "documentation maintainers",
+        "status": "captured-example-image",
+        "source_sha256": null,
+        "output_sha256": "3a850938493f0a2eb46fb6aab97725c437fac34a14d32a38954aaec42bf7eed0",
+        "exporter": null,
+        "note": "Captured application illustration; editable source not available in this checkout. Retain as a dated example, not the library architecture.",
+        "referring_documents": []
+      },
+      {
+        "output": "docs/modules/ROOT/images/diagrams/the-three-layer-memory-architecture.png",
+        "source": "docs/assets/diagrams/excalidraw/the-three-layer-memory-architecture.excalidraw",
+        "referring_pages": [
+          "docs/modules/ROOT/pages/explanation/memory-types.adoc",
+          "docs/modules/ROOT/pages/index.adoc"
+        ],
+        "owner": "documentation maintainers",
+        "status": "exported-and-visually-reviewed",
+        "source_sha256": "264e8878ac09d40d06d32f4724b43ed95e3bf944e8672bd2e8b6b49db890df5c",
+        "output_sha256": "f01f03b8105f215b46031fb9f017d781694a3bf950b34fb644e65b3670bdc083",
+        "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+        "reviewed_on": "2026-09-13",
+        "referring_documents": [
+          "README.md"
+        ]
+      },
+      {
+        "output": "docs/modules/ROOT/images/diagrams/three-extraction-approaches.png",
+        "source": "docs/assets/diagrams/excalidraw/three-extraction-approaches.excalidraw",
+        "referring_pages": [],
+        "owner": "documentation maintainers",
+        "status": "exported-and-visually-reviewed",
+        "source_sha256": "8792cca88078222a685acc1ce53172464ab0a9038c22d0b22bb5515e6dcd5130",
+        "output_sha256": "b1d95bda37ae3a0d689664b1dd734a2b9b95bfdf1a8748c2569885a64696113f",
+        "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+        "reviewed_on": "2026-09-13",
+        "referring_documents": [
+          "README.md"
+        ]
+      },
+      {
+        "output": "docs/modules/ROOT/images/diagrams/three-memory-types-diagram.png",
+        "source": "docs/assets/diagrams/excalidraw/the-three-layer-memory-architecture.excalidraw",
+        "referring_pages": [
+          "docs/modules/ROOT/pages/explanation/memory-types.adoc"
+        ],
+        "owner": "documentation maintainers",
+        "status": "exported-and-visually-reviewed",
+        "source_sha256": "264e8878ac09d40d06d32f4724b43ed95e3bf944e8672bd2e8b6b49db890df5c",
+        "output_sha256": "f01f03b8105f215b46031fb9f017d781694a3bf950b34fb644e65b3670bdc083",
+        "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+        "reviewed_on": "2026-09-13",
+        "referring_documents": []
+      },
+      {
+        "output": "docs/modules/ROOT/images/diagrams/microsoft-agent-architecture.png",
+        "source": "docs/assets/diagrams/excalidraw/microsoft-agent-architecture.excalidraw",
+        "referring_pages": [
+          "docs/modules/ROOT/pages/how-to/integrations/microsoft-agent.adoc"
+        ],
+        "owner": "documentation maintainers",
+        "status": "exported-and-visually-reviewed",
+        "source_sha256": "521f54ec000f893d5706eb4a4fd275cfc1e60fe495de1edb5e6e661012f4986a",
+        "output_sha256": "97f1441d8e9342bc915530c6be93a03aa5f72cc6693d74a8c59596f4e1565d6a",
+        "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+        "referring_documents": [],
+        "reviewed_on": "2026-09-13"
+      },
+      {
+        "output": "docs/modules/ROOT/images/diagrams/message-chain.svg",
+        "source": "docs/assets/diagrams/excalidraw/message-chain.excalidraw",
+        "referring_pages": [
+          "docs/modules/ROOT/pages/how-to/messages.adoc",
+          "docs/modules/ROOT/pages/tutorials/first-agent-memory.adoc"
+        ],
+        "owner": "documentation maintainers",
+        "status": "exported-and-visually-reviewed",
+        "source_sha256": "758eec8996f5745e9d010cc56bc2e26b45480c29b2b6e367f665fda0f3be838f",
+        "output_sha256": "c70a6e621da29766946449aad2dda7007b78ef6ca3e7377b01f0e051ac5ba8fa",
+        "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+        "reviewed_on": "2026-09-13",
+        "referring_documents": []
+      },
+      {
+        "output": "docs/modules/ROOT/images/diagrams/entity-dedup-flow.svg",
+        "source": "docs/assets/diagrams/excalidraw/entity-dedup-flow.excalidraw",
+        "referring_pages": [
+          "docs/modules/ROOT/pages/how-to/deduplication.adoc"
+        ],
+        "owner": "documentation maintainers",
+        "status": "exported-and-visually-reviewed",
+        "source_sha256": "20d2b4369f01d798c4e8dee31325775b81a34e8b5546812b39a8fb64a2f28261",
+        "output_sha256": "ae5ed4b2a6b724b7aa2c24613536df77dd3cb57eb4bcd2474b54926921f77964",
+        "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+        "reviewed_on": "2026-09-13",
+        "referring_documents": []
+      },
+      {
+        "output": "docs/modules/ROOT/images/diagrams/reasoning-trace-graph.svg",
+        "source": "docs/assets/diagrams/excalidraw/reasoning-trace-graph.excalidraw",
+        "referring_pages": [
+          "docs/modules/ROOT/pages/how-to/reasoning-traces.adoc"
+        ],
+        "owner": "documentation maintainers",
+        "status": "exported-and-visually-reviewed",
+        "source_sha256": "2f87a426335a08fc67f590055613911a5bd97e9383d0e28c9cbcd29ece995b14",
+        "output_sha256": "98e6b6275d77f09679a16b14f8b22c7f78a0c8a0128765edfd821b01b4602ce7",
+        "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+        "reviewed_on": "2026-09-13",
+        "referring_documents": []
+      },
+      {
+        "output": "docs/modules/ROOT/images/diagrams/extraction-pipeline.svg",
+        "source": "docs/assets/diagrams/excalidraw/three-extraction-approaches.excalidraw",
+        "referring_pages": [
+          "docs/modules/ROOT/pages/how-to/entity-extraction.adoc"
+        ],
+        "owner": "documentation maintainers",
+        "status": "exported-and-visually-reviewed",
+        "source_sha256": "8792cca88078222a685acc1ce53172464ab0a9038c22d0b22bb5515e6dcd5130",
+        "output_sha256": "f2fefb0d8cdd61aabcabda70d72141f6e14eca5da0e42f1503bb83a0fcfc1e35",
+        "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+        "reviewed_on": "2026-09-13",
+        "referring_documents": []
+      },
+      {
+        "output": "docs/modules/ROOT/images/diagrams/preference-aware-context-graph.svg",
+        "source": "docs/assets/diagrams/excalidraw/preference-aware-context-graph.excalidraw",
+        "referring_pages": [
+          "docs/modules/ROOT/pages/how-to/preferences.adoc"
+        ],
+        "owner": "documentation maintainers",
+        "status": "exported-and-visually-reviewed",
+        "source_sha256": "559f49bea83c19f3e69639db0f6c2618ba386cc99f368b03386d234772dbffee",
+        "output_sha256": "782862047b5216139cdd808946f55c0a00cc420b3fbb141077d7d096e9cff2c0",
+        "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+        "reviewed_on": "2026-09-13",
+        "referring_documents": []
+      }
+    ],
+    "errors": []
+  },
+  "build_log": "",
+  "rendered": {
+    "html_files": 257,
+    "content_links": 2502,
+    "images": 21,
+    "errors": []
+  },
+  "errors": []
+}

@@ -1,7 +1,6 @@
 """Unit tests for nams/ontology.py — NamsOntology accessor + models.
 
-Endpoint shapes and payloads verified empirically against the staging
-deployment (the ontology surface is absent from the OpenAPI spec).
+Endpoint shapes include the active response’s authoritative version record.
 """
 
 from __future__ import annotations
@@ -115,11 +114,14 @@ class TestGet:
 
 
 class TestGetActive:
-    @respx.mock
-    async def test_get_active_composes_validation_mode(self, ontology):
-        respx.get(f"{BASE}/ontologies/active").respond(200, json={"ontology": DOC, "version": None})
-        respx.get(f"{BASE}/ontologies").respond(200, json={"ontologies": [SUMMARY]})
-        respx.get(f"{BASE}/ontologies/ont_1").respond(
+    async def test_get_active_uses_bound_version_not_latest(self, ontology, respx_mock):
+        active_route = respx_mock.get(f"{BASE}/ontologies/active").respond(
+            200, json={"ontology": DOC, "version": _version(1, "permissive")}
+        )
+        summaries = respx_mock.get(f"{BASE}/ontologies").respond(
+            200, json={"ontologies": [SUMMARY]}
+        )
+        detail = respx_mock.get(f"{BASE}/ontologies/ont_1").respond(
             200,
             json={
                 "record": {"id": "ont_1", "name": "legal-clone"},
@@ -129,11 +131,99 @@ class TestGetActive:
         active = await ontology.get_active()
         assert isinstance(active, ActiveOntology)
         assert active.document.domain.id == "legal-clone"
-        # current_revision=2 on the summary -> picks the strict version
-        assert active.validation_mode == "strict"
-        assert active.revision == 2
-        assert active.version_id == "ov_2"
+        assert active.validation_mode == "permissive"
+        assert active.revision == 1
+        assert active.version_id == "ov_1"
         assert active.ontology_id == "ont_1"
+        assert active.schema_hash == "abc"
+        assert active_route.call_count == 1
+        assert not summaries.called and not detail.called
+
+    @pytest.mark.parametrize(
+        "payload", [{"ontology": DOC}, {"ontology": DOC, "version": None}, DOC]
+    )
+    @respx.mock
+    async def test_legacy_document_has_no_inferred_binding(self, ontology, payload):
+        route = respx.get(f"{BASE}/ontologies/active").respond(200, json=payload)
+        active = await ontology.get_active()
+        assert active.document.domain.id == "legal-clone"
+        assert active.version_id is None
+        assert active.ontology_id is None
+        assert active.revision is None
+        assert active.validation_mode is None
+        assert active.schema_hash is None
+        assert route.call_count == 1
+        assert len(respx.calls) == 1
+
+    @pytest.mark.parametrize("schema_json", [None, "omitted"])
+    @respx.mock
+    async def test_active_version_schema_is_optional(self, ontology, schema_json):
+        version = _version()
+        if schema_json == "omitted":
+            del version["schema_json"]
+        else:
+            version["schema_json"] = schema_json
+        respx.get(f"{BASE}/ontologies/active").respond(
+            200, json={"ontology": DOC, "version": version, "server_extension": 1}
+        )
+        assert (await ontology.get_active()).version_id == "ov_1"
+
+    @pytest.mark.parametrize(
+        "version",
+        [
+            {},
+            [],
+            "ov_1",
+            0,
+            {**_version(), "id": ""},
+            {**_version(), "ontology_id": " "},
+            {k: v for k, v in _version().items() if k != "revision"},
+            {**_version(), "revision": "1"},
+            {**_version(), "revision": True},
+            {**_version(), "revision": 1.5},
+            {**_version(), "revision": 0},
+            {**_version(), "validation_mode": "unexpected"},
+            {**_version(), "schema_json": "not json"},
+            {**_version(), "schema_json": "null"},
+            {**_version(), "schema_json": "{}"},
+            {**_version(), "schema_hash": 7},
+        ],
+    )
+    @respx.mock
+    async def test_rejects_invalid_supplied_binding(self, ontology, version):
+        respx.get(f"{BASE}/ontologies/active").respond(
+            200, json={"ontology": DOC, "version": version}
+        )
+        with pytest.raises(ValueError):
+            await ontology.get_active()
+        assert len(respx.calls) == 1
+
+    @respx.mock
+    async def test_rejects_conflicting_schema_documents(self, ontology):
+        other = {**DOC, "domain": {"id": "other", "name": "Other"}}
+        respx.get(f"{BASE}/ontologies/active").respond(
+            200, json={"ontology": DOC, "version": _version(doc=other)}
+        )
+        with pytest.raises(ValueError, match="conflicts"):
+            await ontology.get_active()
+
+    @respx.mock
+    async def test_normalizes_schema_defaults_and_ignores_server_extensions(self, ontology):
+        minimal = {"domain": {"id": "schema-domain", "name": "Schema"}}
+        expanded = {
+            "relationships": None,
+            "entity_types": [],
+            "domain": {"name": "Schema", "id": "schema-domain", "new_field": True},
+            "new_field": "ignored",
+        }
+        respx.get(f"{BASE}/ontologies/active").respond(
+            200,
+            json={"ontology": minimal, "version": {**_version(doc=expanded), "new_field": 1}},
+        )
+        active = await ontology.get_active()
+        assert active.ontology_id == "ont_1"  # Opaque service ID differs from domain ID.
+        assert active.document.entity_types == []
+        assert active.document.relationships == []
 
 
 class TestWriteOps:

@@ -20,25 +20,25 @@ xref:explanation/skills.adoc[Agent Skills].
 | Method | Path | Scope | Purpose
 
 | `GET` | `/v1/skills` | `skills:read` | List skills in the workspace.
-| `GET` | `/v1/skills/{id}` | `skills:read` | One skill with its version history.
+| `GET` | `/v1/skills/\{id}` | `skills:read` | One skill with its version history.
 | `GET` | `/v1/skills/published` | `skills:read` | Discovery manifest of published, usable skills.
 | `GET` | `/v1/skills/governance` | `skills:read` | Reuse candidates vs. duplicate/overlapping skills.
 | `GET` | `/v1/skills/capabilities` | `skills:read` | Gate state: `{distillation, composition, attestationConfigured}`.
 | `POST` | `/v1/skills/generate` | `skills:write` | Start a distillation run (`scope.type` required). Returns `202 {runId, status:"queued"}`.
 | `POST` | `/v1/skills/scan` | `skills:write` | Scan a workspace for candidate skill scopes (auto-suggest).
 | `GET` | `/v1/skills/runs` | `skills:read` | Recent distillation runs (activity list).
-| `GET` | `/v1/skills/runs/{id}` | `skills:read` | Poll one distillation run.
-| `POST` | `/v1/skills/{id}/review` | `skills:write` | Approve or reject a skill.
+| `GET` | `/v1/skills/runs/\{id}` | `skills:read` | Poll one distillation run.
+| `POST` | `/v1/skills/\{id}/review` | `skills:write` | Approve or reject a skill.
 | `POST` | `/v1/skills/review/bulk` | `skills:write` | Approve/reject in bulk.
-| `POST` | `/v1/skills/{id}/publish` | `skills:write` | Publish an approved skill (signs an attestation).
-| `GET` | `/v1/skills/{id}/download` | `skills:read` | Download the `SKILL.md` package (ZIP).
-| `GET` | `/v1/skills/{id}/explain-provenance` | `skills:read` | Trace claims/steps back to source node ids.
-| `GET` | `/v1/skills/{id}/verify` | `skills:read` | Verify a published skill's attestation.
-| `GET` | `/v1/skills/{id}/drift` | `skills:read` | Whether the underlying memory has drifted from the published skill.
-| `POST` | `/v1/skills/{id}/edit` | `skills:write` | Validity-gated preview of an edit.
-| `POST` | `/v1/skills/{id}/edit/commit` | `skills:write` | Commit a previewed edit.
-| `POST` | `/v1/skills/{id}/extract-subprocedure` | `skills:write` | Extract a reusable sub-procedure (composition).
-| `POST` | `/v1/skills/{id}/steps/{stepId}/repair` | `skills:write` | Repair a single procedure step.
+| `POST` | `/v1/skills/\{id}/publish` | `skills:write` | Publish an approved skill (signs an attestation).
+| `GET` | `/v1/skills/\{id}/download` | `skills:read` | Download the `SKILL.md` package (ZIP).
+| `GET` | `/v1/skills/\{id}/explain-provenance` | `skills:read` | Trace claims/steps back to source node ids.
+| `GET` | `/v1/skills/\{id}/verify` | `skills:read` | Verify a published skill's attestation.
+| `GET` | `/v1/skills/\{id}/drift` | `skills:read` | Whether the underlying memory has drifted from the published skill.
+| `POST` | `/v1/skills/\{id}/edit` | `skills:write` | Validity-gated preview of an edit.
+| `POST` | `/v1/skills/\{id}/edit/commit` | `skills:write` | Commit a previewed edit.
+| `POST` | `/v1/skills/\{id}/extract-subprocedure` | `skills:write` | Extract a reusable sub-procedure (composition).
+| `POST` | `/v1/skills/\{id}/steps/\{stepId}/repair` | `skills:write` | Repair a single procedure step.
 | `GET` | `/.well-known/skill-attest-jwks.json` | _(public)_ | Public JWKS for offline attestation verification.
 |===
 
@@ -86,7 +86,7 @@ This is expected for broad scopes, not an error.
 == Attestation
 
 Publishing signs the package digest with a detached JWS (RS256). Consumers verify
-either via `GET /v1/skills/{id}/verify` or offline against the public JWKS at
+either via `GET /v1/skills/\{id}/verify` or offline against the public JWKS at
 `/.well-known/skill-attest-jwks.json`. If no attestation key is configured, a
 skill can still be published but is flagged **unsigned**.
 

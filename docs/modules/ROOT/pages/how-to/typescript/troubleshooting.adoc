@@ -6,7 +6,8 @@
 
 Your `MEMORY_API_KEY` is missing, mistyped, or revoked.
 
-* Check the env var is set: `echo $MEMORY_API_KEY` (Node/Bun/Deno).
+* Check the env var is set: `node -e 'console.log(Boolean(process.env.MEMORY_API_KEY))'`
+  on Node. This checks presence without printing the secret.
 * On Cloudflare Workers or Vercel Edge, `process.env` is not in scope at
   module init — pass the key explicitly:
   `new MemoryClient({ apiKey: env.MEMORY_API_KEY })`.
@@ -24,8 +25,9 @@ bridge supports the legacy long-term/reasoning operations from the TCK.
 
 Either:
 
-* Switch operations to the hosted-native equivalent (most of `shortTerm`,
-  `longTerm`, `reasoning` is supported on both transports).
+* Choose a supported hosted operation using
+  xref:reference/typescript-api.adoc[the capability map]. There is no direct
+  hosted replacement for every bridge operation, including preferences/facts.
 * Use the bridge transport explicitly for conformance testing — import
   `BridgeTransport` from `@neo4j-labs/agent-memory/testing` and supply
   it to the `MemoryClient` constructor.
@@ -34,11 +36,12 @@ Either:
 
 Long-term entity extraction is asynchronous on the hosted service.
 After you add a message, the service runs entity extraction in the
-background and indexes the result for search. Typical lag is a few
-seconds.
+background and indexes the result for search. There is no fixed completion time guaranteed by this SDK.
 
-If you need the entity immediately, call `longTerm.addEntity()` to add
-it explicitly rather than relying on extraction from a message.
+For an explicitly known entity, use `longTerm.addEntity()` and inspect its
+returned id. To wait for asynchronous extraction, use a bounded
+`waitForExtraction` predicate or expected name. An empty result or timeout does
+not by itself mean message storage failed.
 
 == Edge runtime: `process is not defined`
 
@@ -50,6 +53,10 @@ likely coming from a different dependency. Run with
 `process` directly.
 
 == TypeScript: `Cannot find module '@neo4j-labs/agent-memory/middleware/vercel-ai'`
+
+For a repository example, first build the SDK: `cd typescript && npm ci &&
+npm run build`, then install the example from its directory. Local `file:`
+dependencies do not create missing `dist` exports on installation.
 
 Make sure `tsconfig.json` has `"moduleResolution": "bundler"`, or use
 `"Node16"` / `"NodeNext"` together with ESM output. The package uses

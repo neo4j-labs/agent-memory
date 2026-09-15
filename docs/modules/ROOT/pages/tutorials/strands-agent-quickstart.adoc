@@ -1,319 +1,112 @@
-= Build a Strands Agent with Context Graph Memory
-:description: Build your first AI agent with Neo4j Context Graphs and AWS Strands Agents SDK
-:keywords: strands, aws, bedrock, neo4j, agent, memory, tutorial
+= Restore a Strands conversation after a process restart
+:page-product: agent-memory
+:page-pagination:
+:toclevels: 2
+:sectanchors:
 
-This tutorial walks you through building your first AI agent with persistent memory using Neo4j Agent Memory and the AWS Strands Agents SDK.
+We will record a passphrase with a Strands agent, exit the process, and start a second process using the saved session ID. Before the second model call, we will verify that the original message was restored from AuraDB.
 
-== What You'll Build
+This path uses the Bolt backend connected to AuraDB, Bedrock for the agent and embeddings, and the Strands session manager for persistence. Entity extraction is disabled so the observable outcome is conversation restoration, not an unverified automatically built knowledge graph.
 
-A conversational AI agent that:
+This lesson uses `neo4j-agent-memory` 0.6.0 from PyPI and the the complete programs on this page in a POSIX shell. Create the local files shown below; the checks below verify the results in your environment.
 
-* Remembers conversations across sessions
-* Extracts and stores entities (people, organizations, projects)
-* Builds a knowledge graph of relationships
-* Uses Amazon Bedrock for LLM and embeddings
+[[_what_youll_build]]
+== Before you begin
 
-== Prerequisites
+anchor:_prerequisites[]anchor:_time_required[]
 
-* Python 3.10+
-* AWS account with Bedrock access
-* Neo4j Aura account (or local Neo4j instance)
-* Basic Python knowledge
+* Python 3.10 or newer and a POSIX shell.
+* A Neo4j Aura account for a dedicated lesson instance.
+* AWS credentials already configured in the standard credential chain.
+* Access to a Bedrock chat model or inference-profile ID and `amazon.titan-embed-text-v2:0` in the selected region.
 
-== Time Required
+Confirm the provider prerequisites using xref:how-to/integrations/aws-bedrock-embeddings.adoc[Bedrock configuration] before beginning. AWS account setup is not part of the timed execution of this lesson.
 
-Approximately 30 minutes.
+[[_step_1_set_up_your_environment]]
+== 1. Install the integration and connect to Aura
 
-== Step 1: Set Up Your Environment
-
-Create a new project directory and virtual environment:
-
-[source,bash]
-----
-mkdir strands-memory-agent
-cd strands-memory-agent
-python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-----
-
-Install the required packages:
+include::partial$python-tutorial-setup.adoc[]
 
 [source,bash]
 ----
-pip install neo4j-agent-memory[aws,strands] python-dotenv
+python -m pip install 'neo4j-agent-memory[strands,bedrock]==0.6.0'
+python -c "from importlib.metadata import version; import neo4j_agent_memory; assert version('neo4j-agent-memory') == '0.6.0'; print('SDK 0.6.0 import verified')"
 ----
 
-This installs:
+Expected: `SDK 0.6.0 import verified`. Keep `agent-memory-tutorials` as your working directory for every command below.
 
-* `neo4j-agent-memory` - The core memory library
-* `boto3` - AWS SDK for Bedrock access
-* `strands-agents` - AWS Strands Agents SDK (`>=1.52,<2`; tested against 1.52
-  and 1.55.1)
+include::partial$aura-tutorial-setup.adoc[]
 
-== Step 2: Configure Credentials
-
-Create a `.env` file with your credentials:
+[[_step_2_configure_credentials]]
+== 2. Select the authorized Bedrock deployment
 
 [source,bash]
 ----
-# Neo4j Configuration
-NEO4J_URI=neo4j+s://xxxx.databases.neo4j.io
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=your-password
-
-# AWS Configuration (uses default credentials if not set)
-AWS_REGION=us-east-1
-
-# Optional: pin the Bedrock ids instead of the library defaults.
-# Verify with: aws bedrock list-inference-profiles
-# BEDROCK_MODEL_ID=us.anthropic.claude-sonnet-4-6
-# BEDROCK_INFERENCE_PROFILE_PREFIX=us
-# BEDROCK_EMBEDDING_MODEL_ID=amazon.titan-embed-text-v2:0
+export AWS_REGION="us-east-1"
+export AWS_DEFAULT_REGION="$AWS_REGION"
+export BEDROCK_MODEL_ID="replace-with-your-accessible-Bedrock-model-or-profile-id"
+python -c "import boto3; print('AWS identity:', boto3.client('sts').get_caller_identity()['Arn'])"
 ----
 
-[TIP]
-====
-For Neo4j Aura:
+Expected: your intended AWS identity ARN. This is a read-only identity check; it does not prove model access. Keep the same region and identity for both runs.
 
-1. Sign up at https://neo4j.com/cloud/aura-free/
-2. Create a new database
-3. Copy the connection URI and password
-====
+[[_step_3_create_the_agent]]
+== 3. Read the complete agent
 
-== Step 3: Create the Agent
-
-Create a file called `agent.py`:
-
+.Save as `strands_memory_tutorial.py`
 [source,python]
 ----
-"""Strands Agent with Neo4j Context Graph memory."""
-
-import os
-from dotenv import load_dotenv
-from strands import Agent
-from neo4j_agent_memory.integrations.strands import (
-    bedrock_llm_model,
-    context_graph_tools,
-)
-
-# Load environment variables
-load_dotenv()
-
-# Create Context Graph tools for the agent
-tools = context_graph_tools(
-    neo4j_uri=os.environ["NEO4J_URI"],
-    neo4j_user=os.environ.get("NEO4J_USER", "neo4j"),
-    neo4j_password=os.environ["NEO4J_PASSWORD"],
-    embedding_provider="bedrock",
-    aws_region=os.environ.get("AWS_REGION", "us-east-1"),
-)
-
-# Create the agent with memory tools.
-# bedrock_llm_model() resolves a cross-region inference-profile id
-# (us.anthropic.claude-sonnet-4-6 by default) — current Claude models on
-# Bedrock are not invocable by their bare foundation-model id. Override with
-# BEDROCK_MODEL_ID, or swap just the region prefix with
-# BEDROCK_INFERENCE_PROFILE_PREFIX=eu.
-agent = Agent(
-    model=bedrock_llm_model(),
-    tools=tools,
-    system_prompt="""You are a helpful assistant with persistent memory.
-
-You have access to a knowledge graph that stores:
-- Conversation history
-- Entities (people, organizations, projects)
-- Relationships between entities
-- User preferences
-
-Use your memory tools to:
-1. Search for relevant context before answering questions
-2. Store important facts the user shares
-3. Remember user preferences
-4. Track relationships between entities
-
-Be conversational and reference memories when relevant.""",
-)
-
-
-def main():
-    """Run an interactive chat session."""
-    print("Neo4j Memory Agent")
-    print("=" * 40)
-    print("Chat with an AI that remembers!")
-    print("Type 'quit' to exit.\n")
-
-    while True:
-        user_input = input("You: ").strip()
-
-        if user_input.lower() in ("quit", "exit", "q"):
-            print("Goodbye!")
-            break
-
-        if not user_input:
-            continue
-
-        # Get response from agent
-        response = agent(user_input)
-        print(f"\nAssistant: {response}\n")
-
-
-if __name__ == "__main__":
-    main()
+include::example$strands_memory_tutorial.py[]
 ----
 
-== Step 4: Run the Agent
+The shared `aura_config()` helper reads the exported Aura connection variables. The session manager owns message persistence and client shutdown. `record` writes the session ID to a local file; `recall` reads it and does not reseed the passphrase. The sentinel is checked in restored message history before another model request. Keep the same Aura instance and exported connection variables for both processes.
+
+[[_step_4_run_the_agent]]
+== 4. Record the first turn
 
 [source,bash]
 ----
-python agent.py
+python strands_memory_tutorial.py record
 ----
 
-Try these example conversations:
+Expected: a model response, the `Session ID:` with `phase=record`, and `Session manager closed after persisting the turn`. The process now exits. Keep `strands-tutorial-session.txt` for the next step.
 
+[[_step_5_explore_the_knowledge_graph]]
+== 5. Verify a fresh process restores the message
+
+[source,bash]
 ----
-You: Hi, I'm Alex and I work at Acme Corp as a software engineer.
-Assistant: Nice to meet you, Alex! I've stored that you work at Acme Corp
-as a software engineer. How can I help you today?
-
-You: What company do I work for?
-Assistant: Based on my memory, you work at Acme Corp as a software engineer!
-----
-
-[TIP]
-====
-The tools above are *pull-based*: the agent decides when to read and write
-memory. If you also want every turn persisted and restored without the model
-having to ask, attach a session manager — one extra argument, and the
-conversation survives process restarts:
-
-[source,python]
-----
-from pydantic import SecretStr
-
-from neo4j_agent_memory import MemorySettings, Neo4jConfig
-from neo4j_agent_memory.integrations.strands import (
-    Neo4jRetrievalConfig,
-    Neo4jSessionManager,
-    bedrock_llm_model,
-)
-
-# Pinning backend="bolt" keeps a stray MEMORY_API_KEY from redirecting
-# writes to the hosted service; drop it (or use .for_nams()) for NAMS.
-manager = Neo4jSessionManager(
-    "tutorial-session",
-    settings=MemorySettings(
-        backend="bolt",
-        neo4j=Neo4jConfig(
-            uri=os.environ["NEO4J_URI"],
-            username=os.environ.get("NEO4J_USER", "neo4j"),
-            password=SecretStr(os.environ["NEO4J_PASSWORD"]),
-        ),
-    ),
-    # min_score is a Neo4j vector-index score ((1 + cosine) / 2), so 0.5
-    # means "orthogonal"; 0.75 is the equivalent of cosine 0.5.
-    retrieval_config=Neo4jRetrievalConfig(top_k=5, min_score=0.75),
-)
-
-agent = Agent(
-    model=bedrock_llm_model(),
-    tools=tools,
-    session_manager=manager,
-)
+python strands_memory_tutorial.py recall
 ----
 
-See xref:how-to/integrations/aws-strands.adoc#_session_manager_push_based[Session Manager (Push-Based)]
-for the constructor reference and limitations, and the
-`examples/strands-session-manager/` example for a runnable demo that needs no
-API key.
-====
+Expected before the response: `Verified: prior message restored before the model call`. The response should identify `cedar-lantern-47`; wording can vary. If the explicit history check fails, conversation restoration is not verified, even if the model happens to guess the phrase.
 
-== Step 5: Explore the Knowledge Graph
+The script uses the same saved session ID rather than starting an unrelated conversation with the same user name.
 
-Open Neo4j Browser or Bloom to see the entities and relationships:
+[[_available_tools]]
+== What we learned
 
-[source,cypher]
-----
-// See all entities
-MATCH (e:Entity) RETURN e LIMIT 25
+anchor:_understanding_the_context_graph[]anchor:_summary[]
 
-// See relationships
-MATCH (e1:Entity)-[r]->(e2:Entity) RETURN e1, r, e2 LIMIT 25
+A session manager can load and persist framework history through its lifecycle hooks. This example does not attach a tool catalog and does not rely on the model deciding to store the message. That ownership differs from agent-selected memory tools; see xref:how-to/integrations/aws-strands.adoc[the integration guide] for those separate patterns.
 
-// Find Person entities
-MATCH (p:Entity:Person) RETURN p.name, p.created_at
-----
-
-== Available Tools
-
-The agent has access to these Context Graph tools:
-
-[cols="1,3"]
-|===
-| Tool | Description
-
-| `search_context`
-| Search for relevant memories and entities using semantic search
-
-| `get_entity_graph`
-| Explore relationships around an entity with configurable depth
-
-| `add_memory`
-| Store important information with automatic entity extraction
-
-| `get_user_preferences`
-| Retrieve user preferences by category
-|===
-
-== Understanding the Context Graph
-
-As you chat, the agent builds a **context graph** in Neo4j:
-
-* **Messages** are stored with embeddings for semantic search
-* **Entities** (Person, Organization, Project) are extracted automatically
-* **Relationships** connect entities to messages and to each other
-* **Preferences** capture user likes, dislikes, and settings
-
-== Next Steps
-
-Now that you've built your first Strands agent:
-
-* xref:how-to/integrations/aws-bedrock-embeddings.adoc[Configure Bedrock Embeddings] - Optimize embedding model selection
-* xref:how-to/integrations/aws-strands.adoc[Advanced Strands Integration] - Custom tools and configuration
-* xref:how-to/integrations/aws-hybrid-memory.adoc[Use Hybrid Memory] - Combine short-term and long-term memory
-
+[[_troubleshooting]]
 == Troubleshooting
 
-=== Bedrock Access Denied
+anchor:_bedrock_access_denied[]anchor:_neo4j_connection_failed[]anchor:_import_error_for_strands[]
 
-Ensure your AWS account has model access:
+An identity check and model access are separate. If Bedrock rejects a request, inspect its error for the selected model/profile and region rather than changing memory scope. If Neo4j is unavailable, rerun the readiness check and stop before rerunning `record`. A leftover session file identifies the existing exercise; do not silently replace it while investigating restoration.
 
-1. Go to AWS Console -> Bedrock -> Model access
-2. Enable Claude and Titan models
-3. Wait for access to be granted (may take a few minutes)
-
-=== Neo4j Connection Failed
-
-Check your connection string format:
-
-* Aura: `neo4j+s://xxxx.databases.neo4j.io`
-* Local: `bolt://localhost:7687`
-
-=== Import Error for strands
-
-Ensure you've installed the strands extras:
+[[_next_steps]]
+== Cleanup and next steps
 
 [source,bash]
 ----
-pip install neo4j-agent-memory[aws,strands]
+rm strands-tutorial-session.txt
 ----
 
-== Summary
+This removes only the local session-ID file created by this lesson.
 
-You've built an AI agent with persistent memory that:
+include::partial$aura-tutorial-cleanup.adoc[]
 
-* Stores conversations in Neo4j
-* Extracts entities automatically
-* Remembers context across sessions
-* Uses AWS Bedrock for AI capabilities
-
-The context graph grows with each conversation, making the agent increasingly knowledgeable about you and your work.
+Continue with xref:how-to/integrations/aws-strands.adoc[Strands integration] for retrieval configuration, memory tools, and backend-specific limits.

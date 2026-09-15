@@ -12,7 +12,7 @@ Use this skill when:
 
 ## The Four Quadrants
 
-### 1. Tutorials (`docs/tutorials/`)
+### 1. Tutorials (`docs/modules/ROOT/pages/tutorials/`)
 
 **Purpose**: Learning-oriented. Help users learn by doing.
 
@@ -30,10 +30,10 @@ Use this skill when:
 - Don't offer choices - provide one clear path
 
 **Example titles**:
-- "Build Your First Memory-Enabled Agent"
-- "Create a Knowledge Graph from Documents"
+- "Build your first memory agent"
+- "Create a knowledge graph from documents"
 
-### 2. How-To Guides (`docs/how-to/`)
+### 2. How-To Guides (`docs/modules/ROOT/pages/how-to/`)
 
 **Purpose**: Task-oriented. Help users accomplish specific goals.
 
@@ -50,11 +50,11 @@ Use this skill when:
 - End with verification/testing
 
 **Example titles**:
-- "Configure Entity Extraction"
-- "Enable Location Geocoding"
+- "Configure entity extraction"
+- "Enable location geocoding"
 - "Use with PydanticAI"
 
-### 3. Reference (`docs/reference/`)
+### 3. Reference (`docs/modules/ROOT/pages/reference/`)
 
 **Purpose**: Information-oriented. Provide facts for lookup.
 
@@ -75,7 +75,7 @@ Use this skill when:
 - "CLI Command Reference"
 - "API Reference"
 
-### 4. Explanation (`docs/explanation/`)
+### 4. Explanation (`docs/modules/ROOT/pages/explanation/`)
 
 **Purpose**: Understanding-oriented. Help users understand concepts.
 
@@ -140,9 +140,15 @@ For configuration details, see xref:reference/configuration.adoc#extraction[Extr
 2. Create the file in the appropriate directory
 3. Add to the index page for that quadrant
 4. Add cross-references from related pages
-5. Run `npm run lint` to check for broken links
+5. Add the page to `docs/modules/ROOT/nav.adoc` and preserve useful old section IDs.
+6. Run `make docs-lint` to build once and check rendered links, fragments, images and quadrant coverage.
+7. Follow `docs/MAINTAINING.md` for executable examples, backend scope and release verification.
 
-## Diagram and Screenshot Placeholders
+## Diagrams and screenshots
+
+Prefer a completed image with an editable source in `docs/assets/diagrams/excalidraw/` and an entry in `docs/diagrams/manifest.json`. Publish exports under `docs/modules/ROOT/images/diagrams/`. Quote alt text containing commas and verify its rendered dimensions. Use placeholders only while drafting; they are not a completed visual.
+
+### Draft placeholders
 
 For diagrams to be added later:
 ```asciidoc
@@ -180,6 +186,6 @@ Image to add: `images/screenshots/entity-graph.png`
 ```bash
 cd docs
 npm run build      # Build all pages
-npm run serve      # Serve with live reload
-npm run lint       # Check for broken links
+npm run serve      # Preview the existing build; rebuild after edits
+npm run lint       # Fresh build plus source/rendered checks
 ```

@@ -1,4 +1,4 @@
-.PHONY: help install install-all install-dev lint lint-fix format format-check typecheck ty check test test-unit test-integration test-integration-mcp test-e2e test-all test-docker test-ci test-no-docker test-quick test-file test-match test-aws test-nams-unit test-nams-integration test-nams-staging test-nams-sandbox test-nams-local test-nams coverage coverage-all coverage-ci coverage-mcp test-examples test-examples-quick test-examples-no-neo4j test-examples-docker test-examples-ci test-docs test-docs-syntax test-docs-build test-docs-links test-docs-integration neo4j-start neo4j-stop neo4j-restart neo4j-logs neo4j-status neo4j-wait neo4j-wait-quiet neo4j-clean neo4j-shell clean build publish publish-test docs docs-install docs-serve docs-watch docs-clean docs-diagrams-list docs-diagrams-status docs-diagrams-missing docs-diagrams-manifest docs-diagrams-add-refs docs-diagrams-generate pre-commit ci ci-no-docker shell watch dev example-hello example-basic example-resolution example-enrichment example-langchain example-pydantic example-no-llm example-domain-schemas example-existing-graph example-buffered-writes example-audit-trail example-eval-harness example-strands-session-manager example-strands-memory-store example-nams-quickstart example-ontology-lifecycle example-team-memory-doctor example-team-memory-seed examples examples-with-keys chat-agent-install chat-agent-backend chat-agent-frontend chat-agent chat-agent-backend-with-neo4j ts-install ts-build ts-test ts-test-unit ts-test-integration ts-lint ts-docs ts-conformance ts-pack ts-clean ts-test-examples
+.PHONY: help install install-all install-dev lint lint-fix format format-check typecheck ty check test test-unit test-integration test-integration-mcp test-e2e test-all test-docker test-ci test-no-docker test-quick test-file test-match test-aws test-nams-unit test-nams-integration test-nams-staging test-nams-sandbox test-nams-local test-nams coverage coverage-all coverage-ci coverage-mcp test-examples test-examples-quick test-examples-no-neo4j test-examples-docker test-examples-ci test-docs test-docs-syntax test-docs-build test-docs-links test-docs-integration neo4j-start neo4j-stop neo4j-restart neo4j-logs neo4j-status neo4j-wait neo4j-wait-quiet neo4j-clean neo4j-shell clean build publish publish-test docs docs-install docs-serve docs-lint docs-clean docs-diagrams-list docs-diagrams-status docs-diagrams-missing docs-diagrams-manifest docs-diagrams-add-refs docs-diagrams-generate pre-commit ci ci-no-docker shell watch dev example-hello example-basic example-resolution example-enrichment example-langchain example-pydantic example-no-llm example-domain-schemas example-existing-graph example-buffered-writes example-audit-trail example-eval-harness example-strands-session-manager example-strands-memory-store example-nams-quickstart example-ontology-lifecycle example-team-memory-doctor example-team-memory-seed examples examples-with-keys chat-agent-install chat-agent-backend chat-agent-frontend chat-agent chat-agent-backend-with-neo4j ts-install ts-build ts-test ts-test-unit ts-test-integration ts-lint ts-docs ts-conformance ts-pack ts-clean ts-test-examples
 
 # Default target
 help:
@@ -101,13 +101,13 @@ help:
 	@echo "Documentation:"
 	@echo "  make docs-install     Install documentation build dependencies"
 	@echo "  make docs             Build documentation to HTML"
-	@echo "  make docs-serve       Build and serve with live reload (http://localhost:8080)"
-	@echo "  make docs-watch       Watch for changes and rebuild"
+	@echo "  make docs-serve       Build once and serve a static preview (http://localhost:8080)"
+	@echo "  make docs-lint       Watch for changes and rebuild"
 	@echo "  make docs-clean       Remove built documentation"
 	@echo ""
 	@echo "Diagram Management:"
-	@echo "  make docs-diagrams-status   Show status of all diagram placeholders"
-	@echo "  make docs-diagrams-missing  Show diagrams missing Excalidraw files"
+	@echo "  make docs-diagrams-status   Check published diagram sources and exports"
+	@echo "  make docs-diagrams-missing  Show missing or stale diagram sources/exports"
 	@echo "  make docs-diagrams-generate Instructions for generating diagrams"
 	@echo "  make docs-diagrams-add-refs Add image references to AsciiDoc files"
 
@@ -132,7 +132,7 @@ install-dev:
 # TODO(#144): the AWS FSA Lambda shim imports `src.main`, which ruff's isort
 # sorts into the first-party block; drop this once that file grows a
 # `# isort: skip` or the backend is made a real package.
-RUFF_PATHS := src tests examples
+RUFF_PATHS := src tests examples docs/modules/ROOT/examples
 RUFF_EXTEND_IGNORES := \
 	--extend-per-file-ignores 'examples/financial-services-advisor/aws-financial-services-advisor/backend/handler.py:I001'
 
@@ -451,25 +451,24 @@ publish-test: build
 # Install docs dependencies
 docs-install:
 	@echo "Installing documentation dependencies..."
-	cd docs && npm install
+	cd docs && npm ci
 
 # Build documentation to HTML
 docs:
 	@echo "Building documentation..."
 	cd docs && npm run build
 	@echo ""
-	@echo "Documentation built to docs/_site/"
-	@echo "Open docs/_site/index.html in your browser"
+	@echo "Documentation built to docs/build/site/"
+	@echo "Open docs/build/site/index.html in your browser"
 
-# Build and serve with live reload
+# Build once and serve a static preview
 docs-serve:
-	@echo "Starting documentation server with live reload..."
+	@echo "Building documentation and starting the static preview server..."
 	cd docs && npm run serve
 
-# Watch for changes and rebuild
-docs-watch:
-	@echo "Watching for documentation changes..."
-	cd docs && npm run watch
+# Check source and a fresh rendered build
+docs-lint:
+	cd docs && npm run lint
 
 # Clean built documentation
 docs-clean:
@@ -482,23 +481,23 @@ docs-clean:
 
 # List all diagram placeholders in documentation
 docs-diagrams-list:
-	@python scripts/manage_diagrams.py list
+	@python3 scripts/manage_diagrams.py list
 
 # Show status of all diagrams (which have Excalidraw files)
 docs-diagrams-status:
-	@python scripts/manage_diagrams.py status
+	@python3 scripts/manage_diagrams.py status
 
 # Show only diagrams missing Excalidraw files
 docs-diagrams-missing:
-	@python scripts/manage_diagrams.py missing
+	@python3 scripts/manage_diagrams.py missing
 
 # Generate manifest JSON of all diagrams
 docs-diagrams-manifest:
-	@python scripts/manage_diagrams.py manifest
+	@python3 scripts/manage_diagrams.py manifest
 
 # Add image references to AsciiDoc files for diagrams that have Excalidraw files
 docs-diagrams-add-refs:
-	@python scripts/manage_diagrams.py add-refs
+	@python3 scripts/manage_diagrams.py add-refs
 
 # Generate diagrams using Claude with Excalidraw skill
 # Usage: make docs-diagrams-generate
@@ -512,10 +511,11 @@ docs-diagrams-generate:
 	@echo "1. Run: make docs-diagrams-missing"
 	@echo "2. For each missing diagram, ask Claude:"
 	@echo "   'Generate an Excalidraw diagram for [TITLE] based on this ASCII art: ...'"
-	@echo "3. Save the JSON to: docs/assets/images/diagrams/excalidraw/[slug].excalidraw"
-	@echo "4. Run: make docs-diagrams-add-refs"
+	@echo "3. Save the JSON to: docs/assets/diagrams/excalidraw/[slug].excalidraw"
+	@echo "4. Export: node scripts/export_diagrams.mjs --all"
+	@echo "5. Inspect exports, update docs/diagrams/manifest.json hashes, run make docs-lint"
 	@echo ""
-	@python scripts/manage_diagrams.py missing --json 2>/dev/null || python scripts/manage_diagrams.py status
+	@python3 scripts/manage_diagrams.py missing --json 2>/dev/null || python3 scripts/manage_diagrams.py status
 
 # =============================================================================
 # Development Shortcuts
@@ -798,7 +798,7 @@ ts-test-integration:
 ts-lint:
 	cd $(TS_DIR) && npm run lint
 
-# Build TypeDoc API reference (outputs to typescript/docs-api/)
+# Build TypeDoc API reference (outputs to docs/modules/ROOT/attachments/api/typescript/)
 ts-docs:
 	cd $(TS_DIR) && npm run docs:api
 

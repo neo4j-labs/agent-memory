@@ -1,19 +1,21 @@
 # Cloud Build configuration for Neo4j Agent Memory MCP Server
 #
 # Usage:
-#   gcloud builds submit --config cloudbuild.yaml .
+#   gcloud builds submit --config deploy/cloudrun/cloudbuild.yaml .
 #
 # Prerequisites:
 #   - Enable Cloud Build API
 #   - Enable Cloud Run API
-#   - Enable Artifact Registry API
+#   - Enable Artifact Registry and Vertex AI APIs
+#   - Create Neo4j secrets and authorize the runtime identity (see README.md)
 #
 # Variables (set via substitutions or in Cloud Build trigger):
 #   - _REGION: GCP region (default: us-central1)
 #   - _SERVICE_NAME: Cloud Run service name (default: neo4j-memory-mcp)
-#   - _NEO4J_URI: Neo4j connection URI (from Secret Manager)
-#   - _NEO4J_USER: Neo4j username (from Secret Manager)
-#   - _NEO4J_PASSWORD: Neo4j password (from Secret Manager)
+#   - _REPOSITORY: Artifact Registry repository (default: neo4j-agent-memory)
+# Neo4j settings are Secret Manager bindings below, not build substitutions.
+# Embeddings use the runtime identity, GOOGLE_CLOUD_PROJECT, and the image
+# defaults: gemini-embedding-001 in us-central1 at 768 dimensions.
 
 substitutions:
   _REGION: us-central1
@@ -26,7 +28,7 @@ steps:
     args:
       - 'build'
       - '-t'
-      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE_NAME}:$COMMIT_SHA'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE_NAME}:$BUILD_ID'
       - '-t'
       - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE_NAME}:latest'
       - '-f'
@@ -37,7 +39,7 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'push'
-      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE_NAME}:$COMMIT_SHA'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE_NAME}:$BUILD_ID'
 
   - name: 'gcr.io/cloud-builders/docker'
     args:
@@ -52,12 +54,15 @@ steps:
       - 'deploy'
       - '${_SERVICE_NAME}'
       - '--image'
-      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE_NAME}:$COMMIT_SHA'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE_NAME}:$BUILD_ID'
       - '--region'
       - '${_REGION}'
       - '--platform'
       - 'managed'
-      - '--allow-unauthenticated'
+      - '--no-allow-unauthenticated'
+      - '--invoker-iam-check'
+      - '--service-account'
+      - 'neo4j-memory-sa@$PROJECT_ID.iam.gserviceaccount.com'
       - '--memory'
       - '1Gi'
       - '--cpu'
@@ -68,11 +73,13 @@ steps:
       - '10'
       - '--concurrency'
       - '80'
+      - '--set-env-vars'
+      - 'GOOGLE_CLOUD_PROJECT=$PROJECT_ID'
       - '--set-secrets'
       - 'NEO4J_URI=neo4j-uri:latest,NEO4J_USER=neo4j-user:latest,NEO4J_PASSWORD=neo4j-password:latest'
 
 images:
-  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE_NAME}:$COMMIT_SHA'
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE_NAME}:$BUILD_ID'
   - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE_NAME}:latest'
 
 options:

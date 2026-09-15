@@ -20,24 +20,35 @@ and is idempotent.
 
 == Goal
 
-Adopt an existing domain graph as long-term memory entities in one call:
+Inspect the intended label/type mapping, preview changes without writes, then adopt the selected nodes and verify their identity.
 
-[source,python]
-----
-await client.schema.adopt_existing_graph(
-    label_to_type={
-        "Person": "PERSON",
-        "Movie": "MOVIE",
-        "Genre": "GENRE",
-    },
-    name_property_per_label={"Movie": "title"},
-)
-----
+[[Limitations]]
+// Retain former section URLs at the current related topic.
+== Limitations
+
+anchor:_3_dry_run_before_mutating[]
+
+Limitations of the Bolt implementation:
+
+* **Automatic extraction does not link to adopted nodes.** The NER
+extractors map their labels through POLE+O, so a `MOVIE` mention arrives
+typed `OBJECT` and MERGEs a second `:Entity:Object` node; give the
+extractor a `label_mapping` that preserves `MOVIE` and the MERGE finds the
+adopted node but no `MENTIONS` edge is written, because the link step looks
+the entity up by the id it generated rather than the id the MERGE returned.
+Use `extraction_mode="explicit"` with `EntityRef` instead.
+* **`SchemaConfig.strict_types` is not forwarded.** `MemoryClient` does not
+pass `schema_config` to `LongTermMemory`, so out-of-schema types are not
+rejected today.
+* **Adopted ids must be UUID-shaped for the read helpers.** Nodes adopted
+without a pre-existing `id` get a deterministic `<label_lc>:<name>` id;
+helpers that hydrate `Entity.id` as a `UUID` (such as `search_entities()`)
+raise `ValueError` on those rows. Read them with `client.query.cypher`.
 
 == Prerequisites
 
 * A running Neo4j 5.x with your existing domain graph already loaded.
-* `neo4j-agent-memory` v0.2 or later.
+* A Python SDK artifact containing `client.schema.adopt_existing_graph`; verify the method against the installed version before use.
 * A `MemorySettings` configured for the database (see xref:reference/configuration.adoc[Configuration Reference]).
 
 If your domain types differ from the POLE+O default ontology, also configure `SchemaModel.CUSTOM`:
@@ -66,7 +77,23 @@ For each Neo4j label in your existing graph, decide:
 * The library entity type to assign (a string — POLE+O members like `PERSON` if you're keeping the default ontology, or your own type names if you're using `SchemaModel.CUSTOM`).
 * The property to use as the `name` of the resulting `:Entity` node. Defaults to `name` per label, but you can override per label (movies often use `title`, people sometimes use `full_name`, etc.).
 
-=== 2. Call `adopt_existing_graph`
+=== 2. Preview the full mapping
+
+Pass `dry_run=True` to see what would change without mutating the graph:
+
+[source,python]
+----
+report = await client.schema.adopt_existing_graph(
+    label_to_type={"Person": "PERSON", "Movie": "MOVIE", "Genre": "GENRE"},
+    name_property_per_label={"Movie": "title"},
+    dry_run=True,
+)
+print(f"Would migrate {report.total_migrated} nodes.")
+----
+
+Review the counts and skipped nodes before applying the same mapping.
+
+=== 3. Apply the reviewed mapping
 
 [source,python]
 ----
@@ -100,26 +127,16 @@ The helper:
 . Generates a deterministic `id` of the form `<label_lc>:<name>` for nodes that don't have one. Existing `id` properties are preserved.
 . Skips nodes whose configured name property is null.
 
-=== 3. Dry-run before mutating
-
-Pass `dry_run=True` to see what would change without mutating the graph:
-
-[source,python]
-----
-report = await client.schema.adopt_existing_graph(
-    label_to_type={"Person": "PERSON"},
-    dry_run=True,
-)
-print(f"Would migrate {report.total_migrated} nodes.")
-----
-
 === 4. Re-run as needed
 
 The helper is idempotent. Re-running attaches `:Entity` to any new nodes
 of the configured labels added since the last run, and reports the
 already-adopted count for the rest.
 
+// Retain former section URLs at the current related topic.
 == Verification
+
+anchor:_2_call_adopt_existing_graph[]
 
 After adoption, library writes that MERGE on `(:Entity {name, type})`
 land on your existing nodes. Name the entities explicitly so the write is
@@ -134,7 +151,7 @@ from neo4j_agent_memory.schema.models import EntityRef
 await client.short_term.add_message(
     "demo",
     "user",
-    "Have you seen Inception? Bob Singh directed it.",
+    "Have you seen Inception? Bob Singh recommended it.",
     extraction_mode="explicit",
     explicit_mentions=[
         EntityRef(name="Inception", type="MOVIE"),
@@ -157,34 +174,7 @@ rows = await client.query.cypher(
 for row in rows:
     print(f"{row['target']}: {row['total']} (expect 1) {row['label_sets']}")
 
-# Adoption writes no embedding, so backfill before semantic search.
-await client.long_term.add_entity(
-    "Inception", "MOVIE", resolve=False, deduplicate=False
-)
-movies = await client.long_term.search_entities(
-    "science fiction film", entity_types=["MOVIE"]
-)
 ----
-
-[[Limitations]]
-== Limitations
-
-Verified against v0.5.0 on bolt:
-
-* **Automatic extraction does not link to adopted nodes.** The NER
-extractors map their labels through POLE+O, so a `MOVIE` mention arrives
-typed `OBJECT` and MERGEs a second `:Entity:Object` node; give the
-extractor a `label_mapping` that preserves `MOVIE` and the MERGE finds the
-adopted node but no `MENTIONS` edge is written, because the link step looks
-the entity up by the id it generated rather than the id the MERGE returned.
-Use `extraction_mode="explicit"` with `EntityRef` instead.
-* **`SchemaConfig.strict_types` is not forwarded.** `MemoryClient` does not
-pass `schema_config` to `LongTermMemory`, so out-of-schema types are not
-rejected today.
-* **Adopted ids must be UUID-shaped for the read helpers.** Nodes adopted
-without a pre-existing `id` get a deterministic `<label_lc>:<name>` id;
-helpers that hydrate `Entity.id` as a `UUID` (such as `search_entities()`)
-raise `ValueError` on those rows. Read them with `client.query.cypher`.
 
 == Edge cases
 
@@ -205,8 +195,8 @@ raise `ValueError` on those rows. Read them with `client.query.cypher`.
 | `SchemaError` raised before any mutation. The helper refuses to interpolate unsafe identifiers into Cypher.
 |===
 
-== See Also
+== See also
 
 * xref:reference/api/memory-client.adoc[MemoryClient API reference]
 * xref:explanation/poleo-model.adoc[POLE+O Entity Model] — the default ontology you're either keeping or overriding with `SchemaModel.CUSTOM`.
-* `examples/existing-graph/` — a runnable end-to-end example using a small Movies-style domain.
+* https://github.com/neo4j-labs/agent-memory/tree/main/examples/existing-graph[Existing graph example] — a runnable end-to-end example using a small Movies-style domain.

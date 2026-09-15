@@ -11,6 +11,14 @@ your own MCP server, or to invoke tools programmatically against a
 A runnable example lives at
 link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/mcp[`typescript/examples/mcp`].
 
+Prerequisites: Node.js 22+, the MCP/Zod peers and NAMS test-workspace credentials.
+
+== Procedure
+
+. Build/install the source MCP example using its README.
+. Register the memory tools on a server, applying the allow-list and audit hook you need.
+. Connect a client using the chosen transport and inspect its actual `tools/list` response.
+
 == When to self-host MCP
 
 Most users don't need to. The hosted NAMS MCP server at
@@ -174,8 +182,15 @@ scheduled for removal in 1.0 — migrate to the `memory_<noun>_<verb>` form.
 
 == Compatibility
 
-Verified against `@neo4j-labs/agent-memory` 0.5.0-dev,
+Current-source example dependency declarations (not a release or live-service verification):
 `@modelcontextprotocol/sdk` 1.30, `zod` 4.6, Node.js 22 — 2026-09.
 `@modelcontextprotocol/sdk` and `zod` are optional peer dependencies; they are
 required only by the `./mcp/register` subpath (the MCP SDK already depends on
 `zod`).
+
+== Verify the integration
+
+In `typescript/examples/mcp/`, run `npm run lint` and `npm test`. The offline
+suite compiles the complete tutorial server to `dist/server.js`, connects over
+stdio, and checks 12 base tools or 13 with the custom tool. It does not require
+a live NAMS key. Use the tutorial's returned-id sequence for a separate live check.

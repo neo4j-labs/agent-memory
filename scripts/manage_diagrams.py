@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Manage Excalidraw diagrams for documentation.
 
-This script finds placeholder diagrams in AsciiDoc files and tracks their
-relationship to generated Excalidraw JSON files.
+This script checks published image provenance and editable source/export hashes,
+and retains the placeholder helpers for adding new diagrams.
 
 Usage:
     python scripts/manage_diagrams.py list          # List all placeholders
@@ -18,7 +18,7 @@ import hashlib
 import json
 import re
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -80,9 +80,71 @@ class DiagramPlaceholder:
 SCRIPT_DIR = Path(__file__).parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 DOCS_DIR = PROJECT_ROOT / "docs"
-ASSETS_DIR = DOCS_DIR / "assets" / "images"
+ASSETS_DIR = DOCS_DIR / "modules" / "ROOT" / "images"
 DIAGRAMS_DIR = ASSETS_DIR / "diagrams"
-EXCALIDRAW_DIR = DIAGRAMS_DIR / "excalidraw"
+EXCALIDRAW_DIR = DOCS_DIR / "assets" / "diagrams" / "excalidraw"
+MANIFEST = DOCS_DIR / "diagrams" / "manifest.json"
+
+
+def check_manifest(root: Path = PROJECT_ROOT) -> dict[str, Any]:
+    """Check actual published uses; names alone never establish provenance."""
+    manifest = root / "docs/diagrams/manifest.json"
+    if not manifest.exists():
+        return {"errors": ["Missing docs/diagrams/manifest.json"], "diagrams": []}
+    data = json.loads(manifest.read_text())
+    records = data["diagrams"]
+    errors: list[str] = []
+    outputs = {record["output"] for record in records}
+    if len(outputs) != len(records):
+        errors.append("Duplicate output entries in diagram manifest")
+    for page in (root / "docs/modules/ROOT/pages").rglob("*.adoc"):
+        for target in re.findall(r"image::([^\[]+)\[", page.read_text()):
+            if target.startswith("http"):
+                continue
+            output = "docs/modules/ROOT/images/" + target
+            if output not in outputs:
+                errors.append(f"{page.relative_to(root)}: untracked published image {target}")
+    for record in records:
+        for kind in ("source", "output"):
+            name = record.get(kind)
+            if not name:
+                if kind == "source" and not record.get("note"):
+                    errors.append(f"{record['output']}: source exception needs a reason")
+                continue
+            file = root / name
+            if not file.exists():
+                errors.append(f"Missing {kind}: {name}")
+                continue
+            digest = hashlib.sha256(file.read_bytes()).hexdigest()
+            if digest != record.get(kind + "_sha256"):
+                errors.append(f"Changed {kind}; re-export/review before recording hashes: {name}")
+    sources = set((root / "docs/assets/diagrams/excalidraw").glob("*.excalidraw"))
+    sources.update(root / record["source"] for record in records if record.get("source"))
+    for source in sorted(sources):
+        if not source.exists():
+            continue
+        try:
+            scene = json.loads(source.read_text())
+        except (ValueError, OSError) as error:
+            errors.append(f"Invalid scene {source.relative_to(root)}: {error}")
+            continue
+        elements = scene.get("elements", [])
+        ids = [element.get("id") for element in elements]
+        if scene.get("type") != "excalidraw" or not ids or None in ids or len(ids) != len(set(ids)):
+            errors.append(f"Invalid scene or duplicate element IDs: {source.relative_to(root)}")
+        for element in elements:
+            targets = [
+                binding.get("elementId")
+                for binding in (element.get("startBinding"), element.get("endBinding"))
+                if binding
+            ]
+            targets.extend(bound.get("id") for bound in element.get("boundElements") or [])
+            if element.get("containerId"):
+                targets.append(element["containerId"])
+            if any(target not in ids for target in targets):
+                errors.append(f"Dangling binding in {source.relative_to(root)}: {element['id']}")
+    return {"diagrams": records, "errors": errors}
+
 
 # Regex patterns
 PLACEHOLDER_PATTERN = re.compile(r"\[DIAGRAM PLACEHOLDER:\s*([^\]]+)\]", re.IGNORECASE)
@@ -111,7 +173,6 @@ def find_placeholders(docs_dir: Path) -> list[DiagramPlaceholder]:
             continue
 
         content = adoc_file.read_text(encoding="utf-8")
-        lines = content.split("\n")
 
         # Find all placeholder markers
         for match in PLACEHOLDER_PATTERN.finditer(content):
@@ -230,7 +291,7 @@ def add_image_reference(placeholder: DiagramPlaceholder) -> bool:
 
     # Insert image reference after table
     table_end = table_match.end()
-    image_ref = f"\n\nimage::{placeholder.expected_image_path.relative_to(ASSETS_DIR)}[{placeholder.title}]\n"
+    image_ref = f'\n\nimage::{placeholder.expected_image_path.relative_to(ASSETS_DIR)}["{placeholder.title}",width=100%,link=self]\n'
 
     new_content = content[:table_end] + image_ref + content[table_end:]
     placeholder.file_path.write_text(new_content, encoding="utf-8")
@@ -250,11 +311,9 @@ def main():
 
     args = parser.parse_args()
 
-    # Ensure directories exist
-    EXCALIDRAW_DIR.mkdir(parents=True, exist_ok=True)
-
     # Find all placeholders
-    placeholders = find_placeholders(DOCS_DIR)
+    placeholders = find_placeholders(DOCS_DIR / "modules" / "ROOT" / "pages")
+    published = check_manifest()
 
     if args.command == "list":
         if args.json:
@@ -265,19 +324,37 @@ def main():
 
     elif args.command == "status":
         if args.json:
-            print(json.dumps(generate_manifest(placeholders), indent=2))
+            print(json.dumps(published, indent=2))
         else:
-            print_status(placeholders)
+            print(f"{len(published['diagrams'])} tracked image exports in the provenance manifest")
+            print(f"{len(list(EXCALIDRAW_DIR.glob('*.excalidraw')))} canonical editable scenes")
+            for error in published["errors"]:
+                print(error)
+            if placeholders:
+                print_status(placeholders)
 
     elif args.command == "missing":
         missing = [p for p in placeholders if not p.has_excalidraw]
         if args.json:
-            print(json.dumps([p.to_dict() for p in missing], indent=2))
+            print(
+                json.dumps(
+                    {
+                        "errors": published["errors"],
+                        "missing_placeholders": [p.to_dict() for p in missing],
+                    },
+                    indent=2,
+                )
+            )
         else:
-            print_missing(placeholders)
+            for error in published["errors"]:
+                print(error)
+            if placeholders:
+                print_missing(placeholders)
+            elif not published["errors"]:
+                print("All published image sources and exports are current.")
 
     elif args.command == "manifest":
-        manifest = generate_manifest(placeholders)
+        manifest = {**published, "placeholders": generate_manifest(placeholders)}
         print(json.dumps(manifest, indent=2))
 
     elif args.command == "add-refs":
@@ -290,6 +367,8 @@ def main():
 
     # Exit with error if there are missing diagrams
     missing_count = len([p for p in placeholders if not p.has_excalidraw])
+    if args.command in ["status", "missing"] and published["errors"]:
+        sys.exit(1)
     if args.command in ["status", "missing"] and missing_count > 0:
         sys.exit(1)
 

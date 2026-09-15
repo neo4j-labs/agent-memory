@@ -2,29 +2,33 @@
 :page-product: agent-memory
 :toclevels: 2
 
-include::partial$backend-both.adoc[]
+include::partial$backend-bolt-only.adoc[]
 
-How to record audit trails for sensitive memory reads, archive expired
-conversations, and plug in at-rest encryption for `Message.content`.
+Record an explicit audit event after a sensitive read and mark old conversations
+for archival. These are Bolt consolidation operations; the hosted client does
+not implement `client.consolidation`.
 
-[.lead]
-Privacy is opt-in: the library ships the integration points but
-keeps every transparent middleware off by default, since "audit every
-read" doubles traffic and "encrypt every message" pulls in
-provider-specific dependencies.
+== Prerequisites
 
-== Read auditing
+* A connected Bolt `client`, with `settings` configured as in xref:how-to/messages.adoc[Store and Search Messages].
+* A test user and seeded preferences for the read example.
+* A retention policy that distinguishes archival markers from deletion and access controls.
+
+Run the fragments in an async function. The encryption section describes a
+protocol boundary; there is no client setting that installs an encrypter.
+
+== 1. Record a read audit
 
 For sensitive read paths (preference lookups, exports, cross-tenant
 queries), record an audit node alongside the actual read:
 
 [source,python]
 ----
-prefs = await client.long_term.get_preferences_for("sara@omg.com")
+prefs = await client.long_term.get_preferences_for("sara@example.com")
 
-await client.consolidation.record_read_audit(
-    "get_preferences_for sara@omg.com",
-    user_identifier="sara@omg.com",
+audit_id = await client.consolidation.record_read_audit(
+    "get_preferences_for sara@example.com",
+    user_identifier="sara@example.com",
     kind="preference.read",
     result_count=len(prefs),
     metadata={"endpoint": "/api/preferences", "request_id": "req-abc"},
@@ -41,7 +45,7 @@ to record audits — that would multiply database traffic by 2x and
 record reads the agent doesn't care about. Auditing is callsite-explicit
 on purpose.
 
-== Conversation TTL
+== 2. Preview and apply conversation archival
 
 Configure a default TTL via settings, then run the archival job
 periodically:
@@ -53,55 +57,64 @@ settings.memory.conversation_ttl_days = 90
 async with MemoryClient(settings) as client:
     report = await client.consolidation.archive_expired_conversations(
         ttl_days=settings.memory.conversation_ttl_days,
-        dry_run=False,
+        dry_run=True,
     )
-    print(f"Archived {report.actions_taken} conversations")
+    print(f"Candidates: {report.candidate_count}")
+    for candidate in report.candidates:
+        print(candidate.description)
 ----
 
+After reviewing the candidates, repeat with `dry_run=False` to apply them.
+Pass `ttl_days` explicitly: setting `conversation_ttl_days` does not schedule a
+job or supply the argument automatically. Candidates use `created_at`, falling
+back to `updated_at` only if creation time is missing.
+
 Archival sets `c.archived = true` and `c.archived_at = datetime()` on
-each Conversation; data is preserved for compliance / audit trails. Add
-a follow-up job that hard-deletes archived conversations older than
-your retention window if you want full deletion.
+each conversation. It does not delete messages or automatically exclude
+archived conversations from retrieval. Apply your application retention and
+access policy separately; the marker alone is not a deletion mechanism.
 
-== At-rest encryption protocol
-
-The library exposes a protocol but does not ship a real cipher (real
-crypto needs KMS-, vault-, or hardware-backed key management that the
-library shouldn't opinionate). Use the protocol to wire up your own:
+== 3. Verify audit and archival records
 
 [source,python]
 ----
-from neo4j_agent_memory.core.encryption import (
-    MessageContentEncrypter,
-    NoOpEncrypter,
+rows = await client.query.cypher(
+    "MATCH (a:MemoryReadAudit {id: $id}) "
+    "RETURN a.kind AS kind, a.result_count AS result_count",
+    {"id": audit_id},
 )
-
-
-class AESGCMEncrypter:
-    """Example KMS-backed implementation (sketch)."""
-
-    def __init__(self, kms_key_id: str):
-        self.kms_key_id = kms_key_id
-
-    def encrypt(self, plaintext: str) -> str:
-        # ... real implementation: pull DEK from KMS, AES-GCM encrypt,
-        # base64 the (iv || ciphertext || tag).
-        ...
-
-    def decrypt(self, ciphertext: str) -> str:
-        ...
-
-
-# Verify the structural protocol at runtime if you want belt-and-braces:
-encrypter: MessageContentEncrypter = AESGCMEncrypter("kms/...")
-assert isinstance(encrypter, MessageContentEncrypter)
+assert rows == [{"kind": "preference.read", "result_count": len(prefs)}]
 ----
 
-The library ships `NoOpEncrypter` as the default — appropriate when the
-database itself is encrypted at rest (Neo4j Aura, AWS RDS), or in
-development.
+After applying archival, inspect `report.actions_taken` and `report.run_id`,
+then read the selected conversations' `archived` and `archived_at` properties.
+A dry run should produce no new archive markers.
+
+== Optional: Implement content encryption in your application
+
+`neo4j_agent_memory.core.encryption.MessageContentEncrypter` defines
+`encrypt(plaintext: str) -> str` and `decrypt(ciphertext: str) -> str`.
+It is a runtime-checkable protocol, not middleware wired into message storage.
+`NoOpEncrypter` returns its input unchanged and provides no encryption.
+
+An application can implement that protocol using its chosen key-management
+and encryption library, and call it explicitly at its own write/read boundary.
+A runtime `isinstance` check proves only that methods exist. Verify a round
+trip, wrong-key failure, and that stored content differs from plaintext using
+the actual implementation before relying on it.
+
+Account for derived data as well: embeddings, extracted entities, metadata,
+and logs may expose information even when the stored message body is encrypted.
+If you submit ciphertext to `add_message`, disable extraction and embedding
+for that write unless your application deliberately supplies another strategy.
+Database encryption at rest is a separate deployment control.
 
 == See Also
 
 * xref:how-to/consolidation.adoc[Memory Consolidation] — `archive_expired_conversations` and the underlying audit-run pattern.
 * xref:how-to/multi-tenancy.adoc[Multi-Tenant Memory] — the `:User` node that audit edges attach to.
+
+// Preserve historical section links after the procedure was reorganized.
+anchor:_read_auditing[]
+anchor:_conversation_ttl[]
+anchor:_at_rest_encryption_protocol[]

@@ -19,6 +19,7 @@
 
 import type { MemoryClient } from "../client.js";
 
+/** Plain message shape used by this adapter. @inline */
 interface LangchainBaseMessage {
   type: "human" | "ai" | "system";
   content: string;
@@ -71,6 +72,7 @@ export class Neo4jChatMessageHistory {
   }
 }
 
+/** Plain document shape used by this adapter. @inline */
 interface LangchainDocument {
   pageContent: string;
   metadata: Record<string, unknown>;

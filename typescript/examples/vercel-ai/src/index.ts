@@ -8,11 +8,11 @@
  *     prepended to the prompt,
  *   - the user's turn is persisted before generation,
  *   - the assistant's turn is persisted after it — from `generateText` via
- *     `wrapGenerate`, and from `streamText` via `wrapStream`.
+ *     `wrapGenerate`, and for streams through an application-owned, awaited write.
  *
  * The script is deliberately small: one wrapped model, three turns (the third
  * streamed), then an epilogue that prints what the graph actually holds —
- * injected context counts, a preference recalled across sessions, and the
+ * injected context counts, messages recalled from the same conversation, and the
  * entities NAMS extracted in the background. Nothing is kept in process: turn
  * two knows about turn one only because the middleware read it back out of
  * Neo4j.
@@ -38,7 +38,7 @@ const GENERATED_TURNS = [
   "What kind of dataset would you use?",
 ];
 
-/** Streamed, so `wrapStream` persistence is exercised too. */
+/** Streamed, with the application awaiting the assembled assistant write. */
 const STREAMED_TURN = "Given what I just told you about my preferences, suggest a starter project.";
 
 export interface RunOptions {
@@ -70,7 +70,7 @@ export interface RunResult {
   streamedAnswer: string;
   /** What `shortTerm.getContext` held after the turns — i.e. what gets injected. */
   context: { reflections: number; observations: number; recentMessages: number };
-  recalledPreferences: string[];
+  recalledMessages: string[];
   extractedEntities: string[];
 }
 
@@ -130,16 +130,6 @@ export async function main(options: RunOptions = {}): Promise<RunResult> {
         : `Created conversation ${conversationId} for the demo user`,
     );
 
-    // A preference outlives any one conversation: written on the first run,
-    // recalled on every later one. Written once so re-runs don't duplicate it.
-    if (!resumed) {
-      await client.longTerm.addPreference(
-        "games",
-        "Prefers euro-style board games with low randomness",
-        { context: "Stated while scoping a recommendation engine" },
-      );
-    }
-
     // The whole integration: one wrapped model. Everything below is a plain
     // AI SDK call with no memory-specific code.
     const model = wrapLanguageModel({
@@ -148,23 +138,35 @@ export async function main(options: RunOptions = {}): Promise<RunResult> {
     });
 
     const answers: string[] = [];
-    for (const prompt of GENERATED_TURNS) {
+    const turns = resumed
+      ? ["What kind of games did I say I enjoy?", "What project were we discussing?"]
+      : GENERATED_TURNS;
+    for (const prompt of turns) {
       log(`\n[user] ${prompt}`);
       const { text } = await generateText({ model, prompt });
       log(`[assistant] ${text}`);
       answers.push(text);
     }
 
-    // Same wrapped model, streamed: `wrapStream` accumulates the deltas and
-    // writes one assistant message when the stream finishes.
+    // Own the streaming write so closing the CLI cannot race background persistence.
+    const streamingModel = wrapLanguageModel({
+      model: options.model ?? openai(process.env.OPENAI_MODEL ?? "gpt-5-mini"),
+      middleware: agentMemoryMiddleware(client, { conversationId, persistResponses: false }),
+    });
     log(`\n[user] ${STREAMED_TURN}`);
     write("[assistant] ");
     let streamedAnswer = "";
-    const streamed = streamText({ model, prompt: STREAMED_TURN });
+    let streamError: unknown;
+    const streamed = streamText({
+      model: streamingModel, prompt: STREAMED_TURN,
+      onError: ({ error }) => { streamError = error; },
+    });
     for await (const chunk of streamed.textStream) {
       streamedAnswer += chunk;
       write(chunk);
     }
+    if (streamError !== undefined) throw streamError;
+    await client.shortTerm.addMessage(conversationId, "assistant", streamedAnswer);
     write("\n");
 
     // Epilogue: what the graph holds — i.e. what the next call will inject.
@@ -174,19 +176,19 @@ export async function main(options: RunOptions = {}): Promise<RunResult> {
         `${ctx.observations.length} observation(s), ${ctx.recentMessages.length} recent message(s)`,
     );
 
-    const prefs = await client.longTerm.searchPreferences("board games", { limit: 5 });
-    log(`Preferences recalled across sessions: ${prefs.length}`);
-    for (const p of prefs) log(`  [${p.category}] ${p.preference}`);
+    const recalled = ctx.recentMessages.filter((message) => message.role === "user");
+    log(`User messages in this conversation's context: ${recalled.length}`);
 
     // Entity extraction is asynchronous, so wait for it rather than racing it.
     const extracted = await client.longTerm.waitForExtraction({
       query: "board games",
+      expectedNames: ["Euro-style board games"],
       timeoutMs: options.extractionTimeoutMs ?? 15_000,
     });
     const entities = extracted
       ? await client.longTerm.searchEntities("board games", { limit: 5 })
       : [];
-    log(`Entities extracted from the conversation: ${entities.length}`);
+    log(`Matching workspace entities: ${entities.length}`);
     for (const e of entities) log(`  ${e.name} (${e.type})`);
 
     log(`\nRe-run with CONVERSATION_ID=${conversationId} to continue this conversation.`);
@@ -201,7 +203,7 @@ export async function main(options: RunOptions = {}): Promise<RunResult> {
         observations: ctx.observations.length,
         recentMessages: ctx.recentMessages.length,
       },
-      recalledPreferences: prefs.map((p) => p.preference),
+      recalledMessages: recalled.map((message) => message.content),
       extractedEntities: entities.map((e) => e.name),
     };
   } finally {

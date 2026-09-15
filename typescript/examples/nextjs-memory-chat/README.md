@@ -13,8 +13,8 @@ operate, no vector store, no database migrations.
 > ⚠️ **Neo4j Labs Project**
 >
 > This project is part of Neo4j Labs and is actively maintained, but not
-> officially supported. There are no SLAs or guarantees around backwards
-> compatibility and deprecation. For questions and support, please use the
+> officially supported. There are no SLAs, backward-compatibility guarantees,
+> or scheduled deprecation commitments. APIs may change without notice. For questions and support, please use the
 > [Neo4j Community Forum](https://community.neo4j.com).
 
 ## What it shows
@@ -96,11 +96,39 @@ booting Next.
 - Optionally a **`MEMORY_WORKSPACE_ID`** to scope the conversations and entities
   to one workspace.
 
+## Streaming persistence boundary
+
+This minimal route uses the core middleware's background assistant write. A
+completed client stream does not prove NAMS storage finished before a serverless
+runtime stops; the middleware exposes no persistence-completion promise. For
+application-owned, awaited writes and explicit abort/error handling, follow the
+[Cloudflare lifecycle example](../cloudflare-agents-edge/README.md) and adapt its
+runtime hook to your deployment. Disable automatic assistant writes when adding
+that explicit write, so the response is not stored twice.
+
+## Build the shared SDK first
+
+This is a source-checkout example. Its `file:../..` dependency and shared
+`../tsconfig.base.json` require the repository layout. From the repository root:
+
+```bash
+cd typescript
+npm ci
+npm run build
+cd examples/nextjs-memory-chat
+```
+
+Run the commands below from `typescript/examples/nextjs-memory-chat/`. Build **before**
+installing this example; package exports point at `typescript/dist/` and npm does
+not build the local SDK on installation. For standalone copies, follow the
+[copy checklist](../README.md#copying-an-example) and verify the selected npm
+artifact supplies every API used here.
+
 ## Run it
 
 ```bash
 cp .env.example .env.local     # set MEMORY_API_KEY and OPENAI_API_KEY
-npm install
+npm ci
 npm run dev                    # http://localhost:3000
 ```
 
@@ -223,7 +251,4 @@ This is a Neo4j Labs project — community supported, no SLA. Ask questions on t
 
 ---
 
-_Verified against @neo4j-labs/agent-memory 0.6.0-dev (in-tree `file:../..`),
-next 16.3.4, react 19.3.0, ai 7.0.97, @ai-sdk/openai 4.0.65, @ai-sdk/react
-4.0.100, @chakra-ui/react 3.37.0, @neo4j-nvl/react 1.2.2, msw 2.15.0, vitest
-5.0.0, Node 22+ — 2026-09-10._
+_Compatibility scope: this example targets the current source checkout and its committed package/lock files. Offline tests validate the exercised contracts; they do not establish published-package availability, a live model result, or deployed NAMS behavior. Use the runtime floor above; record the actual package/runtime versions when verifying a release or deployment._

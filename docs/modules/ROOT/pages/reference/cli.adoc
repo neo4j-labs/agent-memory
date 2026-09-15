@@ -1,9 +1,9 @@
-= CLI Reference
+= CLI reference
 :page-product: agent-memory
 :page-pagination:
 :toclevels: 2
 
-Command-line interface for neo4j-agent-memory extraction and schema management.
+Command-line interface for local extraction, bolt schema/statistics commands, and MCP serving with bolt or NAMS. Add the selected extractor/provider extras and model files before inference; the CLI extra supplies command rendering, not every model.
 
 == Installation
 
@@ -11,7 +11,7 @@ Install with CLI extras:
 
 [source,bash]
 ----
-pip install neo4j-agent-memory[cli]
+pip install 'neo4j-agent-memory[cli]==0.6.0'
 ----
 
 == Commands
@@ -22,7 +22,7 @@ Extract entities from text or files.
 
 [source,bash]
 ----
-neo4j-agent-memory extract [OPTIONS] TEXT
+neo4j-agent-memory extract [OPTIONS] [TEXT]
 ----
 
 ==== Arguments
@@ -37,37 +37,20 @@ neo4j-agent-memory extract [OPTIONS] TEXT
 
 ==== Options
 
-[cols="2,1,3", options="header"]
+// cli-options: extract
+[cols="2,1,4",options="header"]
 |===
 | Option | Default | Description
-
-| `--file`, `-f`
-| _none_
-| Read text from file instead
-
-| `--extractor`, `-e`
-| `gliner`
-| Extractor to use: `gliner`, `spacy`, `llm`, `hybrid`
-
-| `--entity-types`, `-t`
-| _all_
-| Entity types to extract (can repeat)
-
-| `--format`
-| `table`
-| Output format: `table`, `json`, `jsonl`
-
-| `--threshold`
-| `0.5`
-| Confidence threshold (0.0-1.0)
-
-| `--schema`
-| `poleo`
-| Domain schema: `poleo`, `podcast`, `news`, etc.
-
-| `--verbose`, `-v`
-| `false`
-| Show extraction details
+| `-f`, `--file` | `unset` | Read text from a file instead of argument.
+| `--format`, `-o` | `table` | Output format (default: table). Choices: `table`, `json`, `jsonl`.
+| `--schema` | `unset` | Path to a schema YAML file.
+| `--entity-types`, `-e` | `unset` | Entity types to extract (can be specified multiple times).
+| `--extractor` | `gliner` | Extractor to use (default: gliner). Choices: `gliner`, `llm`, `hybrid`.
+| `--model` | `unset` | Model name for GLiNER or LLM extractor.
+| `--relations`, `--no-relations` | `true` | Extract relations between entities.
+| `--preferences`, `--no-preferences` | `false` | Extract preferences/sentiments.
+| `--confidence-threshold` | `0.5` | Minimum confidence threshold (default: 0.5). Valid range: 0–1. Applied to GLiNER; not a general post-filter for every extractor.
+| `--quiet`, `-q` | `false` | Suppress progress output.
 |===
 
 ==== Examples
@@ -87,58 +70,62 @@ echo "Sarah lives in London" | neo4j-agent-memory extract -
 neo4j-agent-memory extract --extractor llm "..."
 
 # Filter entity types
-neo4j-agent-memory extract -t Person -t Organization "..."
+neo4j-agent-memory extract -e PERSON -e ORGANIZATION "..."
 
 # JSON output
 neo4j-agent-memory extract --format json "..."
 
-# Use domain schema
-neo4j-agent-memory extract --schema podcast "..."
+# Use a YAML schema file (see the schema example below)
+neo4j-agent-memory extract --schema custom_schema.yaml "..."
 ----
 
-==== Output Formats
+==== Schema input and extractor capabilities
 
-*Table (default):*
+`--schema` requires an existing EntitySchemaConfig YAML file, not a built-in GLiNER schema name. For example, save this as `custom_schema.yaml` and run `schemas validate custom_schema.yaml` before extraction:
 
-[source]
+[source,yaml]
 ----
-┏━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━━┓
-┃ Entity         ┃ Type         ┃ Subtype     ┃ Confidence  ┃
-┡━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━━┩
-│ John Smith     │ PERSON       │ INDIVIDUAL  │ 0.95        │
-│ Acme Corp      │ ORGANIZATION │ COMPANY     │ 0.92        │
-│ New York       │ LOCATION     │ CITY        │ 0.88        │
-└────────────────┴──────────────┴─────────────┴─────────────┘
+name: custom_example
+version: "1.0"
+entity_types:
+  - name: PERSON
+    description: A named person
+  - name: ORGANIZATION
+    description: A company or organization
 ----
 
-*JSON:*
+The CLI passes the schema's entity type names to ExtractorBuilder. This does not apply the full schema's relationship/property validation. `--relations` and `--preferences` are extraction requests: GLiNER alone does not produce either; select an LLM/hybrid pipeline for those outputs. `--confidence-threshold` configures the builder's GLiNER threshold and does not post-filter all LLM results.
+
+==== Output formats
+
+The table renders entity columns Type, Name, Confidence, and Attributes, plus relation/preference tables when present. Exact model results and confidence scores vary.
+
+The JSON serializer returns entities, relations, preferences, and source_text. Example shape:
 
 [source,json]
 ----
 {
   "entities": [
-    {"name": "John Smith", "type": "PERSON", "subtype": "INDIVIDUAL", "confidence": 0.95},
-    {"name": "Acme Corp", "type": "ORGANIZATION", "subtype": "COMPANY", "confidence": 0.92}
+    {"type": "PERSON", "name": "John Smith", "confidence": 0.95, "attributes": {}}
   ],
-  "metadata": {
-    "extractor": "gliner",
-    "schema": "poleo",
-    "duration_ms": 234
-  }
+  "relations": [],
+  "preferences": [],
+  "source_text": "John Smith"
 }
 ----
 
-*JSON Lines:*
+There is no CLI metadata envelope or entity subtype field in this serializer. JSON Lines wraps each item with a kind and data:
 
-[source]
+[source,json]
 ----
-{"name": "John Smith", "type": "PERSON", "subtype": "INDIVIDUAL", "confidence": 0.95}
-{"name": "Acme Corp", "type": "ORGANIZATION", "subtype": "COMPANY", "confidence": 0.92}
+{"type": "entity", "data": {"type": "PERSON", "name": "John Smith", "confidence": 0.95, "attributes": {}}}
 ----
+
+Relation/preference lines use `type: "relation"` / `type: "preference"` with their corresponding data fields.
 
 === schemas
 
-Manage entity extraction schemas stored in Neo4j.
+Manage EntitySchemaConfig documents stored in Neo4j (bolt only). These commands do not list the built-in local GLiNER schemas or hosted ontologies. Configure the Aura environment variables in <<_environment_variables,Environment variables>> before running the connection examples.
 
 ==== schemas list
 
@@ -149,25 +136,14 @@ List all schemas in the database.
 neo4j-agent-memory schemas list [OPTIONS]
 ----
 
-[cols="2,1,3", options="header"]
+// cli-options: schemas list
+[cols="2,1,4",options="header"]
 |===
 | Option | Default | Description
-
-| `--uri`
-| `bolt://localhost:7687`
-| Neo4j connection URI
-
-| `--username`
-| `neo4j`
-| Neo4j username
-
-| `--password`
-| _required_
-| Neo4j password
-
-| `--format`
-| `table`
-| Output format: `table`, `json`
+| `--format`, `-o` | `table` | Output format. Choices: `table`, `json`.
+| `--uri` | `bolt://localhost:7687` | Neo4j URI (default: bolt://localhost:7687 or NEO4J_URI env var). Environment: `NEO4J_URI`.
+| `--user` | `neo4j` | Neo4j username (default: neo4j or NEO4J_USER env var). Environment: `NEO4J_USER`.
+| `--password` | `unset` | Neo4j password (or NEO4J_PASSWORD env var). Environment: `NEO4J_PASSWORD`.
 |===
 
 ==== schemas show
@@ -179,17 +155,15 @@ Show details of a specific schema.
 neo4j-agent-memory schemas show SCHEMA_NAME [OPTIONS]
 ----
 
-[cols="2,1,3", options="header"]
+// cli-options: schemas show
+[cols="2,1,4",options="header"]
 |===
 | Option | Default | Description
-
-| `--version`
-| _latest_
-| Specific version to show
-
-| `--format`
-| `yaml`
-| Output format: `yaml`, `json`
+| `--version`, `-v` | `unset` | Schema version (default: active version).
+| `--format`, `-o` | `yaml` | Output format. Choices: `yaml`, `json`.
+| `--uri` | `bolt://localhost:7687` | Neo4j URI. Environment: `NEO4J_URI`.
+| `--user` | `neo4j` | Neo4j username. Environment: `NEO4J_USER`.
+| `--password` | `unset` | Neo4j password. Environment: `NEO4J_PASSWORD`.
 |===
 
 ==== schemas validate
@@ -206,7 +180,7 @@ neo4j-agent-memory schemas validate SCHEMA_FILE
 [source,bash]
 ----
 # List schemas
-neo4j-agent-memory schemas list --password $NEO4J_PASSWORD
+neo4j-agent-memory schemas list --uri "$NEO4J_URI" --user "$NEO4J_USERNAME"
 
 # Show schema details
 neo4j-agent-memory schemas show medical --format yaml
@@ -217,133 +191,110 @@ neo4j-agent-memory schemas validate custom_schema.yaml
 
 === stats
 
-Show memory statistics from Neo4j.
+Show entity extraction/provenance and extractor statistics from Neo4j (bolt only). This command is distinct from MemoryClient.get_stats().
 
 [source,bash]
 ----
 neo4j-agent-memory stats [OPTIONS]
 ----
 
-[cols="2,1,3", options="header"]
+// cli-options: stats
+[cols="2,1,4",options="header"]
 |===
 | Option | Default | Description
-
-| `--uri`
-| `bolt://localhost:7687`
-| Neo4j connection URI
-
-| `--username`
-| `neo4j`
-| Neo4j username
-
-| `--password`
-| _required_
-| Neo4j password
-
-| `--format`
-| `table`
-| Output format: `table`, `json`
+| `--format`, `-o` | `table` | Output format. Choices: `table`, `json`.
+| `--uri` | `bolt://localhost:7687` | Neo4j URI. Environment: `NEO4J_URI`.
+| `--user` | `neo4j` | Neo4j username. Environment: `NEO4J_USER`.
+| `--password` | `unset` | Neo4j password. Environment: `NEO4J_PASSWORD`.
 |===
 
 ==== Example
 
 [source,bash]
 ----
-neo4j-agent-memory stats --password $NEO4J_PASSWORD
+neo4j-agent-memory stats --uri "$NEO4J_URI" --user "$NEO4J_USERNAME"
 ----
 
-Output:
-
-[source]
-----
-Memory Statistics
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Short-Term Memory
-  Conversations: 42
-  Messages: 1,234
-
-Long-Term Memory
-  Entities: 567
-    PERSON: 234
-    ORGANIZATION: 123
-    LOCATION: 89
-    OBJECT: 45
-    EVENT: 76
-  Preferences: 23
-  Facts: 156
-
-Reasoning Memory
-  Traces: 89
-  Steps: 445
-  Tool Calls: 312
-----
+The table contains an Extraction Statistics panel, an entity-type breakdown, and extractor counts. `--format json` returns an object with `extraction_stats` and `extractor_stats`; it does not return conversation/message/reasoning totals.
 
 === mcp serve
 
-Start the MCP server for Claude Desktop and other MCP hosts.
+Start the MCP server for Claude Desktop and other MCP hosts. Install the `mcp` extra. Bolt requires a Neo4j password; NAMS requires an API key. `--backend` pins selection; otherwise a supplied key selects NAMS. Local provider/extraction options do not configure the hosted pipeline.
 
 [source,bash]
 ----
 neo4j-agent-memory mcp serve [OPTIONS]
 ----
 
+The runnable Bolt commands below use the Aura environment in <<_environment_variables,Environment variables>>; set its URI and credentials first.
+
 ==== Options
 
-[cols="1,1,3", options="header"]
+// cli-options: mcp serve
+[cols="2,1,4",options="header"]
 |===
-| Option                  | Default               | Description
-| `--uri`                 | `bolt://localhost:7687`| Neo4j connection URI (env: `NEO4J_URI`).
-| `--user`                | `neo4j`               | Neo4j username (env: `NEO4J_USER`).
-| `--password`            | _required_            | Neo4j password (env: `NEO4J_PASSWORD`).
-| `--database`            | `neo4j`               | Neo4j database name (env: `NEO4J_DATABASE`).
-| `--transport`           | `stdio`               | MCP transport: `stdio` or `http` (Streamable HTTP; `streamable-http` is a synonym). `sse` is deprecated and serves Streamable HTTP with a warning.
-| `--host`                | `127.0.0.1`           | Host for the HTTP transport (`0.0.0.0` to expose it).
-| `--port`                | `8080`                | Port for the HTTP transport.
-| `--profile`             | `extended`            | Tool profile: `core` (6 tools) or `extended` (16 tools).
-| `--session-strategy`    | `per_conversation`    | `per_conversation`, `per_day`, or `persistent`.
-| `--user-id`             | _none_                | User ID for `per_day`/`persistent` strategies (env: `MCP_USER_ID`).
-| `--observation-threshold`| `30000`              | Token threshold for observational memory compression.
-| `--no-auto-preferences` | _disabled_            | Disable automatic preference detection.
-| `--llm`                 | _none_                | LLM provider string, e.g. `anthropic/claude-3-5-sonnet-latest` (env: `NAM_LLM`). See xref:how-to/bring-your-own-model.adoc[Bring Your Own Model].
-| `--llm-api-key`         | _none_                | API key override for the LLM provider (env: `NAM_LLM_API_KEY`).
-| `--llm-api-base`        | _none_                | Base URL override (vLLM, Ollama, internal endpoint).
-| `--embedding`           | _none_                | Embedding provider string, e.g. `BAAI/bge-small-en-v1.5` (env: `NAM_EMBEDDING`).
-| `--embedding-dimensions`| _none_                | Override embedding dimensions for unknown models.
+| Option | Default | Description
+| `--uri` | `bolt://localhost:7687` | Neo4j connection URI. Environment: `NEO4J_URI`.
+| `--user` | `neo4j` | Neo4j username. Environment: `NEO4J_USER`.
+| `--password` | `unset` | Neo4j password (or NEO4J_PASSWORD env var). Environment: `NEO4J_PASSWORD`.
+| `--database` | `neo4j` | Neo4j database name. Environment: `NEO4J_DATABASE`.
+| `--transport` | `stdio` | MCP transport (default: stdio). 'http' is Streamable HTTP; 'streamable-http' is a synonym. 'sse' is deprecated and serves Streamable HTTP with a warning. Choices: `stdio`, `http`, `streamable-http`, `sse`.
+| `--host` | `127.0.0.1` | Host to bind for --transport http (use 0.0.0.0 to expose it).
+| `--port` | `8080` | Port to bind for --transport http. The MCP endpoint is /mcp/.
+| `--profile` | `extended` | Tool profile: core (6 tools) or extended (16 tools). Choices: `core`, `extended`.
+| `--session-strategy` | `per_conversation` | Session identity strategy. Choices: `per_conversation`, `per_day`, `persistent`.
+| `--user-id` | `unset` | User ID for per_day/persistent session strategies. Environment: `MCP_USER_ID`.
+| `--observation-threshold` | `30000` | Token threshold for observational memory compression.
+| `--no-auto-preferences` | `false` | Disable automatic preference detection.
+| `--llm` | `unset` | LLM provider string (e.g. 'openai/gpt-4o-mini', 'anthropic/claude-3-5-sonnet-latest', 'ollama/llama3.2'). Resolved via neo4j_agent_memory.llm.from_provider. Environment: `NAM_LLM`.
+| `--llm-api-key` | `unset` | API key for the LLM provider (overrides provider-default env var). Environment: `NAM_LLM_API_KEY`.
+| `--llm-api-base` | `unset` | Base URL for the LLM provider (e.g. for vLLM, Ollama, or an internal endpoint). Passed through to the adapter constructor.
+| `--embedding` | `unset` | Embedding provider string (e.g. 'openai/text-embedding-3-small', 'BAAI/bge-small-en-v1.5'). Resolved via from_provider. Environment: `NAM_EMBEDDING`.
+| `--embedding-dimensions` | `unset` | Embedding dimensions override (for models not in the defaults table).
+| `--backend` | `unset` | Storage backend. 'bolt' uses direct Neo4j; 'nams' uses the hosted Neo4j Agent Memory Service REST API. Defaults to NAMS if MEMORY_API_KEY is set, otherwise bolt. Choices: `bolt`, `nams`. Environment: `NAM_BACKEND`.
+| `--api-key` | `unset` | NAMS API key (or set MEMORY_API_KEY env var). Required when --backend=nams. Environment: `MEMORY_API_KEY`.
+| `--endpoint` | `unset` | NAMS endpoint base URL. Defaults to MEMORY_ENDPOINT env var, or https://memory.neo4jlabs.com/v1 when neither is set. Environment: `MEMORY_ENDPOINT`.
 |===
 
 ==== Examples
 
 [source,bash]
 ----
-# Default (OpenAI embeddings, OpenAI gpt-4o-mini extractor).
-neo4j-agent-memory mcp serve --password mypw
+# Bolt example (requires the corresponding provider dependencies/credentials).
+neo4j-agent-memory mcp serve --backend bolt --uri "$NEO4J_URI" --user "$NEO4J_USERNAME"
 
 # Anthropic + local sentence-transformers, no OpenAI dependency.
-neo4j-agent-memory mcp serve \
-  --password mypw \
+neo4j-agent-memory mcp serve --backend bolt \
+  --uri "$NEO4J_URI" --user "$NEO4J_USERNAME" \
   --llm anthropic/claude-3-5-sonnet-latest \
   --embedding BAAI/bge-small-en-v1.5
 
 # Local vLLM endpoint via LiteLLM.
-neo4j-agent-memory mcp serve \
-  --password mypw \
+neo4j-agent-memory mcp serve --backend bolt \
+  --uri "$NEO4J_URI" --user "$NEO4J_USERNAME" \
   --llm openai/llama-3.3-70b-instruct \
   --llm-api-base https://llms.internal.corp/v1
 
 # Core profile (fewer tools), per-day session strategy.
-neo4j-agent-memory mcp serve \
-  --password mypw \
+neo4j-agent-memory mcp serve --backend bolt \
+  --uri "$NEO4J_URI" --user "$NEO4J_USERNAME" \
   --profile core \
   --session-strategy per_day \
   --user-id alice
 
 # Streamable HTTP, for a networked deployment (Cloud Run, Kubernetes).
 # The MCP endpoint is POST/GET http://<host>:8080/mcp/
-neo4j-agent-memory mcp serve \
-  --password mypw \
+neo4j-agent-memory mcp serve --backend bolt \
+  --uri "$NEO4J_URI" --user "$NEO4J_USERNAME" \
   --transport http \
   --host 0.0.0.0 \
   --port 8080
+----
+
+[source,bash]
+----
+# Hosted MCP server; set MEMORY_API_KEY in the process environment first.
+neo4j-agent-memory mcp serve --backend nams --transport stdio
 ----
 
 NOTE: `--transport sse` is deprecated. The MCP specification replaced the legacy
@@ -351,16 +302,21 @@ HTTP+SSE transport with Streamable HTTP; the flag still starts a server but logs
 a warning and serves Streamable HTTP at `/mcp/`. See
 xref:reference/mcp-tools.adoc#_transports[Transports].
 
-== Environment Variables
+== Environment variables
 
-The CLI respects these environment variables:
+Copy Aura connection values from xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the Aura connection setup] before running the Bolt examples. The examples override the local defaults listed in the option tables.
+
+Options use their listed environment aliases. The CLI does not load `.neo4j-memory.yaml` or implement a `NAM_CLI__...` settings group. Example process environment:
 
 [source,bash]
 ----
 # Neo4j connection (avoids passing --password)
-export NEO4J_URI=bolt://localhost:7687
-export NEO4J_USER=neo4j
-export NEO4J_PASSWORD=password
+export NEO4J_URI="neo4j+s://<instance-id>.databases.neo4j.io"
+export NEO4J_USERNAME="neo4j"
+export NEO4J_PASSWORD="replace-with-your-Aura-password"
+export NEO4J_DATABASE="neo4j"
+# The CLI uses NEO4J_USER, so map the exported Aura username.
+export NEO4J_USER="$NEO4J_USERNAME"
 
 # OpenAI (for LLM extractor or OpenAI provider strings)
 export OPENAI_API_KEY=sk-...
@@ -371,7 +327,7 @@ export NAM_LLM_API_KEY=$ANTHROPIC_API_KEY
 export NAM_EMBEDDING=BAAI/bge-small-en-v1.5
 ----
 
-== See Also
+== See also
 
 * xref:how-to/entity-extraction.adoc[Configure Entity Extraction] - Pipeline configuration
 * xref:reference/schemas.adoc[Domain Schemas Reference] - Available schemas

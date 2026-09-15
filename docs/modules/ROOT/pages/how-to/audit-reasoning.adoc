@@ -4,26 +4,37 @@
 
 include::partial$backend-bolt-only.adoc[]
 
-NOTE: Writing `:TOUCHED` edges is bolt-only — NAMS drops
-`touched_entities` today. The audit *read* is portable: run it through
-`client.query.cypher`, which works on both backends.
+NOTE: This procedure requires Bolt. The hosted Python bridge does not forward
+`touched_entities`. Both clients expose `client.query.cypher`, but that does
+not establish that the hosted graph contains these nodes or relationships.
 
 How to make every agent reasoning step queryable from any entity it
-referenced — a 1-hop traversal instead of the default 3-hop path.
+referenced through a direct step-to-entity relationship.
 
 [.lead]
-By default, the library writes
+When you supply `triggered_by_message_id` to `start_trace` and `message_id` to
+`record_tool_call`, the library can link
 `(ReasoningTrace)-[:INITIATED_BY]->(Message)-[:MENTIONS]->(Entity)` and
-`(ToolCall)-[:TRIGGERED_BY]->(Message)`, so reaching an entity from a
-step is three hops. The library also provides a direct
+`(ToolCall)-[:TRIGGERED_BY]->(Message)`, when the corresponding message and entity links exist. Those links are
+optional; recording a trace alone does not create them. The library also provides a direct
 `(:ReasoningStep)-[:TOUCHED]->(:Entity)` edge that you can write either
 explicitly or via an observer hook. This page shows both.
 
+== Prerequisites
+
+* A connected `BoltMemoryClient`, constructed with `BoltSettings` and `await connect(settings)`.
+* A recorded `trace` and `step` from xref:how-to/reasoning-traces.adoc[Record Reasoning Traces].
+* Existing entity IDs when linking to entities already stored by your application.
+
+Run the Python fragments in the same async function with that `client`, `trace`, and `step`.
+The `CLIENT` entity type in this example is a domain-specific audit label.
+
 == Goal
 
-image::diagrams/provenance-chain-graph-auditability.png[Provenance chain: graph traversal and vector similarity both trace agent decisions back to source messages and entities,width=600,align=left]
+image::diagrams/provenance-chain-graph-auditability.png[Provenance chain: graph traversal and vector similarity both trace agent decisions back to source messages and entities,width=600,align=left,link=self]
 
-Run the headline audit query in 1 hop:
+Find traces through a direct `ReasoningStep` → `Entity` edge. The query also
+traverses `HAS_STEP` and optionally the initiating message:
 
 [source,cypher]
 ----
@@ -38,7 +49,9 @@ RETURN rt.task, s.thought, rt.outcome, rt.success, rt.error_kind,
 string, with `success`, `error_kind` and `metrics_json` beside it — not an
 opaque blob.
 
-== Approach 1 — Pass `touched_entities` directly
+== 1. Choose how to record touched entities
+
+=== Approach 1 — Pass `touched_entities` directly
 
 Simplest: when you know the touched entities at call time, pass them
 into `record_tool_call(...)`.
@@ -59,18 +72,19 @@ await client.reasoning.record_tool_call(
 )
 ----
 
-The library MERGEs each `EntityRef` into the long-term memory layer
-(matching by `id` if provided, else `name + type`, else `name` only)
+The library matches an existing entity when `id` is provided; a missing ID
+does not create an entity or an edge. Otherwise it MERGEs by `name + type`,
+or by `name` when no type is supplied,
 and writes a `pass:[(:ReasoningStep)-[:TOUCHED {recorded_at}]->(:Entity)]`
-edge. Re-recording the same touched entity is a no-op — the relationship
-is keyed on the (step, entity) pair.
+edge. The edge is keyed on the (step, entity) pair, so repeated references
+do not create duplicate edges. Each `record_tool_call` still records a new tool call.
 
 IMPORTANT: Entity types are uppercase strings. The MERGE stores `type`
 verbatim, so `type="Client"` creates a second `:Entity` node that
-`add_entity` (which uppercases) can never match. Prefer
+`add_entity` (which uppercases) would identify differently. Prefer
 `EntityRef(id=...)` when the entity already exists.
 
-== Approach 2 — Register an observer hook
+=== Approach 2 — Register an observer hook
 
 Often the touched entities aren't known until the tool result is in
 hand (e.g. `recommend_team` returns a list of consultants). Register a
@@ -118,14 +132,14 @@ which does not carry the bolt-only hook. Construct the client with
 `BoltMemoryClient`, whose `reasoning` is the concrete `ReasoningMemory` —
 that is what makes the decorator and `get_tool_stats()` type-check.
 
-Hook errors are logged but never raised — memory writes must not break
-agent execution loops. Hooks fire in registration order, after the tool
+Exceptions raised inside observer hooks are logged and suppressed. Failures
+persisting the tool call or its explicit `touched_entities` can still propagate. Hooks fire in registration order, after the tool
 call is persisted and after any `touched_entities` passed to
 `record_tool_call` have been written.
 
-== Indexable structured outcomes
+== 2. Record a structured outcome
 
-image::diagrams/graph-provenance-tracing-decisions-to-sources.png[Graph provenance: a single Cypher traversal from a credit decision through shared entities back to the original KYC findings,width=540,align=left]
+image::diagrams/graph-provenance-tracing-decisions-to-sources.png[Graph provenance: a single Cypher traversal from a credit decision through shared entities back to the original KYC findings,width=540,align=left,link=self]
 
 Pair `:TOUCHED` with `TraceOutcome` to make audit queries filterable
 by structured failure mode:
@@ -159,10 +173,18 @@ ORDER BY rt.completed_at DESC
 ----
 
 The `related_entities` list is materialized as `:TOUCHED` edges on the
-most recent step of the trace, so trace-level audit queries continue to
-work via the same 1-hop path.
+most recent step of the trace, when one exists. Completing a trace with no
+steps does not create a `:TOUCHED` edge.
 
-== Step-level case-based retrieval
+== 3. Verify the audit trail
+
+Run the goal query after recording the tool call and completing the trace.
+Confirm the returned task and outcome belong to this trace and the touched
+entity is the intended node. For an existing entity, filter on its ID instead
+of name. A missing row can mean a missing step, a missing entity ID, or a
+failed hook; inspect application logs and the explicit write results.
+
+== Optional: Retrieve similar steps
 
 For case-based imitation prompting, search past *steps* by their
 thought/action — coarser-grained `get_similar_traces` searches the
@@ -186,5 +208,8 @@ can see "in a similar situation, here's what worked."
 
 * xref:how-to/reasoning-traces.adoc[Record Reasoning Traces] — the
 underlying trace + step + tool-call API.
-* `examples/audit-trail/` — runnable end-to-end example using
-this how-to.
+* link:https://github.com/neo4j-labs/agent-memory/tree/main/examples/audit-trail[Audit-trail example] — runnable end-to-end example using this how-to.
+
+// Preserve historical section links after the procedure was reorganized.
+anchor:_indexable_structured_outcomes[]
+anchor:_step_level_case_based_retrieval[]

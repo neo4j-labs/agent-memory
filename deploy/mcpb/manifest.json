@@ -6,22 +6,30 @@
   "author": "Neo4j Labs",
   "license": "Apache-2.0",
   "repository": "https://github.com/neo4j-labs/agent-memory",
-  "keywords": ["memory", "neo4j", "knowledge-graph", "entity-extraction", "agent"],
+  "keywords": [
+    "memory",
+    "neo4j",
+    "knowledge-graph",
+    "entity-extraction",
+    "agent"
+  ],
   "server": {
     "command": "uvx",
     "args": [
-      "neo4j-agent-memory[mcp]",
+      "neo4j-agent-memory[mcp,openai]",
       "mcp",
-      "serve"
+      "serve",
+      "--backend",
+      "bolt"
     ],
     "env_required": [
-      "NEO4J_PASSWORD"
-    ],
-    "env_optional": [
       "NEO4J_URI",
       "NEO4J_USER",
+      "NEO4J_PASSWORD",
+      "OPENAI_API_KEY"
+    ],
+    "env_optional": [
       "NEO4J_DATABASE",
-      "OPENAI_API_KEY",
       "MCP_USER_ID"
     ]
   },

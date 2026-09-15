@@ -1,178 +1,161 @@
-= Building Your First TypeScript Agent with Memory
-:toc:
-:toclevels: 2
+= Build your first TypeScript agent with memory
 :source-highlighter: rouge
 
-This tutorial shows you how to add persistent memory to a TypeScript AI application using `@neo4j-labs/agent-memory` and the Vercel AI SDK.
+anchor:_what_youll_build[]
+We will store a fictional project name and entity, retrieve the same conversation
+during a model call, then independently verify that the new question and answer
+were stored. NAMS hosts the data; no database server runs on your machine.
 
-== What You'll Build
+anchor:_prerequisites[]
+anchor:_step_1_create_the_project[]
 
-A simple chat application where the AI assistant remembers conversation history across sessions, stores entities it learns about, and records its reasoning process.
+== Step 1: Build the SDK and install the lesson project
 
-== Prerequisites
+You need a workspace-scoped `MEMORY_API_KEY` for a dedicated test workspace on
+link:https://memory.neo4jlabs.com/[NAMS]. Model calls also need `OPENAI_API_KEY`.
 
-* Node.js 20+ or Bun
-* An OpenAI API key
-* Either a `nams_*` API key for the link:https://memory.neo4jlabs.com/[hosted service] (recommended) or a local Neo4j + bridge server
+include::partial$typescript-tutorial-project.adoc[]
 
-== Step 1: Create the Project
+anchor:_step_2_connect_the_memory_client[]
+anchor:_step_3_store_and_retrieve_messages[]
+anchor:_step_4_build_a_knowledge_graph[]
+anchor:_step_5_record_reasoning_traces[]
+
+== Step 2: Read the complete agent
+
+Open `src/tutorials/first-agent.ts`. The file below is the complete program; keep
+its imports at module scope. It creates a conversation and an explicit entity
+before storing the message that mentions that entity. The subsequent message
+search explicitly scopes itself to this conversation.
+
+[source,typescript]
+----
+import type { LanguageModelV4 } from "@ai-sdk/provider";
+import { openai } from "@ai-sdk/openai";
+import { generateText, wrapLanguageModel } from "ai";
+import { agentMemoryMiddleware } from "@neo4j-labs/agent-memory/middleware/vercel-ai";
+import { TutorialRun, isTutorialEntryPoint } from "../../../shared/tutorial-state.js";
+import { runTutorialCommand } from "../../../shared/tutorial-cleanup.js";
+
+export async function firstAgent(run: TutorialRun, baseModel: LanguageModelV4) {
+  const conversation = await run.createConversation();
+  console.log(`CONVERSATION_ID=${conversation.id}`);
+  const entity = await run.addEntity();
+  const storedEntity = await run.client.longTerm.getEntity(entity.id);
+  console.log(`ENTITY_ID=${storedEntity.id} name=${storedEntity.name}`);
+  const message = await run.addMessage("user", `My fictional project is called ${run.name}.`);
+  console.log(`Stored message: ${message.id}`);
+  const matches = await run.client.shortTerm.searchMessages(run.name, { conversationId: conversation.id, limit: 5 });
+  console.log(`Conversation search matches: ${matches.length}`);
+
+  await run.verify();
+  const before = await run.client.shortTerm.getConversation(conversation.id);
+  const prompt = "What is the exact full project name I told you, including its identifier?";
+  const model = wrapLanguageModel({ model: baseModel,
+    middleware: agentMemoryMiddleware(run.client, { conversationId: conversation.id }) });
+  const restore = run.trackMiddlewareWrites();
+  try {
+    const answer = await generateText({ model,
+      system: "Use the supplied conversation history. If a fact is missing, say so.", prompt });
+    console.log(`Model returned: ${answer.text}`);
+    await run.verifyTurn(before.messages.map(m => m.id), prompt, answer.text);
+    console.log("New user and assistant messages verified in storage.");
+    if (!answer.text.includes(run.name)) throw new Error("Storage passed, but the model did not recall the run-specific project name.");
+    console.log("Recall verified against the run-specific project name.");
+    return { conversationId: conversation.id, entityId: entity.id, answer: answer.text };
+  } finally { restore(); }
+}
+
+if (isTutorialEntryPoint(import.meta.url)) {
+  runTutorialCommand("first-agent", process.argv.slice(2), "seed", ["seed"], (_mode, run) => {
+    if (!process.env.OPENAI_API_KEY) throw new Error("Set OPENAI_API_KEY for seed; inspect, verify and cleanup do not need it.");
+    return firstAgent(run, openai(process.env.OPENAI_MODEL ?? "gpt-4o-mini"));
+  }).catch(error => { console.error(error); process.exitCode = 1; });
+}
+----
+
+The maintained state and cleanup helpers are in `typescript/examples/shared/`.
+Keep the private `.tutorial-state/` directory with this checkout. Each run binds
+its saved IDs to the endpoint, workspace selector and credential; a changed
+identity stops before using those IDs. Reseeding an existing state is refused.
+
+anchor:_step_6_add_vercel_ai_sdk_middleware[]
+
+`wrapLanguageModel` accepts the SDK's V4 middleware. Before generation, the
+middleware reads this conversation's context. Its user and assistant writes are
+best effort: a model answer can succeed even if storing a message fails. This
+lesson checks newly returned message IDs, roles and exact content before
+reporting a persistence milestone.
+
+== Step 3: Run and inspect the result
 
 [source,bash]
 ----
-mkdir my-memory-agent && cd my-memory-agent
-npm init -y
-npm install @neo4j-labs/agent-memory ai @ai-sdk/openai
+npx tsx --env-file-if-exists=.env src/tutorials/first-agent.ts seed .tutorial-state/first-agent.json
 ----
 
-== Step 2: Connect the Memory Client
+Expect the returned conversation and entity IDs, a scoped message-search result,
+and a model answer recalling the run's full fictional project name, including
+its unique identifier. The question requests that precision without supplying
+the name or identifier. Surrounding model wording and search counts vary.
 
-Set `MEMORY_API_KEY` in your environment, then:
+Expect `New user and assistant messages verified in storage.` before
+`Recall verified against the run-specific project name.`
+Read these checks separately: the new user and assistant messages must
+match this call's question and answer, with IDs absent before generation.
+A previously stored identical string cannot satisfy this check. If the model
+answers but message storage cannot be verified, the command fails that milestone
+and preserves state for inspection and cleanup.
 
-[source,typescript]
+The introductory path creates no reasoning steps. See
+xref:reference/typescript-api.adoc[the API reference] before adding reasoning
+records whose service cleanup is not established.
+
+== Verify in a fresh process
+
+Run these commands from the same directory, using the state created above:
+
+[source,bash]
 ----
-// index.ts
-import { MemoryClient } from "@neo4j-labs/agent-memory";
-
-// Zero-config: defaults to https://memory.neo4jlabs.com/v1 and reads
-// MEMORY_API_KEY from the environment.
-const client = new MemoryClient();
-----
-
-The first request acts as the implicit auth check. To fail fast at
-startup, call `await client.connect()` explicitly.
-
-On Cloudflare Workers or Vercel Edge, pass the key explicitly because
-`process.env` is not available at module init:
-
-[source,typescript]
-----
-const client = new MemoryClient({ apiKey: env.MEMORY_API_KEY });
-----
-
-== Step 3: Store and Retrieve Messages
-
-[source,typescript]
-----
-// Store a message
-const msg = await client.shortTerm.addMessage(
-  "session-1",
-  "user",
-  "My name is Alice and I work at Acme Corp"
-);
-console.log(`Stored message: ${msg.id}`);
-
-// Retrieve the conversation
-const conv = await client.shortTerm.getConversation("session-1");
-console.log(`Messages: ${conv.messages.length}`);
-
-// Search across all messages
-const results = await client.shortTerm.searchMessages("Alice", {
-  limit: 5,
-  threshold: 0.0,
-});
-console.log(`Found ${results.length} matching messages`);
+npx tsx --env-file-if-exists=.env src/tutorials/first-agent.ts inspect .tutorial-state/first-agent.json
+npx tsx --env-file-if-exists=.env src/tutorials/first-agent.ts verify .tutorial-state/first-agent.json
 ----
 
-== Step 4: Build a Knowledge Graph
+`inspect` shows the saved IDs and operation status. Expect `Verified stored
+messages:` with the recorded conversation ID and message count from `verify`.
+It opens another
+client and reads the recorded conversation and exact message IDs, roles and
+content digests; it makes no model
+calls and creates no records. A successful check establishes persistence across
+client processes. It does not imply that the hosted service restarted.
 
-[source,typescript]
+anchor:_step_7_clean_up[]
+anchor:_clean_up_the_conversation[]
+
+== Clean up and inspect the disposition
+
+From the same lesson directory, clean up this run using its saved state:
+
+[source,bash]
 ----
-// Store entities
-const alice = await client.longTerm.addEntity("Alice Johnson", "PERSON", {
-  description: "Software engineer at Acme Corp",
-});
-
-const acme = await client.longTerm.addEntity("Acme Corp", "ORGANIZATION", {
-  description: "Technology company",
-});
-
-// Create a relationship
-await client.longTerm.addRelationship(alice.id, acme.id, "WORKS_AT");
-
-// Store facts
-await client.longTerm.addFact("Alice Johnson", "ROLE", "Software Engineer");
-
-// Search the graph
-const entities = await client.longTerm.searchEntities("Alice");
-console.log(`Found: ${entities.map(e => e.name).join(", ")}`);
+npx tsx --env-file-if-exists=.env src/tutorials/first-agent.ts cleanup .tutorial-state/first-agent.json
+npx tsx --env-file-if-exists=.env src/tutorials/first-agent.ts inspect .tutorial-state/first-agent.json
 ----
 
-== Step 5: Record Reasoning Traces
+The cleanup command waits for the recorded messages' extraction to finish,
+checks the entities derived from those messages and any explicitly created
+entities, and deletes only records with proven exclusive ownership. It verifies
+deleted records are absent. Shared, merged or uncertain records remain listed;
+inspect their disposition instead of treating partial cleanup as a complete
+reset. A timeout or failed readback stops cleanup and preserves the state.
 
-[source,typescript]
-----
-// Start a reasoning trace
-const trace = await client.reasoning.startTrace(
-  "session-1",
-  "Find Alice's employer"
-);
+Keep the state until every resource has a verified disposition. Closing the
+client alone does not delete data. Do not remove the state file to bypass an
+unfinished run or bulk-delete workspace entities.
 
-// Record each step
-const step = await client.reasoning.addStep(trace.id, {
-  thought: "I need to look up Alice in the entity graph",
-  action: "search_entities",
-});
+== Next steps
 
-// Record tool calls
-await client.reasoning.recordToolCall(step.id, "search_entities", {
-  query: "Alice Johnson",
-}, {
-  result: { found: true },
-  durationMs: 42,
-});
-
-// Complete the trace
-await client.reasoning.completeTrace(trace.id, {
-  outcome: "Alice works at Acme Corp",
-  success: true,
-});
-----
-
-== Step 6: Add Vercel AI SDK Middleware
-
-The middleware injects three-tier conversational context (reflections + observations + recent messages, when available from the hosted service) and persists assistant responses:
-
-[source,typescript]
-----
-import { generateText } from "ai";
-import { openai } from "@ai-sdk/openai";
-import { agentMemoryMiddleware } from "@neo4j-labs/agent-memory/middleware/vercel-ai";
-
-// On REST transports, pass conversationId (UUID from createConversation).
-// On bridge transports, pass sessionId (any free-form string).
-const conv = await client.shortTerm.createConversation({ userId: "alice@example.com" });
-
-const middleware = agentMemoryMiddleware(client, {
-  conversationId: conv.id,
-  userId: "alice@example.com",
-  includeContext: true,     // 3-tier context on REST; flat history on bridge
-  persistResponses: true,
-});
-
-const result = await generateText({
-  model: openai("gpt-4o-mini"),
-  experimental_middleware: middleware,
-  prompt: "What do you know about my role?",
-});
-
-console.log(result.text);
-// The assistant sees the full conversation history (plus any reflections
-// and observations the service has generated) and can reference that
-// Alice works at Acme Corp as a software engineer.
-----
-
-== Step 7: Clean Up
-
-[source,typescript]
-----
-await client.close();
-----
-
-== Next Steps
-
-* link:../how-to/typescript/integrations-overview.html[Framework Integrations] — LangChain JS, Mastra, MCP, and more
-* link:../how-to/typescript/authenticate.html[Authenticate] — API key rotation, OAuth refresh, scope management
-* link:../reference/rest-api.html[REST API Reference] — every hosted endpoint mapped to a client method
-* link:../reference/mcp-tools.html[MCP Tool Reference] — wire the same surface into Claude Desktop, Cursor, or Windsurf
-* link:../explanation/memory-types.html[The Agent Memory Model] — short-term, long-term, reasoning, plus observations and reflections
-* link:../explanation/multi-agent-sharing.html[Cross-Agent Memory Sharing] — how multiple agents share one graph
+* xref:tutorials/conversation-memory-typescript.adoc[Recall memory after restarting the application].
+* xref:tutorials/knowledge-graph-typescript.adoc[Ingest documents and inspect extracted entities].
+* xref:how-to/typescript/vercel-ai.adoc[Configure the Vercel AI SDK middleware].
+* xref:reference/typescript-api.adoc[Check the REST capability and error reference].

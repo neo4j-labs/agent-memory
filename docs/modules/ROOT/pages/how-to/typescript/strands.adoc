@@ -22,7 +22,7 @@ all four of Strands' orthogonal extension surfaces:
   automatically. Real conversation messages land as `Message` graph
   nodes; non-message snapshot state (Strands' `data` minus messages,
   plus `appData`, plus manifests) rides on synthetic `role: "user"`
-  marker messages whose content is `__strands_state__:{base64-JSON}`.
+  marker messages whose content is `pass:[__strands_state__:{base64-JSON}]`.
 * **`ConversationManager`** — three-tier context (reflections + observations
   from `getContext()`) is prepended to every model invocation, *on top of*
   a configurable inner manager (defaults to `SlidingWindowConversationManager`).
@@ -36,6 +36,14 @@ memory store feeds the agent loop.
 
 A runnable example lives at
 link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/strands[`typescript/examples/strands`].
+
+Prerequisites: a Strands JS agent, Node.js 22+ and NAMS test-workspace credentials.
+
+== Procedure
+
+. Build the shared SDK before installing the Strands example; its local dependency is copied by npm.
+. Use `connectMemoryToAgent` for session/context/reasoning wiring, as shown below.
+. Add the memory-store surface only when your application needs explicit entity recall, then inspect stored messages using the synthetic-message filter.
 
 == Quick Start
 
@@ -255,20 +263,20 @@ await registerReasoningHooks(memory, agent, { conversationId: conv.id });
 |===
 | Strands construct | Where it lands in NAMS
 | Conversation messages | `Message` nodes attached to the Conversation
-| Agent state (`Snapshot.data`, non-message fields) | synthetic `role: "user"` message with content `__strands_state__:{base64-JSON-blob}`
+| Agent state (`Snapshot.data`, non-message fields) | synthetic `role: "user"` message with content `pass:[__strands_state__:{base64-JSON-blob}]`
 | Application state (`Snapshot.appData`) | inside the same synthetic message's content blob
 | Tool calls | `ToolCall` nodes attached to a `ReasoningStep`
 | Per-turn reasoning | `ReasoningStep` nodes attached to the Conversation
-| Manifests (snapshot metadata) | synthetic `role: "user"` message with content `__strands_manifest__:{base64-JSON-blob}`
+| Manifests (snapshot metadata) | synthetic `role: "user"` message with content `pass:[__strands_manifest__:{base64-JSON-blob}]`
 |===
 
 NAMS exposes no endpoint to update a Conversation's `metadata` after
 creation, and we observed that per-message metadata doesn't reliably
-round-trip via `GET /conversations/{id}/messages` either. So the
+round-trip via `GET /conversations/\{id}/messages` either. So the
 integration stuffs the serialized blob directly into the message's
 `content` field, base64-encoded after a recognizable prefix. Each
 `saveSnapshot` writes one synthetic message; `listSnapshotIds` walks
-the message list, filters by the `__strands_state__:` content prefix,
+the message list, filters by the `pass:[__strands_state__:]` content prefix,
 and dedupes by `snapshotId` (last-write-wins for the `isLatest` flag).
 
 Synthetic markers are filtered out before the Snapshot is handed back
@@ -286,9 +294,9 @@ const conv = await memory.shortTerm.getConversation(conversationId);
 const realMessages = conv.messages.filter((m) => !isSyntheticStrandsMessage(m));
 ----
 
-The chat UI in `demo/agents/spool/` doesn't fetch raw conversation
-messages (it streams from `agent.invoke` directly) so it doesn't need
-to filter; consumers that DO fetch raw messages must.
+A UI rendering only the `agent.invoke` stream does not encounter stored
+snapshot messages. A consumer fetching the raw conversation must apply this
+filter before presenting messages to a user.
 
 == Behaviour details
 
@@ -319,8 +327,9 @@ in. An auth failure surfaces as `AuthenticationError` from
 
 == Version compatibility
 
-Verified against `@strands-agents/sdk` 1.17 (declared floor: `>=1.16 <2`) and
-Node.js 22, with `@neo4j-labs/agent-memory` 0.5.0-dev — 2026-09. Strands' v1 API
+The source declares `@strands-agents/sdk >=1.16 <2` and Node.js 22+.
+The tests check installed typings; this describes source compatibility, not
+a verified npm artifact. Strands' v1 API
 is stable under semver, and `typescript/test/unit/strands/type-compatibility.test.ts`
 asserts each of our classes still satisfies the interface it implements, so an
 `npm install` that reshapes one of them fails a test rather than drifting
@@ -345,7 +354,14 @@ a unified `Storage` that keeps the hybrid message mapping behind it.
 == See also
 
 - link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/strands[Runnable Strands example]
-- link:observability.adoc[Enable request logging]
-- link:handle-errors.adoc[Error handling]
+- xref:how-to/typescript/observability.adoc[Enable request logging]
+- xref:how-to/typescript/handle-errors.adoc[Error handling]
 - xref:how-to/integrations/aws-strands.adoc[AWS Strands Agents (Python)] — the Python guide
 - https://strandsagents.com[Strands Agents docs]
+
+== Verify the integration
+
+In `typescript/examples/strands/`, run `npm run lint` and `npm test` after the
+README's SDK-build/install sequence. The suite checks session replay, context,
+reasoning and memory-store behavior offline. A live test must use your selected
+Strands/model versions and inspect returned conversation ids.

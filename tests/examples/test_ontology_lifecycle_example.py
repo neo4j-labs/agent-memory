@@ -14,9 +14,8 @@ The fake is **stateful** on the two things the example actually teaches:
   fails if the polling loop is replaced by a fixed sleep.
 
 Route payloads mirror ``tests/unit/nams/*`` fixtures (verified against the live
-API) and ``src/neo4j_agent_memory/nams/ontology.py`` (verified empirically
-against the staging deployment — the ontology routes are absent from the
-OpenAPI spec).
+API) and ``src/neo4j_agent_memory/nams/ontology.py``. Active responses include
+the version record actually bound to the workspace.
 """
 
 from __future__ import annotations
@@ -208,7 +207,9 @@ class FakeNams:
         if active is None:
             # A workspace with nothing bound: the live service 404s here.
             return httpx.Response(404, json={"detail": "no active ontology"})
-        return httpx.Response(200, json={"ontology": json.loads(active["schema_json"])})
+        return httpx.Response(
+            200, json={"ontology": json.loads(active["schema_json"]), "version": active}
+        )
 
     def import_ontology(self, request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)

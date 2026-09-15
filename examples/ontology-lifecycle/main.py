@@ -36,9 +36,10 @@ Run:
     uv pip install -r requirements.txt
     uv run python main.py
 
-Re-running is safe: the script reuses the ``support-desk`` ontology if it
-already exists in the workspace and mints the next revision instead of
-creating a second one.
+Use a disposable workspace: the script changes its active ontology and migrates
+stored entities. A rerun reuses ``support-desk`` and creates another revision;
+it is not a no-op. The result remains active for inspection. Deleting that
+ontology alone does not restore the previous active version or migrated data.
 """
 
 from __future__ import annotations
@@ -215,14 +216,21 @@ async def run_migration(
     deadline = time.monotonic() + MIGRATION_TIMEOUT
     while job.status not in TERMINAL_STATUSES:
         if time.monotonic() >= deadline:
-            print(f"   still {job.status} after {MIGRATION_TIMEOUT:.0f}s — stopped polling")
-            return job
-        await asyncio.sleep(MIGRATION_POLL_INTERVAL)
-        job = await client.ontology.get_migration(job.id)
+            raise TimeoutError(
+                f"Migration {job.id} still {job.status} after {MIGRATION_TIMEOUT:.0f}s; "
+                "stopped before the next lifecycle operation"
+            )
+        await asyncio.sleep(min(MIGRATION_POLL_INTERVAL, max(0.0, deadline - time.monotonic())))
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(f"Migration {job.id} exceeded its polling deadline")
+        job = await asyncio.wait_for(client.ontology.get_migration(job.id), timeout=remaining)
         print(f"   ... {job.status}: {job.processed or 0}/{job.total or 0} node(s)")
 
     if job.status == "failed":
-        print(f"   migration failed: {job.error_message}")
+        raise RuntimeError(f"Migration {job.id} failed: {job.error_message}")
+    elif job.errored:
+        raise RuntimeError(f"Migration {job.id} completed with {job.errored} errored nodes")
     else:
         print(
             f"   migration {job.status} ({mode}): {job.processed or 0} re-labelled, "
@@ -269,7 +277,8 @@ async def main() -> None:
         else:
             print(
                 f"Active ontology: {active.document.domain.name} "
-                f"(revision {active.revision}, {active.validation_mode})"
+                f"(revision {active.revision}, {active.validation_mode}, "
+                f"version_id={active.version_id})"
             )
 
         # 2. Import the Arrows document into a draft ---------------------------
@@ -340,6 +349,10 @@ async def main() -> None:
             timeout=EXTRACTION_TIMEOUT,
             interval=EXTRACTION_POLL_INTERVAL,
         )
+        if not settled:
+            raise TimeoutError(
+                f"Extraction did not settle for {conversation_id}; no migration was started"
+            )
         extracted = await client.long_term.search_entities("support ticket order", limit=10)
         print(f"Extraction settled: {settled}; {len(extracted)} entity(ies) searchable")
         for entity in extracted:
@@ -399,7 +412,8 @@ async def main() -> None:
 
         print(
             f"\nDone. Inspect {DOMAIN_ID} at https://memory.neo4jlabs.com. "
-            f"Clean up with: await client.ontology.delete({ontology_id!r})"
+            f"Retained ontology: {ontology_id}. The new version remains active; "
+            "deleting it alone does not restore the previous schema or migrated entities."
         )
     finally:
         # `connect()` hands back an already-connected client, so we own closing

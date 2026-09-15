@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -216,6 +217,52 @@ CODE_BLOCK_PATTERN = re.compile(
 )
 
 
+def expand_example_includes(code: str, file_path: Path) -> str:
+    """Resolve the full Antora example resources used by maintained programs.
+
+    Missing files and unsupported include options fail visibly instead of
+    silently certifying a block that contains only an include directive.
+    """
+    module = next((parent for parent in file_path.parents if parent.name == "pages"), None)
+    if module is None or "include::example$" not in code:
+        return code
+    examples = (module.parent / "examples").resolve()
+
+    def include(match: re.Match[str]) -> str:
+        target, options = match.groups()
+        tags = None
+        if options:
+            option = re.fullmatch(r"tags?=([\w;-]+)", options)
+            if not option:
+                raise ValueError(f"Unsupported example include options in {file_path}: {options}")
+            tags = set(option[1].split(";"))
+        source = (examples / target).resolve()
+        if not source.is_relative_to(examples):
+            raise ValueError(f"Example include escapes module examples: {target}")
+        text = source.read_text(encoding="utf-8")
+        if tags is None:
+            return text.rstrip()
+        active: set[str] = set()
+        found: set[str] = set()
+        selected = []
+        for line in text.splitlines():
+            marker = re.search(r"(?:#|//)\s*(tag|end)::([\w-]+)\[\]", line)
+            if marker:
+                if marker[1] == "tag":
+                    active.add(marker[2])
+                    found.add(marker[2])
+                else:
+                    active.discard(marker[2])
+                continue
+            if active & tags:
+                selected.append(line)
+        if tags - found:
+            raise ValueError(f"Missing example tags in {source}: {sorted(tags - found)}")
+        return "\n".join(selected).rstrip()
+
+    return re.sub(r"^include::example\$([^\[]+)\[([^\]]*)\]$", include, code, flags=re.MULTILINE)
+
+
 def extract_snippets_from_file(file_path: Path) -> list[CodeSnippet]:
     """Extract all code blocks from an AsciiDoc file.
 
@@ -238,7 +285,7 @@ def extract_snippets_from_file(file_path: Path) -> list[CodeSnippet]:
     for match in CODE_BLOCK_PATTERN.finditer(content):
         title = match.group(1)
         language = match.group(2)
-        code = match.group(3)
+        code = expand_example_includes(match.group(3), file_path)
 
         # Calculate line number
         line_num = content[: match.start()].count("\n") + 1
@@ -274,10 +321,13 @@ def extract_python_snippets(docs_dir: Path) -> list[CodeSnippet]:
     """
     snippets: list[CodeSnippet] = []
 
-    # Find all .adoc files recursively
+    # Use authored Antora pages when passed the docs root.
+    pages = docs_dir / "modules" / "ROOT" / "pages"
+    if pages.is_dir():
+        docs_dir = pages
     for adoc_file in docs_dir.rglob("*.adoc"):
         # Skip node_modules and _site
-        if "node_modules" in str(adoc_file) or "_site" in str(adoc_file):
+        if {"node_modules", "_site", "build", "attachments"}.intersection(adoc_file.parts):
             continue
 
         file_snippets = extract_snippets_from_file(adoc_file)
@@ -321,3 +371,88 @@ def get_complete_python_snippets() -> list[CodeSnippet]:
     This is a convenience function for use with pytest.mark.parametrize.
     """
     return [s for s in get_all_python_snippets() if s.is_complete]
+
+
+def local_import_errors(code: str, source_root: Path) -> list[str]:
+    """Check SDK imports against source declarations without loading providers."""
+    declarations: dict[str, set[str] | None] = {}
+
+    def exports(module: str) -> set[str] | None:
+        if module in declarations:
+            return declarations[module]
+        base = source_root.joinpath(*module.split("."))
+        path = (
+            base.with_suffix(".py") if base.with_suffix(".py").is_file() else base / "__init__.py"
+        )
+        if not path.is_file():
+            declarations[module] = None
+            return None
+        names: set[str] = set()
+        declarations[module] = names
+
+        def visit(statements):
+            for node in statements:
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    names.add(node.name)
+                    if isinstance(node, ast.FunctionDef) and node.name == "__getattr__":
+                        for branch in ast.walk(node):
+                            if (
+                                isinstance(branch, ast.Compare)
+                                and isinstance(branch.left, ast.Name)
+                                and branch.left.id == "name"
+                            ):
+                                names.update(
+                                    value.value
+                                    for value in branch.comparators
+                                    if isinstance(value, ast.Constant)
+                                    and isinstance(value.value, str)
+                                )
+                elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                    names.update(alias.asname or alias.name.split(".")[0] for alias in node.names)
+                elif isinstance(node, ast.Assign):
+                    names.update(
+                        target.id for target in node.targets if isinstance(target, ast.Name)
+                    )
+                elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                    names.add(node.target.id)
+                elif isinstance(node, ast.If):
+                    visit(node.body)
+                    visit(node.orelse)
+                elif isinstance(node, ast.Try):
+                    visit(node.body)
+                    visit(node.orelse)
+                    visit(node.finalbody)
+                    for handler in node.handlers:
+                        visit(handler.body)
+
+        visit(ast.parse(path.read_text()).body)
+        return names
+
+    errors = []
+    for node in ast.walk(ast.parse(code)):
+        if (
+            isinstance(node, ast.ImportFrom)
+            and node.module
+            and (
+                node.module == "neo4j_agent_memory" or node.module.startswith("neo4j_agent_memory.")
+            )
+        ):
+            names = exports(node.module)
+            if names is None:
+                errors.append(f"Missing module {node.module}")
+            else:
+                for alias in node.names:
+                    if (
+                        alias.name != "*"
+                        and alias.name not in names
+                        and exports(f"{node.module}.{alias.name}") is None
+                    ):
+                        errors.append(f"{node.module} does not declare {alias.name}")
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if (
+                    alias.name == "neo4j_agent_memory"
+                    or alias.name.startswith("neo4j_agent_memory.")
+                ) and exports(alias.name) is None:
+                    errors.append(f"Missing module {alias.name}")
+    return errors

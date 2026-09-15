@@ -1,652 +1,105 @@
 = Use with LangChain
 :page-product: agent-memory
 :page-pagination:
-:toclevels: 3
+:toclevels: 2
 :sectanchors:
-:icons: font
-:source-highlighter: highlight.js
 
-How to integrate neo4j-agent-memory with LangChain 1.x to build memory-enabled agents and chains backed by a persistent context graph.
+Add verified conversation persistence to a LangChain 1.x `create_agent` agent with `Neo4jMemoryMiddleware`. The middleware owns message writes in this recipe, so the application does not save the same turn a second time.
 
-[NOTE]
-====
-**Supported LangChain range: 1.x.** The `[langchain]` extra installs
-`langchain-core>=1.0,<2`; the `[langchain-agents]` extra adds
-`langchain>=1.0,<2` (which pulls LangGraph) for the `create_agent` middleware.
+== 1. Prepare the selected environment
 
-LangChain 1.0 retired the memory story this page used to teach.
-`langchain_core.memory.BaseMemory` no longer exists, and
-`ConversationChain`, `ConversationBufferMemory`, `AgentExecutor` and
-`create_openai_functions_agent` moved to the `langchain-classic`
-distribution. The supported shape is:
+anchor:_overview[]
+anchor:_prerequisites[]
 
-* **thread history** — a `BaseChatMessageHistory` implementation (plus a
-  LangGraph checkpointer when you use the graph runtime), and
-* **context injection / persistence** — `create_agent` middleware hooks.
+Use Python 3.10+ and a POSIX shell. The recipe uses `BoltSettings` to select Neo4j explicitly and disables entity extraction so that message persistence can be checked independently. Use a dedicated AuraDB instance with vector-index support and no incompatible existing vectors. Follow xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the Aura connection setup] and copy its connection values into the exports below. These recipes use the published Python 0.6.0 package; provider access and database execution must be verified in your environment.
 
-Both are what this library ships. See <<legacy>> if you are maintaining a
-pre-1.0 application.
-====
-
-https://github.com/neo4j-labs/agent-memory/tree/main/examples/langchain_agent.py[examples/langchain_agent.py] is the runnable version of this page; https://github.com/neo4j-labs/agent-memory/tree/main/examples/nams-langchain[examples/nams-langchain] runs the same adapter against the hosted backend.
-
-== Overview
-
-The library ships three LangChain adapters, each implementing a base class that
-exists in LangChain 1.x, plus one pass-through helper.
-
-[cols="1,1,2", options="header"]
-|===
-| Adapter | Implements | Use it for
-
-| `Neo4jAgentMemory`
-| `langchain_core.chat_history.BaseChatMessageHistory`
-| Thread history for `RunnableWithMessageHistory`, and memory-context assembly
-  for hand-rolled prompts.
-
-| `Neo4jMemoryRetriever`
-| `langchain_core.retrievers.BaseRetriever`
-| RAG over all three memory layers — messages, entities, preferences and traces.
-
-| `Neo4jMemoryMiddleware`
-| `langchain.agents.middleware.AgentMiddleware`
-| Give a `create_agent` agent memory: inject context before the model call,
-  persist the turn after it.
-
-| `llm_provider_from_langchain`
-| —
-| Reuse your configured LangChain chat model as memory's own LLM.
-|===
-
-[cols="1", options="header"]
-|===
-| LangChain 1.x + Context Graph Architecture
-
-a|
-[source,text]
-----
-┌──────────────────────────────────────────────────────────┐
-│               create_agent(model, tools, …)              │
-│                                                          │
-│   abefore_model ──▶ awrap_model_call ──▶ aafter_model    │
-│        │                   │                   │         │
-│        │                   ▼                   │         │
-│        │          inject memory block          │         │
-│        │          into system message          │         │
-│        ▼                                       ▼         │
-│   persist user turn                    persist reply     │
-│  ┌────────────────────────────────────────────────────┐  │
-│  │              Neo4jMemoryMiddleware                 │  │
-│  └───────────────────────┬────────────────────────────┘  │
-└──────────────────────────┼───────────────────────────────┘
-                           │
-      Neo4jAgentMemory ────┤──── Neo4jMemoryRetriever
-     (BaseChatMessage…)    │         (BaseRetriever)
-                           ▼
-┌──────────────────────────────────────────────────────────┐
-│                   Neo4j Context Graph                    │
-│   Messages ──── Entities ──── Preferences ──── Traces    │
-└──────────────────────────────────────────────────────────┘
-----
-|===
-
-== Prerequisites
-
-* Python 3.10+
-* A Neo4j database (or a hosted NAMS workspace — see xref:explanation/backends.adoc[Backends])
-* An API key for your model provider
+include::partial$python-tutorial-setup.adoc[]
 
 [source,bash]
 ----
-# Chat history + retriever only
-pip install "neo4j-agent-memory[langchain,openai]"
-
-# Plus the create_agent middleware
-pip install "neo4j-agent-memory[langchain-agents,openai]" langchain-openai
+python -m pip install 'neo4j-agent-memory[langchain-agents,openai]==0.6.0' langchain-openai
+export NEO4J_URI='neo4j+s://<instance-id>.databases.neo4j.io'
+export NEO4J_USERNAME='neo4j'
+export NEO4J_PASSWORD='replace-with-your-Aura-password'
+export NEO4J_DATABASE='neo4j'
+export OPENAI_API_KEY='replace-with-your-provider-key'
+export OPENAI_MODEL='replace-with-an-available-model-id'
 ----
 
-== Pass-through your LangChain model
+The OpenAI-backed recipes require access to `text-embedding-3-small`; it produces 1536-dimensional vectors in this configuration. Configure the selected chat model separately where required. Credentials are read from the environment, never printed by the programs.
 
-To avoid declaring the same model twice — once for the agent, once for memory's
-entity extraction — convert your LangChain `BaseChatModel` into an
-`LLMProvider`:
+== 2. Read the complete recipe
 
-[source,python]
+Create the subdirectory below, then save both complete files under the displayed names. Run commands from `agent-memory-tutorials/`; Python resolves `common` from the script's `integrations/` directory.
+
+[source,bash]
 ----
-import os
-
-from langchain_openai import ChatOpenAI
-
-from neo4j_agent_memory import MemoryClient, MemorySettings
-from neo4j_agent_memory.integrations.langchain import (
-    llm_provider_from_langchain,
-)
-
-# Configure your LangChain model however you normally would. Temperature is
-# left at the provider default: the GPT-5 family rejects non-default values.
-chat = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-5-mini"))
-
-# Convert it to an LLMProvider for the memory client.
-provider = llm_provider_from_langchain(chat)
-
-settings = MemorySettings(
-    neo4j={"password": os.environ["NEO4J_PASSWORD"]},
-    llm=provider,
-    embedding="openai/text-embedding-3-small",
-)
+mkdir -p integrations
 ----
 
-The helper introspects the model's class name and attributes (`model_name`,
-`anthropic_api_key`, `openai_api_key`, `openai_api_base`, …) and routes via
-`from_provider`. `ChatOpenAI` resolves to `OpenAIProvider`; `ChatAnthropic` to
-`AnthropicProvider`; everything else falls through to LiteLLM.
 
-Note the spelling: `model=` is the current constructor argument. `model_name=`
-is a legacy alias.
+The script imports this shared helper from the same directory. It supplies explicit database settings, closes clients through the calling context manager, and fails when expected records are absent. Task traces record the observable outcome of the call; they do not expose hidden model reasoning.
 
-For the full pattern across all integrations, see xref:how-to/migrate-to-providers.adoc[Migrate to Pluggable Providers — Pattern 5].
-
-[#agent]
-== Give an agent memory with middleware
-
-`Neo4jMemoryMiddleware` is the whole integration for an agent: nothing else to
-wire up, no prompt template to maintain.
-
-[source,python]
-----
-import asyncio
-import os
-
-from langchain.agents import create_agent
-from langchain_openai import ChatOpenAI
-from pydantic import SecretStr
-
-from neo4j_agent_memory import BoltSettings, MemoryClient, Neo4jConfig
-from neo4j_agent_memory.integrations.langchain import (
-    Neo4jMemoryMiddleware,
-    llm_provider_from_langchain,
-)
-
-
-async def main() -> None:
-    model = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-5-mini"))
-
-    settings = BoltSettings(
-        neo4j=Neo4jConfig(
-            uri=os.getenv("NEO4J_URI", "bolt://localhost:7687"),
-            password=SecretStr(os.environ["NEO4J_PASSWORD"]),
-        ),
-        embedding="openai/text-embedding-3-small",
-        llm=llm_provider_from_langchain(model),
-    )
-
-    async with MemoryClient(settings) as client:
-        agent = create_agent(
-            model,
-            tools=[],
-            system_prompt="You are a helpful assistant.",
-            middleware=[
-                Neo4jMemoryMiddleware(client, session_id="user-123"),
-            ],
-        )
-
-        # Async invocation: the middleware implements the async hooks.
-        result = await agent.ainvoke(
-            {"messages": [("user", "Where should I eat tonight?")]}
-        )
-        print(result["messages"][-1].content)
-
-
-asyncio.run(main())
-----
-
-What the middleware does on each turn:
-
-`abefore_model`:: Persists any user message the agent has not stored yet, so the
-turn survives a failed model call.
-`awrap_model_call`:: Calls `client.get_context(query, session_id=...)` for the
-latest user message and appends the result to the request's system message. Agent
-state is left untouched, so the memory block never accumulates in the thread's
-message list.
-`aafter_model`:: Persists the assistant's reply. Messages are de-duplicated by
-id, so a tool-calling loop that re-sends the same history does not write it
-repeatedly.
-
-Options:
-
-[source,python]
-----
-Neo4jMemoryMiddleware(
-    client,
-    session_id="user-123",
-    include_short_term=True,   # conversation history in the injected block
-    include_long_term=True,    # entities, facts and preferences
-    include_reasoning=True,    # similar past traces
-    max_items=10,              # per-layer cap
-    store_messages=True,       # set False for a read-only agent
-    extract_entities=True,     # entity extraction on persisted messages
-    context_header="# Memory",
-)
-----
-
-[IMPORTANT]
+.Complete `integrations/common.py`
+[%collapsible]
 ====
-Only the async hooks are implemented, because neo4j-agent-memory is async all
-the way down. Invoke the agent with `ainvoke` or `astream`. The sync hooks raise
-`NotImplementedError` with that instruction rather than silently skipping
-memory.
+.Save as `integrations/common.py`
+[source,python]
+----
+include::example$integrations/common.py[]
+----
 ====
 
-=== Add tools that read the graph
-
-`create_agent` takes plain `@tool` functions, and async tools are first class —
-no `run_until_complete` bridging:
-
-[source,python]
-----
-import json
-
-from langchain_core.tools import tool
-
-from neo4j_agent_memory import MemoryClient
-
-
-def build_memory_tools(client: MemoryClient) -> list:
-    """Tools that query the context graph directly."""
-
-    @tool
-    async def search_entities(query: str, limit: int = 10) -> str:
-        """Search the knowledge graph for people, places, products or organizations."""
-        entities = await client.long_term.search_entities(query, limit=limit)
-        return json.dumps(
-            [
-                {
-                    "name": e.display_name,
-                    "type": e.full_type,
-                    "description": e.description,
-                }
-                for e in entities
-            ]
-        )
-
-    @tool
-    async def save_preference(category: str, preference: str) -> str:
-        """Record a preference the user just expressed (category: food, brand, style, ...)."""
-        await client.long_term.add_preference(category, preference)
-        return f"Saved preference: {category} — {preference}"
-
-    @tool
-    async def search_history(query: str, session_id: str, limit: int = 5) -> str:
-        """Search earlier messages in a conversation."""
-        messages = await client.short_term.search_messages(
-            query, session_id=session_id, limit=limit
-        )
-        return json.dumps(
-            [{"role": m.role.value, "content": m.content[:200]} for m in messages]
-        )
-
-    return [search_entities, save_preference, search_history]
-
-
-# agent = create_agent(model, tools=build_memory_tools(client), middleware=[...])
-----
-
-== Thread history for a chain
-
-`Neo4jAgentMemory` is a `BaseChatMessageHistory`, so it drops straight into
-`RunnableWithMessageHistory` for chains that are not agents:
-
-[source,python]
-----
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.runnables.history import RunnableWithMessageHistory
-
-from neo4j_agent_memory.integrations.langchain import Neo4jAgentMemory
-
-prompt = ChatPromptTemplate.from_messages(
-    [
-        ("system", "You are a helpful assistant."),
-        MessagesPlaceholder("history"),
-        ("human", "{input}"),
-    ]
-)
-chain = prompt | model | StrOutputParser()
-
-chain_with_history = RunnableWithMessageHistory(
-    chain,
-    lambda session_id: Neo4jAgentMemory(memory_client=client, session_id=session_id),
-    input_messages_key="input",
-    history_messages_key="history",
-)
-
-answer = await chain_with_history.ainvoke(
-    {"input": "I'm looking for running shoes"},
-    config={"configurable": {"session_id": "user-123"}},
-)
-----
-
-`RunnableWithMessageHistory` reads the history with `aget_messages()` and writes
-the turn back with `aadd_messages()` — both of which talk to Neo4j directly.
-
-=== Use it directly
-
-[source,python]
-----
-from langchain_core.messages import AIMessage, HumanMessage
-
-history = Neo4jAgentMemory(memory_client=client, session_id="user-123")
-
-await history.aadd_messages(
-    [
-        HumanMessage(content="I prefer spicy food"),
-        AIMessage(content="Noted — I'll remember that."),
-    ]
-)
-
-messages = await history.aget_messages()  # list[BaseMessage], oldest first
-await history.aclear()                    # clears the session
-----
-
-Role mapping: `HumanMessage` ↔ `"user"`, `AIMessage` ↔ `"assistant"`,
-`SystemMessage` ↔ `"system"`, and `ChatMessage(role="tool")` ↔ `"tool"`.
-Messages with no text content (an `AIMessage` carrying only tool calls, say) are
-skipped — memory stores text.
-
-[WARNING]
+.Complete `integrations/langchain_recipe.py`
+[%collapsible]
 ====
-The sync surface (`history.messages`, `add_messages`, `clear`) only works
-*outside* a running event loop; inside one it raises `RuntimeError` naming the
-coroutine to await. The async driver is bound to the loop that created it, so
-blocking on the caller's own loop would deadlock. Prefer `aget_messages` /
-`aadd_messages` / `aclear`.
+.Save as `integrations/langchain_recipe.py`
+[source,python]
+----
+include::example$integrations/langchain_recipe.py[]
+----
 ====
 
-=== Assemble a memory context block
+== 3. Run and verify persistence
 
-The same object can render a context block for a hand-rolled prompt:
+anchor:agent[]
+anchor:_thread_history_for_a_chain[]
+anchor:_use_it_directly[]
+anchor:_assemble_a_memory_context_block[]
+anchor:_retrieve_from_memory[]
+anchor:_record_reasoning_traces[]
+anchor:_running_on_the_hosted_backend[]
+anchor:_use_one_session_per_conversation[]
+anchor:_stay_on_the_async_path[]
+anchor:_cap_what_you_inject[]
+anchor:_do_not_let_memory_break_the_agent[]
+anchor:legacy[]
 
-[source,python]
+[source,bash]
 ----
-memory = Neo4jAgentMemory(
-    memory_client=client,
-    session_id="user-123",
-    include_short_term=True,
-    include_long_term=True,
-    include_reasoning=True,
-    max_messages=10,
-)
-
-variables = await memory.aload_memory_variables({"input": "restaurant recommendation"})
-# {"history": "...", "context": "...", "preferences": [...], "similar_tasks": "..."}
-
-await memory.asave_context(
-    {"input": "What's a good Thai restaurant?"},
-    {"output": "Based on your preferences, I recommend Thai Kitchen!"},
-)
+python integrations/langchain_recipe.py
 ----
 
-`memory.memory_variables` lists the keys the current `include_*` flags produce.
+Expected: `Verified stored messages` followed by the response. `abefore_model` persists the user input; `awrap_model_call` injects a retrieved memory block into the model request; `aafter_model` persists the reply. A failed model request can leave the user input stored without a reply. The async exception is allowed to propagate.
 
-[NOTE]
-====
-`aload_memory_variables` / `asave_context` replaced the private
-`_load_memory_variables_async` / `_save_context_async` coroutines, which are kept
-as aliases for one release. Use the public names.
-====
-
-== Retrieve from memory
-
-`Neo4jMemoryRetriever` searches every memory layer and returns LangChain
-`Document` objects sorted by similarity:
-
-[source,python]
-----
-from neo4j_agent_memory.integrations.langchain import Neo4jMemoryRetriever
-
-retriever = Neo4jMemoryRetriever(
-    memory_client=client,
-    session_id="user-123",     # scopes message search
-    search_short_term=True,    # messages
-    search_long_term=True,     # entities + preferences
-    search_reasoning=True,     # reasoning traces
-    k=10,
-    threshold=0.7,
-)
-
-docs = await retriever.ainvoke("spicy food preferences")
-for doc in docs:
-    print(doc.metadata["type"], "-", doc.page_content)
-----
-
-Each document's `metadata["type"]` is one of `message`, `entity`, `preference` or
-`trace`, alongside `id` and `similarity`. Because it is a real `BaseRetriever`,
-it composes with anything that takes one — `create_retrieval_chain`, a
-retriever tool, LangSmith tracing — and `ainvoke` runs on the caller's event
-loop.
-
-Pass `session_id` whenever you can: it scopes message search, and the hosted
-NAMS backend *requires* it (its message search is conversation-scoped). Without
-it on NAMS, the message layer is skipped with a warning rather than failing the
-whole retrieval.
-
-To let the agent decide when to search memory, hand the retriever to LangChain's
-own tool wrapper instead of injecting context unconditionally:
-
-[source,python]
-----
-from langchain_core.tools.retriever import create_retriever_tool
-
-search_memory = create_retriever_tool(
-    retriever,
-    "search_memory",
-    "Search the user's memory: past messages, known entities, saved preferences.",
-)
-
-# agent = create_agent(model, tools=[search_memory], middleware=[...])
-----
-
-== Record reasoning traces
-
-Write the agent's run into reasoning memory with a second middleware, so you can
-later ask "what did the agent do, and which entities did it touch?":
-
-[source,python]
-----
-from typing import Any
-
-from langchain.agents.middleware import AgentMiddleware, AgentState
-from langchain_core.messages import AIMessage, HumanMessage
-
-from neo4j_agent_memory import MemoryClient
-from neo4j_agent_memory.schema.models import TraceOutcome
+== Troubleshooting and cleanup
 
 
-class ReasoningTraceMiddleware(AgentMiddleware):
-    """Record each agent run as a reasoning trace."""
+Stop when the program raises an exception; a printed model response alone does not verify persistence. Check the configured database, provider access and vector dimensions before retrying. The program prints the session or trace IDs needed for inspection and closes the client. Retained example records remain in the dedicated database; follow the Aura tutorial's cleanup procedure for that dedicated instance only when you no longer need them. Reusing a session groups records; it does not authorize a user to read them.
 
-    def __init__(self, client: MemoryClient, session_id: str) -> None:
-        super().__init__()
-        self.client = client
-        self.session_id = session_id
-        self.tools = []
+== Adapt the integration
 
-    async def abefore_agent(self, state: AgentState, runtime: Any) -> None:
-        task = next(
-            (m.text for m in reversed(state["messages"]) if isinstance(m, HumanMessage)),
-            "",
-        )
-        trace = await self.client.reasoning.start_trace(self.session_id, task)
-        self._trace_id = trace.id
+anchor:_pass_through_your_langchain_model[]
+anchor:_add_tools_that_read_the_graph[]
+anchor:_best_practices[]
+anchor:_see_also[]
 
-    async def aafter_model(self, state: AgentState, runtime: Any) -> None:
-        last = state["messages"][-1]
-        if not isinstance(last, AIMessage):
-            return
-        step = await self.client.reasoning.add_step(
-            self._trace_id,
-            thought=last.text or "(tool call only)",
-            action=", ".join(c["name"] for c in last.tool_calls) or "respond",
-        )
-        for call in last.tool_calls:
-            await self.client.reasoning.record_tool_call(
-                step.id,
-                call["name"],
-                call["args"],
-            )
+Use `agent.ainvoke(...)` with this middleware: its persistence and context hooks are asynchronous. The memory block is appended to the request's system message, not repeatedly accumulated in graph state. The middleware tracks message IDs to avoid repeating the same write within its instance; this is not a durable cross-process exactly-once guarantee.
 
-    async def aafter_agent(self, state: AgentState, runtime: Any) -> None:
-        await self.client.reasoning.complete_trace(
-            self._trace_id,
-            outcome=TraceOutcome(
-                success=True,
-                summary=state["messages"][-1].text[:200],
-                metrics={"model_calls": float(len(state["messages"]))},
-            ),
-        )
-----
+For a `RunnableWithMessageHistory` application, `Neo4jAgentMemory` implements `BaseChatMessageHistory`. Use `aget_messages()` / `aadd_messages()` / `aclear()` in an async context. That adapter's `aget_messages()` is a framework method; the underlying library readback is `client.short_term.get_conversation(...).messages`. Do not assume a LangGraph checkpointer and Neo4j transcript memory are the same persistence layer.
 
-Add it alongside the memory middleware:
+`Neo4jMemoryRetriever` implements `BaseRetriever` for memory RAG and can be invoked asynchronously. Keep retrieval limits and the prompt's context budget explicit. `llm_provider_from_langchain(model)` configures an extraction provider separately; see xref:how-to/migrate-to-providers.adoc[Configure providers].
 
-[source,python]
-----
-agent = create_agent(
-    model,
-    tools=tools,
-    middleware=[
-        Neo4jMemoryMiddleware(client, session_id=session_id),
-        ReasoningTraceMiddleware(client, session_id=session_id),
-    ],
-)
-----
+This repository supports the 1.x packages declared in `pyproject.toml`. The old `ConversationChain`, `AgentExecutor` and `BaseMemory` recipes are not the selected path. See https://github.com/neo4j-labs/agent-memory/blob/main/examples/langchain_agent.py[the maintained LangChain example] and https://github.com/neo4j-labs/agent-memory/tree/main/examples/nams-langchain[the separate hosted example] for application assembly. Financial/product data loaders and domain tools are application-specific.
 
-Once traces exist, `Neo4jMemoryMiddleware(include_reasoning=True)` starts
-surfacing similar past runs in the injected block. Without them that layer is
-always empty, so leave `include_reasoning=False` until you record something.
-
-See xref:how-to/audit-reasoning.adoc[Audit Reasoning] for the one-hop audit query
-over `TOUCHED` edges.
-
-== Running on the hosted backend
-
-The adapters tolerate the hosted NAMS backend's narrower surface instead of
-raising:
-
-[cols="2,1,2", options="header"]
-|===
-| Call | On NAMS | Adapter behaviour
-
-| `short_term.*` | supported | full history and context
-| `long_term.search_entities` | supported | entity documents and context block
-| `long_term.get_context` | returns `""` | falls back to entity search
-| `long_term.search_preferences` | `NotSupportedError` | `preferences` comes back `[]`
-| `reasoning.get_similar_traces` | `NotSupportedError` | `similar_tasks` comes back `""`
-| `short_term.search_messages` | needs a conversation id | pass `session_id=`, else the layer is skipped
-|===
-
-Switching backends is a settings change; the adapter code is identical:
-
-[source,python]
-----
-from neo4j_agent_memory import MemoryClient, MemorySettings
-
-# Hosted: reads MEMORY_API_KEY (and optionally MEMORY_WORKSPACE_ID)
-settings = MemorySettings(backend="nams")
-
-async with MemoryClient(settings) as client:
-    history = Neo4jAgentMemory(
-        memory_client=client,
-        session_id="user-123",
-        include_reasoning=False,  # no trace search on NAMS
-    )
-----
-
-== Best practices
-
-=== Use one session per conversation
-
-[source,python]
-----
-from datetime import datetime, timezone
-
-# Good: unique, attributable session
-session_id = f"user-{user_id}-{datetime.now(timezone.utc):%Y%m%d%H%M%S}"
-
-# Avoid: one session shared by every user
-session_id = "global"
-----
-
-For a policy rather than an ad-hoc string, use `MemoryIntegration` with a
-`SessionStrategy` (`PER_CONVERSATION`, `PER_DAY`, `PERSISTENT`) — see
-xref:reference/api/adapters.adoc[Adapters reference].
-
-=== Stay on the async path
-
-Every adapter's async surface talks to Neo4j directly; the sync surface exists
-only for genuinely synchronous callers and refuses to run inside an event loop.
-Use `ainvoke` / `astream` on agents and chains, and the `a*` methods on the
-adapters.
-
-=== Cap what you inject
-
-[source,python]
-----
-Neo4jMemoryMiddleware(client, session_id=session_id, max_items=5)
-Neo4jAgentMemory(memory_client=client, session_id=session_id, max_messages=10)
-Neo4jMemoryRetriever(memory_client=client, session_id=session_id, k=5)
-----
-
-Memory competes with the rest of the prompt for context; fewer, better items
-usually beat more.
-
-=== Do not let memory break the agent
-
-The middleware already degrades on unsupported layers, but storage errors
-propagate. Wrap the run if a memory outage must not take the agent down:
-
-[source,python]
-----
-import logging
-
-logger = logging.getLogger(__name__)
-
-try:
-    result = await agent.ainvoke({"messages": [("user", question)]})
-except Exception:
-    logger.warning("memory-backed agent run failed; retrying without memory")
-    plain = create_agent(model, tools=tools, system_prompt=system_prompt)
-    result = await plain.ainvoke({"messages": [("user", question)]})
-----
-
-[#legacy]
-== Legacy: pre-1.0 LangChain
-
-If you are maintaining an application built on LangChain 0.x, the classes the
-earlier version of this guide used now live in the `langchain-classic`
-distribution:
-
-[cols="1,1", options="header"]
-|===
-| Pre-1.0 import | 1.x location
-
-| `langchain_core.memory.BaseMemory` | removed
-| `langchain.memory.ConversationBufferMemory` | `langchain_classic.memory.ConversationBufferMemory`
-| `langchain.memory.ConversationBufferWindowMemory` | `langchain_classic.memory.ConversationBufferWindowMemory`
-| `langchain.chains.ConversationChain` | `langchain_classic.chains.ConversationChain`
-| `langchain.agents.AgentExecutor` | `langchain_classic.agents.AgentExecutor`
-| `langchain.agents.create_openai_functions_agent` | `langchain_classic.agents.create_openai_functions_agent`
-|===
-
-`Neo4jAgentMemory` can still back a classic `ConversationBufferMemory` through
-its `chat_memory=` argument, because that argument takes a
-`BaseChatMessageHistory` — which is exactly what `Neo4jAgentMemory` now is. New
-code should use <<agent,middleware>> or `RunnableWithMessageHistory` instead.
-
-== See Also
-
-* xref:how-to/integrations/pydantic-ai.adoc[Use with PydanticAI]
-* xref:how-to/integrations/llamaindex.adoc[Use with LlamaIndex]
-* xref:how-to/messages.adoc[Store and Search Messages]
-* xref:how-to/audit-reasoning.adoc[Audit Reasoning]
-* https://docs.langchain.com/oss/python/langchain/middleware[LangChain middleware documentation]
-* https://docs.langchain.com/oss/python/langchain/agents[LangChain agents documentation]
+See xref:reference/backend-capabilities.adoc[Backend capabilities and scoping] before adding hosted or multi-user behavior. Neo4j Agent Memory is a Neo4j Labs project with community support.

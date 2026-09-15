@@ -2,8 +2,22 @@
 :description: Install, configure, and use the TypeScript SDK for Neo4j Agent Memory.
 
 The TypeScript SDK is a thin HTTP client over the
-xref:reference/rest-api.adoc[NAMS] hosted service. It runs on Node 20+,
+xref:reference/rest-api.adoc[NAMS] hosted service. It runs on Node 22+,
 Bun, Deno, Cloudflare Workers, and Vercel Edge.
+
+[IMPORTANT]
+====
+This is a Neo4j Labs project: actively maintained and community supported,
+but not officially supported. There are no SLAs, backward-compatibility
+guarantees or scheduled deprecation commitments; APIs may change without notice.
+Use the link:https://community.neo4j.com/[Neo4j Community Forum] or
+link:https://github.com/neo4j-labs/agent-memory/issues[GitHub Issues] for support.
+====
+
+[NOTE]
+====
+Artifact check on 13 September 2026: npm's latest `@neo4j-labs/agent-memory` was `0.4.1`, with Node `>=20` metadata and older V1-style middleware declarations. This checkout's Node 22 / V4 lesson setup describes source development, not that published artifact. Use the source bootstrap below until a matching release is verified.
+====
 
 == Install
 
@@ -15,7 +29,9 @@ pnpm add @neo4j-labs/agent-memory
 bun add @neo4j-labs/agent-memory
 ----
 
-Requires Node.js 20+.
+Requires Node.js 22+. This page maps current source; inspect the installed
+package before using APIs added after its release. For a complete source-checkout
+setup, follow xref:tutorials/hosted-quickstart-typescript.adoc[the hosted tutorial].
 
 == Quick start
 
@@ -87,4 +103,7 @@ link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples[`t
 with link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/nextjs-memory-chat[`nextjs-memory-chat/`] —
 the flagship full-stack demo: a Next.js 16 App Router assistant on hosted NAMS
 with a live entity-graph rail, an extraction-status badge and a reasoning-trace
-drawer. Every example is type-checked, tested and (where it builds) built in CI.
+drawer. The CI example matrix checks source compatibility with mocked services.
+The eve commerce demo currently has unsupported hosted preference/fact paths;
+see its README before using it as a deployment example. Offline checks do not
+prove npm artifact availability or live-service behavior.

@@ -1,251 +1,82 @@
-= Configure Entity Extraction
+= Extract and inspect entity candidates
 :page-product: agent-memory
 :page-pagination:
-:toclevels: 3
+:toclevels: 2
 :sectanchors:
-:icons: font
-:source-highlighter: highlight.js
 
-How to configure entity extraction pipelines to automatically build your context graph from conversations and documents.
+To extract entity candidates with a local model, select a supported domain schema, run extraction on the input, and inspect the returned names and types before persistence.
 
-image::diagrams/three-extraction-approaches.png[Three extraction approaches: spaCy, GLiNER, and LLM, each with different speed/quality trade-offs,width=480,align=left]
+image::diagrams/extraction-pipeline.svg["Configurable extraction stages combine candidate results",width=100%,link=self]
 
-== Prerequisites
+anchor:_prerequisites[]
 
-* `neo4j-agent-memory` installed
-* For GLiNER extraction: `pip install neo4j-agent-memory[gliner]`
-* For LLM extraction: OpenAI API key or compatible LLM
+== 1. Install the local extractor
 
-== Quick Start
+Use Python 3.10 or newer and a POSIX shell. Prepare the example files and install the required extra:
 
-Use the built-in POLE+O schema for general-purpose extraction:
+include::partial$python-tutorial-setup.adoc[]
+
+[source,bash]
+----
+python -m pip install 'neo4j-agent-memory[gliner]==0.6.0'
+----
+
+The maintained program `extraction_recipes.py` supplies its own imports, source texts, and event-loop entry point. It downloads the GLiNER model on first inference; allow disk space and network access for the download. These commands do not connect to a database or require an LLM API key.
+
+include::partial$python-extraction-recipe-file.adoc[]
+
+== 2. Configure and run the extraction
+
+The runner constructs `GLiNEREntityExtractor.for_schema("business")` and uses the first built-in fictional source text. Relation and preference extraction are disabled for this entity-only task.
+
+The following function is included from the complete program. Run the maintained file with the command below it.
 
 [source,python]
 ----
-from neo4j_agent_memory import MemoryClient, MemorySettings
-from neo4j_agent_memory.extraction import GLiNEREntityExtractor
-
-settings = MemorySettings(
-    neo4j={"uri": "bolt://localhost:7687", "password": "password"}
-)
-
-client = MemoryClient(settings)
-
-# Create extractor with POLE+O schema
-extractor = GLiNEREntityExtractor.for_poleo()
-
-text = """
-    Customer Jane Smith called about her order #12345 from Nike.
-    She purchased Air Max 90 shoes last week from our Manhattan store.
-    She mentioned she prefers next-day delivery for future orders.
-"""
-
-result = await extractor.extract(text)
-
-for entity in result.entities:
-    print(f"  {entity.name} ({entity.type}) - confidence: {entity.confidence:.2f}")
+include::example$extraction_recipes.py[tags=extract]
 ----
 
-== Choosing an Extractor
+[source,bash]
+----
+python extraction_recipes.py extract
+----
 
-[TIP]
-====
-*Which extractor should I use?*
+== 3. Verify the result
 
-* **spaCy only** — throughput > 1000 docs/s, common entity types (PERSON, ORG, GPE), no GPU needed, offline
-* **GLiNER** — domain-specific types, ~50-200 docs/s, no API cost, GPU recommended; *the right default for most use cases*
-* **LLM** — complex or ambiguous text where accuracy is critical; add as a fallback stage, not a first pass
-* **GLiNER + GLiREL** — when you need both entities and relationships without an LLM
-====
+Expected: candidate names, POLE+O types, optional subtypes, and confidence values, followed by `Verified: ... candidate entities returned; inspect their accuracy`. No entities causes an explicit error, not a successful extraction claim.
 
-[cols="1,1,1,1,1", options="header"]
+The command raises on the documented failure conditions. Inspect candidate names, types, and confidence against source text before storing them. Counts alone do not measure extraction accuracy.
+
+anchor:_choosing_an_extractor[]
+
+== Choose the extraction path for the task
+
+[cols="2,4",options="header"]
 |===
-|Extractor |Speed |Quality |Cost |Best For
-
-|spaCy
-|Very Fast
-|Basic
-|Free
-|High-volume, standard entity types
-
-|GLiNER
-|Fast
-|Good
-|Free
-|Domain-specific, local deployment
-
-|GLiNER + GLiREL
-|Fast
-|Good
-|Free
-|Entities + relationships together
-
-|LLM (gpt-4o-mini)
-|Slow
-|Excellent
-|$$
-|Complex text, high-accuracy requirements
-
-|Hybrid Pipeline
-|Medium
-|Excellent
-|$
-|Production systems
+|Task |Next operation
+|Custom domain labels |xref:how-to/entity-extraction-schemas.adoc[Construct a DomainSchema and label mapping]. `financial` and `ecommerce` are not registered schema names.
+|Document batches or chunking |xref:how-to/entity-extraction-batch.adoc[Use the pipeline and streaming result contracts].
+|Relationships with local models |Compose GLiNER and GLiREL; see xref:tutorials/knowledge-graph.adoc[the complete document program], including GLiREL/tokenizer dependencies.
+|LLM extraction |Choose an explicit LLM provider and `extractor_type="llm"`; see xref:tutorials/anthropic-and-local-embeddings.adoc[the provider tutorial].
+|Multiple extraction stages |Use `ExtractionPipeline`; compare per-stage results and the chosen merge strategy in xref:reference/extractors.adoc[the extractor reference].
 |===
 
-== Multi-Stage Extraction Pipelines
+anchor:_store_extracted_entities[]
 
-Combine extractors for comprehensive extraction:
+== Store candidates with provenance
 
-[source,python]
-----
-from neo4j_agent_memory.extraction import (
-    ExtractionPipeline,
-    GLiNEREntityExtractor,
-    LLMEntityExtractor,
-)
+A standalone extractor returns `ExtractionResult`; it does not persist nodes. Its entities expose `name`, `type`, `subtype`, and `confidence`. A relation exposes `source`, `target`, and `relation_type`. Store accepted entities with `add_entity` and attach source evidence using `link_entity_to_message`. Entity storage has no `confidence` parameter; keep extraction confidence on the provenance link or in metadata.
 
-# Stage 1: Fast local extraction
-gliner = GLiNEREntityExtractor.for_schema("financial")
+The xref:tutorials/knowledge-graph.adoc[document tutorial] includes a complete write/readback path and skips ambiguous relationship endpoints. Avoid automatic extraction on `add_message` when you also run and store an explicit extraction, or you may duplicate work and records.
 
-# Stage 2: LLM for refinement and relationship extraction
-llm = LLMEntityExtractor(
-    model="gpt-4o-mini",
-    extract_relations=True,
-    schema="financial",
-)
+For conditional/multi-stage extraction, use the supported constructor options rather than undocumented callbacks. `FIRST_SUCCESS` stops when a stage reaches the configured minimum; other merge policies can also stop with `stop_on_success=True`. Stage execution success does not imply factual correctness. See xref:reference/extractors.adoc[all extractor and pipeline options].
 
-pipeline = ExtractionPipeline(
-    stages=[gliner, llm],
-    merge_strategy="confidence",  # Keep highest confidence result per entity
-)
-
-result = await pipeline.extract(text)
-----
-
-[TIP]
-====
-*Use LLM as a fallback, not a first pass.* Run GLiNER first — it handles 80-90% of entities with no API cost. Only route to LLM when GLiNER confidence is below your threshold, or when you need relationship extraction that GLiREL can't handle.
-====
-
-=== Conditional Pipeline
-
-Apply different schemas based on conversation content:
-
-[source,python]
-----
-from neo4j_agent_memory.extraction import ConditionalPipeline
-
-pipeline = ConditionalPipeline(
-    conditions=[
-        {
-            "keywords": ["portfolio", "investment", "stock", "bond", "dividend"],
-            "extractor": GLiNEREntityExtractor.for_schema("financial"),
-        },
-        {
-            "keywords": ["order", "shipping", "product", "return", "delivery"],
-            "extractor": GLiNEREntityExtractor.for_schema("ecommerce"),
-        },
-    ],
-    default=GLiNEREntityExtractor.for_poleo(),
-)
-
-result = await pipeline.extract(text)
-----
-
-== Store Extracted Entities
-
-=== Basic Storage
-
-[source,python]
-----
-result = await extractor.extract(text)
-
-for entity in result.entities:
-    stored, _ = await client.long_term.add_entity(
-        name=entity.name,
-        entity_type=entity.type,
-        attributes={
-            "confidence": entity.confidence,
-            "extracted_at": datetime.now().isoformat(),
-        },
-    )
-----
-
-=== With Deduplication
-
-Prevent duplicate nodes in your context graph:
-
-[source,python]
-----
-from neo4j_agent_memory.memory import DeduplicationConfig
-
-dedup_config = DeduplicationConfig(
-    auto_merge_threshold=0.95,  # Auto-merge highly similar entities
-    flag_threshold=0.85,         # Flag for review between 0.85-0.95
-    use_fuzzy_matching=True,
-    match_same_type_only=True,
-)
-
-for extracted in result.entities:
-    entity, dedup_result = await client.long_term.add_entity(
-        name=extracted.name,
-        entity_type=extracted.type,
-        deduplication=dedup_config,
-    )
-
-    if dedup_result.action == "merged":
-        print(f"Merged '{extracted.name}' with '{dedup_result.matched_entity_name}'")
-    elif dedup_result.action == "flagged":
-        print(f"Flagged '{extracted.name}' for review")
-----
-
-=== Validate Before Storing
-
-[source,python]
-----
-for entity in result.entities:
-    if entity.confidence < 0.6:
-        continue
-    if len(entity.name) < 2:
-        continue
-
-    stored, _ = await client.long_term.add_entity(
-        name=entity.name,
-        entity_type=entity.type,
-    )
-----
-
-=== With Provenance Tracking
-
-[source,python]
-----
-entity, _ = await client.long_term.add_entity(
-    name=extracted.name,
-    entity_type=extracted.type,
-)
-
-await client.long_term.link_entity_to_message(
-    entity=entity,
-    message_id=message.id,
-    confidence=extracted.confidence,
-    start_pos=extracted.start,
-    end_pos=extracted.end,
-)
-
-await client.long_term.link_entity_to_extractor(
-    entity=entity,
-    extractor_name="GLiNEREntityExtractor",
-    extractor_version="1.0",
-    confidence=extracted.confidence,
-)
-----
-
-== See Also
-
-* xref:how-to/entity-extraction-schemas.adoc[Domain Schemas & Custom Types]
-* xref:how-to/entity-extraction-batch.adoc[Batch & Streaming Extraction]
-* xref:reference/schemas.adoc[Domain Schemas Reference]
-* xref:reference/extractors.adoc[Extractor Classes Reference]
-* xref:how-to/deduplication.adoc[Handle Duplicate Entities]
-* xref:explanation/extraction-pipeline.adoc[How Entity Extraction Works]
+// Historical section links resolve to the maintained task and reference pointers.
+anchor:_quick_start[]
+anchor:_multi_stage_extraction_pipelines[]
+anchor:_conditional_pipeline[]
+anchor:_basic_storage[]
+anchor:_with_deduplication[]
+anchor:_validate_before_storing[]
+anchor:_with_provenance_tracking[]
+anchor:_see_also[]

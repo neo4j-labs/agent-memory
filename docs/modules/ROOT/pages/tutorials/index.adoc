@@ -1,120 +1,43 @@
 = Tutorials
 :page-product: agent-memory
-:page-pagination:
 :toclevels: 2
-:page-ad-icon: mortarboard
-:page-ad-title: Context Graphs: Agent Memory with Neo4j
-:page-ad-description: Build an AI agent that records its reasoning into Neo4j and query the trace to understand what it did and why.
-:page-ad-link: https://graphacademy.neo4j.com/courses/genai-context-graphs/?ref=docs-ad-genai-context-graphs
-:page-ad-underline-role: button
-:page-ad-underline: Enroll now
 
-Learn neo4j-agent-memory by building real applications. These tutorials guide you through complete, working examples from start to finish.
+Learn by building one working example. Choose a language and backend here; each lesson then follows one path. The Aura lessons connect to a dedicated Neo4j database through Bolt. The hosted lessons use a NAMS workspace and its data key; the two configurations are separate.
 
-[.lead]
-Tutorials are *learning-oriented*. They take you by the hand through a series of steps to complete a project. They focus on building a **context graph**—the personalized knowledge structure that makes AI agents truly intelligent.
+Start with the first lesson in your route, then follow its continuation links. Provider and framework lessons build on the same storage concepts.
 
-== Getting Started
+anchor:_python_and_bolt[]
 
-Pick the path that matches your stack:
+== Python and Aura
 
-[cols="1,2,1", options="header"]
-|===
-| Tutorial | What You'll Build | Time
+anchor:_building_real_applications[]
 
-| xref:tutorials/nams-quickstart.adoc[NAMS Quickstart (Python)]
-| The hosted-service path. Get an API key, install the SDK, run your first memory operations — no Neo4j to operate. Ideal for prototypes and SaaS deployments.
-| ~10 min
+* xref:tutorials/first-agent-memory.adoc[Build your first memory context]
+* xref:tutorials/conversation-memory.adoc[Add persistent conversation context to a chatbot]
+* xref:tutorials/knowledge-graph.adoc[Build a knowledge graph from documents]
+* xref:tutorials/anthropic-and-local-embeddings.adoc[Extract memory with Anthropic and local embeddings]
+* xref:tutorials/microsoft-agent-memory.adoc[Build a shopping response with Microsoft Agent Framework memory]
+* xref:tutorials/strands-agent-quickstart.adoc[Restore a Strands conversation after a process restart]
+* xref:tutorials/mcp-server.adoc[Store and recall a message from Claude Desktop]
 
-| xref:tutorials/hosted-quickstart-typescript.adoc[Hosted Quickstart (TypeScript)]
-| Same hosted-service path, TypeScript flavor. Works on Node, Bun, Deno, Cloudflare Workers, and Vercel Edge.
-| ~10 min
+== Python and NAMS
 
-| xref:tutorials/first-agent-memory.adoc[Build Your First Memory-Enabled Agent (Self-Hosted)]
-| A working memory system against your own Neo4j. Stores conversations, extracts entities automatically, enables semantic search. You'll see your context graph in Neo4j Browser.
-| ~30 min
+anchor:_what_youll_learn[]
 
-| xref:tutorials/first-agent-memory-typescript.adoc[First Agent Memory (TypeScript, hosted)]
-| TypeScript end-to-end: NAMS + Vercel AI SDK middleware, multi-turn chat with three-tier context recall.
-| ~20 min
-|===
+* xref:tutorials/nams-quickstart.adoc[Store and read back memory on NAMS]
+* xref:tutorials/ontology-quickstart.adoc[Activate and restore a NAMS ontology]
+* xref:tutorials/skills-quickstart.adoc[Distil and download a skill from a recorded procedure]
 
-== Building Real Applications
+== TypeScript and NAMS
 
-After completing the first tutorial, build complete applications:
+anchor:_getting_started[]
+anchor:_enterprise_examples[]
+anchor:_before_you_start[]
+anchor:_tutorial_philosophy[]
+anchor:_getting_help[]
 
-[cols="1,2,1", options="header"]
-|===
-| Tutorial | What You'll Build | Time
-
-| xref:tutorials/conversation-memory.adoc[Add Conversation Memory to a Chatbot]
-| A shopping assistant chatbot that remembers users, learns preferences (brands, sizes, budget), and provides personalized recommendations across sessions.
-| ~45 min
-
-| xref:tutorials/knowledge-graph.adoc[Build a Knowledge Graph from Documents]
-| Process financial documents to extract entities (companies, people, securities), discover relationships, and power intelligent Q&A with LLM integration.
-| ~45 min
-
-| xref:tutorials/strands-agent-quickstart.adoc[Build a Strands Agent with Context Graph]
-| Create an AI agent using AWS Strands SDK with persistent memory backed by Neo4j. Uses Amazon Bedrock for LLM and embeddings.
-| ~30 min
-
-| xref:tutorials/mcp-server.adoc[Connect Claude Desktop to Your Knowledge Graph]
-| Set up the MCP server so Claude Desktop can store conversations, extract entities, and query your knowledge graph automatically.
-| ~15 min
-|===
-
-== What You'll Learn
-
-These tutorials cover the core concepts of neo4j-agent-memory:
-
-* **Context Graph**: Build and query the knowledge structure that powers personalization
-* **Entity Extraction**: Automatically extract people, companies, products from text
-* **Preference Learning**: Capture and use user preferences for personalization
-* **Semantic Search**: Find information by meaning, not just keywords
-* **Multi-Session Persistence**: Memory that survives across conversations
-* **Agent Integration**: Connect memory to LLMs for intelligent responses
-
-== Enterprise Examples
-
-Each tutorial includes examples for common enterprise use cases:
-
-* **Financial Services**: Client profiles, investment preferences, document analysis
-* **Ecommerce Retail**: Customer preferences, product recommendations, purchase history
-
-== Before You Start
-
-The Python tutorials assume:
-
-* Python 3.10 or later installed
-* Basic familiarity with Python and async programming
-* Either an API key from link:https://memory.neo4jlabs.com[NAMS] (hosted path) **or** access to a Neo4j database (self-hosted path; setup instructions included)
-
-The TypeScript tutorials assume:
-
-* Node.js 20 or later
-* An API key from link:https://memory.neo4jlabs.com[NAMS]
-* Basic familiarity with TypeScript and async/await
-
-== Tutorial Philosophy
-
-These tutorials follow the Diataxis "learning-oriented" approach:
-
-* *Step-by-step*: Every action is explicit, with exact commands to run
-* *Hands-on*: You'll build something real, not just read about concepts
-* *One path*: No choices or alternatives - just follow along
-* *Complete*: Each tutorial stands alone and produces a working result
-
-If you're looking for quick answers to specific problems, see the xref:how-to/index.adoc[How-To Guides].
-
-If you want to understand the concepts behind the library, see the xref:explanation/index.adoc[Explanation] section.
-
-If you need to look up configuration options or API details, see the xref:reference/index.adoc[Reference] section.
-
-== Getting Help
-
-If you get stuck:
-
-1. Check the xref:reference/configuration.adoc[Configuration Reference] for environment setup
-2. See the https://github.com/neo4j-labs/agent-memory/discussions[GitHub Discussions] for community help
-3. Report issues at https://github.com/neo4j-labs/agent-memory/issues[GitHub Issues]
+* xref:tutorials/hosted-quickstart-typescript.adoc[Store and read back hosted memory with TypeScript]
+* xref:tutorials/first-agent-memory-typescript.adoc[Build your first TypeScript agent with memory]
+* xref:tutorials/conversation-memory-typescript.adoc[Recall conversation memory after a restart (TypeScript)]
+* xref:tutorials/knowledge-graph-typescript.adoc[Ingest documents and inspect extracted entities (TypeScript)]
+* xref:tutorials/mcp-server-typescript.adoc[Connect Claude Desktop to memory with a TypeScript MCP server]

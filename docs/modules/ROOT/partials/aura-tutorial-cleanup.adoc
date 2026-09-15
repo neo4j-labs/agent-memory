@@ -1,0 +1,12 @@
+In the Aura console, select only the `agent-memory-tutorial` instance created for this lesson. Use its trashcan action, enter its exact name and confirm *Destroy*.
+
+Expected: the tutorial instance disappears from the instance list. This removes its data and snapshots, so verify the instance name before confirming. See https://neo4j.com/docs/aura/managing-instances/instance-actions/#_delete_an_instance[Aura instance deletion] for the console procedure.
+
+Remove the downloaded credentials for that deleted instance and clear its connection variables:
+
+[source,bash]
+----
+unset NEO4J_URI NEO4J_USERNAME NEO4J_PASSWORD NEO4J_DATABASE
+----
+
+Keep the tutorial folder and virtual environment. Start each Aura tutorial with a new empty lesson instance and its new credentials; this also avoids carrying over vector indexes from a lesson using a different embedding dimension.

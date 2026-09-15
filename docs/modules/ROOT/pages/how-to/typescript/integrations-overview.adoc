@@ -7,7 +7,8 @@ Pick yours below.
 == Vercel AI SDK (TypeScript)
 
 The `agentMemoryMiddleware` injects three-tier context (reflections +
-observations + recent messages) into every model call and persists both the
+observations + recent messages) into each model call for the selected
+conversation and attempts to persist both the
 user's input and the assistant's response — streamed or not. It implements
 specification v4 (`ai` 7.x / `@ai-sdk/provider` 4.x).
 
@@ -33,12 +34,14 @@ const model = wrapLanguageModel({
 const result = await generateText({ model, prompt: "What did we decide?" });
 ----
 
-See link:vercel-ai.adoc[How-to: integrate with the Vercel AI SDK].
+See xref:how-to/typescript/vercel-ai.adoc[How-to: integrate with the Vercel AI SDK].
 
 == LangChain JS (TypeScript)
 
-`Neo4jChatMessageHistory` is a drop-in `ChatMessageHistory` backed by memory;
-`Neo4jEntityRetriever` returns memory entities as LangChain `Document`s.
+`Neo4jChatMessageHistory` supplies framework-neutral history objects; map them
+to LangChain message classes before passing them to LangChain APIs.
+`Neo4jEntityRetriever` returns plain `{ pageContent, metadata }` objects;
+construct LangChain `Document` instances when a framework API requires them.
 
 [source,ts]
 ----
@@ -58,7 +61,7 @@ const docs = await retriever.invoke("Find entities about Acme Corp");
 
 `Neo4jMastraMemory` is a thin thread-and-message-history adapter in Mastra's
 vocabulary. It is not a Mastra `Memory` or storage adapter — drive it alongside
-your agent; see link:mastra.adoc[How-to: store Mastra threads in NAMS].
+your agent; see xref:how-to/typescript/mastra.adoc[How-to: store Mastra threads in NAMS].
 
 [source,ts]
 ----

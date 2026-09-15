@@ -9,6 +9,10 @@ on:
       - 'benchmarks/**'
       - 'examples/**'
       - 'docs/**'
+      - 'README*.md'
+      - 'CONTRIBUTING.md'
+      - 'deploy/cloudrun/**'
+      - '.claude/skills/docs-*/**'
       - 'scripts/**'
       - 'pyproject.toml'
       - 'uv.lock'
@@ -24,6 +28,10 @@ on:
       - 'benchmarks/**'
       - 'examples/**'
       - 'docs/**'
+      - 'README*.md'
+      - 'CONTRIBUTING.md'
+      - 'deploy/cloudrun/**'
+      - '.claude/skills/docs-*/**'
       - 'scripts/**'
       - 'pyproject.toml'
       - 'uv.lock'
@@ -65,11 +73,11 @@ jobs:
       # carries an `# isort: skip` or the backend becomes a real package.
       - name: Run ruff check
         run: |
-          uv run ruff check src tests examples \
+          uv run ruff check src tests examples docs/modules/ROOT/examples \
             --extend-per-file-ignores 'examples/financial-services-advisor/aws-financial-services-advisor/backend/handler.py:I001'
 
       - name: Run ruff format check
-        run: uv run ruff format --check src tests examples
+        run: uv run ruff format --check src tests examples docs/modules/ROOT/examples
 
   type-check:
     runs-on: ubuntu-latest
@@ -188,6 +196,11 @@ jobs:
       - name: Install dependencies
         run: uv sync --group dev --all-extras
 
+      # The Microsoft extra supplies the framework core; the documentation
+      # constructor contract also needs the separately published OpenAI client.
+      - name: Install framework documentation client
+        run: uv pip install 'agent-framework-openai>=1.13,<2'
+
       - name: Wait for Neo4j to be ready
         run: |
           echo "Waiting for Neo4j to be ready..."
@@ -195,7 +208,7 @@ jobs:
             if curl -s http://localhost:7474 > /dev/null 2>&1; then
               echo "Neo4j HTTP interface is ready"
               # Also check bolt connection
-              if uv run python -c "from neo4j import GraphDatabase; d = GraphDatabase.driver('bolt://localhost:7687', auth=('neo4j', 'test-password')); d.verify_connectivity(); d.close(); print('Bolt ready')" 2>/dev/null; then
+              if uv run --no-sync python -c "from neo4j import GraphDatabase; d = GraphDatabase.driver('bolt://localhost:7687', auth=('neo4j', 'test-password')); d.verify_connectivity(); d.close(); print('Bolt ready')" 2>/dev/null; then
                 echo "Neo4j is fully ready!"
                 break
               fi
@@ -203,6 +216,9 @@ jobs:
             echo "Attempt $i: Waiting for Neo4j..."
             sleep 2
           done
+
+      - name: Run offline framework documentation contracts
+        run: uv run --no-sync pytest tests/docs/test_python_integration_contracts.py -q --timeout=60
 
       # Cache the whole Hugging Face cache dir so tests don't re-download any
       # model on every run (a cold download can exceed the no-llm test's
@@ -223,7 +239,7 @@ jobs:
         # NAMS integration tests have a dedicated workflow
         # (.github/workflows/nams-integration.yml) so we exclude them here.
         run: |
-          uv run pytest tests/integration -v \
+          uv run --no-sync pytest tests/integration -v \
             --ignore=tests/integration/nams \
             --tb=short \
             --timeout=300 \
@@ -607,6 +623,25 @@ jobs:
         working-directory: ${{ matrix.dir }}
         run: npm run ${{ matrix.build || 'build' }}
 
+  # Run the hosted tutorials against their Python floor without heavyweight providers.
+  hosted-tutorial-minimum:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - name: Install a clean Python 3.10 hosted environment
+        run: |
+          uv venv --python 3.10 .venv-hosted
+          uv pip install --python .venv-hosted/bin/python '.[nams]' pytest pytest-asyncio pytest-timeout respx
+      - name: Verify hosted clients and maintained tutorial failure paths
+        run: |
+          .venv-hosted/bin/python -m pytest -q \
+            tests/unit/nams/test_ontology.py \
+            tests/docs/test_hosted_tutorial_contracts.py \
+            tests/docs/test_hosted_tutorial_cleanup.py \
+            tests/docs/test_skills_tutorial.py \
+            tests/docs/test_ontology_tutorial.py --timeout=60
+
   # Documentation tests - validates code snippets and internal links
   docs-tests:
     runs-on: ubuntu-latest
@@ -628,7 +663,7 @@ jobs:
         run: uv sync --group dev
 
       - name: Install docs dependencies
-        run: cd docs && npm install
+        run: cd docs && npm ci
 
       - name: Run documentation syntax validation
         run: |
@@ -639,10 +674,23 @@ jobs:
 
       - name: Run documentation link validation
         run: |
-          uv run pytest tests/docs/test_links.py \
+          uv run pytest tests/docs/test_links.py tests/docs/test_docs_checker.py \
             -v \
             --tb=short \
             --timeout=60
+
+      - name: Run offline documentation contracts
+        run: |
+          uv run pytest tests/docs/test_python_reference_contracts.py \
+            tests/docs/test_hosted_tutorial_contracts.py \
+            tests/docs/test_hosted_tutorial_cleanup.py \
+            tests/docs/test_skills_tutorial.py \
+            tests/docs/test_ontology_tutorial.py \
+            tests/docs/test_core_python_tutorials.py \
+            tests/docs/test_aura_tutorial_setup.py \
+            tests/docs/test_operational_howto_contracts.py \
+            tests/docs/test_diagram_manifest.py \
+            tests/docs/test_cloudrun_assets.py -q --timeout=60
 
       - name: Run documentation build tests
         run: |

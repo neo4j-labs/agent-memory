@@ -1,0 +1,33 @@
+. Sign in to the https://console.neo4j.io/[Neo4j Aura console] and create an *AuraDB Free* instance named `agent-memory-tutorial`. Use an empty instance dedicated to this lesson; do not load a sample dataset.
+. Download the generated credentials and keep them outside the tutorial folder. Wait until the instance shows *Running*.
+. Copy its connection URI, username, password and database name into the exports below. Keep the `neo4j+s://` scheme supplied by Aura.
+
+Aura permits one Free instance per account. This lesson needs that slot for a dedicated tutorial instance; do not delete an existing database containing other work to make room. See https://neo4j.com/docs/aura/getting-started/create-instance/[Aura instance creation] for account and tier requirements.
+
+Create the two local files below before running the readiness check. They read the exported Aura settings and verify the selected database.
+
+include::partial$python-aura-connection-file.adoc[]
+
+include::partial$python-aura-readiness-file.adoc[]
+
+[source,bash]
+----
+export NEO4J_URI='neo4j+s://<instance-id>.databases.neo4j.io'
+export NEO4J_USERNAME='neo4j'
+export NEO4J_PASSWORD='replace-with-the-generated-password'
+export NEO4J_DATABASE='neo4j'
+python wait_for_tutorial_neo4j.py
+----
+
+Expected: `Verified: Neo4j Aura answered the readiness query`. The helper checks connectivity and executes `RETURN 1` in the selected database, retrying temporary connection failures for up to three minutes. Authentication failures stop immediately. If the check fails, confirm the instance is Running and recopy its connection settings.
+
+The examples read these exported variables through `aura_connection.py`. They require Aura credentials and do not supply a fallback database. Keep this shell and virtual environment active for the remaining commands. See https://neo4j.com/docs/aura/getting-started/connect-instance/[Aura connection instructions] for help locating the settings.
+
+In the Aura console, open *Query*, select this instance and database in the connection bar, and connect using the same credentials. Run:
+
+[source,cypher]
+----
+MATCH (n) RETURN count(n) AS node_count
+----
+
+Expected: `0`. This confirms that the lesson starts with an empty database. The Python SDK still uses `backend="bolt"`: Aura hosts Neo4j and accepts encrypted Bolt connections.

@@ -2,7 +2,7 @@
 :toc: left
 :source-highlighter: rouge
 
-The `@neo4j-labs/agent-memory` package is first-class on Cloudflare
+The core `@neo4j-labs/agent-memory` REST client can run on Cloudflare
 Workers and Vercel Edge. The package uses `fetch` only, has zero runtime
 dependencies, and defensively guards every `process.env` lookup behind a
 `typeof process !== "undefined"` check.
@@ -17,7 +17,8 @@ scope, not `process.env`. The zero-config form
 const client = new MemoryClient();   // reads MEMORY_API_KEY from process.env
 ----
 
-works on Node, Bun, and Deno. On edge, pass the key explicitly:
+reads environment variables only when that runtime provides `process.env`.
+Pass the key explicitly on runtimes using request-scoped bindings:
 
 [source,typescript]
 ----
@@ -45,7 +46,7 @@ export async function GET(req: Request) {
 
 == What works on edge
 
-* All `MemoryClient` short-term, long-term, and reasoning operations
+* The REST-supported `MemoryClient` operations (see xref:reference/typescript-api.adoc[the capability map])
 * The Vercel AI SDK middleware
 * The MCP tool dispatcher (`handleMemoryToolCall`)
 * The LangChain JS and Mastra adapters
@@ -60,10 +61,23 @@ export async function GET(req: Request) {
 
 == Streaming + memory persistence
 
-When using `streamText` from the Vercel AI SDK, the middleware persists
-the assistant response only after the stream completes (in
-`wrapGenerate`). On edge runtimes you must `await` the result or your
-function will return before persistence finishes.
+Non-streaming `generateText` uses `wrapGenerate`, which awaits its assistant
+write. Streaming uses `wrapStream`: it launches a background write and exposes
+no completion promise. Draining or awaiting the model stream does not prove
+that write has finished, and `waitUntil(Promise.resolve(result))` cannot make it so.
+
+For a Worker, use the application-owned lifecycle in
+link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/cloudflare-agents-edge[the Cloudflare example]:
+
+. Disable automatic assistant persistence (`persistResponses: false`).
+. On a successful stream end, call `addMessage` once with the assembled answer.
+. Register the actual write promise with `ctx.waitUntil` before returning the response.
+. Settle the lifecycle on abort/error too. The example skips partial responses on
+abort and logs write failures; it does not guarantee storage if the runtime is terminated.
+
+This avoids duplicate assistant writes. It is application code, not a hidden
+SDK flush method. Keep the client alive until that write settles. See
+xref:how-to/typescript/vercel-ai.adoc[the middleware streaming example].
 
 == Verifying
 
@@ -72,4 +86,4 @@ client in an environment where `process` is undefined. To exercise the
 full path against a real Worker, deploy with `wrangler` and watch tail
 logs for request-id-tagged failures.
 
-See link:observability.adoc[How-to: enable request logging] for tracing.
+See xref:how-to/typescript/observability.adoc[How-to: enable request logging] for tracing.

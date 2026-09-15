@@ -1,1387 +1,510 @@
-= Configuration Reference
+= Configuration reference
 :page-product: agent-memory
 :page-pagination:
-:toclevels: 3
-:sectanchors:
-:icons: font
-:source-highlighter: highlight.js
+:toclevels: 2
 
-Complete reference for all configuration options in neo4j-agent-memory.
+Python configuration types, defaults, constraints, and integration limits. See xref:reference/environment-variables.adoc[Environment variables] for the complete variable names and xref:reference/backend-capabilities.adoc[Backend capabilities] for data scope.
 
-== Configuration Methods
-
-Neo4j Agent Memory supports multiple configuration methods:
-
-1. **Python Configuration** - Direct instantiation of settings objects
-2. **Environment Variables** - Using the `NAM_` prefix
-3. **Configuration Files** - YAML or JSON files
-4. **Mixed** - Combine methods with environment variables taking precedence
+anchor:memory-settings[]
 
 == MemorySettings
 
-The main configuration class that contains all settings.
+Import configuration classes from `neo4j_agent_memory.config.settings`; `MemorySettings`, `BoltSettings`, and `NamsSettings` are also available from `neo4j_agent_memory`.
 
-[source,python]
-----
-from neo4j_agent_memory import MemorySettings
+`BoltSettings` pins `backend="bolt"`; `NamsSettings` pins `backend="nams"`. `MemorySettings` resolves an unset backend to NAMS when a NAMS key is populated, otherwise bolt. Explicit backend selection takes precedence. NAMS is a continuously shipped service; `/v1` is its REST protocol prefix, not a service release number.
 
-settings = MemorySettings(
-    neo4j=Neo4jConfig(...),
-    embedding=EmbeddingConfig(...),
-    extraction=ExtractionConfig(...),
-    resolution=ResolutionConfig(...),
-    schema_config=SchemaConfig(...),
-    llm=LLMConfig(...),
-    memory=MemoryConfig(...),
-    search=SearchConfig(...),
-)
-----
-
-=== `embedding` and `llm` — three accepted shapes
-
-As of v0.3 both fields accept a discriminated union:
-
-* **legacy `EmbeddingConfig` / `LLMConfig`** — emits one `DeprecationWarning` per construction when user-explicit; planned removal in v0.5.0. Backward compat preserved through v0.4.
-* **provider-string shorthand** — e.g. `"openai/text-embedding-3-small"` or `"anthropic/claude-3-5-sonnet-latest"`. Resolved via `neo4j_agent_memory.llm.from_provider`.
-* **fully-constructed Provider instance** — the new canonical shape. See xref:reference/api/adapters.adoc[Adapters Reference].
-
-[source,python]
-----
-# Provider string (recommended)
-settings = MemorySettings(
-    neo4j={"password": "p"},
-    embedding="openai/text-embedding-3-small",
-    llm="anthropic/claude-3-5-sonnet-latest",
-)
-
-# Explicit Provider instance (full control)
-from neo4j_agent_memory.llm.adapters.anthropic import AnthropicProvider
-
-settings = MemorySettings(
-    neo4j={"password": "p"},
-    llm=AnthropicProvider("anthropic/claude-3-5-sonnet-latest", cache_system=True),
-)
-
-# Legacy (still works, one DeprecationWarning per construction)
-from neo4j_agent_memory.config.settings import EmbeddingConfig, EmbeddingProvider
-settings = MemorySettings(
-    neo4j={"password": "p"},
-    embedding=EmbeddingConfig(provider=EmbeddingProvider.OPENAI, ...),
-)
-----
-
-For the full migration guide, see xref:how-to/migrate-to-providers.adoc[Migrate to Pluggable Providers].
-
-== Neo4j Configuration
-
-Connection settings for Neo4j database.
-
-=== Python Configuration
-
-[source,python]
-----
-from neo4j_agent_memory import Neo4jConfig
-from pydantic import SecretStr
-
-neo4j_config = Neo4jConfig(
-    uri="bolt://localhost:7687",
-    username="neo4j",
-    password=SecretStr("password"),
-    database="neo4j",                    # Database name (default: neo4j)
-    max_connection_pool_size=50,         # Connection pool size
-    connection_timeout=30.0,             # Connection timeout in seconds
-    max_transaction_retry_time=30.0,     # Max retry time for transactions
-)
-----
-
-=== Environment Variables
-
-[source,bash]
-----
-NAM_NEO4J__URI=bolt://localhost:7687
-NAM_NEO4J__USERNAME=neo4j
-NAM_NEO4J__PASSWORD=your-password
-NAM_NEO4J__DATABASE=neo4j
-NAM_NEO4J__MAX_CONNECTION_POOL_SIZE=50
-NAM_NEO4J__CONNECTION_TIMEOUT=30.0
-----
-
-=== Parameters
-
-[cols="2,1,1,3"]
+[cols="1,2,3",options="header"]
 |===
-|Parameter |Type |Default |Description
-
-|`uri`
-|str
-|`bolt://localhost:7687`
-|Neo4j connection URI
-
-|`username`
-|str
-|`neo4j`
-|Authentication username
-
-|`password`
-|SecretStr
-|Required
-|Authentication password
-
-|`database`
-|str
-|`neo4j`
-|Database name
-
-|`max_connection_pool_size`
-|int
-|50
-|Maximum connection pool size
-
-|`connection_timeout`
-|float
-|30.0
-|Connection timeout (seconds)
-
-|`max_transaction_retry_time`
-|float
-|30.0
-|Maximum transaction retry time
+| Field | Accepted value | Default / behavior
+| `backend` | `bolt`, `nams`, or None | Auto-resolved when unset.
+| `neo4j` | Neo4jConfig or dictionary | Local bolt URI, neo4j user/database, empty password.
+| `nams` | NamsConfig or dictionary | Hosted endpoint and transport defaults below.
+| `embedding` | Provider string, EmbeddingProvider instance, legacy EmbeddingConfig or dictionary | Implicit OpenAI embedding configuration. None is rejected.
+| `llm` | Provider string, LLMProvider instance, legacy LLMConfig/dictionary, or None | Implicitly supplies LLMConfig when the selected extraction needs an LLM. Explicit None is validated against extraction settings.
+| `schema_config` | SchemaConfig or dictionary | POLE+O settings.
+| `extraction` | ExtractionConfig or dictionary | Multi-stage pipeline with all three stages enabled.
+| `resolution` | ResolutionConfig or dictionary | Composite resolution.
+| `memory` | MemoryConfig or dictionary | Declared memory behavior values below.
+| `search` | SearchConfig or dictionary | Declared search values below.
+| `geocoding` | GeocodingConfig or dictionary | Disabled.
+| `enrichment` | EnrichmentConfig or dictionary | Disabled.
 |===
 
-== Embedding Configuration
+`MemorySettings.from_dict(config)` is equivalent to passing the dictionary as keyword arguments. The field is `schema_config`, not `schema`. All child config models reject unknown fields, as does direct MemorySettings construction.
 
-Settings for vector embeddings.
+=== Provider shapes and no-LLM operation
 
-=== Python Configuration
+The runnable examples use Aura connection values exported by xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the Aura connection setup]. The default tables below still describe the SDK defaults.
 
-[source,python]
-----
-from neo4j_agent_memory import EmbeddingConfig, EmbeddingProvider
-from pydantic import SecretStr
-
-embedding_config = EmbeddingConfig(
-    provider=EmbeddingProvider.OPENAI,
-    model="text-embedding-3-small",
-    api_key=SecretStr("sk-..."),         # Or use OPENAI_API_KEY env var
-    dimensions=1536,                      # Embedding dimensions
-    batch_size=100,                       # Batch size for bulk embedding
-    device="cpu",                         # Device for local models
-)
-----
-
-=== Environment Variables
-
-[source,bash]
-----
-NAM_EMBEDDING__PROVIDER=openai
-NAM_EMBEDDING__MODEL=text-embedding-3-small
-NAM_EMBEDDING__API_KEY=sk-...
-NAM_EMBEDDING__DIMENSIONS=1536
-NAM_EMBEDDING__BATCH_SIZE=100
-NAM_EMBEDDING__DEVICE=cpu
-
-# Alternative: use standard OpenAI env var
-OPENAI_API_KEY=sk-...
-----
-
-=== Parameters
-
-[cols="2,1,1,3"]
-|===
-|Parameter |Type |Default |Description
-
-|`provider`
-|EmbeddingProvider
-|`OPENAI`
-|Embedding provider (OPENAI, SENTENCE_TRANSFORMERS, VERTEX_AI, BEDROCK)
-
-|`model`
-|str
-|`text-embedding-3-small`
-|Model name. When `provider=VERTEX_AI` and `model` is not set, it defaults to `gemini-embedding-001` (and `dimensions` to 768).
-
-|`api_key`
-|SecretStr
-|None
-|API key (for OpenAI)
-
-|`dimensions`
-|int
-|1536
-|Embedding dimensions
-
-|`batch_size`
-|int
-|100
-|Batch size for bulk operations
-
-|`device`
-|str
-|`cpu`
-|Device for local models (cpu/cuda)
-
-|`project_id`
-|str
-|None
-|GCP project ID (for Vertex AI)
-
-|`location`
-|str
-|`us-central1`
-|GCP region (for Vertex AI)
-
-|`task_type`
-|str
-|`RETRIEVAL_DOCUMENT`
-|Vertex AI task type
-
-|`output_dimensionality`
-|int \| None
-|None (768 when `provider=VERTEX_AI`)
-|Vertex AI truncation target. `gemini-embedding-001` emits 3072 dimensions natively and can be truncated to 1536 or 768.
-
-|`aws_region`
-|str
-|None
-|AWS region (for Bedrock)
-
-|`aws_profile`
-|str
-|None
-|AWS credentials profile name (for Bedrock)
-|===
-
-=== Embedding Providers
-
-[cols="1,2,2"]
-|===
-|Provider |Models |Notes
-
-|`OPENAI`
-|`text-embedding-3-small`, `text-embedding-3-large`, `text-embedding-ada-002`
-|Requires API key
-
-|`SENTENCE_TRANSFORMERS`
-|`all-MiniLM-L6-v2`, `all-mpnet-base-v2`, etc.
-|Runs locally
-
-|`VERTEX_AI`
-|`gemini-embedding-001` (default), `text-embedding-005`, `text-multilingual-embedding-002`
-|Requires GCP project. Install with `pip install neo4j-agent-memory[vertex-ai]`. `text-embedding-004` (retired 2026-01-14) and `textembedding-gecko*` (retired 2025-04-09) raise an error.
-
-|`BEDROCK`
-|`amazon.titan-embed-text-v2:0`, `amazon.titan-embed-text-v1`, `cohere.embed-english-v3`, `cohere.embed-multilingual-v3`
-|Requires AWS credentials. Install with `pip install neo4j-agent-memory[bedrock]`
-|===
-
-== Extraction Configuration
-
-Settings for entity extraction pipeline.
-
-=== Python Configuration
-
-[source,python]
-----
-from neo4j_agent_memory import ExtractionConfig, ExtractorType, MergeStrategy
-
-extraction_config = ExtractionConfig(
-    # Extractor type
-    extractor_type=ExtractorType.PIPELINE,
-
-    # Pipeline stages
-    enable_spacy=True,
-    enable_gliner=True,
-    enable_llm_fallback=True,
-
-    # Merge strategy
-    merge_strategy=MergeStrategy.CONFIDENCE,
-    fallback_on_empty=True,
-
-    # spaCy settings
-    spacy_model="en_core_web_sm",
-    spacy_confidence=0.85,
-
-    # GLiNER settings
-    gliner_model="urchade/gliner_medium-v2.1",
-    gliner_threshold=0.5,
-    gliner_device="cpu",
-
-    # LLM settings
-    llm_model="gpt-4o-mini",
-
-    # Entity types
-    entity_types=["PERSON", "ORGANIZATION", "LOCATION", "EVENT", "OBJECT"],
-
-    # Extraction options
-    extract_relations=True,
-    extract_preferences=True,
-    confidence_threshold=0.5,
-)
-# Batching and streaming are configured at call time on
-# ``ExtractionPipeline.extract_batch()`` / ``StreamingExtractor``.
-# GLiREL relation extraction is opt-in via ``GLiRELExtractor``.
-----
-
-=== Environment Variables
-
-[source,bash]
-----
-# Extractor type
-NAM_EXTRACTION__EXTRACTOR_TYPE=pipeline    # none, llm, spacy, gliner, pipeline
-
-# Pipeline stages
-NAM_EXTRACTION__ENABLE_SPACY=true
-NAM_EXTRACTION__ENABLE_GLINER=true
-NAM_EXTRACTION__ENABLE_LLM_FALLBACK=true
-
-# Merge strategy
-NAM_EXTRACTION__MERGE_STRATEGY=confidence  # union, intersection, confidence, cascade
-NAM_EXTRACTION__FALLBACK_ON_EMPTY=true
-
-# spaCy settings
-NAM_EXTRACTION__SPACY_MODEL=en_core_web_sm
-NAM_EXTRACTION__SPACY_CONFIDENCE=0.85
-
-# GLiNER settings
-NAM_EXTRACTION__GLINER_MODEL=urchade/gliner_medium-v2.1
-NAM_EXTRACTION__GLINER_THRESHOLD=0.5
-NAM_EXTRACTION__GLINER_DEVICE=cpu
-
-# LLM settings
-NAM_EXTRACTION__LLM_MODEL=gpt-4o-mini
-
-# Entity types (JSON array)
-NAM_EXTRACTION__ENTITY_TYPES='["PERSON","ORGANIZATION","LOCATION","EVENT","OBJECT"]'
-
-# Extraction options
-NAM_EXTRACTION__EXTRACT_RELATIONS=true
-NAM_EXTRACTION__EXTRACT_PREFERENCES=true
-
-# Batch extraction settings
-NAM_EXTRACTION__BATCH_SIZE=10
-NAM_EXTRACTION__BATCH_MAX_CONCURRENT=5
-
-# Streaming extraction settings
-NAM_EXTRACTION__STREAMING_CHUNK_SIZE=4000
-NAM_EXTRACTION__STREAMING_CHUNK_OVERLAP=200
-----
-
-=== Extractor Types
-
-[cols="1,3"]
-|===
-|Type |Description
-
-|`NONE`
-|Disable extraction
-
-|`SPACY`
-|spaCy statistical NER only
-
-|`GLINER`
-|GLiNER zero-shot NER only
-
-|`LLM`
-|LLM-based extraction only
-
-|`PIPELINE`
-|Multi-stage pipeline (default)
-|===
-
-=== Merge Strategies
-
-[cols="1,3"]
-|===
-|Strategy |Description
-
-|`UNION`
-|Keep all unique entities from all stages
-
-|`INTERSECTION`
-|Only keep entities found by multiple extractors
-
-|`CONFIDENCE`
-|Keep highest-confidence version (default)
-
-|`CASCADE`
-|Use first stage, fill gaps with subsequent stages
-
-|`FIRST_SUCCESS`
-|Stop after first successful stage
-|===
-
-== Schema Configuration
-
-Settings for the knowledge graph schema.
-
-=== Python Configuration
-
-[source,python]
-----
-from neo4j_agent_memory import SchemaConfig, SchemaModel
-
-schema_config = SchemaConfig(
-    model=SchemaModel.POLEO,              # Schema model
-    entity_types=None,                     # Custom types (for CUSTOM model)
-    enable_subtypes=True,                  # Track entity subtypes
-    strict_types=False,                    # Reject unknown types
-    custom_schema_path=None,               # Path to schema file
-)
-----
-
-=== Environment Variables
-
-[source,bash]
-----
-NAM_SCHEMA_CONFIG__MODEL=poleo                   # poleo, legacy, custom
-NAM_SCHEMA_CONFIG__ENTITY_TYPES='["PERSON","PRODUCT"]'  # For custom model
-NAM_SCHEMA_CONFIG__ENABLE_SUBTYPES=true
-NAM_SCHEMA_CONFIG__STRICT_TYPES=false
-NAM_SCHEMA_CONFIG__CUSTOM_SCHEMA_PATH=/path/to/schema.json
-----
-
-=== Schema Models
-
-[cols="1,3"]
-|===
-|Model |Description
-
-|`POLEO`
-|Default POLE+O model (Person, Object, Location, Event, Organization)
-
-|`LEGACY`
-|Backward-compatible with older versions
-
-|`CUSTOM`
-|User-defined entity types
-|===
-
-== Resolution Configuration
-
-Settings for entity resolution (deduplication).
-
-=== Python Configuration
-
-[source,python]
-----
-from neo4j_agent_memory import ResolutionConfig, ResolverStrategy
-
-resolution_config = ResolutionConfig(
-    strategy=ResolverStrategy.COMPOSITE,
-    exact_threshold=1.0,                  # Exact match threshold
-    fuzzy_threshold=0.85,                 # Fuzzy match threshold
-    semantic_threshold=0.9,               # Semantic similarity threshold
-)
-----
-
-=== Environment Variables
-
-[source,bash]
-----
-NAM_RESOLUTION__STRATEGY=composite        # none, exact, fuzzy, semantic, composite
-NAM_RESOLUTION__EXACT_THRESHOLD=1.0
-NAM_RESOLUTION__FUZZY_THRESHOLD=0.85
-NAM_RESOLUTION__SEMANTIC_THRESHOLD=0.9
-----
-
-=== Resolver Strategies
-
-[cols="1,3"]
-|===
-|Strategy |Description
-
-|`NONE`
-|No resolution
-
-|`EXACT`
-|Exact string matching only
-
-|`FUZZY`
-|Fuzzy string matching (using rapidfuzz)
-
-|`SEMANTIC`
-|Embedding similarity matching
-
-|`COMPOSITE`
-|Combine all strategies
-|===
-
-== LLM Configuration
-
-Settings for LLM-based operations. The `llm` field on `MemorySettings` is `Optional[LLMConfig]`. Set `llm=None` to opt out of all LLM construction — see xref:how-to/running-without-an-llm.adoc[Run Without an LLM].
-
-=== Python Configuration
-
-[source,python]
-----
-from neo4j_agent_memory import LLMConfig, LLMProvider
-from pydantic import SecretStr
-
-llm_config = LLMConfig(
-    provider=LLMProvider.OPENAI,
-    model="gpt-4o-mini",
-    api_key=SecretStr("sk-..."),
-    temperature=0.0,
-    max_tokens=4096,
-)
-----
-
-[NOTE]
-====
-If you set `MemorySettings(llm=None, ...)` together with `extraction.extractor_type=LLM` or `extraction.enable_llm_fallback=True`, `MemorySettings` raises a `ValidationError` at construction time. Either provide an `LLMConfig` or switch to a non-LLM extractor (`SPACY`, `GLINER`, `NONE`) and disable the LLM fallback.
-====
-
-=== Environment Variables
-
-[source,bash]
-----
-NAM_LLM__PROVIDER=openai
-NAM_LLM__MODEL=gpt-4o-mini
-NAM_LLM__API_KEY=sk-...
-NAM_LLM__TEMPERATURE=0.0
-NAM_LLM__MAX_TOKENS=4096
-
-# Alternative
-OPENAI_API_KEY=sk-...
-----
-
-== Memory Configuration
-
-Settings for memory behavior.
-
-=== Python Configuration
-
-[source,python]
-----
-from neo4j_agent_memory import MemoryConfig
-
-memory_config = MemoryConfig(
-    default_conversation_limit=50,                 # Default messages per conversation
-    message_embedding_enabled=True,                # Embed messages for similarity search
-    preference_confidence_threshold=0.7,           # Confidence floor for preferences
-    fact_deduplication_enabled=True,               # Deduplicate facts on ingest
-    trace_embedding_enabled=True,                  # Embed reasoning traces for retrieval
-    tool_stats_enabled=True,                       # Aggregate tool-call statistics
-)
-----
-
-=== Environment Variables
-
-[source,bash]
-----
-NAM_MEMORY__DEFAULT_CONVERSATION_LIMIT=50
-NAM_MEMORY__MESSAGE_EMBEDDING_ENABLED=true
-NAM_MEMORY__PREFERENCE_CONFIDENCE_THRESHOLD=0.7
-NAM_MEMORY__FACT_DEDUPLICATION_ENABLED=true
-NAM_MEMORY__TRACE_EMBEDDING_ENABLED=true
-NAM_MEMORY__TOOL_STATS_ENABLED=true
-----
-
-== Search Configuration
-
-Settings for search operations.
-
-=== Python Configuration
-
-[source,python]
-----
-from neo4j_agent_memory import SearchConfig
-
-search_config = SearchConfig(
-    default_limit=10,                     # Default result limit
-    default_threshold=0.7,                # Minimum similarity score
-    hybrid_search_enabled=True,           # Combine vector + graph signals
-    graph_depth=2,                        # Hops to traverse during graph search
-)
-----
-
-=== Environment Variables
-
-[source,bash]
-----
-NAM_SEARCH__DEFAULT_LIMIT=10
-NAM_SEARCH__DEFAULT_THRESHOLD=0.7
-NAM_SEARCH__HYBRID_SEARCH_ENABLED=true
-NAM_SEARCH__GRAPH_DEPTH=2
-----
-
-== Geocoding Configuration
-
-Settings for automatic geocoding of LOCATION entities. When enabled, location names are converted to latitude/longitude coordinates stored as Neo4j Point properties, enabling geospatial queries.
-
-=== Python Configuration (Nominatim - Free)
-
-[source,python]
-----
-from neo4j_agent_memory import GeocodingConfig, GeocodingProvider
-
-# Nominatim is free but rate-limited to 1 request/second
-geocoding_config = GeocodingConfig(
-    enabled=True,
-    provider=GeocodingProvider.NOMINATIM,
-    cache_results=True,                   # Cache to avoid repeated API calls
-    rate_limit_per_second=1.0,            # Nominatim requires <= 1 req/sec
-    user_agent="my-app/1.0",              # Required by Nominatim ToS
-)
-----
-
-=== Python Configuration (Google Maps - Higher Accuracy)
-
-[source,python]
-----
-from neo4j_agent_memory import GeocodingConfig, GeocodingProvider
-from pydantic import SecretStr
-
-# Google Maps API requires an API key and has usage costs
-geocoding_config = GeocodingConfig(
-    enabled=True,
-    provider=GeocodingProvider.GOOGLE,
-    api_key=SecretStr("your-google-api-key"),
-    cache_results=True,
-)
-----
-
-=== Environment Variables
-
-[source,bash]
-----
-# Enable geocoding
-NAM_GEOCODING__ENABLED=true
-
-# Provider selection
-NAM_GEOCODING__PROVIDER=nominatim        # nominatim or google
-
-# API key (required for Google)
-NAM_GEOCODING__API_KEY=your-google-api-key
-
-# Caching
-NAM_GEOCODING__CACHE_RESULTS=true
-
-# Nominatim-specific settings
-NAM_GEOCODING__RATE_LIMIT_PER_SECOND=1.0
-NAM_GEOCODING__USER_AGENT=my-app/1.0
-----
-
-=== Parameters
-
-[cols="2,1,1,3"]
-|===
-|Parameter |Type |Default |Description
-
-|`enabled`
-|bool
-|`False`
-|Enable automatic geocoding of LOCATION entities
-
-|`provider`
-|GeocodingProvider
-|`NOMINATIM`
-|Geocoding provider (NOMINATIM or GOOGLE)
-
-|`api_key`
-|SecretStr
-|None
-|API key (required for Google)
-
-|`cache_results`
-|bool
-|`True`
-|Cache geocoding results in-memory
-
-|`rate_limit_per_second`
-|float
-|1.0
-|Rate limit for requests (Nominatim requires ≤1)
-
-|`user_agent`
-|str
-|`neo4j-agent-memory`
-|User-Agent header for Nominatim (required by ToS)
-|===
-
-=== Geocoding Providers
-
-[cols="1,2,2,2"]
-|===
-|Provider |Cost |Rate Limit |Notes
-
-|`NOMINATIM`
-|Free
-|1 request/second
-|Uses OpenStreetMap data. Good for most use cases.
-
-|`GOOGLE`
-|Pay per use
-|50 requests/second
-|Higher accuracy, better address parsing. Requires API key.
-|===
-
-=== Usage Example
-
-[source,python]
-----
-from neo4j_agent_memory import (
-    MemoryClient,
-    MemorySettings,
-    GeocodingConfig,
-    GeocodingProvider,
-)
-
-# Configure with geocoding enabled
-settings = MemorySettings(
-    geocoding=GeocodingConfig(
-        enabled=True,
-        provider=GeocodingProvider.NOMINATIM,
-    )
-)
-
-async with MemoryClient(settings) as client:
-    # LOCATION entities are automatically geocoded
-    entity, dedup_result = await client.long_term.add_entity(
-        "Empire State Building, New York",
-        "LOCATION",
-    )
-
-    # Get coordinates
-    coords = await client.long_term.get_entity_coordinates(entity.id)
-    if coords:
-        lat, lon = coords
-        print(f"Coordinates: {lat}, {lon}")
-
-    # Search for nearby locations (within 5km)
-    nearby = await client.long_term.search_locations_near(
-        latitude=40.7484,
-        longitude=-73.9857,
-        radius_km=5.0,
-    )
-
-    # Batch geocode existing locations without coordinates
-    stats = await client.long_term.geocode_locations()
-    print(f"Geocoded {stats['geocoded']} of {stats['processed']} locations")
-----
-
-=== Geospatial Queries
-
-Once locations are geocoded, you can run geospatial queries:
-
-[source,python]
-----
-# Find locations within a bounding box
-locations = await client.long_term.search_locations_in_bounds(
-    min_lat=40.70,
-    max_lat=40.80,
-    min_lon=-74.02,
-    max_lon=-73.95,
-)
-
-# Find locations near a point
-nearby = await client.long_term.search_locations_near(
-    latitude=40.7484,
-    longitude=-73.9857,
-    radius_km=10.0,
-    limit=20,
-)
-----
-
-== Enrichment Configuration
-
-Settings for background entity enrichment from external knowledge sources (Wikipedia, Diffbot).
-
-=== Python Configuration
-
-[source,python]
-----
-from neo4j_agent_memory.config.settings import EnrichmentConfig, EnrichmentProvider
-
-enrichment_config = EnrichmentConfig(
-    enabled=True,                                    # Enable enrichment
-    providers=[EnrichmentProvider.WIKIMEDIA],        # Providers to use
-
-    # API keys (Diffbot only)
-    diffbot_api_key="your-api-key",                  # Or set DIFFBOT_API_KEY env var
-
-    # Rate limiting
-    wikimedia_rate_limit=0.5,                        # Seconds between requests
-    diffbot_rate_limit=0.2,                          # Seconds between requests
-
-    # Caching
-    cache_results=True,                              # Cache results in memory
-    cache_ttl_hours=168,                             # Cache TTL (1 week)
-
-    # Background processing
-    background_enabled=True,                         # Enable async processing
-    queue_max_size=1000,                             # Max queue size
-    max_retries=3,                                   # Retry count
-    retry_delay_seconds=60.0,                        # Delay between retries
-
-    # Filtering
-    entity_types=["PERSON", "ORGANIZATION", "LOCATION", "EVENT"],
-    min_confidence=0.7,                              # Minimum confidence threshold
-
-    # API settings
-    language="en",                                   # Wikipedia language
-    user_agent="neo4j-agent-memory/1.0",             # User-Agent header
-)
-----
-
-=== Environment Variables
-
-[source,bash]
-----
-# Enable enrichment
-NAM_ENRICHMENT__ENABLED=true
-
-# Providers (JSON array)
-NAM_ENRICHMENT__PROVIDERS=["wikimedia", "diffbot"]
-
-# Diffbot API key
-NAM_ENRICHMENT__DIFFBOT_API_KEY=your-api-key
-# Or use the standard env var
-DIFFBOT_API_KEY=your-api-key
-
-# Rate limiting
-NAM_ENRICHMENT__WIKIMEDIA_RATE_LIMIT=0.5
-NAM_ENRICHMENT__DIFFBOT_RATE_LIMIT=0.2
-
-# Caching
-NAM_ENRICHMENT__CACHE_RESULTS=true
-NAM_ENRICHMENT__CACHE_TTL_HOURS=168
-
-# Background processing
-NAM_ENRICHMENT__BACKGROUND_ENABLED=true
-NAM_ENRICHMENT__QUEUE_MAX_SIZE=1000
-NAM_ENRICHMENT__MAX_RETRIES=3
-NAM_ENRICHMENT__RETRY_DELAY_SECONDS=60.0
-
-# Filtering
-NAM_ENRICHMENT__ENTITY_TYPES=["PERSON", "ORGANIZATION", "LOCATION", "EVENT"]
-NAM_ENRICHMENT__MIN_CONFIDENCE=0.7
-
-# API settings
-NAM_ENRICHMENT__LANGUAGE=en
-NAM_ENRICHMENT__USER_AGENT=neo4j-agent-memory/1.0
-----
-
-=== Parameters
-
-[cols="2,1,1,3"]
-|===
-|Parameter |Type |Default |Description
-
-|`enabled`
-|bool
-|`False`
-|Enable the enrichment system
-
-|`providers`
-|list[EnrichmentProvider]
-|`[WIKIMEDIA]`
-|Providers to use (tried in order)
-
-|`diffbot_api_key`
-|SecretStr
-|None
-|API key for Diffbot
-
-|`wikimedia_rate_limit`
-|float
-|0.5
-|Seconds between Wikimedia requests
-
-|`diffbot_rate_limit`
-|float
-|0.2
-|Seconds between Diffbot requests
-
-|`cache_results`
-|bool
-|`True`
-|Cache enrichment results
-
-|`cache_ttl_hours`
-|int
-|168
-|Cache TTL in hours (1 week)
-
-|`background_enabled`
-|bool
-|`True`
-|Enable background processing
-
-|`queue_max_size`
-|int
-|1000
-|Maximum enrichment queue size
-
-|`max_retries`
-|int
-|3
-|Retry count for failures
-
-|`retry_delay_seconds`
-|float
-|60.0
-|Delay between retries
-
-|`entity_types`
-|list[str]
-|See above
-|Entity types to enrich
-
-|`min_confidence`
-|float
-|0.7
-|Minimum confidence threshold
-
-|`language`
-|str
-|`"en"`
-|Wikipedia language code
-
-|`user_agent`
-|str
-|`"neo4j-agent-memory/1.0"`
-|User-Agent header
-|===
-
-=== Enrichment Providers
-
-[cols="1,2,2,2"]
-|===
-|Provider |Cost |Rate Limit |Notes
-
-|`WIKIMEDIA`
-|Free
-|2 requests/second
-|Uses Wikipedia REST API. Good for general entities.
-
-|`DIFFBOT`
-|Pay per use
-|5 requests/second
-|Richer structured data, requires API key.
-|===
-
-See the xref:how-to/entities.adoc[Working with Entities] guide for detailed usage documentation.
-
-== Deduplication Configuration
-
-Settings for entity deduplication during ingest.
-
-=== Python Configuration
-
-[source,python]
-----
-from neo4j_agent_memory import DeduplicationConfig, DeduplicationStrategy
-
-dedup_config = DeduplicationConfig(
-    enabled=True,                         # Enable deduplication
-    strategy=DeduplicationStrategy.COMPOSITE,
-    embedding_threshold=0.92,             # Similarity for auto-merge
-    fuzzy_threshold=0.85,                 # Fuzzy match threshold
-    create_same_as=True,                  # Create SAME_AS for ambiguous matches
-    same_as_threshold=0.85,               # Threshold for SAME_AS relationships
-    batch_size=100,                       # Entities to process per batch
-)
-----
-
-=== Environment Variables
-
-[source,bash]
-----
-NAM_DEDUPLICATION__ENABLED=true
-NAM_DEDUPLICATION__STRATEGY=composite     # none, exact, fuzzy, embedding, composite
-NAM_DEDUPLICATION__EMBEDDING_THRESHOLD=0.92
-NAM_DEDUPLICATION__FUZZY_THRESHOLD=0.85
-NAM_DEDUPLICATION__CREATE_SAME_AS=true
-NAM_DEDUPLICATION__SAME_AS_THRESHOLD=0.85
-NAM_DEDUPLICATION__BATCH_SIZE=100
-----
-
-=== Deduplication Strategies
-
-[cols="1,3"]
-|===
-|Strategy |Description
-
-|`NONE`
-|Disable deduplication
-
-|`EXACT`
-|Exact name matching only
-
-|`FUZZY`
-|Fuzzy string matching (rapidfuzz)
-
-|`EMBEDDING`
-|Vector similarity matching
-
-|`COMPOSITE`
-|Combine fuzzy and embedding (default)
-|===
-
-== Observability Configuration
-
-Settings for tracing and monitoring with OpenTelemetry or Opik.
-
-=== Python Configuration (OpenTelemetry)
-
-[source,python]
-----
-from neo4j_agent_memory import ObservabilityConfig, TracingProvider
-
-observability_config = ObservabilityConfig(
-    enabled=True,
-    provider=TracingProvider.OPENTELEMETRY,
-    service_name="my-agent-memory",
-    endpoint="http://localhost:4317",     # OTLP endpoint
-    sample_rate=1.0,                      # Trace all requests
-    log_level="INFO",
-)
-----
-
-=== Python Configuration (Opik)
-
-[source,python]
-----
-from neo4j_agent_memory import ObservabilityConfig, TracingProvider
-
-observability_config = ObservabilityConfig(
-    enabled=True,
-    provider=TracingProvider.OPIK,
-    project_name="my-agent-memory",
-    workspace="my-workspace",             # Optional Opik workspace
-    track_llm_calls=True,                 # Track LLM interactions
-    track_extraction=True,                # Track extraction pipeline
-    track_memory_ops=True,                # Track memory operations
-)
-----
-
-=== Environment Variables
-
-[source,bash]
-----
-# Common settings
-NAM_OBSERVABILITY__ENABLED=true
-NAM_OBSERVABILITY__PROVIDER=opentelemetry  # opentelemetry, opik, auto
-
-# OpenTelemetry settings
-NAM_OBSERVABILITY__SERVICE_NAME=my-agent-memory
-NAM_OBSERVABILITY__ENDPOINT=http://localhost:4317
-NAM_OBSERVABILITY__SAMPLE_RATE=1.0
-NAM_OBSERVABILITY__LOG_LEVEL=INFO
-
-# Opik settings
-NAM_OBSERVABILITY__PROJECT_NAME=my-agent-memory
-NAM_OBSERVABILITY__WORKSPACE=my-workspace
-NAM_OBSERVABILITY__TRACK_LLM_CALLS=true
-NAM_OBSERVABILITY__TRACK_EXTRACTION=true
-NAM_OBSERVABILITY__TRACK_MEMORY_OPS=true
-
-# Opik API (if using cloud)
-OPIK_API_KEY=your-api-key
-OPIK_WORKSPACE=your-workspace
-----
-
-=== Parameters
-
-[cols="2,1,1,3"]
-|===
-|Parameter |Type |Default |Description
-
-|`enabled`
-|bool
-|`False`
-|Enable observability
-
-|`provider`
-|TracingProvider
-|`AUTO`
-|Tracing provider to use
-
-|`service_name`
-|str
-|`neo4j-agent-memory`
-|Service name for traces
-
-|`sample_rate`
-|float
-|1.0
-|Percentage of requests to trace (0.0-1.0)
-
-|`track_llm_calls`
-|bool
-|`True`
-|Track LLM API calls
-
-|`track_extraction`
-|bool
-|`True`
-|Track extraction pipeline stages
-
-|`track_memory_ops`
-|bool
-|`True`
-|Track memory read/write operations
-|===
-
-=== Tracing Providers
-
-[cols="1,2,2"]
-|===
-|Provider |Description |Required Package
-
-|`OPENTELEMETRY`
-|Standard OpenTelemetry tracing
-|`pip install neo4j-agent-memory[opentelemetry]`
-
-|`OPIK`
-|Comet Opik for LLM observability
-|`pip install neo4j-agent-memory[opik]`
-
-|`AUTO`
-|Auto-detect available provider
-|Whichever is installed
-|===
-
-== CLI Configuration
-
-The CLI tool uses environment variables and optional configuration files.
-
-=== Environment Variables
-
-[source,bash]
-----
-# Neo4j connection (required for memory commands)
-NAM_NEO4J__URI=bolt://localhost:7687
-NAM_NEO4J__USERNAME=neo4j
-NAM_NEO4J__PASSWORD=your-password
-
-# Extraction settings
-NAM_EXTRACTION__EXTRACTOR_TYPE=pipeline
-NAM_EXTRACTION__ENABLE_GLINER=true
-
-# Output format
-NAM_CLI__OUTPUT_FORMAT=json              # json, table, yaml
-NAM_CLI__VERBOSE=false
-NAM_CLI__COLOR=true
-----
-
-=== Configuration File
-
-Create a `.neo4j-memory.yaml` file in your project or home directory:
-
-[source,yaml]
-----
-# .neo4j-memory.yaml
-neo4j:
-  uri: bolt://localhost:7687
-  username: neo4j
-  password: your-password
-
-extraction:
-  extractor_type: pipeline
-  enable_gliner: true
-  gliner_threshold: 0.5
-
-cli:
-  output_format: json
-  verbose: false
-  color: true
-----
-
-=== CLI Commands
-
-[source,bash]
-----
-# Extract entities from text
-neo4j-agent-memory extract "John works at Acme Corp in New York"
-
-# Extract with specific schema
-neo4j-agent-memory extract --schema poleo "..."
-
-# Extract from file
-neo4j-agent-memory extract --input document.txt
-
-# List available schemas
-neo4j-agent-memory schemas list
-
-# Show schema details
-neo4j-agent-memory schemas show poleo
-
-# Get extraction statistics
-neo4j-agent-memory stats
-
-# Output as table
-neo4j-agent-memory extract --format table "..."
-----
-
-== Complete Example
-
-=== Python Configuration
-
-[source,python]
-----
-from neo4j_agent_memory import (
-    MemorySettings,
-    Neo4jConfig,
-    EmbeddingConfig,
-    EmbeddingProvider,
-    ExtractionConfig,
-    ExtractorType,
-    MergeStrategy,
-    SchemaConfig,
-    SchemaModel,
-    ResolutionConfig,
-    ResolverStrategy,
-    LLMConfig,
-    LLMProvider,
-    GeocodingConfig,
-    GeocodingProvider,
-)
-from pydantic import SecretStr
-
-settings = MemorySettings(
-    neo4j=Neo4jConfig(
-        uri="bolt://localhost:7687",
-        username="neo4j",
-        password=SecretStr("password"),
-    ),
-    embedding=EmbeddingConfig(
-        provider=EmbeddingProvider.OPENAI,
-        model="text-embedding-3-small",
-    ),
-    extraction=ExtractionConfig(
-        extractor_type=ExtractorType.PIPELINE,
-        enable_spacy=True,
-        enable_gliner=True,
-        enable_llm_fallback=True,
-        merge_strategy=MergeStrategy.CONFIDENCE,
-    ),
-    schema_config=SchemaConfig(
-        model=SchemaModel.POLEO,
-        enable_subtypes=True,
-    ),
-    resolution=ResolutionConfig(
-        strategy=ResolverStrategy.COMPOSITE,
-    ),
-    geocoding=GeocodingConfig(
-        enabled=True,
-        provider=GeocodingProvider.NOMINATIM,
-        cache_results=True,
-    ),
-    llm=LLMConfig(
-        provider=LLMProvider.OPENAI,
-        model="gpt-4o-mini",
-    ),
-)
-# Per-entity deduplication is configured via DeduplicationConfig
-# at the memory layer (see how-to/deduplication.adoc).
-# Observability tracers are obtained from
-# ``neo4j_agent_memory.observability.get_tracer(...)``.
-----
-
-=== Environment Variables (`.env` file)
-
-[source,bash]
-----
-# Neo4j
-NAM_NEO4J__URI=bolt://localhost:7687
-NAM_NEO4J__USERNAME=neo4j
-NAM_NEO4J__PASSWORD=your-password
-
-# Embedding
-NAM_EMBEDDING__PROVIDER=openai
-NAM_EMBEDDING__MODEL=text-embedding-3-small
-
-# Extraction
-NAM_EXTRACTION__EXTRACTOR_TYPE=pipeline
-NAM_EXTRACTION__ENABLE_SPACY=true
-NAM_EXTRACTION__ENABLE_GLINER=true
-NAM_EXTRACTION__ENABLE_LLM_FALLBACK=true
-NAM_EXTRACTION__MERGE_STRATEGY=confidence
-
-# Schema
-NAM_SCHEMA_CONFIG__MODEL=poleo
-NAM_SCHEMA_CONFIG__ENABLE_SUBTYPES=true
-
-# Resolution
-NAM_RESOLUTION__STRATEGY=composite
-
-# Deduplication
-NAM_DEDUPLICATION__ENABLED=true
-NAM_DEDUPLICATION__STRATEGY=composite
-NAM_DEDUPLICATION__EMBEDDING_THRESHOLD=0.92
-
-# Geocoding (for LOCATION entities)
-NAM_GEOCODING__ENABLED=true
-NAM_GEOCODING__PROVIDER=nominatim
-NAM_GEOCODING__CACHE_RESULTS=true
-# For Google Maps (instead of Nominatim):
-# NAM_GEOCODING__PROVIDER=google
-# NAM_GEOCODING__API_KEY=your-google-api-key
-
-# Observability
-NAM_OBSERVABILITY__ENABLED=true
-NAM_OBSERVABILITY__PROVIDER=opik
-NAM_OBSERVABILITY__PROJECT_NAME=my-agent-memory
-
-# LLM
-NAM_LLM__PROVIDER=openai
-NAM_LLM__MODEL=gpt-4o-mini
-
-# OpenAI API Key
-OPENAI_API_KEY=sk-...
-----
-
-== Configuration Precedence
-
-When using multiple configuration methods, the precedence is:
-
-1. **Explicit Python arguments** (highest priority)
-2. **Environment variables** with `NAM_` prefix
-3. **Default values** (lowest priority)
+Provider strings resolve immediately through `from_provider`. Pass a constructed provider for constructor-specific options such as API base URL, timeout, or custom dimensions. Explicit legacy EmbeddingConfig/LLMConfig inputs still work in this checkout and emit DeprecationWarning; prefer provider strings/instances for new code. The warning's historical removal date does not describe current availability.
 
 [source,python]
 ----
 import os
+from neo4j_agent_memory import BoltSettings
+from neo4j_agent_memory.config.settings import ExtractionConfig
 
-# Set environment variable
-os.environ["NAM_NEO4J__URI"] = "bolt://env-server:7687"
-
-# This will use the environment variable
-settings = MemorySettings()
-print(settings.neo4j.uri)  # bolt://env-server:7687
-
-# This will override the environment variable
-settings = MemorySettings(
-    neo4j={"uri": "bolt://explicit-server:7687"}
+settings = BoltSettings(
+    neo4j={
+        "uri": os.environ["NEO4J_URI"],
+        "username": os.environ["NEO4J_USERNAME"],
+        "password": os.environ["NEO4J_PASSWORD"],
+        "database": os.getenv("NEO4J_DATABASE", "neo4j"),
+    },
+    embedding="openai/text-embedding-3-small",
+    llm="openai/gpt-4o-mini",
 )
-print(settings.neo4j.uri)  # bolt://explicit-server:7687
+# No LLM calls: also disable the pipeline's LLM fallback.
+local_settings = BoltSettings(
+    neo4j={
+        "uri": os.environ["NEO4J_URI"],
+        "username": os.environ["NEO4J_USERNAME"],
+        "password": os.environ["NEO4J_PASSWORD"],
+        "database": os.getenv("NEO4J_DATABASE", "neo4j"),
+    },
+    embedding="BAAI/bge-small-en-v1.5",
+    llm=None,
+    extraction=ExtractionConfig(extractor_type="gliner", enable_llm_fallback=False),
+)
 ----
 
-== Validation
+The examples require their corresponding provider extras; local models may download on first use. `llm=None` with `extractor_type="llm"`, or a pipeline with `enable_llm_fallback=True`, raises a validation error. To disable extraction entirely use `extractor_type="none"`.
 
-Settings are validated using Pydantic. Invalid configurations raise `ValidationError`:
+anchor:precedence[]
+
+== Sources and precedence
+
+From highest to lowest: explicit constructor values, process environment variables, filtered `.env` values, configured file-secret sources, then defaults. `.env` is read from the current directory; pass `_env_file="path/to/file"` to select another file or `_env_file=None` to disable dotenv loading. It is not a YAML configuration loader.
+
+`NAM_` variables use `__` for nested fields. JSON represents arrays and dictionaries. Unrelated top-level dotenv keys are filtered; misspelled nested keys in a recognized group still fail validation. A variable that is not a settings field does not create a new feature.
+
+`MEMORY_API_KEY`, `MEMORY_ENDPOINT`, and `MEMORY_WORKSPACE_ID` are additional *process-environment* aliases resolved after settings sources. They populate an unset NAMS API key/workspace and an endpoint not explicitly set on NamsConfig. They are not loaded from a dotenv file by that alias resolver. Use `NAM_NAMS__...` in `.env` or explicitly load process environment aliases in your application.
 
 [source,python]
 ----
-from neo4j_agent_memory import MemorySettings, ExtractionConfig
-from pydantic import ValidationError
+import os
+from neo4j_agent_memory import BoltSettings
 
-try:
-    settings = MemorySettings(
-        extraction=ExtractionConfig(
-            gliner_threshold=1.5  # Invalid: must be 0.0-1.0
-        )
-    )
-except ValidationError as e:
-    print(f"Configuration error: {e}")
+os.environ["NAM_NEO4J__URI"] = "neo4j+s://<environment-instance-id>.databases.neo4j.io"
+settings = BoltSettings(neo4j={
+    "uri": "neo4j+s://<explicit-instance-id>.databases.neo4j.io",
+    "username": os.environ["NEO4J_USERNAME"],
+    "password": os.environ["NEO4J_PASSWORD"],
+    "database": os.getenv("NEO4J_DATABASE", "neo4j"),
+})
+assert settings.neo4j.uri == "neo4j+s://<explicit-instance-id>.databases.neo4j.io"
 ----
 
-== Next Steps
+anchor:neo4j[]
 
-* xref:getting-started.adoc[Get started with neo4j-agent-memory]
-* xref:how-to/entity-extraction.adoc[Configure entity extraction]
-* xref:explanation/memory-types.adoc[Learn about memory types]
-* xref:how-to/integrations/index.adoc[Framework integrations]
-* xref:faq.adoc[Frequently asked questions]
+== Neo4j connection
+
+Bolt only. Standalone `Neo4jConfig` requires a password; the implicit MemorySettings factory supplies an empty string. Supply valid credentials before connecting. URI schemes and connection permissions are determined by your Neo4j deployment.
+
+// settings-fields: Neo4jConfig:neo4j:python
+[cols="2,2,2,1,4",options="header"]
+|===
+| Field | Type / values | Default | Constraints | Description
+| `uri` | `str` | `'bolt://localhost:7687'` | — | Neo4j connection URI
+| `username` | `str` | `'neo4j'` | — | Neo4j username
+| `password` | `SecretStr` | `required` | — | Neo4j password
+| `database` | `str` | `'neo4j'` | — | Neo4j database name
+| `max_connection_pool_size` | `int` | `50` | ge 1 | Maximum connection pool size
+| `connection_timeout` | `float` | `30.0` | gt 0 | Connection timeout in seconds
+| `max_transaction_retry_time` | `float` | `30.0` | gt 0 | Maximum transaction retry time in seconds
+| `max_connection_lifetime` | `int` | `300` | gt 0 | Maximum lifetime of a pooled connection in seconds. Connections older than this are proactively closed and replaced. Should be shorter than the server's idle timeout (e.g., Neo4j Aura).
+| `liveness_check_timeout` | `int` | `60` | gt 0 | Seconds a connection can be idle before the driver checks if it is still alive. Prevents use of stale connections.
+| `keep_alive` | `bool` | `True` | — | Enable TCP keep-alive on connections to prevent idle drops.
+|===
+
+anchor:nams[]
+
+== NAMS connection
+
+NAMS only. This config controls HTTP transport, not server extraction settings. Pin NamsSettings to avoid accidental backend selection. The `transport_mode="bridge"` option is intended for conformance/reference implementations.
+
+[source,python]
+----
+from neo4j_agent_memory import NamsSettings
+
+settings = NamsSettings(nams={"timeout": 60.0, "retry_backoff_seconds": 0.5})
+----
+
+The example takes its API key from the environment; see xref:how-to/use-nams.adoc[Use NAMS].
+
+// settings-fields: NamsConfig:nams:python
+[cols="2,2,2,1,4",options="header"]
+|===
+| Field | Type / values | Default | Constraints | Description
+| `endpoint` | `str` | `'https://memory.neo4jlabs.com/v1'` | — | Base URL. Auto transport uses REST for a URL containing /v followed by digits; otherwise it uses the conformance bridge.
+| `api_key` | `SecretStr \| None` | `None` | — | NAMS API key (format 'nams_...'). When constructed via MemorySettings, an unset value may be populated from MEMORY_API_KEY.
+| `workspace_id` | `str \| None` | `None` | — | Sent as X-Workspace-Id when set. Use the workspace authorized by your credentials; the workspace is the tenancy boundary.
+| `timeout` | `float` | `30.0` | gt 0 | HTTP request timeout in seconds.
+| `max_retries` | `int` | `3` | ge 0 | Max retry attempts for 429 (after Retry-After), 5xx, and network errors.
+| `retry_backoff_seconds` | `float` | `0.5` | gt 0 | Base exponential backoff between retries (0.5 → 0.5, 1.0, 2.0...).
+| `headers` | `dict[str, str]` | `{}` | — | Extra HTTP headers added to every request (e.g. tracing headers).
+| `validate_on_connect` | `bool` | `True` | — | Make an authenticated connection probe when connecting. Disabling it defers failures until the first request.
+| `transport_mode` | `Literal['auto', 'rest', 'bridge']` | `'auto'` | — | Wire-protocol override. 'auto' (default) infers from endpoint shape.
+|===
+
+anchor:embedding[]
+
+== Embedding configuration
+
+Legacy field inventory. Provider strings and instances use their own adapter signatures, not these nested keys; see xref:reference/api/adapters.adoc[Adapters]. The enum also declares `anthropic`, `vertex_ai`, `bedrock`, and `custom`, but MemoryClient's legacy factory currently constructs only `openai` and `sentence_transformers`. For Vertex AI or Bedrock, use a supported provider instance/string or inject an embedder explicitly.
+
+When a legacy Vertex AI config is constructed, its validator changes an unset model to `gemini-embedding-001` and unset output dimensionality/dimensions to 768; retired IDs known to the SDK are rejected. This validation does not wire the config into the legacy MemoryClient factory. Index dimensions must match the actual embedder; see xref:how-to/migrate-embedding-model.adoc[Migrate embedding models].
+
+// settings-fields: EmbeddingConfig:embedding:python
+[cols="2,2,2,1,4",options="header"]
+|===
+| Field | Type / values | Default | Constraints | Description
+| `provider` | `openai / anthropic / sentence_transformers / vertex_ai / bedrock / custom` | `'openai'` | — | Embedding provider to use
+| `model` | `str` | `'text-embedding-3-small'` | — | Embedding model name
+| `dimensions` | `int` | `1536` | ge 1 | Embedding dimensions
+| `api_key` | `SecretStr \| None` | `None` | — | API key for embedding provider
+| `batch_size` | `int` | `100` | ge 1 | Batch size for embeddings
+| `device` | `str` | `'cpu'` | — | Device for sentence transformers (cpu/cuda)
+| `project_id` | `str \| None` | `None` | — | GCP project ID for Vertex AI
+| `location` | `str` | `'us-central1'` | — | GCP region for Vertex AI
+| `task_type` | `str` | `'RETRIEVAL_DOCUMENT'` | — | Vertex AI task type (RETRIEVAL_QUERY, RETRIEVAL_DOCUMENT, etc.)
+| `output_dimensionality` | `int \| None` | `None` | ge 1 | Vertex AI output dimensionality. gemini-embedding-001 emits 3072 dimensions natively and can be truncated to 1536 or 768. Defaults to 768 for Vertex AI so existing vector indexes keep working; pass an explicit value to override.
+| `aws_region` | `str \| None` | `None` | — | AWS region for Bedrock
+| `aws_profile` | `str \| None` | `None` | — | AWS credentials profile name
+|===
+
+anchor:llm[]
+
+== LLM configuration
+
+Legacy LLM field inventory. The extraction factory forwards the selected provider/model/API key; it does not forward these legacy temperature/max_tokens fields. Use the extractor/provider APIs for their supported generation controls. `extraction.llm_model` is the fallback only when the factory receives no LLM config/provider.
+
+// settings-fields: LLMConfig:llm:python
+[cols="2,2,2,1,4",options="header"]
+|===
+| Field | Type / values | Default | Constraints | Description
+| `provider` | `openai / anthropic / custom` | `'openai'` | — | LLM provider to use
+| `model` | `str` | `'gpt-4o-mini'` | — | LLM model name
+| `api_key` | `SecretStr \| None` | `None` | — | API key for LLM provider
+| `temperature` | `float` | `0.0` | ge 0.0, le 2.0 | LLM temperature *Not automatically applied by MemoryClient*; see integration limits.
+| `max_tokens` | `int` | `4096` | ge 1 | Maximum tokens for LLM *Not automatically applied by MemoryClient*; see integration limits.
+|===
+
+anchor:schema[]
+
+== Graph schema configuration
+
+This is not a persisted EntitySchemaConfig or a NAMS ontology. The extraction factory uses `entity_types` for GLiNER labels and LLM type selection. Other declared fields are not automatically forwarded as storage validation or file loading. For custom schemas, load and use a supported extractor explicitly; see xref:reference/schemas.adoc[Domain schemas].
+
+// settings-fields: SchemaConfig:schema_config:python
+[cols="2,2,2,1,4",options="header"]
+|===
+| Field | Type / values | Default | Constraints | Description
+| `model` | `poleo / legacy / custom` | `'poleo'` | — | Schema model to use *Not automatically applied by MemoryClient*; see integration limits.
+| `entity_types` | `list[str] \| None` | `None` | — | Custom entity types (overrides model default when model=custom)
+| `enable_subtypes` | `bool` | `True` | — | Whether to track entity subtypes *Not automatically applied by MemoryClient*; see integration limits.
+| `strict_types` | `bool` | `False` | — | Whether to reject unknown entity types *Not automatically applied by MemoryClient*; see integration limits.
+| `custom_schema_path` | `str \| None` | `None` | — | Accepted path field; not automatically loaded by MemoryClient. Load a schema explicitly and inject an extractor. *Not automatically applied by MemoryClient*; see integration limits.
+|===
+
+anchor:extraction[]
+
+== Extraction configuration
+
+Bolt extraction only. The default pipeline attempts spaCy, GLiNER, and LLM in order. The factory may skip unavailable stages and use NoOpExtractor if none can be constructed; test your configured stages and their output. GLiNER's default schema field is None; simple labels are used unless a named schema is supplied.
+
+`merge_strategy` accepts `union`, `intersection`, `confidence`, and `cascade`. Pipeline construction sets `stop_on_success` to the inverse of `fallback_on_empty`; with the default True, enabled stages can all run. FIRST_SUCCESS belongs only to the direct pipeline enum, not this settings enum. There are no batch or streaming chunk fields in ExtractionConfig: pass those to the corresponding extraction methods.
+
+[source,python]
+----
+from neo4j_agent_memory.config.settings import ExtractionConfig
+
+extraction = ExtractionConfig(
+    extractor_type="pipeline", enable_spacy=True, enable_gliner=True,
+    enable_llm_fallback=False, gliner_schema="podcast",
+    merge_strategy="confidence", gliner_threshold=0.6,
+)
+----
+
+// settings-fields: ExtractionConfig:extraction:python
+[cols="2,2,2,1,4",options="header"]
+|===
+| Field | Type / values | Default | Constraints | Description
+| `extractor_type` | `llm / gliner / spacy / pipeline / none` | `'pipeline'` | — | Type of entity extractor
+| `enable_spacy` | `bool` | `True` | — | Enable spaCy in extraction pipeline
+| `enable_gliner` | `bool` | `True` | — | Enable GLiNER in extraction pipeline
+| `enable_llm_fallback` | `bool` | `True` | — | Enable LLM as fallback in pipeline
+| `merge_strategy` | `union / intersection / confidence / cascade` | `'confidence'` | — | Strategy for merging results from multiple extractors
+| `fallback_on_empty` | `bool` | `True` | — | Continue to next stage if current stage returns no results
+| `spacy_model` | `str` | `'en_core_web_sm'` | — | spaCy model name
+| `spacy_confidence` | `float` | `0.85` | ge 0.0, le 1.0 | Default confidence score for spaCy extractions
+| `gliner_model` | `str` | `'gliner-community/gliner_medium-v2.5'` | — | GLiNER model name (GLiNER2 v2.5 recommended for best accuracy)
+| `gliner_threshold` | `float` | `0.5` | ge 0.0, le 1.0 | GLiNER confidence threshold
+| `gliner_device` | `str` | `'cpu'` | — | Device for GLiNER model (cpu/cuda/mps)
+| `gliner_schema` | `str \| None` | `None` | — | Domain schema for GLiNER extraction (poleo, podcast, news, scientific, business, entertainment, medical, legal)
+| `llm_model` | `str` | `'gpt-4o-mini'` | — | LLM model for extraction
+| `entity_types` | `list[str]` | `["PERSON", "ORGANIZATION", "LOCATION", "EVENT", "OBJECT"]` | — | Entity types to extract (POLE+O by default)
+| `extract_relations` | `bool` | `True` | — | Whether to extract relations
+| `extract_preferences` | `bool` | `True` | — | Whether to extract preferences
+| `confidence_threshold` | `float` | `0.5` | ge 0.0, le 1.0 | Minimum confidence threshold for extracted entities *Not automatically applied by MemoryClient*; see integration limits.
+|===
+
+anchor:resolution[]
+
+== Resolution configuration
+
+Bolt resolution factory: `none` disables resolution; `exact`, `fuzzy`, and `semantic` select one resolver; `composite` chains them. Fuzzy and semantic thresholds default to 0.85 and 0.8. The accepted `fuzzy_scorer` field is not forwarded by MemoryClient; construct/inject a resolver for that control. Ingestion deduplication is a separate mechanism; see <<deduplication>>.
+
+// settings-fields: ResolutionConfig:resolution:python
+[cols="2,2,2,1,4",options="header"]
+|===
+| Field | Type / values | Default | Constraints | Description
+| `strategy` | `exact / fuzzy / semantic / composite / none` | `'composite'` | — | Resolution strategy
+| `exact_threshold` | `float` | `1.0` | ge 0.0, le 1.0 | Exact match threshold
+| `fuzzy_threshold` | `float` | `0.85` | ge 0.0, le 1.0 | Fuzzy match threshold
+| `semantic_threshold` | `float` | `0.8` | ge 0.0, le 1.0 | Semantic match threshold
+| `fuzzy_scorer` | `str` | `'token_sort_ratio'` | — | Fuzzy matching scorer *Not automatically applied by MemoryClient*; see integration limits.
+|===
+
+anchor:memory[]
+
+== Memory behavior
+
+The tables distinguish declared values from automatic runtime behavior. MemoryClient forwards `multi_tenant`, `write_mode`, and `max_pending`. Its ordinary store operations use their own method defaults. The remaining fields are not automatically applied; call the relevant operation explicitly.
+
+`multi_tenant` guards selected writes accepting `user_identifier`; it does not enforce read isolation. `write_mode` controls `client.buffered.submit(...)`, not ordinary store calls. TTL and auditing require explicit consolidation calls.
+
+// settings-fields: MemoryConfig:memory:python
+[cols="2,2,2,1,4",options="header"]
+|===
+| Field | Type / values | Default | Constraints | Description
+| `default_conversation_limit` | `int` | `50` | ge 1 | Default conversation message limit *Not automatically applied by MemoryClient*; see integration limits.
+| `message_embedding_enabled` | `bool` | `True` | — | Enable message embeddings *Not automatically applied by MemoryClient*; see integration limits.
+| `preference_confidence_threshold` | `float` | `0.7` | ge 0.0, le 1.0 | Preference confidence threshold *Not automatically applied by MemoryClient*; see integration limits.
+| `fact_deduplication_enabled` | `bool` | `True` | — | Enable fact deduplication *Not automatically applied by MemoryClient*; see integration limits.
+| `trace_embedding_enabled` | `bool` | `True` | — | Enable reasoning trace embeddings *Not automatically applied by MemoryClient*; see integration limits.
+| `tool_stats_enabled` | `bool` | `True` | — | Enable tool usage statistics *Not automatically applied by MemoryClient*; see integration limits.
+| `multi_tenant` | `bool` | `False` | — | Require user_identifier on the guarded bolt writes; does not add read authorization or scope semantic search.
+| `write_mode` | `Literal['sync', 'buffered']` | `'sync'` | — | How fire-and-forget writes via `client.buffered.submit(...)` are persisted. `'sync'` (default): each submit awaits the underlying execute_write — useful for tests and small loads. `'buffered'`: submits enqueue and a background task drains to Neo4j; callers use `client.flush()` / `client.wait_for_pending()` at shutdown.
+| `max_pending` | `int` | `200` | ge 1 | Maximum number of buffered writes that can be in flight. When the queue is full, `client.buffered.submit(...)` blocks until a worker drains an item.
+| `conversation_ttl_days` | `int \| None` | `None` | ge 1 | Available to application code as a TTL value; pass it explicitly to archive_expired_conversations(older_than_days=...). *Not automatically applied by MemoryClient*; see integration limits.
+| `audit_read` | `bool` | `False` | — | Available to application code as an audit preference; call consolidation.audit_reads(...) explicitly. *Not automatically applied by MemoryClient*; see integration limits.
+|===
+
+anchor:search[]
+
+== Search configuration
+
+These fields are accepted settings values but are not automatically read by the memory stores. Pass `limit`, `threshold`, and other supported options on individual search/traversal calls. NAMS honors a narrower option set; see the API references.
+
+// settings-fields: SearchConfig:search:python
+[cols="2,2,2,1,4",options="header"]
+|===
+| Field | Type / values | Default | Constraints | Description
+| `default_limit` | `int` | `10` | ge 1 | Default search limit *Not automatically applied by MemoryClient*; see integration limits.
+| `default_threshold` | `float` | `0.7` | ge 0.0, le 1.0 | Default similarity threshold *Not automatically applied by MemoryClient*; see integration limits.
+| `hybrid_search_enabled` | `bool` | `True` | — | Enable hybrid search *Not automatically applied by MemoryClient*; see integration limits.
+| `graph_depth` | `int` | `2` | ge 1 | Graph traversal depth for search *Not automatically applied by MemoryClient*; see integration limits.
+|===
+
+anchor:geocoding[]
+
+== Geocoding configuration
+
+Bolt only. When enabled, MemoryClient creates the selected geocoder and can enrich Location entities with coordinates. `nominatim` uses OpenStreetMap lookup; `google` requires a key. Provider usage limits/costs are separate from SDK defaults.
+
+[source,python]
+----
+from neo4j_agent_memory.config.settings import GeocodingConfig
+
+geocoding = GeocodingConfig(
+    enabled=True, provider="nominatim", user_agent="my-memory-app/1.0",
+    rate_limit_per_second=1.0, cache_results=True,
+)
+----
+
+Store explicit coordinates with `add_entity(..., coordinates=(latitude, longitude))`, or query them through `search_locations_near` and `search_locations_in_bounding_box`. See xref:reference/api/long-term.adoc[Long-term API] for exact arguments and result types.
+
+// settings-fields: GeocodingConfig:geocoding:python
+[cols="2,2,2,1,4",options="header"]
+|===
+| Field | Type / values | Default | Constraints | Description
+| `enabled` | `bool` | `False` | — | Enable automatic geocoding of Location entities
+| `provider` | `nominatim / google` | `'nominatim'` | — | Geocoding provider to use
+| `api_key` | `SecretStr \| None` | `None` | — | API key for geocoding provider (required for Google)
+| `cache_results` | `bool` | `True` | — | Cache geocoding results to avoid repeated API calls
+| `rate_limit_per_second` | `float` | `1.0` | gt 0 | Client request rate limit for the configured geocoder; honor the provider service policy.
+| `user_agent` | `str` | `'neo4j-agent-memory'` | — | User-Agent sent by the configured geocoder.
+|===
+
+anchor:enrichment[]
+
+== Enrichment configuration
+
+Bolt only. Enabled providers enrich entities with external descriptions/identifiers; provider settings govern caching, rate control, and background work. An injected `enrichment_provider` can replace construction from these settings. `providers` is a JSON list in environment variables.
+
+[source,python]
+----
+from neo4j_agent_memory.config.settings import EnrichmentConfig
+
+enrichment = EnrichmentConfig(
+    enabled=True, providers=["wikimedia"], background_enabled=True,
+    entity_types=["PERSON", "ORGANIZATION", "LOCATION", "EVENT"],
+    min_confidence=0.7, cache_ttl_hours=168,
+)
+----
+
+// settings-fields: EnrichmentConfig:enrichment:python
+[cols="2,2,2,1,4",options="header"]
+|===
+| Field | Type / values | Default | Constraints | Description
+| `enabled` | `bool` | `False` | — | Enable automatic entity enrichment
+| `providers` | `list[EnrichmentProvider]` | `["wikimedia"]` | — | Enrichment providers to use (in priority order)
+| `diffbot_api_key` | `SecretStr \| None` | `None` | — | API key for Diffbot Knowledge Graph
+| `wikimedia_rate_limit` | `float` | `0.5` | gt 0 | Seconds between Wikimedia API requests
+| `diffbot_rate_limit` | `float` | `0.2` | gt 0 | Seconds between Diffbot API requests
+| `cache_results` | `bool` | `True` | — | Cache enrichment results to avoid repeated API calls
+| `cache_ttl_hours` | `int` | `168` | ge 1 | Hours to cache enrichment results
+| `background_enabled` | `bool` | `True` | — | Run enrichment in background (non-blocking)
+| `queue_max_size` | `int` | `1000` | ge 1 | Maximum enrichment queue size
+| `max_retries` | `int` | `3` | ge 0 | Maximum retry attempts for failed enrichments
+| `retry_delay_seconds` | `float` | `60.0` | ge 1 | Delay between retry attempts
+| `entity_types` | `list[str]` | `["PERSON", "ORGANIZATION", "LOCATION", "EVENT"]` | — | Entity types to enrich (empty = all types)
+| `min_confidence` | `float` | `0.7` | ge 0.0, le 1.0 | Minimum entity confidence to trigger enrichment
+| `language` | `str` | `'en'` | — | Preferred language for enrichment data
+| `user_agent` | `str` | `'neo4j-agent-memory/1.0'` | — | User-Agent for API requests
+|===
+
+anchor:integration-limits[]
+
+== Integration limits
+
+An accepted configuration field is not a guarantee that MemoryClient forwards it to a store or provider. The tables mark currently unapplied values. In particular, changing memory/search defaults does not override method defaults, TTL does not schedule cleanup, and `audit_read` does not instrument every query. Use explicit method arguments and verify the behavior you rely on.
+
+On NAMS, local extraction, schema, resolution, geocoding, and enrichment settings do not configure the hosted pipeline. Client settings validation still runs, so an incompatible explicit `llm=None` can fail before the backend connects. Configure hosted ontologies through `client.ontology`; see xref:reference/ontology-api.adoc[Ontology API].
+
+anchor:deduplication[]
+
+== Deduplication configuration
+
+`DeduplicationConfig` is a dataclass from `neo4j_agent_memory.memory.long_term`. It belongs to the bolt LongTermMemory constructor; it is not a MemorySettings group or a MemoryClient constructor argument. There is no `DeduplicationStrategy` enum and no `NAM_DEDUPLICATION__...` environment family.
+
+[source,python]
+----
+from neo4j_agent_memory.memory.long_term import DeduplicationConfig, LongTermMemory
+
+config = DeduplicationConfig(auto_merge_threshold=0.97, flag_threshold=0.88)
+# Use only when constructing a store explicitly with your connected graph client.
+store = LongTermMemory(graph_client, embedder=embedder, deduplication=config)
+----
+
+MemoryClient constructs its long-term store with the dataclass defaults. `add_entity(..., deduplicate=False)` disables checking for that call. See xref:reference/api/long-term.adoc[Long-term API] for all fields and review/merge operations.
+
+anchor:observability[]
+
+== Observability configuration
+
+There is no `ObservabilityConfig` on MemorySettings and no `NAM_OBSERVABILITY__...` family. Use the observability factory and provider SDK settings.
+
+[source,python]
+----
+from neo4j_agent_memory.observability import get_tracer
+
+tracer = get_tracer(
+    provider="opentelemetry", service_name="my-agent-memory",
+    endpoint="http://localhost:4317",
+)
+# Or: get_tracer(provider="opik", project_name="my-agent-memory")
+
+async with tracer.async_span("entity-search") as span:
+    span.set_attribute("query_length", len(query))
+    result = await client.long_term.search_entities(query)
+----
+
+`get_tracer` accepts `auto`, `opentelemetry`, `opik`, and `noop`; auto-detection depends on installed libraries. Instrument the operations you intend to trace. OpenTelemetry export requires an explicit endpoint and an installed OTLP exporter; merely setting OTEL_EXPORTER_OTLP_ENDPOINT does not install an exporter on this tracer. Use `tracer.span` for a synchronous context manager or `tracer.async_span` for an async one.
+
+anchor:cli[]
+
+== CLI configuration
+
+The CLI exposes command-specific Click options and environment aliases; see xref:reference/cli.adoc[CLI reference]. It does not automatically read `.neo4j-memory.yaml`, nor does it implement `NAM_CLI__...`. An extraction `--schema` argument is a YAML schema file path, not a CLI settings file or named built-in schema.
+
+== Validation
+
+Numeric constraints appear in each field table. Invalid enum values or unknown constructor/nested fields raise Pydantic ValidationError. Missing optional provider packages may instead fail during provider construction; connection and model requests have their own errors.
+
+[source,python]
+----
+from pydantic import ValidationError
+from neo4j_agent_memory.config.settings import ResolutionConfig
+
+try:
+    ResolutionConfig(semantic_threshold=1.5)
+except ValidationError as exc:
+    print(exc.errors()[0]["type"])  # less_than_equal
+----
+
+== See also
+
+* xref:reference/environment-variables.adoc[Environment variables]
+* xref:reference/api/factory.adoc[Provider factory]
+* xref:reference/api/memory-client.adoc[MemoryClient]
+
+== Earlier section links
+
+anchor:_configuration_methods[]
+anchor:_embedding_and_llm_three_accepted_shapes[]
+anchor:_neo4j_configuration[]
+anchor:_python_configuration[]
+anchor:_environment_variables[]
+anchor:_parameters[]
+anchor:_python_configuration_2[]
+anchor:_environment_variables_2[]
+anchor:_parameters_2[]
+anchor:_embedding_providers[]
+anchor:_python_configuration_3[]
+anchor:_environment_variables_3[]
+anchor:_extractor_types[]
+anchor:_merge_strategies[]
+anchor:_schema_configuration[]
+anchor:_python_configuration_4[]
+anchor:_environment_variables_4[]
+anchor:_schema_models[]
+anchor:_python_configuration_5[]
+anchor:_environment_variables_5[]
+anchor:_resolver_strategies[]
+anchor:_python_configuration_6[]
+anchor:_environment_variables_6[]
+anchor:_memory_configuration[]
+anchor:_python_configuration_7[]
+anchor:_environment_variables_7[]
+anchor:_python_configuration_8[]
+anchor:_environment_variables_8[]
+anchor:_python_configuration_nominatim_free[]
+anchor:_python_configuration_google_maps_higher_accuracy[]
+anchor:_environment_variables_9[]
+anchor:_parameters_3[]
+anchor:_geocoding_providers[]
+anchor:_usage_example[]
+anchor:_geospatial_queries[]
+anchor:_python_configuration_9[]
+anchor:_environment_variables_10[]
+anchor:_parameters_4[]
+anchor:_enrichment_providers[]
+anchor:_python_configuration_10[]
+anchor:_environment_variables_11[]
+anchor:_deduplication_strategies[]
+anchor:_python_configuration_opentelemetry[]
+anchor:_python_configuration_opik[]
+anchor:_environment_variables_12[]
+anchor:_parameters_5[]
+anchor:_tracing_providers[]
+anchor:_environment_variables_13[]
+anchor:_configuration_file[]
+anchor:_cli_commands[]
+anchor:_complete_example[]
+anchor:_python_configuration_11[]
+anchor:_environment_variables_env_file[]
+anchor:_configuration_precedence[]
+anchor:_next_steps[]
+The earlier sections have been consolidated into the current contracts. See xref:reference/configuration.adoc#memory-settings[MemorySettings and provider shapes], xref:reference/configuration.adoc#precedence[sources and precedence], the configuration-group field tables above, and xref:reference/environment-variables.adoc[environment variables]. Deduplication, observability, and CLI integration limits are covered in their named sections above.

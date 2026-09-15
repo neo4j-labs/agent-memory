@@ -24,7 +24,8 @@ agent memory from TypeScript directly, use the TypeScript SDK in
 
 ## Prerequisites
 
-- **Node.js 22 LTS or newer** (`engines.node: ">=22"`; Node 18 and 20 are EOL)
+- **Node.js 22.13+ on the 22 release line, or Node.js 24**, for development and checks.
+  The locked lint/test toolchain sets this floor independently of the TypeScript memory SDK.
 - The backend running and reachable — see [`../GETTING_STARTED.md`](../GETTING_STARTED.md)
 - Sample data loaded into Neo4j (`make load-data` from the example root), or the
   dashboard, alerts and graph views will be empty
@@ -193,12 +194,14 @@ src/
 
 ---
 
-**Verified against** `neo4j-agent-memory` 0.6.0-dev (the example's backend uses
-the repo checkout), Node 25.0.0 / npm 11.6.2, Vite 8.3.0,
-`@vitejs/plugin-react` 6.1.1, React 19.3.0, react-router 7.18.3,
-`@chakra-ui/react` 3.37.0, `@neo4j-nvl/base`+`react` 1.2.1,
-`@tanstack/react-query` 5.102.8, motion 13.2.0, TypeScript 5.9.3, ESLint 10.10.0
-with `typescript-eslint` 8.70.0, Vitest 5.0.0 — on **2026-09-10**.
-`npm ci && npm run type-check && npm run lint && npm test && npm run build` all
-pass; the UI was exercised in headless Chromium against a stub of the backend's
-HTTP contract.
+**Historical verification report — 2026-09-10.** The following records a prior checkout/test report. Its development-version labels, passing counts, and release-availability statements are historical, not evidence of current package compatibility. See the [current source and artifact evidence](../../../../DOCUMENTATION_REMEDIATION_STATUS.md) before selecting an SDK artifact.
+
+> **Verified against** `neo4j-agent-memory` 0.6.0-dev (the example's backend uses
+> the repo checkout), Node 25.0.0 / npm 11.6.2, Vite 8.3.0,
+> `@vitejs/plugin-react` 6.1.1, React 19.3.0, react-router 7.18.3,
+> `@chakra-ui/react` 3.37.0, `@neo4j-nvl/base`+`react` 1.2.1,
+> `@tanstack/react-query` 5.102.8, motion 13.2.0, TypeScript 5.9.3, ESLint 10.10.0
+> with `typescript-eslint` 8.70.0, Vitest 5.0.0 — on **2026-09-10**.
+> `npm ci && npm run type-check && npm run lint && npm test && npm run build` all
+> pass; the UI was exercised in headless Chromium against a stub of the backend's
+> HTTP contract.

@@ -10,14 +10,15 @@ The shape of `@neo4j-labs/agent-memory`'s public surface, with deep links into t
 
 [NOTE]
 ====
-**NAMS-only, and at parity with Python.** The TypeScript SDK targets the hosted xref:reference/rest-api.adoc[NAMS] service exclusively — there is no bolt backend. It implements the *same memory model* as the xref:sdks/python.adoc[Python SDK]; cross-language behavioral parity is enforced by the link:https://github.com/neo4j-labs/agent-memory-tck[agent-memory-tck] conformance suite, which is the source of truth for parity claims.
+This map describes the current TypeScript source. It shares a memory model with
+the Python SDK, but method availability differs by backend and language. The
+normal TypeScript application uses hosted REST; the optional bridge transport
+exists for development and TCK conformance. A bridge method's presence does not
+establish a hosted endpoint. See xref:reference/backend-capabilities.adoc[backend capabilities].
 
-Both SDKs share the same `shortTerm` / `longTerm` / `reasoning` / `query` /
-`ontology` / `auth` surface, including ontology `import` / `diff` / `migrate` and
-API-key management. The only structural difference is that the TypeScript SDK is
-NAMS-only (no bolt backend), so these accessors are always live; in the Python
-SDK the NAMS-only ones raise `NotSupportedError` on bolt (see
-xref:reference/authentication.adoc[Authentication]).
+A source manifest or a generated page does not prove that an API has shipped in
+an npm artifact. Verify the installed package's exports/types before adopting
+new APIs. Source-checkout tutorials build the in-tree SDK explicitly.
 ====
 
 [NOTE]
@@ -42,11 +43,11 @@ npm install @neo4j-labs/agent-memory
 # bun add @neo4j-labs/agent-memory
 ----
 
-Requires Node.js 20+. Works in Bun, Deno, Cloudflare Workers, and Vercel Edge — the transport is `fetch`-only.
+Requires Node.js 22+. The core REST transport uses `fetch`; pass credentials explicitly where environment access differs. Framework adapters retain their own runtime and peer requirements.
 
 == `MemoryClient`
 
-The root class. Holds five subclients (`shortTerm`, `longTerm`, `reasoning`, `query`, `auth`) and the underlying `Transport`.
+The root class. Holds six subclients (`shortTerm`, `longTerm`, `reasoning`, `query`, `auth`, `ontology`) and the underlying `Transport`.
 
 [source,typescript]
 ----
@@ -55,15 +56,20 @@ import { MemoryClient } from "@neo4j-labs/agent-memory";
 // Zero-config: reads MEMORY_API_KEY from environment, targets hosted NAMS.
 const memory = new MemoryClient();
 
-// With options
-const memory = new MemoryClient({
+// Alternatively, construct a client with options.
+const configuredMemory = new MemoryClient({
   endpoint: "https://memory.neo4jlabs.com/v1",
   apiKey: process.env.MEMORY_API_KEY,
   timeout: 30_000,
-  headers: { "X-Trace-Id": traceId },
+  headers: { "X-Trace-Id": "example-trace-id" },
   logger: (event) => console.log(event),
 });
 ----
+
+`new MemoryClient(options)` selects a transport; a supplied `Transport` is also
+accepted for tests/adapters. Construction makes no HTTP request. Ordinary calls
+connect lazily; `await client.connect()` performs an optional explicit probe.
+`await client.close()` closes client resources and does not delete stored data.
 
 === `MemoryClientOptions`
 
@@ -73,7 +79,7 @@ const memory = new MemoryClient({
 
 |`endpoint`
 |`string`
-|The NAMS REST endpoint. Auto-selects REST transport when ending in `/v\d+`.
+|The NAMS REST endpoint. Auto-selects REST when the endpoint contains a version path matching `/\/v\d+\b/`; otherwise selects the bridge protocol.
 |`+https://memory.neo4jlabs.com/v1+`
 
 |`apiKey`
@@ -84,7 +90,7 @@ const memory = new MemoryClient({
 |`workspaceId`
 |`string`
 |NAMS workspace id, sent as the `X-Workspace-Id` header on every request.
-Required by header-scoped deployments (e.g. staging); harmless on production.
+Use when the deployment requires an explicit workspace header. The selected workspace, not a conversation user id, defines tenancy.
 An explicit `X-Workspace-Id` entry in `headers` overrides it.
 |`process.env.MEMORY_WORKSPACE_ID`
 
@@ -108,6 +114,11 @@ An explicit `X-Workspace-Id` entry in `headers` overrides it.
 |Extra request headers (User-Agent, trace headers, etc.).
 |—
 
+|`namespace`
+|`string`
+|Accepted but currently unused; does not scope requests or isolate entities.
+|—
+
 |`logger`
 |`(event: LogEvent) => void`
 |Receives `request` / `response` / `error` events for observability.
@@ -118,7 +129,9 @@ TypeDoc: link:{attachmentsdir}/api/typescript/classes/index.MemoryClient.html[`M
 
 == `client.shortTerm` — short-term memory
 
-Conversations, messages, three-tier context.
+Conversations, messages, three-tier context. On REST, create a conversation first
+and reuse its returned id. `userId` is metadata and a supported list filter, not
+a substitute for a conversation id or an authorization policy.
 
 [cols="2,3", options="header"]
 |===
@@ -131,19 +144,19 @@ Conversations, messages, three-tier context.
 |Fetch a conversation by id, with its messages.
 
 |`searchMessages(query, options?)`
-|Semantic + filter search across stored messages.
+|Semantic + filter search within the required `sessionId` (alias `conversationId`) on REST; `sessionId` wins if both are supplied.
 
 |`listSessions(options?)`
 |Enumerate session ids (with message counts and timestamps).
 
 |`deleteMessage(messageId)`
-|Remove a single message.
+|Bridge only. REST raises `NotSupportedError`; use conversation deletion when appropriate.
 
-|`clearSession(sessionId)`
+|`clearSession(sessionId, options?)`
 |Delete the whole conversation.
 
 |`createConversation(options)` _(hosted)_
-|Explicitly create a conversation with metadata (title, userId, workspace).
+|Create a conversation with required `userId` and optional `metadata`. Workspace selection comes from credentials/headers, not this options object.
 
 |`listConversations(options?)` _(hosted)_
 |Enumerate full conversation objects.
@@ -158,7 +171,7 @@ Conversations, messages, three-tier context.
 |Three-tier window: reflections, observations, recent messages — designed to be dropped into an LLM prompt.
 
 |`bulkAddMessages(conversationId, messages)` _(hosted)_
-|Persist many messages in one HTTP round-trip.
+|Persist up to 100 messages in one HTTP round-trip. More than 100 raises a plain `Error` before sending a request.
 
 |`getObservations(conversationId, options?)` _(hosted)_
 |Inline observations extracted from the conversation so far.
@@ -166,6 +179,16 @@ Conversations, messages, three-tier context.
 |`getReflections(conversationId)` _(hosted)_
 |Higher-level reflections generated when accumulated context crosses the compression threshold.
 |===
+
+**Options and scope**: `addMessage` accepts `metadata`; `getConversation` accepts
+`limit` (omitted by default). Both, and `clearSession`, accept an options
+`conversationId` alias when the positional `sessionId` is `undefined`; the
+positional id wins if both exist. Missing both raises `ValidationError`.
+`searchMessages` accepts `sessionId` / `conversationId`, `limit` (10) and
+`threshold` (0.7). On REST, missing both ids raises a pre-request `TransportError`
+for the required path parameter. `listSessions` defaults its limit to 100.
+`listConversations` accepts `userId` and `limit`; `getObservations` accepts
+`limit`, with an omitted value left to the server.
 
 **Returned types**: `Message`, `Conversation`, `ConversationContext`, `SessionInfo`, `Observation`, `Reflection`.
 
@@ -175,7 +198,8 @@ TypeDoc: link:{attachmentsdir}/api/typescript/classes/index.ShortTermMemory.html
 
 == `client.longTerm` — long-term memory
 
-Entities (POLE+O), preferences, facts, relationships.
+Entities and graph views on REST. The compatibility operations marked _bridge only_
+raise `NotSupportedError` on REST. They are not substitutes for hosted entity APIs.
 
 [cols="2,3", options="header"]
 |===
@@ -184,38 +208,38 @@ Entities (POLE+O), preferences, facts, relationships.
 |`addEntity(name, entityType, options?)`
 |Create an entity. Returns the persisted `Entity`.
 
-|`addPreference(category, preference, options?)`
+|`addPreference(category, preference, options?)` _(bridge only)_
 |Record a preference (food, communication, dietary, etc.).
 
-|`addFact(subject, predicate, object)`
+|`addFact(subject, predicate, object)` _(bridge only)_
 |Store a typed subject-predicate-object triple.
 
 |`searchEntities(query, options?)`
-|Semantic search over entities, with optional type filter and `topK`.
+|Semantic search over entities, with optional `type` and `limit` (default 10).
 
-|`searchPreferences(query, options?)`
+|`searchPreferences(query, options?)` _(bridge only)_
 |Semantic search over preferences, with optional category filter.
 
-|`getEntityByName(name)`
+|`getEntityByName(name)` _(bridge only)_
 |Look up an entity by exact name (returns `null` if not found).
 
-|`getRelatedEntities(entityId, options?)`
+|`getRelatedEntities(entityId, options?)` _(bridge only)_
 |Walk relationships outward from a given entity.
 
-|`addRelationship(sourceId, targetId, relationshipType, options?)`
+|`addRelationship(sourceId, targetId, relationshipType, options?)` _(bridge only)_
 |Create a typed relationship between two entities.
 
-|`mergeDuplicateEntities(sourceId, targetId, options?)`
+|`mergeDuplicateEntities(sourceId, targetId, options?)` _(bridge only)_
 |Merge `source` into `target`; aliases the source name onto target.
 
 |`listEntities(options?)` _(hosted)_
-|Enumerate entities, optionally filtered by type, with pagination.
+|Enumerate entities with optional `type` and `limit`; an omitted limit is left to the server. No cursor/offset option is exposed.
 
 |`getEntity(entityId)` _(hosted)_
 |Fetch an entity by id.
 
 |`updateEntity(entityId, options)` _(hosted)_
-|Patch an entity's description, type, or metadata.
+|Patch an entity's `name` and/or `description`. Type and metadata are not update options.
 
 |`deleteEntity(entityId)` _(hosted)_
 |Remove an entity.
@@ -230,10 +254,38 @@ Entities (POLE+O), preferences, facts, relationships.
 |Server-side merge with conflict resolution.
 
 |`getEntityGraph()` _(hosted)_
-|Snapshot of the entity graph (nodes + edges) for visualization.
+|Snapshot of the workspace entity graph (nodes + edges) for visualization.
+
+|`expandGraph(nodeId, loadedIds?)` _(hosted)_
+|Expand around a graph node, excluding already loaded ids (default `[]`). Returns `ExpandedGraph`.
+
+|`waitForExtraction(options)`
+|Poll `searchEntities` for a predicate, exact expected names, or a minimum result count. See readiness constraints below.
 |===
 
 **Returned types**: `Entity`, `Preference`, `Fact`, `Relationship`, `EntityHistory`, `EntityGraph`.
+
+**Readiness options** for `waitForExtraction`:
+
+[cols="2,2,3",options="header"]
+|===
+|Option |Type |Default/constraint
+|`query` |`string` |First expected name when omitted; empty string for a predicate-only check.
+|`expectedNames` |`string[]` |Case-insensitive names that must all appear.
+|`predicate` |`(entities: Entity[]) => boolean` |Takes precedence over expected names/count when supplied.
+|`minResults` |`number` |1; used when neither a predicate nor expected names is supplied.
+|`limit` |`number` |10; effective search limit is at least the minimum count and expected-name count.
+|`timeoutMs` |`number` |30,000; bounded polling returns `false` at the deadline.
+|`intervalMs` |`number` |1,000 between unsuccessful polls.
+|===
+
+`waitForExtraction` requires `query`, `expectedNames` or `predicate`.
+Defaults are 30,000 ms timeout, 1,000 ms interval and `minResults: 1`; the search
+limit is at least 10 and grows to cover the requested count/names. Prefer a
+predicate or case-insensitive `expectedNames` for this ingestion: unrelated
+nearest-neighbor results can satisfy a mere count. Returns `false` on timeout;
+validation and transport failures propagate. This helper and graph expansion
+must be present in the artifact you install; this page maps current source.
 
 **Entity types**: hosted service uses lowercase strings — `"person"`, `"organization"`, `"location"`, `"concept"`, `"tool"`, `"custom"`. The bridge protocol uses POLE+O uppercase — `"PERSON"`, `"ORGANIZATION"`, `"LOCATION"`, `"EVENT"`, `"OBJECT"`. The SDK normalizes both directions.
 
@@ -247,28 +299,28 @@ Reasoning traces, steps, tool calls.
 |===
 |Method |Purpose
 
-|`startTrace(sessionId, task)`
-|Begin a reasoning trace. Returns a `ReasoningTrace` with a `traceId`.
+|`startTrace(sessionId, task)` _(bridge only)_
+|Begin a reasoning trace. Returns a `ReasoningTrace` with an `id`.
 
-|`addStep(traceId, options?)`
+|`addStep(traceId, options?)` _(bridge only)_
 |Add a step (thought / action / observation) to a trace.
 
 |`recordToolCall(stepId, toolName, args, options?)`
 |Persist a tool call: name, arguments, result, status, duration.
 
-|`completeTrace(traceId, options?)`
+|`completeTrace(traceId, options?)` _(bridge only)_
 |Mark the trace finished with an outcome and `success: boolean`.
 
-|`getTraceWithSteps(traceId)`
+|`getTraceWithSteps(traceId)` _(bridge only)_
 |Fetch a trace including its steps and tool calls.
 
-|`listTraces(options?)`
-|Enumerate traces (filter by session, success, time range).
+|`listTraces(options?)` _(bridge only)_
+|Enumerate traces with `sessionId` and `limit` (default 100); no success/time-range filters.
 
-|`getToolStats(toolName?)`
+|`getToolStats(toolName?)` _(bridge only)_
 |Per-tool aggregate stats: success rate, average duration.
 
-|`getSimilarTraces(task, options?)`
+|`getSimilarTraces(task, options?)` _(bridge only)_
 |"What did I do last time I tried something like this?" Semantic search over past traces.
 
 |`recordStep(input)` _(hosted)_
@@ -278,7 +330,7 @@ Reasoning traces, steps, tool calls.
 |All steps recorded against a conversation.
 
 |`explainStep(stepId)` _(hosted)_
-|Server-generated explanation of why an agent did what it did.
+|Read the recorded step together with its tool calls and influenced entities. This is a provenance view, not hidden model reasoning.
 
 |`getTraceByConversation(conversationId)` _(hosted)_
 |Pull the full reasoning trace tied to a conversation.
@@ -321,7 +373,7 @@ TypeDoc: link:{attachmentsdir}/api/typescript/classes/index.QueryConsole.html[`Q
 |Permanently revoke a key.
 
 |`revealApiKey(keyId, workspaceId)`
-|Re-reveal a stored key (one-time, if your account has the scope).
+|Request plaintext for a stored key in the workspace, where authorized by the service.
 
 |`rotateApiKey(keyId)`
 |Mint a replacement key and revoke the old one.
@@ -381,56 +433,47 @@ xref:how-to/use-ontologies.adoc[Use Ontologies].
 
 == Errors
 
-Every error extends `MemoryError` and carries an optional `requestId` for correlation with server logs.
+The classes below describe SDK errors. Not all thrown values extend
+`MemoryError`: client guards, token providers, response parsing and fetch aborts
+can throw ordinary errors. A server correlation id is optional and appears only
+when captured from a response header.
 
 [cols="1,3", options="header"]
 |===
-|Class |Raised when
-
-|`MemoryError`
-|Base class. Catch this if you want everything.
-
-|`ConnectionError`
-|Network failure — DNS, refused, TLS handshake. Wraps the underlying `fetch` error.
-
-|`AuthenticationError`
-|HTTP 401 / 403. Missing, expired, or scope-restricted API key.
-
-|`NotFoundError`
-|HTTP 404. Conversation, entity, or trace id does not exist.
-
-|`ValidationError`
-|HTTP 400. Required field missing or value out of range. `details` carries the server's per-field complaint.
-
-|`TransportError`
-|HTTP 5xx after retries exhausted, OR any non-mapped status. Carries `statusCode` and `responseBody`.
-
-|`RateLimitError`
-|HTTP 429 after retries exhausted. Honors `Retry-After` header during retry.
-
-|`NotSupportedError`
-|Method exists on the SDK but the current transport doesn't implement it (e.g., calling hosted-only methods over a TCK bridge).
+|Class |Current REST behavior
+|`MemoryError` |Base class of the SDK's named errors; does not cover every failure.
+|`ConnectionError` |Wraps fetch `TypeError` failures. Explicit `connect()` also wraps timeouts and HTTP 5xx.
+|`AuthenticationError` |HTTP 401 or 403.
+|`TransportError` |Other non-success statuses, including 400, 404, 429 and 5xx on ordinary requests; carries `statusCode`, `responseBody` and optional `requestId`. Also used for missing route parameters before HTTP.
+|`ValidationError` |Selected client-side argument checks. Has no `details` field.
+|`NotFoundError` |Exported compatibility class; ordinary REST 404 responses use `TransportError`.
+|`NotSupportedError` |No implementation on the selected transport; raised before HTTP.
 |===
+
+The client makes one attempt per ordinary request. It does not automatically
+retry, expose `RateLimitError`, or honor `Retry-After` for retries. A normal
+request timeout can propagate a `DOMException` named `TimeoutError`; it is not
+always a `ConnectionError`. See xref:how-to/typescript/handle-errors.adoc[handling errors]
+for a bounded retry of an idempotent read.
 
 [source,typescript]
 ----
-import {
-  MemoryClient,
-  MemoryError,
-  AuthenticationError,
-  RateLimitError,
-} from "@neo4j-labs/agent-memory";
+import { MemoryClient, AuthenticationError, MemoryError, TransportError } from "@neo4j-labs/agent-memory";
 
+const client = new MemoryClient();
 try {
-  await memory.shortTerm.addMessage(sessionId, "user", text);
-} catch (err) {
-  if (err instanceof AuthenticationError) {
-    // rotate the key
-  } else if (err instanceof RateLimitError) {
-    // back off; err.retryAfter is in seconds
-  } else if (err instanceof MemoryError) {
-    console.error("memory failure", { requestId: err.requestId, err });
+  await client.shortTerm.listConversations({ limit: 5 });
+} catch (error) {
+  if (error instanceof AuthenticationError) {
+    console.error("Check credentials and workspace access", error.requestId);
+  } else if (error instanceof TransportError) {
+    console.error("HTTP failure", error.statusCode, error.requestId);
+  } else if (error instanceof MemoryError) {
+    console.error(error.message, error.requestId);
   }
+  throw error; // Preserve non-SDK errors too.
+} finally {
+  await client.close();
 }
 ----
 
@@ -481,7 +524,7 @@ TypeDoc: each subpath's exports are listed under the matching module in the link
 
 == Observability
 
-The `logger` constructor option receives typed `LogEvent`s for every transport call:
+The `logger` constructor option receives typed `LogEvent`s for supported HTTP calls. Pre-request validation and some raw failures have no complete event pair:
 
 [source,typescript]
 ----
@@ -514,14 +557,13 @@ See xref:how-to/typescript/observability.adoc[How-to: enable observability] for 
 
 == Versioning
 
-The TypeScript SDK follows SemVer:
-
-* **Major** — backwards-incompatible API change (rare; expect a migration guide).
-* **Minor** — new methods, new options. Existing code keeps working.
-* **Patch** — bug fixes, no API change.
-
-Release tags are namespaced `typescript-v<X.Y.Z>` so they don't collide with the Python SDK's `python-v<X.Y.Z>` tags. The current published version is in
-link:https://github.com/neo4j-labs/agent-memory/blob/main/typescript/CHANGELOG.md[`typescript/CHANGELOG.md`].
+The SDK has its own package version; NAMS itself is continuously shipped and
+`/v1` is the service API path. Release tags use `typescript-v<X.Y.Z>` separately
+from Python tags. The source manifest and
+link:https://github.com/neo4j-labs/agent-memory/blob/main/typescript/CHANGELOG.md[changelog]
+record repository development; verify the npm artifact before treating an entry
+as released. This Neo4j Labs project provides no backward-compatibility or
+scheduled-deprecation guarantee.
 
 == See also
 

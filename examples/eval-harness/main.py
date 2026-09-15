@@ -22,11 +22,18 @@ Every case is built to be able to fail:
 * Two tenants are seeded. Each ``PreferenceCase`` expects only its own
   tenant's id, so a scoping leak is an F1 miss, not a silent pass.
 
-Run from the repo root::
+Install the published package in an activated virtual environment::
 
-    uv run python examples/eval-harness/main.py
-    uv run python examples/eval-harness/main.py --dimensions retrieval,preference
-    uv run python examples/eval-harness/main.py --min-score 0.9 --out eval-trend.jsonl
+    python -m pip install 'neo4j-agent-memory[sentence-transformers]==0.6.0'
+
+Export NEO4J_URI, NEO4J_USERNAME and NEO4J_PASSWORD for a dedicated test Aura
+database; NEO4J_DATABASE defaults to neo4j. The fixture resets its demo records
+on every run. Save this file as eval-harness/main.py in your local
+agent-memory-tutorials directory, then run from that directory::
+
+    python eval-harness/main.py
+    python eval-harness/main.py --dimensions retrieval,preference
+    python eval-harness/main.py --min-score 0.9 --out eval-trend.jsonl
 
 ``--min-score`` turns the script into a gate: it exits 1 (and prints the
 expected-vs-actual breakdown of the failing cases) when the overall score
@@ -113,10 +120,12 @@ class SeedLabels(TypedDict):
 def build_settings(*, multi_tenant: bool = True) -> MemorySettings:
     """Settings for the demo: no LLM, a local embedder, no extractor."""
     return MemorySettings(
+        backend="bolt",
         neo4j=Neo4jConfig(
-            uri=os.getenv("NEO4J_URI", "bolt://localhost:7687"),
-            username=os.getenv("NEO4J_USERNAME", "neo4j"),
-            password=SecretStr(os.getenv("NEO4J_PASSWORD", "password")),
+            uri=os.environ["NEO4J_URI"],
+            username=os.environ["NEO4J_USERNAME"],
+            password=SecretStr(os.environ["NEO4J_PASSWORD"]),
+            database=os.getenv("NEO4J_DATABASE", "neo4j"),
         ),
         llm=None,
         # v0.3+ provider-string shorthand for a local sentence-transformers

@@ -12,11 +12,20 @@ Default behavior is sync — every write awaits a Neo4j round-trip. In
 production, that means each `record_tool_call`, `add_step`, custom
 write, etc. delays the agent's reply by the round-trip latency. With
 `write_mode="buffered"`, writes go through `client.buffered.submit(...)`,
-return immediately, and a background drainer pushes them to Neo4j.
+return after enqueueing when capacity is available, and a background drainer
+attempts each write against Neo4j. Existing memory API calls still persist inline.
+
+== Prerequisites
+
+* A connected Bolt client and a Neo4j database on which you can run parameterized writes.
+* `MemorySettings` configured as in xref:how-to/messages.adoc[Store and Search Messages].
+* An application shutdown path that awaits `flush()` or `close()` and inspects background errors.
+
+The snippets run inside an async function. `generate_response` below represents your application's response function; it is not a library method.
 
 == Goal
 
-image::diagrams/buffered-write-flow.png[Buffered write architecture: agent submits to queue and returns immediately; background drainer pushes to Neo4j,width=600,align=left]
+image::diagrams/buffered-write-flow.png[Buffered write architecture: agent submits to bounded queue; background drainer pushes to Neo4j,width=600,align=left,link=self]
 
 The agent responds before persistence completes:
 
@@ -53,7 +62,7 @@ async with MemoryClient(settings) as client:
 
 [source,python]
 ----
-settings = MemorySettings(...)
+# Start with the configured settings from the prerequisites.
 settings.memory.write_mode = "buffered"
 settings.memory.max_pending = 200   # back-pressure threshold
 ----
@@ -85,7 +94,8 @@ work in both modes without changes.
 
 === 3. Drain the queue
 
-`client.flush()` blocks until every queued write has been persisted:
+`client.flush()` waits until every submitted job has finished its write attempt.
+It does not raise captured write failures or retry them:
 
 [source,python]
 ----
@@ -96,16 +106,21 @@ await client.flush()
 `client.wait_for_pending()` is an alias.
 
 `client.close()` (and `async with` on its way out) automatically
-drains the queue before disconnecting from Neo4j, so writes are never
-silently lost on a clean shutdown.
+drains the queue before disconnecting from Neo4j. A clean shutdown attempts
+queued writes; check `write_errors` to determine whether any failed. The queue
+is held in process memory and is not a durable retry log.
 
 === 4. Inspect background errors
 
 Errors during background writes are captured rather than raised into
-the agent's hot path:
+the agent's hot path. `write_errors` is cumulative for this client instance:
 
 [source,python]
 ----
+import logging
+
+log = logging.getLogger(__name__)
+
 for err in client.write_errors:
     # BufferedWriteError carries the originating Cypher, its parameters, the
     # exception and when it failed.
@@ -116,6 +131,29 @@ for err in client.write_errors:
         type(err.error).__name__,
     )
 ----
+
+=== 5. Verify the persisted result
+
+For the `agent_turn` example, record the counter before the turn, await the
+turn and `flush()`, then read it back:
+
+[source,python]
+----
+await client.flush()
+if client.write_errors:
+    raise RuntimeError(f"{len(client.write_errors)} buffered writes failed")
+rows = await client.query.cypher(
+    "MATCH (c:Conversation {session_id: $session}) "
+    "RETURN c.turns_recorded AS turns",
+    {"session": "session-1"},
+)
+print(rows)
+----
+
+The counter should increase by one for each successful turn in this example.
+`client.buffered.pending == 0` only measures queue depth; a job can still be
+in flight before `flush()`, and a failed job also leaves the queue. Retain the
+error details and decide whether each failed operation is safe to retry.
 
 == Tradeoffs
 

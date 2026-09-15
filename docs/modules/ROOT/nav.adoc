@@ -1,30 +1,31 @@
 * xref:index.adoc[Agent Memory]
-** xref:getting-started.adoc[Getting Started]
+** xref:getting-started.adoc[Getting started]
 
 ** SDKs
 *** xref:sdks/python.adoc[Python SDK — neo4j-agent-memory]
 *** xref:sdks/typescript.adoc[TypeScript SDK — @neo4j-labs/agent-memory]
 
 ** xref:tutorials/index.adoc[Tutorials]
-*** Python
-**** xref:tutorials/first-agent-memory.adoc[First Agent Memory]
-**** xref:tutorials/conversation-memory.adoc[Conversation Memory]
-**** xref:tutorials/knowledge-graph.adoc[Knowledge Graphs]
-**** xref:tutorials/anthropic-and-local-embeddings.adoc[Anthropic + Local Embeddings]
-**** xref:tutorials/strands-agent-quickstart.adoc[Strands Agent Quickstart]
-**** xref:tutorials/mcp-server.adoc[MCP Server for Claude Desktop]
-**** xref:tutorials/microsoft-agent-memory.adoc[Microsoft Agent Memory]
-**** xref:tutorials/nams-quickstart.adoc[NAMS Quickstart]
-**** xref:tutorials/ontology-quickstart.adoc[Ontology Quickstart]
-**** xref:tutorials/skills-quickstart.adoc[Skills Quickstart (Preview)]
-*** TypeScript
-**** xref:tutorials/first-agent-memory-typescript.adoc[First Agent Memory (TypeScript)]
-**** xref:tutorials/hosted-quickstart-typescript.adoc[Hosted Quickstart]
-**** xref:tutorials/conversation-memory-typescript.adoc[Conversation Memory (TypeScript)]
-**** xref:tutorials/knowledge-graph-typescript.adoc[Knowledge Graph from Documents (TypeScript)]
-**** xref:tutorials/mcp-server-typescript.adoc[MCP Server (TypeScript)]
+*** Python and Aura
+**** xref:tutorials/first-agent-memory.adoc[Build memory context]
+**** xref:tutorials/conversation-memory.adoc[Persistent chatbot context]
+**** xref:tutorials/knowledge-graph.adoc[Build a knowledge graph]
+**** xref:tutorials/anthropic-and-local-embeddings.adoc[Anthropic and local embeddings]
+**** xref:tutorials/microsoft-agent-memory.adoc[Microsoft framework memory]
+**** xref:tutorials/strands-agent-quickstart.adoc[Restore a Strands conversation]
+**** xref:tutorials/mcp-server.adoc[Store and recall with Claude Desktop]
+*** Python and NAMS
+**** xref:tutorials/nams-quickstart.adoc[Store and read back hosted memory]
+**** xref:tutorials/ontology-quickstart.adoc[Activate and restore an ontology]
+**** xref:tutorials/skills-quickstart.adoc[Distil and download a skill]
+*** TypeScript and NAMS
+**** xref:tutorials/hosted-quickstart-typescript.adoc[Store and read back hosted memory]
+**** xref:tutorials/first-agent-memory-typescript.adoc[Build an agent with memory]
+**** xref:tutorials/conversation-memory-typescript.adoc[Recall after a restart]
+**** xref:tutorials/knowledge-graph-typescript.adoc[Inspect extracted entities]
+**** xref:tutorials/mcp-server-typescript.adoc[Connect Claude Desktop through MCP]
 
-** xref:how-to/index.adoc[How-To Guides]
+** xref:how-to/index.adoc[How-to guides]
 
 *** Pluggable Providers
 **** xref:how-to/bring-your-own-model.adoc[Bring Your Own Model]
@@ -54,7 +55,7 @@
 **** xref:how-to/reasoning-traces.adoc[Record Reasoning Traces]
 **** xref:how-to/audit-reasoning.adoc[Audit with TOUCHED Edges]
 
-*** Production Features
+*** Operational features
 **** xref:how-to/multi-tenancy.adoc[Multi-Tenant Memory]
 **** xref:how-to/buffered-writes.adoc[Buffered Writes]
 **** xref:how-to/consolidation.adoc[Memory Consolidation]
@@ -94,6 +95,7 @@
 **** xref:how-to/typescript/integrations-overview.adoc[Framework Integrations Overview]
 
 ** xref:reference/index.adoc[Reference]
+*** xref:reference/backend-capabilities.adoc[Backend capabilities and data scope]
 *** xref:reference/configuration.adoc[Configuration]
 *** xref:reference/environment-variables.adoc[Environment Variables]
 *** xref:reference/cli.adoc[CLI]

@@ -1,0 +1,23 @@
+Save the three complete files below in `agent-memory-tutorials/`. If a file already exists from another guide, keep its matching contents; do not replace configuration or state files. The task-specific excerpt in the next section explains the operation to run.
+
+include::partial$python-aura-connection-file.adoc[]
+
+.Complete `core_memory_settings.py`
+[%collapsible]
+====
+.Save as `core_memory_settings.py`
+[source,python]
+----
+include::example$core_memory_settings.py[]
+----
+====
+
+.Complete `core_memory_recipes.py`
+[%collapsible]
+====
+.Save as `core_memory_recipes.py`
+[source,python]
+----
+include::example$core_memory_recipes.py[]
+----
+====

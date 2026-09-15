@@ -1,172 +1,86 @@
-= Entity Extraction: Batch & Streaming
+= Account for batch and chunk extraction results
 :page-product: agent-memory
 :page-pagination:
-:toclevels: 3
+:toclevels: 2
 :sectanchors:
-:icons: font
-:source-highlighter: highlight.js
 
-How to process multiple documents in parallel and handle very long documents with streaming extraction.
+To process multiple source texts without losing failed inputs, use the pipeline's batch result wrappers and retain the input index for every result. For longer individual texts, select explicit chunk units and inspect per-chunk errors.
 
-== Batch Extraction
+anchor:_prerequisites[]
 
-Process multiple documents efficiently with parallel extraction:
+== 1. Install the local extractor
+
+Use Python 3.10 or newer and a POSIX shell. Prepare the example files and install the required extra:
+
+include::partial$python-tutorial-setup.adoc[]
+
+[source,bash]
+----
+python -m pip install 'neo4j-agent-memory[gliner]==0.6.0'
+----
+
+The maintained program `extraction_recipes.py` supplies its own imports, source texts, and event-loop entry point. It downloads the GLiNER model on first inference; allow disk space and network access for the download. These commands do not connect to a database or require an LLM API key.
+
+include::partial$python-extraction-recipe-file.adoc[]
+
+== 2. Configure and run the extraction
+
+The runner selects the `business` GLiNER schema. `ExtractionPipeline(..., fallback_on_error=False)` propagates an extractor error to the batch wrapper; `fail_fast=False` then collects the item error instead of abandoning the remaining inputs. The example starts with one worker and a batch size of two; tune after measuring your workload.
+
+The following function is included from the complete program. Run the maintained file with the command below it.
 
 [source,python]
 ----
-documents = [
-    {"id": "doc-1", "text": "Customer John ordered iPhone 15..."},
-    {"id": "doc-2", "text": "Jane returned the Nike shoes..."},
-    {"id": "doc-3", "text": "Order #12345 shipped via FedEx..."},
-    # ... hundreds more
-]
-
-texts = [doc["text"] for doc in documents]
-
-result = await extractor.extract_batch(
-    texts=texts,
-    batch_size=10,         # Documents per batch
-    max_concurrency=5,     # Parallel workers
-    on_progress=lambda done, total: print(f"Progress: {done}/{total}"),
-)
-
-print(f"Processed: {result.successful_items}/{result.total_items}")
-print(f"Total entities extracted: {result.total_entities}")
-print(f"Total relations extracted: {result.total_relations}")
-
-# Check for failures
-for index, error_msg in result.get_errors():
-    print(f"  doc {index} failed: {error_msg}")
+include::example$extraction_recipes.py[tags=batch]
 ----
 
-[TIP]
-====
-*Tuning batch size and concurrency*
+[source,bash]
+----
+python extraction_recipes.py batch
+----
 
-* **GLiNER on GPU**: `batch_size=32, max_concurrency=1` — let the GPU saturate with larger batches rather than many small concurrent runs
-* **GLiNER on CPU**: `batch_size=10, max_concurrency=4` — smaller batches, more parallelism
-* **LLM via API**: `batch_size=1, max_concurrency=10` — one doc per worker, limited by API rate limits
-====
+== 3. Verify the result
 
-=== High-Volume Ecommerce (Speed Priority)
+Expected: progress for both inputs, an `Input ...` line for each result, and `Verified: all 2 inputs accounted for`. Failed items are printed with their source indexes and cause a nonzero exit so they can be retried after correcting the cause. An empty but successful extraction is still an accounted-for item; inspect it for quality.
 
+The command raises on the documented failure conditions. Inspect candidate names, types, and confidence against source text before storing them. Counts alone do not measure extraction accuracy.
+
+anchor:_streaming_extraction[]
+
+== Process a long text in chunks
+
+. Read the maintained streaming function:
++
 [source,python]
 ----
-extractor = GLiNEREntityExtractor.for_schema("ecommerce")
-
-result = await extractor.extract_batch(
-    texts=product_descriptions,
-    batch_size=50,         # Larger batches for GPU throughput
-    max_concurrency=10,
-)
+include::example$extraction_recipes.py[tag=streaming]
 ----
-
-=== Financial Compliance (Accuracy Priority)
-
-[source,python]
+. Run it against the program's repeated fictional sample text:
++
+[source,bash]
 ----
-pipeline = ExtractionPipeline(
-    stages=[
-        GLiNEREntityExtractor.for_schema("financial"),
-        LLMEntityExtractor(
-            model="gpt-4o",
-            extract_relations=True,
-            temperature=0,           # Deterministic output
-        ),
-    ],
-    merge_strategy="union",          # Keep all extractions
-)
-
-result = await pipeline.extract_batch(compliance_documents)
-
-# Flag low-confidence entities for human review
-for item in result.results:
-    for entity in item.result.entities:
-        if entity.confidence < 0.8:
-            await flag_for_review(entity, document_id=item.index)
+python extraction_recipes.py streaming
 ----
+. Verify `Verified: ... chunks completed; ... merged entities`. Any chunk error raises with its chunk index; inspect candidate quality separately.
 
-== Streaming Extraction
+`chunk_size=400` and `overlap=40` in this example are *characters*. The default is 4,000 characters with 200 overlap. With `chunk_by_tokens=True`, this implementation uses approximate whitespace token counts, not the exact tokenizer of every model. Choose a size based on the selected model's accepted input, boundary behavior, memory use, latency, and a representative corpus; there is no universal 2,000/10,000/100,000-token cutoff.
 
-For documents longer than ~10,000 tokens, use streaming extraction to process in chunks without loading the full document into memory:
+The API accepts the complete input string and computes its chunks. It is not a file-streaming reader that avoids loading the document text into memory. `extract_streaming` yields `StreamingChunkResult` objects with `.result.entities`; `extract` returns `StreamingExtractionResult`, and `to_extraction_result` converts it to the common result model. Calling extraction twice repeats model work.
 
-[source,python]
-----
-from neo4j_agent_memory.extraction import StreamingExtractor
+anchor:_track_extraction_quality[]
 
-streamer = StreamingExtractor(
-    extractor=extractor,
-    chunk_size=4000,    # Characters per chunk
-    overlap=200,        # Overlap to avoid splitting entities at boundaries
-)
+== Preserve source indexes and measure quality
 
-long_document = open("annual_report.txt").read()  # 100K+ characters
+The batch API shown here belongs to `ExtractionPipeline`. `GLiNEREntityExtractor.extract_batch` has a different signature and returns a list of `ExtractionResult`, not the aggregate wrapper. Keep the two APIs distinct.
 
-# Stream results as each chunk completes
-async for chunk_result in streamer.extract_streaming(long_document):
-    print(f"Chunk {chunk_result.chunk.index}: {chunk_result.entity_count} entities")
+Before persistence, associate each successful `BatchItemResult.index` with its source document; log errors against that same input identifier. The xref:tutorials/knowledge-graph.adoc[document program] demonstrates message provenance and safe relationship endpoint matching. Measure precision/recall on reviewed samples and inspect chunk boundaries; a 100% completed-item rate is not a claim of extraction accuracy.
 
-    for entity in chunk_result.entities:
-        stored, _ = await client.long_term.add_entity(
-            name=entity.name,
-            entity_type=entity.type,
-        )
-----
+See xref:reference/extractors.adoc[batch, stage, and streaming result models] and xref:how-to/batch-processing.adoc[document-processing tasks].
 
-=== Get Complete Deduplicated Result
-
-[source,python]
-----
-# Collect all chunks and deduplicate across chunk boundaries
-result = await streamer.extract(long_document, deduplicate=True)
-
-print(f"Chunks processed: {result.stats.total_chunks}")
-print(f"Raw entities: {result.stats.total_entities}")
-print(f"After deduplication: {result.stats.deduplicated_entities}")
-
-extraction_result = result.to_extraction_result(source_text=long_document)
-----
-
-=== Token-Based Chunking
-
-Use token-count chunking for more predictable LLM context window usage:
-
-[source,python]
-----
-streamer = StreamingExtractor(
-    extractor=extractor,
-    chunk_size=1000,        # Approximate tokens per chunk
-    overlap=50,             # Token overlap
-    chunk_by_tokens=True,   # Token-based instead of character-based
-)
-----
-
-[TIP]
-====
-*When to use streaming*
-
-Use streaming when your document exceeds ~8,000 characters (~2,000 tokens). Below that threshold, the chunking overhead isn't worth it. For batch processing many large documents, combine both: use `extract_batch()` for parallelism and `StreamingExtractor` per document for size handling.
-====
-
-== Track Extraction Quality
-
-[source,python]
-----
-metrics = {
-    "document_id": doc_id,
-    "text_length": len(text),
-    "entities_extracted": len(result.entities),
-    "relations_extracted": len(result.relations),
-    "avg_confidence": sum(e.confidence for e in result.entities) / len(result.entities),
-    "extraction_time_ms": result.extraction_time_ms,
-    "extractor": extractor.__class__.__name__,
-}
-
-await log_metrics(metrics)
-----
-
-== See Also
-
-* xref:how-to/entity-extraction.adoc[Basic Extraction & Pipelines]
-* xref:how-to/entity-extraction-schemas.adoc[Domain Schemas & Custom Types]
-* xref:reference/extractors.adoc[Extractor Classes Reference]
+// Historical section links resolve to the maintained task and reference pointers.
+anchor:_batch_extraction[]
+anchor:_high_volume_ecommerce_speed_priority[]
+anchor:_financial_compliance_accuracy_priority[]
+anchor:_get_complete_deduplicated_result[]
+anchor:_token_based_chunking[]
+anchor:_see_also[]
