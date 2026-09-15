@@ -6,4 +6,4 @@ fastapi>=0.141,<1
 # the run command below assumes.
 uvicorn[standard]>=0.52,<1
 # Optional: loads this directory's .env (main.py falls back to a tiny parser).
-python-dotenv>=1.0,<2
+python-dotenv>=1.2.3,<2
