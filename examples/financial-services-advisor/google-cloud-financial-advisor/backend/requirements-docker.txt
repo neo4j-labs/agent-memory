@@ -54,7 +54,7 @@ colorama==0.4.6 ; sys_platform == 'win32'
     #   click
     #   tqdm
     #   typer
-cryptography==46.0.4
+cryptography==50.0.1
     # via
     #   authlib
     #   google-auth
