@@ -94,6 +94,51 @@ class TestNamsConfigValidation:
         config = NamsConfig(endpoint="https://nams.internal/v2")
         assert config.endpoint == "https://nams.internal/v2"
 
+
+class TestNamsConfigEndpointNormalization:
+    """The hosted NAMS service is REST-only and lives under ``/v1``.
+
+    A user who copies the bare base URL from the docs
+    (``https://memory.neo4jlabs.com``) must not silently fall into TCK
+    bridge mode. NamsConfig appends the ``/v1`` suffix for the hosted
+    host when no ``/v<N>`` segment is present. See issue #129.
+
+    Normalization is scoped to the hosted host so that version-less
+    on-prem / localhost endpoints keep their (bridge) behavior.
+    """
+
+    def test_bare_hosted_url_gets_v1_suffix(self):
+        config = NamsConfig(endpoint="https://memory.neo4jlabs.com")
+        assert config.endpoint == "https://memory.neo4jlabs.com/v1"
+
+    def test_bare_hosted_url_with_trailing_slash_gets_v1_suffix(self):
+        config = NamsConfig(endpoint="https://memory.neo4jlabs.com/")
+        assert config.endpoint == "https://memory.neo4jlabs.com/v1"
+
+    def test_normalized_hosted_url_selects_rest_protocol(self):
+        # The whole point: after normalization, auto-detection is REST.
+        from neo4j_agent_memory.nams import detect_protocol
+
+        config = NamsConfig(endpoint="https://memory.neo4jlabs.com")
+        assert detect_protocol(config.endpoint) == "rest"
+
+    def test_hosted_url_already_versioned_is_unchanged(self):
+        config = NamsConfig(endpoint="https://memory.neo4jlabs.com/v1")
+        assert config.endpoint == "https://memory.neo4jlabs.com/v1"
+
+    def test_hosted_url_with_higher_version_is_unchanged(self):
+        config = NamsConfig(endpoint="https://memory.neo4jlabs.com/v2")
+        assert config.endpoint == "https://memory.neo4jlabs.com/v2"
+
+    def test_localhost_without_version_is_untouched(self):
+        # On-prem / TCK bridge must keep working — no forced /v1.
+        config = NamsConfig(endpoint="http://localhost:8000")
+        assert config.endpoint == "http://localhost:8000"
+
+    def test_other_host_without_version_is_untouched(self):
+        config = NamsConfig(endpoint="https://nams.internal")
+        assert config.endpoint == "https://nams.internal"
+
     def test_api_key_is_secret(self):
         config = NamsConfig(api_key=SecretStr("nams_test_key"))
         assert config.api_key is not None
@@ -167,6 +212,14 @@ class TestEnvFallback:
         settings = MemorySettings()
         assert settings.backend == "nams"
         assert settings.nams.endpoint == "https://nams.sandbox/v1"
+
+    def test_bare_hosted_endpoint_via_env_is_normalized(self, monkeypatch):
+        # Same bug as issue #129 via the MEMORY_ENDPOINT alias: a bare
+        # hosted URL set through env must also gain the /v1 suffix.
+        monkeypatch.setenv("MEMORY_API_KEY", "nams_test")
+        monkeypatch.setenv("MEMORY_ENDPOINT", "https://memory.neo4jlabs.com")
+        settings = MemorySettings()
+        assert settings.nams.endpoint == "https://memory.neo4jlabs.com/v1"
 
     def test_explicit_endpoint_wins_over_env(self, monkeypatch):
         monkeypatch.setenv("MEMORY_API_KEY", "nams_test")
