@@ -111,6 +111,7 @@ export type {
   ActiveOntology,
   DomainInfo,
   EntityTypeDef,
+  PoleType,
   PropertyDef,
   RelationshipDef,
   CreateOntologyOptions,

@@ -27,9 +27,22 @@ export interface PropertyDef {
   enum?: string[];
 }
 
+/**
+ * The semantic category of an entity type, as recognized by the hosted
+ * ontology service. Must be an exact SCREAMING_CASE match — lowercase or
+ * unrecognized values are rejected at runtime with a 422.
+ */
+export type PoleType =
+  | "PERSON"
+  | "ORGANIZATION"
+  | "LOCATION"
+  | "EVENT"
+  | "OBJECT"
+  | "CUSTOM";
+
 export interface EntityTypeDef {
   label: string;
-  poleType: string; // PERSON | ORGANIZATION | LOCATION | EVENT | OBJECT
+  poleType: PoleType;
   subtype?: string;
   color?: string;
   icon?: string;
@@ -38,7 +51,17 @@ export interface EntityTypeDef {
 
 export interface RelationshipDef {
   type: string;
+  /**
+   * Must exactly match the `label` of an `EntityTypeDef` defined in the same
+   * ontology schema. There is no wildcard ("*" is not accepted) — every
+   * relationship endpoint must reference a concrete entity label.
+   */
   source: string;
+  /**
+   * Must exactly match the `label` of an `EntityTypeDef` defined in the same
+   * ontology schema. There is no wildcard ("*" is not accepted) — every
+   * relationship endpoint must reference a concrete entity label.
+   */
   target: string;
 }
 
@@ -243,7 +266,7 @@ function toDocument(raw: WireDocument | null | undefined): OntologyDocument | un
     domain: raw.domain,
     entityTypes: (raw.entity_types ?? []).map((e) => ({
       label: e.label,
-      poleType: e.pole_type,
+      poleType: e.pole_type as PoleType,
       subtype: e.subtype,
       color: e.color,
       icon: e.icon,
