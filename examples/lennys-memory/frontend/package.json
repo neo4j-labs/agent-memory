@@ -19,7 +19,7 @@
     "@neo4j-nvl/base": "^1.2.1",
     "@neo4j-nvl/react": "^1.2.1",
     "@turf/turf": "^7.2.0",
-    "@vercel/analytics": "^1.6.1",
+    "@vercel/analytics": "^2.0.1",
     "leaflet": "^1.9.4",
     "next": "^16.3.4",
     "next-themes": "^0.4.6",
