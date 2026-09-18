@@ -23,6 +23,80 @@ async with MemoryClient(settings) as client:
     )
 ----
 
+== Constructor
+
+`MemoryClient` builds this layer for you; the signature matters when you
+construct it directly.
+
+[source,python]
+----
+ShortTermMemory(
+    client: Neo4jClient,
+    embedder: Embedder | None = None,
+    extractor: EntityExtractor | None = None,
+    *,
+    multi_tenant: bool = False,
+    default_llm_provider: LLMProvider | None = None,
+    ontology: OntologyDocument | None = None,
+    validation_mode: Literal["permissive", "strict"] = "permissive",
+    resolver: EntityResolver | None = None,
+    resolution_config: ResolutionConfig | None = None,
+)
+----
+
+[cols="1,1,3", options="header"]
+|===
+| Parameter | Type | Description
+
+| `ontology`
+| `OntologyDocument \| None`
+| _v0.7._ The effective ontology. Extracted relations the ontology does not
+  permit are dropped before storage, in either validation mode. `MemoryClient`
+  passes its resolved document.
+
+| `validation_mode`
+| `"permissive" \| "strict"`
+| _v0.7._ `strict` additionally drops extracted entities whose
+  `(type, subtype)` the ontology does not declare (with a warning), along with
+  any relation that referenced them. `permissive` is the pre-v0.7 behaviour.
+
+| `resolver`
+| `EntityResolver \| None`
+| _v0.7._ Resolver used on the ingestion path. Only an `OntologyResolver`
+  resolves during ingestion — every other strategy (and `None`) stores one node
+  per distinct surface form, exactly as before v0.7.
+
+| `resolution_config`
+| `ResolutionConfig \| None`
+| _v0.7._ Resolution settings. `resolve_on_ingest=False` is the single switch
+  that turns ingest-time resolution off.
+|===
+
+== Entity Extraction on Ingest
+
+When an extractor is configured, `add_message`, `add_messages_batch` and
+`extract_entities_from_session` all persist entities through one internal path,
+which as of v0.7:
+
+. filters invalid entities (stopwords, bare numbers, single characters),
+. enforces the ontology — always dropping forbidden relations, and in `strict`
+  mode also undeclared entities,
+. resolves the message's mentions as one episode (when
+  `resolution.resolve_on_ingest` is on and the resolver is an
+  `OntologyResolver`), and
+. writes each mention: `merged` reuses the matched node and appends the surface
+  form to its `aliases`; `review` creates the node plus a pending `SAME_AS`
+  edge to the match; `created` behaves as before.
+
+Every `MENTIONS` edge points at the id the database actually holds, including
+when the entity `MERGE` matched a pre-existing node — before v0.7 a freshly
+generated id was used in that case, so the link (and the relation writes keyed
+on it) silently did nothing.
+
+Resolution failures are logged and the mentions are stored unresolved:
+resolution never blocks the write. See
+xref:how-to/tune-entity-resolution.adoc[Tune Entity Resolution].
+
 == Message Operations
 
 === add_message
@@ -343,5 +417,6 @@ async with MemoryClient(settings) as client:
 == See Also
 
 * xref:reference/api/memory-client.adoc[MemoryClient API]
+* xref:how-to/tune-entity-resolution.adoc[Tune Entity Resolution]
 * xref:how-to/messages.adoc[Store and Search Messages]
 * xref:explanation/memory-types.adoc[Understanding Memory Types]

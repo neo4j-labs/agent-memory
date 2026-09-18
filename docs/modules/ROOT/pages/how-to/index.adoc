@@ -86,10 +86,19 @@ Automatically extract entities and relationships to populate your context graph 
 | Layer agent memory on top of a graph that already exists in production. Attach the `:Entity` super-label and library-managed properties idempotently with `client.schema.adopt_existing_graph()`.
 
 | xref:how-to/entity-extraction.adoc[Configure Entity Extraction]
-| Set up spaCy, GLiNER, or LLM extractors. Create custom domain schemas for financial services, ecommerce, or any industry. Build multi-stage pipelines.
+| Set up spaCy, GLiNER2.5, or LLM extractors. Create custom domain schemas for financial services, ecommerce, or any industry. Build multi-stage pipelines.
+
+| xref:how-to/ontology-driven-extraction.adoc[Drive Extraction From an Ontology]
+| Write a typed ontology, validate and compile it, activate it in the database, and get typed `RELATED_TO` edges with provenance. Choose permissive or strict validation.
+
+| xref:how-to/tune-entity-resolution.adoc[Tune Entity Resolution]
+| Tune the ingest-time resolver: thresholds and per-type overrides, the alias gazetteer, the review band, tenant scoping, and how to measure a change with B-cubed.
+
+| xref:how-to/migrate-to-gliner2.adoc[Migrate to GLiNER2.5]
+| Move off the removed GLiNER v1 / GLiREL stack: install extras, model ids, old-to-new code, output-shape changes and the `RELATED_TO` backfill.
 
 | xref:how-to/running-without-an-llm.adoc[Run Without an LLM]
-| Use spaCy/GLiNER-only extraction with `llm=None`. Run in air-gapped environments or without an OpenAI key.
+| Use spaCy/GLiNER2.5-only extraction with `llm=None`. Run in air-gapped environments or without an OpenAI key.
 
 | xref:how-to/batch-processing.adoc[Process Documents in Batch]
 | Extract entities from large document collections efficiently. Handle streaming for long documents. Import product catalogs or financial reports.

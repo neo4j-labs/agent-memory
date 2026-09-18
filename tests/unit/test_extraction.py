@@ -349,11 +349,11 @@ class TestExtractionResultFilterInvalidEntities:
 
 
 class TestDomainSchemas:
-    """Tests for GLiNER2 domain schemas."""
+    """Tests for the domain catalogs of labelled entity types."""
 
     def test_domain_schema_model(self):
         """Test DomainSchema model creation."""
-        from neo4j_agent_memory.extraction.gliner_extractor import DomainSchema
+        from neo4j_agent_memory.extraction.domain_schemas import DomainSchema
 
         schema = DomainSchema(
             name="test",
@@ -370,7 +370,7 @@ class TestDomainSchemas:
 
     def test_domain_schema_with_relations(self):
         """Test DomainSchema model with relation types."""
-        from neo4j_agent_memory.extraction.gliner_extractor import DomainSchema
+        from neo4j_agent_memory.extraction.domain_schemas import DomainSchema
 
         schema = DomainSchema(
             name="test",
@@ -386,7 +386,7 @@ class TestDomainSchemas:
 
     def test_get_schema_valid(self):
         """Test get_schema with valid schema name."""
-        from neo4j_agent_memory.extraction.gliner_extractor import get_schema
+        from neo4j_agent_memory.extraction.domain_schemas import get_schema
 
         schema = get_schema("poleo")
 
@@ -399,14 +399,14 @@ class TestDomainSchemas:
 
     def test_get_schema_invalid(self):
         """Test get_schema with invalid schema name."""
-        from neo4j_agent_memory.extraction.gliner_extractor import get_schema
+        from neo4j_agent_memory.extraction.domain_schemas import get_schema
 
         with pytest.raises(ValueError, match="Unknown schema"):
             get_schema("nonexistent")
 
     def test_list_schemas(self):
         """Test list_schemas returns all available schemas."""
-        from neo4j_agent_memory.extraction.gliner_extractor import list_schemas
+        from neo4j_agent_memory.extraction.domain_schemas import list_schemas
 
         schemas = list_schemas()
 
@@ -422,7 +422,7 @@ class TestDomainSchemas:
 
     def test_podcast_schema_entity_types(self):
         """Test that podcast schema has appropriate entity types."""
-        from neo4j_agent_memory.extraction.gliner_extractor import get_schema
+        from neo4j_agent_memory.extraction.domain_schemas import get_schema
 
         schema = get_schema("podcast")
 
@@ -437,7 +437,7 @@ class TestDomainSchemas:
 
     def test_all_schemas_have_descriptions(self):
         """Test that all entity types have descriptions."""
-        from neo4j_agent_memory.extraction.gliner_extractor import DOMAIN_SCHEMAS
+        from neo4j_agent_memory.extraction.domain_schemas import DOMAIN_SCHEMAS
 
         for name, schema in DOMAIN_SCHEMAS.items():
             for entity_type, description in schema.entity_types.items():
@@ -448,124 +448,243 @@ class TestDomainSchemas:
                     f"{name}/{entity_type} description should be meaningful"
                 )
 
+    def test_schemas_are_reachable_from_the_package(self):
+        """The catalog is re-exported from ``neo4j_agent_memory.extraction``."""
+        from neo4j_agent_memory.extraction import DOMAIN_SCHEMAS, DomainSchema, get_schema
 
-class TestGLiNERConfig:
-    """Tests for GLiNERConfig."""
+        assert isinstance(get_schema("news"), DomainSchema)
+        assert set(DOMAIN_SCHEMAS) >= {"poleo", "news"}
 
-    def test_default_config(self):
-        """Test default GLiNER configuration."""
-        from neo4j_agent_memory.extraction.gliner_extractor import GLiNERConfig
 
-        config = GLiNERConfig()
+class TestDomainSchemaToOntology:
+    """``DomainSchema.to_ontology()`` — the bridge to the extraction schema."""
 
-        assert config.model == "gliner-community/gliner_medium-v2.5"
-        assert config.threshold == 0.5
-        assert config.device == "cpu"
-        assert config.schema_name is None
+    def test_labels_become_typed_entity_types(self):
+        from neo4j_agent_memory.extraction.domain_schemas import get_schema
 
-    def test_config_with_schema(self):
-        """Test GLiNER configuration with schema name."""
-        from neo4j_agent_memory.extraction.gliner_extractor import GLiNERConfig
+        doc = get_schema("podcast").to_ontology()
 
-        config = GLiNERConfig(schema_name="podcast")
+        assert doc.domain.name == "podcast"
+        assert doc.labels() == list(get_schema("podcast").entity_types)
+        assert doc.label_map()["company"] == ("ORGANIZATION", "COMPANY")
+        assert doc.validate_structure() == []
 
-        assert config.schema_name == "podcast"
+    def test_descriptions_survive_as_annotation_guidelines(self):
+        from neo4j_agent_memory.extraction.domain_schemas import get_schema
 
-    def test_config_with_custom_labels(self):
-        """Test GLiNER configuration with custom labels."""
-        from neo4j_agent_memory.extraction.gliner_extractor import GLiNERConfig
+        schema = get_schema("medical")
+        doc = schema.to_ontology()
 
-        config = GLiNERConfig(
-            entity_labels={"person": "A person", "company": "A business"},
+        by_label = {et.label: et for et in doc.entity_types}
+        assert by_label["disease"].description == schema.entity_types["disease"]
+
+    def test_catalog_alone_declares_no_relationships(self):
+        from neo4j_agent_memory.extraction.domain_schemas import get_schema
+
+        assert get_schema("legal").to_ontology().relationships == []
+
+    def test_supplied_relationships_pick_up_catalog_descriptions(self):
+        from neo4j_agent_memory.extraction.domain_schemas import DomainSchema
+        from neo4j_agent_memory.ontology.models import RelationshipDef
+
+        schema = DomainSchema(
+            name="tiny",
+            entity_types={"person": "A person", "company": "A company"},
+            relation_types={"WORKS_AT": "Employment."},
         )
 
-        assert isinstance(config.entity_labels, dict)
-        assert "person" in config.entity_labels
-
-
-class TestGLiNERExtractorClassMethods:
-    """Tests for GLiNEREntityExtractor class methods (no model loading)."""
-
-    def test_for_schema_creates_extractor(self):
-        """Test for_schema class method creates extractor with schema."""
-        from neo4j_agent_memory.extraction.gliner_extractor import GLiNEREntityExtractor
-
-        # This creates the extractor but doesn't load the model
-        extractor = GLiNEREntityExtractor.for_schema("podcast")
-
-        assert extractor._use_descriptions is True
-        assert isinstance(extractor.entity_labels, dict)
-        assert "person" in extractor.entity_labels
-
-    def test_for_poleo_creates_extractor(self):
-        """Test for_poleo class method creates extractor."""
-        from neo4j_agent_memory.extraction.gliner_extractor import GLiNEREntityExtractor
-
-        extractor = GLiNEREntityExtractor.for_poleo()
-
-        assert extractor._use_descriptions is True  # Uses descriptions by default
-
-    def test_for_poleo_without_descriptions(self):
-        """Test for_poleo with use_descriptions=False."""
-        from neo4j_agent_memory.extraction.gliner_extractor import GLiNEREntityExtractor
-
-        extractor = GLiNEREntityExtractor.for_poleo(use_descriptions=False)
-
-        assert extractor._use_descriptions is False
-        assert isinstance(extractor.entity_labels, list)
-
-    def test_extractor_with_dict_labels(self):
-        """Test extractor with dict labels enables descriptions."""
-        from neo4j_agent_memory.extraction.gliner_extractor import GLiNEREntityExtractor
-
-        extractor = GLiNEREntityExtractor(
-            entity_labels={
-                "person": "A human individual",
-                "company": "A business organization",
-            }
+        doc = schema.to_ontology(
+            relationships=[RelationshipDef(type="WORKS_AT", source="person", target="company")]
         )
 
-        assert extractor._use_descriptions is True
+        assert doc.relationships[0].description == "Employment."
+        assert doc.patterns() == {("person", "WORKS_AT", "company")}
+        assert doc.validate_structure() == []
 
-    def test_extractor_with_list_labels(self):
-        """Test extractor with list labels disables descriptions."""
-        from neo4j_agent_memory.extraction.gliner_extractor import GLiNEREntityExtractor
+    def test_all_eight_catalogs_convert_cleanly(self):
+        from neo4j_agent_memory.extraction.domain_schemas import DOMAIN_SCHEMAS
 
-        extractor = GLiNEREntityExtractor(entity_labels=["person", "company", "location"])
+        for name, schema in DOMAIN_SCHEMAS.items():
+            doc = schema.to_ontology()
+            assert doc.validate_structure() == [], f"{name} does not validate"
 
-        assert extractor._use_descriptions is False
 
-    def test_label_mapping(self):
-        """Test label mapping to POLE+O types."""
-        from neo4j_agent_memory.extraction.gliner_extractor import GLiNEREntityExtractor
+class TestRemovedNames:
+    """The GLiNER v1 / GLiREL names removed in 0.7 explain themselves."""
 
-        extractor = GLiNEREntityExtractor()
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "GLiNEREntityExtractor",
+            "GLiNERConfig",
+            "GLiNERWithRelationsExtractor",
+            "GLiRELExtractor",
+            "GLiRELConfig",
+            "DEFAULT_RELATION_TYPES",
+            "is_gliner_available",
+            "is_glirel_available",
+        ],
+    )
+    def test_removed_name_raises_import_error(self, name):
+        import neo4j_agent_memory.extraction as extraction
 
-        # Test standard mappings
-        assert extractor._map_label_to_poleo("person") == ("PERSON", None)
-        assert extractor._map_label_to_poleo("company") == ("ORGANIZATION", "COMPANY")
-        assert extractor._map_label_to_poleo("city") == ("LOCATION", "CITY")
-        assert extractor._map_label_to_poleo("meeting") == ("EVENT", "MEETING")
-        assert extractor._map_label_to_poleo("product") == ("OBJECT", "PRODUCT")
+        with pytest.raises(ImportError, match="removed in 0.7"):
+            getattr(extraction, name)
 
-    def test_custom_label_mapping(self):
-        """Test adding custom label mapping."""
-        from neo4j_agent_memory.extraction.gliner_extractor import GLiNEREntityExtractor
+    def test_the_package_still_imports_cleanly(self):
+        """Importing the module must not depend on the removed-name machinery.
 
-        extractor = GLiNEREntityExtractor()
-        extractor.add_label_mapping("custom_type", "OBJECT", "CUSTOM")
+        ``RemovedExtractorError`` is created at import time, so a base-class
+        combination CPython rejects (``ImportError`` + ``AttributeError``:
+        "multiple bases have instance lay-out conflict") would fail the whole
+        package import, not just the removed names.
+        """
+        import subprocess
+        import sys
 
-        assert extractor._map_label_to_poleo("custom_type") == ("OBJECT", "CUSTOM")
-
-    def test_from_config_with_schema(self):
-        """Test from_config with schema_name."""
-        from neo4j_agent_memory.extraction.gliner_extractor import (
-            GLiNERConfig,
-            GLiNEREntityExtractor,
+        # A subprocess, so the check is a real cold import and cannot perturb
+        # the modules the rest of the suite already holds.
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import neo4j_agent_memory.extraction as e; "
+                "print(e.RemovedExtractorError.__mro__[1].__name__)",
+            ],
+            capture_output=True,
+            text=True,
         )
 
-        config = GLiNERConfig(schema_name="podcast")
-        extractor = GLiNEREntityExtractor.from_config(config)
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stdout.strip() == "ImportError"
 
-        assert extractor._use_descriptions is True
-        assert "person" in extractor.entity_labels
+    @pytest.mark.parametrize("name", ["is_gliner_available", "is_glirel_available"])
+    def test_hasattr_on_a_removed_name_raises_by_design(self, name):
+        """``hasattr`` cannot answer ``False`` here, and that is deliberate.
+
+        The migration hint only survives the ``from ... import`` path as an
+        ``ImportError``, and CPython will not let one class be both that and an
+        ``AttributeError``. Probe with ``is_gliner2_available()`` or
+        ``try/except ImportError`` instead.
+        """
+        import neo4j_agent_memory.extraction as extraction
+        from neo4j_agent_memory.extraction import RemovedExtractorError
+
+        assert issubclass(RemovedExtractorError, ImportError)
+        with pytest.raises(ImportError, match="removed in 0.7"):
+            hasattr(extraction, name)
+
+    def test_from_import_keeps_the_migration_message(self):
+        with pytest.raises(ImportError, match="use is_gliner2_available"):
+            exec("from neo4j_agent_memory.extraction import is_gliner_available")
+
+    def test_unknown_name_still_raises_attribute_error(self):
+        import neo4j_agent_memory.extraction as extraction
+
+        name = "NotAThing"
+        with pytest.raises(AttributeError):
+            getattr(extraction, name)
+
+    def test_gliner_extractor_module_is_gone(self):
+        import importlib
+
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module("neo4j_agent_memory.extraction.gliner_extractor")
+
+
+class TestLLMExtractorOntologyPrompt:
+    """The LLM stage's prompt is derived from the ontology when one is set."""
+
+    @staticmethod
+    def _ontology():
+        from neo4j_agent_memory.ontology.models import (
+            DomainInfo,
+            EntityTypeDef,
+            OntologyDocument,
+            RelationshipDef,
+        )
+
+        return OntologyDocument(
+            domain=DomainInfo(id="support", name="support"),
+            entity_types=[
+                EntityTypeDef(
+                    label="Customer",
+                    pole_type="PERSON",
+                    subtype="INDIVIDUAL",
+                    description="A person who reported a ticket. Not a support engineer.",
+                ),
+                EntityTypeDef(
+                    label="Vendor",
+                    pole_type="ORGANIZATION",
+                    subtype="COMPANY",
+                    description="A company that sells support.",
+                ),
+            ],
+            relationships=[
+                RelationshipDef(
+                    type="BUYS_FROM",
+                    source="Customer",
+                    target="Vendor",
+                    description="A customer purchases from a vendor.",
+                    unique_source=True,
+                ),
+            ],
+        )
+
+    @staticmethod
+    def _extractor(**kwargs):
+        from unittest.mock import MagicMock
+
+        from neo4j_agent_memory.extraction.llm_extractor import LLMEntityExtractor
+
+        # A MagicMock provider skips provider construction entirely; the
+        # prompt is built without any network call.
+        return LLMEntityExtractor(provider=MagicMock(), **kwargs)
+
+    def test_the_prompt_carries_the_guidelines_and_the_relationship_catalogue(self):
+        extractor = self._extractor(ontology=self._ontology())
+
+        prompt = extractor._build_prompt("Ada bought support from Acme.", ["PERSON"])
+
+        assert "## Entity types" in prompt
+        assert "Customer (PERSON:INDIVIDUAL)" in prompt
+        assert "Not a support engineer." in prompt
+        assert "## Relationship types" in prompt
+        assert "BUYS_FROM: Customer -> Vendor" in prompt
+        assert "at most one per source" in prompt
+        # And the text under analysis is still interpolated.
+        assert "Ada bought support from Acme." in prompt
+
+    def test_relations_are_omitted_when_relation_extraction_is_off(self):
+        extractor = self._extractor(ontology=self._ontology(), extract_relations=False)
+
+        prompt = extractor._build_prompt("text", ["PERSON"])
+
+        assert "Customer (PERSON:INDIVIDUAL)" in prompt
+        assert "BUYS_FROM" not in prompt
+
+    def test_entity_types_and_subtypes_come_from_the_ontology(self):
+        extractor = self._extractor(ontology=self._ontology())
+
+        assert extractor._entity_types == ["PERSON", "ORGANIZATION"]
+        assert extractor._subtypes == {
+            "PERSON": ["INDIVIDUAL"],
+            "ORGANIZATION": ["COMPANY"],
+        }
+
+    def test_explicit_entity_types_still_win(self):
+        extractor = self._extractor(ontology=self._ontology(), entity_types=["EVENT"])
+        assert extractor._entity_types == ["EVENT"]
+
+    def test_without_an_ontology_the_prompt_is_unchanged(self):
+        from neo4j_agent_memory.extraction.llm_extractor import POLEO_SUBTYPES
+
+        extractor = self._extractor()
+
+        prompt = extractor._build_prompt("text", ["PERSON", "OBJECT"])
+
+        assert extractor._ontology is None
+        assert extractor._subtypes == POLEO_SUBTYPES
+        assert "## Entity types" not in prompt
+        assert "Subtypes (optional" in prompt
+        assert "PERSON: INDIVIDUAL, ALIAS, PERSONA" in prompt

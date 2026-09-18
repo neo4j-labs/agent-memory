@@ -8,12 +8,12 @@
 
 How to configure entity extraction pipelines to automatically build your context graph from conversations and documents.
 
-image::diagrams/three-extraction-approaches.png[Three extraction approaches: spaCy, GLiNER, and LLM, each with different speed/quality trade-offs,width=480,align=left]
+image::diagrams/three-extraction-approaches.png[Three extraction approaches: spaCy, GLiNER2.5, and LLM, each with different speed/quality trade-offs,width=480,align=left]
 
 == Prerequisites
 
 * `neo4j-agent-memory` installed
-* For GLiNER extraction: `pip install neo4j-agent-memory[gliner]`
+* For GLiNER2.5 extraction: `pip install "neo4j-agent-memory[gliner2]"`
 * For LLM extraction: OpenAI API key or compatible LLM
 
 == Quick Start
@@ -23,7 +23,7 @@ Use the built-in POLE+O schema for general-purpose extraction:
 [source,python]
 ----
 from neo4j_agent_memory import MemoryClient, MemorySettings
-from neo4j_agent_memory.extraction import GLiNEREntityExtractor
+from neo4j_agent_memory.extraction import GLiNER2Extractor
 
 settings = MemorySettings(
     neo4j={"uri": "bolt://localhost:7687", "password": "password"}
@@ -31,8 +31,8 @@ settings = MemorySettings(
 
 client = MemoryClient(settings)
 
-# Create extractor with POLE+O schema
-extractor = GLiNEREntityExtractor.for_poleo()
+# Create extractor with the built-in POLE+O ontology
+extractor = GLiNER2Extractor.for_poleo()
 
 text = """
     Customer Jane Smith called about her order #12345 from Nike.
@@ -43,8 +43,13 @@ text = """
 result = await extractor.extract(text)
 
 for entity in result.entities:
-    print(f"  {entity.name} ({entity.type}) - confidence: {entity.confidence:.2f}")
+    print(f"  {entity.name} ({entity.full_type}) - confidence: {entity.confidence:.2f}")
+
+for relation in result.relations:
+    print(f"  {relation.source} -[{relation.relation_type}]-> {relation.target}")
 ----
+
+The first call downloads `fastino/gliner2.5-base-v1` (~407 MB) and caches it.
 
 == Choosing an Extractor
 
@@ -53,9 +58,8 @@ for entity in result.entities:
 *Which extractor should I use?*
 
 * **spaCy only** — throughput > 1000 docs/s, common entity types (PERSON, ORG, GPE), no GPU needed, offline
-* **GLiNER** — domain-specific types, ~50-200 docs/s, no API cost, GPU recommended; *the right default for most use cases*
-* **LLM** — complex or ambiguous text where accuracy is critical; add as a fallback stage, not a first pass
-* **GLiNER + GLiREL** — when you need both entities and relationships without an LLM
+* **GLiNER2.5** — domain-specific types *and* typed relations in one pass, no API cost, GPU recommended; *the right default for most use cases*
+* **LLM** — complex or ambiguous text where accuracy is critical, and the only stage that extracts preferences; add as a fallback, not a first pass
 ====
 
 [cols="1,1,1,1,1", options="header"]
@@ -68,17 +72,17 @@ for entity in result.entities:
 |Free
 |High-volume, standard entity types
 
-|GLiNER
+|GLiNER2.5 (`small-v1`)
 |Fast
 |Good
 |Free
-|Domain-specific, local deployment
+|Domain-specific, CPU or edge deployment
 
-|GLiNER + GLiREL
-|Fast
+|GLiNER2.5 (`base-v1`)
+|Medium (~1.6 docs/s on CPU)
 |Good
 |Free
-|Entities + relationships together
+|Entities and typed relations together, local deployment
 
 |LLM (gpt-4o-mini)
 |Slow
@@ -101,31 +105,40 @@ Combine extractors for comprehensive extraction:
 ----
 from neo4j_agent_memory.extraction import (
     ExtractionPipeline,
-    GLiNEREntityExtractor,
+    GLiNER2Extractor,
     LLMEntityExtractor,
+    MergeStrategy,
 )
+from neo4j_agent_memory.ontology import get_template
 
-# Stage 1: Fast local extraction
-gliner = GLiNEREntityExtractor.for_schema("financial")
+ontology = get_template("business")
 
-# Stage 2: LLM for refinement and relationship extraction
+# Stage 1: Fast local extraction, entities + typed relations
+gliner = GLiNER2Extractor.for_ontology(ontology)
+
+# Stage 2: LLM for refinement and preferences
 llm = LLMEntityExtractor(
     model="gpt-4o-mini",
     extract_relations=True,
-    schema="financial",
+    ontology=ontology,
 )
 
 pipeline = ExtractionPipeline(
     stages=[gliner, llm],
-    merge_strategy="confidence",  # Keep highest confidence result per entity
+    merge_strategy=MergeStrategy.CONFIDENCE,  # Keep highest confidence per entity
+    ontology=ontology,                        # Drop relations the ontology forbids
 )
 
 result = await pipeline.extract(text)
 ----
 
+Passing the same ontology to every stage is what keeps them consistent: it
+becomes the JointIE schema for GLiNER2.5, the guideline block and relationship
+catalogue in the LLM prompt, and the rulebook for the final validation step.
+
 [TIP]
 ====
-*Use LLM as a fallback, not a first pass.* Run GLiNER first — it handles 80-90% of entities with no API cost. Only route to LLM when GLiNER confidence is below your threshold, or when you need relationship extraction that GLiREL can't handle.
+*Use LLM as a fallback, not a first pass.* Run GLiNER2.5 first — it handles most entities and the ontology's typed relations with no API cost. Route to the LLM only when confidence is below your threshold, when the text is ambiguous, or when you need preferences (no local model extracts those).
 ====
 
 === Conditional Pipeline
@@ -134,24 +147,31 @@ Apply different schemas based on conversation content:
 
 [source,python]
 ----
-from neo4j_agent_memory.extraction import ConditionalPipeline
+from neo4j_agent_memory.extraction import (
+    ConditionalPipeline,
+    ExtractorStage,
+    GLiNER2Extractor,
+)
+
+business = ExtractorStage(GLiNER2Extractor.for_schema("business"), name="business")
+medical = ExtractorStage(GLiNER2Extractor.for_schema("medical"), name="medical")
 
 pipeline = ConditionalPipeline(
-    conditions=[
-        {
-            "keywords": ["portfolio", "investment", "stock", "bond", "dividend"],
-            "extractor": GLiNEREntityExtractor.for_schema("financial"),
-        },
-        {
-            "keywords": ["order", "shipping", "product", "return", "delivery"],
-            "extractor": GLiNEREntityExtractor.for_schema("ecommerce"),
-        },
-    ],
-    default=GLiNEREntityExtractor.for_poleo(),
+    stages=[business, medical],
+    conditions={
+        # Stage name -> predicate over (text, previous_result)
+        "business": lambda text, previous: "portfolio" in text.lower(),
+        "medical": lambda text, previous: "diagnosis" in text.lower(),
+    },
 )
 
 result = await pipeline.extract(text)
 ----
+
+`conditions` maps a *stage name* to a callable receiving `(text, previous_result)`.
+A stage with no entry always runs. Wrap extractors in `ExtractorStage` when you
+need to name them — the default name is the class name, which is the same string
+for two `GLiNER2Extractor` instances.
 
 == Store Extracted Entities
 
@@ -165,6 +185,7 @@ for entity in result.entities:
     stored, _ = await client.long_term.add_entity(
         name=entity.name,
         entity_type=entity.type,
+        subtype=entity.subtype,
         attributes={
             "confidence": entity.confidence,
             "extracted_at": datetime.now().isoformat(),
@@ -172,26 +193,35 @@ for entity in result.entities:
     )
 ----
 
+NOTE: When entities are extracted on the ingestion path (`add_message`,
+`add_messages_batch`, `extract_entities_from_session`) this loop is not needed —
+entities, `MENTIONS` links and typed `RELATED_TO` edges are written for you.
+
 === With Deduplication
 
-Prevent duplicate nodes in your context graph:
+Prevent duplicate nodes in your context graph. `DeduplicationConfig` is set on
+the `LongTermMemory` instance, not per call; `add_entity()` takes a
+`deduplicate: bool` to opt a single entity out.
 
 [source,python]
 ----
-from neo4j_agent_memory.memory import DeduplicationConfig
+from neo4j_agent_memory.memory import DeduplicationConfig, LongTermMemory
 
-dedup_config = DeduplicationConfig(
-    auto_merge_threshold=0.95,  # Auto-merge highly similar entities
-    flag_threshold=0.85,         # Flag for review between 0.85-0.95
-    use_fuzzy_matching=True,
-    match_same_type_only=True,
+long_term = LongTermMemory(
+    client=neo4j_client,
+    embedder=embedder,
+    deduplication=DeduplicationConfig(
+        auto_merge_threshold=0.95,  # Auto-merge highly similar entities
+        flag_threshold=0.85,        # Flag for review between 0.85-0.95
+        use_fuzzy_matching=True,
+        match_same_type_only=True,
+    ),
 )
 
 for extracted in result.entities:
-    entity, dedup_result = await client.long_term.add_entity(
+    entity, dedup_result = await long_term.add_entity(
         name=extracted.name,
         entity_type=extracted.type,
-        deduplication=dedup_config,
     )
 
     if dedup_result.action == "merged":
@@ -226,18 +256,30 @@ entity, _ = await client.long_term.add_entity(
 )
 
 await client.long_term.link_entity_to_message(
-    entity=entity,
-    message_id=message.id,
+    entity,
+    message.id,
     confidence=extracted.confidence,
-    start_pos=extracted.start,
-    end_pos=extracted.end,
+    start_pos=extracted.start_pos,
+    end_pos=extracted.end_pos,
+    context=extracted.context,
 )
 
 await client.long_term.link_entity_to_extractor(
-    entity=entity,
-    extractor_name="GLiNEREntityExtractor",
-    extractor_version="1.0",
+    entity,
+    extracted.extractor or "gliner2",   # GLiNER2Extractor.name
     confidence=extracted.confidence,
+)
+----
+
+Record the model id and the extractor version alongside it when you register the
+extractor explicitly:
+
+[source,python]
+----
+await client.long_term.register_extractor(
+    extractor.name,                 # "gliner2"
+    version=extractor.version,      # the installed gliner2 version
+    config={"model": extractor.model_id, "threshold": extractor.threshold},
 )
 ----
 

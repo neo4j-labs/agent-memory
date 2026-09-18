@@ -228,10 +228,18 @@ extraction_config = ExtractionConfig(
     spacy_model="en_core_web_sm",
     spacy_confidence=0.85,
 
-    # GLiNER settings
-    gliner_model="urchade/gliner_medium-v2.1",
+    # GLiNER2.5 settings ("gliner" means GLiNER2.5 since 0.7)
+    gliner_model="fastino/gliner2.5-base-v1",
     gliner_threshold=0.5,
+    gliner_relation_threshold=None,
     gliner_device="cpu",
+    gliner_schema=None,
+    gliner_max_words=384,
+    gliner_chunk_overlap=64,
+    gliner_overlap_policy=None,
+    gliner_extract_attributes=False,
+    gliner_quantize=False,
+    gliner_compile=False,
 
     # LLM settings
     llm_model="gpt-4o-mini",
@@ -246,8 +254,74 @@ extraction_config = ExtractionConfig(
 )
 # Batching and streaming are configured at call time on
 # ``ExtractionPipeline.extract_batch()`` / ``StreamingExtractor``.
-# GLiREL relation extraction is opt-in via ``GLiRELExtractor``.
+# Relations come from the same GLiNER2.5 pass as the entities, so there is no
+# separate relation extractor to enable.
 ----
+
+==== GLiNER2.5 Fields
+
+[cols="2,1,3", options="header"]
+|===
+| Field | Default | Description
+
+| `enable_gliner`
+| `True`
+| Include the GLiNER2.5 stage in the pipeline
+
+| `gliner_model`
+| `fastino/gliner2.5-base-v1`
+| Checkpoint id or local path. GLiNER v1 ids (`urchade/++*++`,
+  `gliner-community/++*++`, `numind/++*++`) are rejected by the extractor with a
+  migration hint, not by settings validation.
+
+| `gliner_threshold`
+| `0.5`
+| Entity confidence floor (0.0-1.0)
+
+| `gliner_relation_threshold`
+| `None`
+| Confidence floor for decoded relations. `None` keeps whatever the ontology's
+  per-relation thresholds selected.
+
+| `gliner_device`
+| `cpu`
+| Inference device (`cpu` / `cuda` / `mps`)
+
+| `gliner_schema`
+| `None`
+| Built-in domain template name (`poleo`, `podcast`, `news`, `scientific`,
+  `business`, `entertainment`, `medical`, `legal`). Set, it wins over the
+  resolved ontology for the GLiNER2.5 stage.
+
+| `gliner_max_words`
+| `384`
+| Longest input decoded in one pass; longer text is windowed
+
+| `gliner_chunk_overlap`
+| `64`
+| Word overlap between windows
+
+| `gliner_overlap_policy`
+| `None`
+| Span-overlap policy for the attribute pass (`flat` / `nested` / `allow` /
+  `longest`); `None` keeps the checkpoint default
+
+| `gliner_extract_attributes`
+| `False`
+| Run the opt-in second pass that recovers enum properties as attributes
+
+| `gliner_quantize`
+| `False`
+| Load the weights in fp16
+
+| `gliner_compile`
+| `False`
+| Run the weights through `torch.compile`
+|===
+
+The field names keep the `gliner_` prefix so existing configuration and
+`NAM_EXTRACTION__GLINER_*` environment variables keep working — but "gliner"
+now means GLiNER2.5.
 
 === Environment Variables
 
@@ -269,10 +343,18 @@ NAM_EXTRACTION__FALLBACK_ON_EMPTY=true
 NAM_EXTRACTION__SPACY_MODEL=en_core_web_sm
 NAM_EXTRACTION__SPACY_CONFIDENCE=0.85
 
-# GLiNER settings
-NAM_EXTRACTION__GLINER_MODEL=urchade/gliner_medium-v2.1
+# GLiNER2.5 settings
+NAM_EXTRACTION__GLINER_MODEL=fastino/gliner2.5-base-v1
 NAM_EXTRACTION__GLINER_THRESHOLD=0.5
+NAM_EXTRACTION__GLINER_RELATION_THRESHOLD=0.35
 NAM_EXTRACTION__GLINER_DEVICE=cpu
+NAM_EXTRACTION__GLINER_SCHEMA=podcast
+NAM_EXTRACTION__GLINER_MAX_WORDS=384
+NAM_EXTRACTION__GLINER_CHUNK_OVERLAP=64
+NAM_EXTRACTION__GLINER_OVERLAP_POLICY=flat
+NAM_EXTRACTION__GLINER_EXTRACT_ATTRIBUTES=false
+NAM_EXTRACTION__GLINER_QUANTIZE=false
+NAM_EXTRACTION__GLINER_COMPILE=false
 
 # LLM settings
 NAM_EXTRACTION__LLM_MODEL=gpt-4o-mini
@@ -283,15 +365,10 @@ NAM_EXTRACTION__ENTITY_TYPES='["PERSON","ORGANIZATION","LOCATION","EVENT","OBJEC
 # Extraction options
 NAM_EXTRACTION__EXTRACT_RELATIONS=true
 NAM_EXTRACTION__EXTRACT_PREFERENCES=true
-
-# Batch extraction settings
-NAM_EXTRACTION__BATCH_SIZE=10
-NAM_EXTRACTION__BATCH_MAX_CONCURRENT=5
-
-# Streaming extraction settings
-NAM_EXTRACTION__STREAMING_CHUNK_SIZE=4000
-NAM_EXTRACTION__STREAMING_CHUNK_OVERLAP=200
+NAM_EXTRACTION__CONFIDENCE_THRESHOLD=0.5
 ----
+
+NOTE: Batching and streaming have no `NAM_EXTRACTION__` variables. `ExtractionConfig` uses `extra="forbid"`, so an unrecognised key raises at construction time rather than being ignored.
 
 === Extractor Types
 
@@ -306,7 +383,7 @@ NAM_EXTRACTION__STREAMING_CHUNK_OVERLAP=200
 |spaCy statistical NER only
 
 |`GLINER`
-|GLiNER zero-shot NER only
+|GLiNER2.5 joint entity + relation extraction only
 
 |`LLM`
 |LLM-based extraction only
@@ -334,9 +411,13 @@ NAM_EXTRACTION__STREAMING_CHUNK_OVERLAP=200
 |Use first stage, fill gaps with subsequent stages
 
 |`FIRST_SUCCESS`
-|Stop after first successful stage
+|Stop after first successful stage. Available on
+`neo4j_agent_memory.extraction.MergeStrategy` when constructing an
+`ExtractionPipeline` directly; the `ExtractionConfig.merge_strategy` enum offers
+`union`, `intersection`, `confidence` and `cascade` only.
 |===
 
+[#schema-configuration]
 == Schema Configuration
 
 Settings for the knowledge graph schema.
@@ -345,16 +426,60 @@ Settings for the knowledge graph schema.
 
 [source,python]
 ----
-from neo4j_agent_memory import SchemaConfig, SchemaModel
+from neo4j_agent_memory.config.settings import SchemaConfig, SchemaModel
 
 schema_config = SchemaConfig(
     model=SchemaModel.POLEO,              # Schema model
-    entity_types=None,                     # Custom types (for CUSTOM model)
+    entity_types=None,                    # Custom types (for CUSTOM model)
     enable_subtypes=True,                  # Track entity subtypes
     strict_types=False,                    # Reject unknown types
-    custom_schema_path=None,               # Path to schema file
+    custom_schema_path=None,              # Path to an EntitySchemaConfig file
+    ontology_path=None,                   # Path to an ontology document
+    use_active_ontology=True,             # Adopt the activated stored version
+    ontology_template="poleo",            # Final fallback template
+    validation_mode=None,                 # "permissive" | "strict" | None
 )
 ----
+
+==== Ontology Fields
+
+[cols="2,1,3", options="header"]
+|===
+| Field | Default | Description
+
+| `custom_schema_path`
+| `None`
+| Path to a schema file (`.json`/`.yaml`). Loaded through `load_ontology`, so it
+  may hold an `EntitySchemaConfig` or an `OntologyDocument`; either is converted
+  on the way in. Consulted after `ontology_path`.
+
+| `ontology_path`
+| `None`
+| Path to an ontology document (`.json`/`.yaml`). Highest-priority source after
+  the explicit `MemoryClient(ontology=...)` keyword.
+
+| `use_active_ontology`
+| `True`
+| Adopt the ontology version activated in the database
+  (`client.ontology.activate`) when no file or explicit document is given.
+
+| `ontology_template`
+| `poleo`
+| Built-in template used as the final fallback.
+
+| `validation_mode`
+| `None`
+| Ontology enforcement on the write paths. `strict` rejects undeclared entity
+  types and relationship patterns; `permissive` keeps them with a warning.
+  `None` defers to the active stored version's mode, then to `strict` if
+  `strict_types` else `permissive`.
+|===
+
+The effective ontology is resolved once per connection, in this order: the
+explicit `MemoryClient(ontology=...)` keyword, `ontology_path`,
+`custom_schema_path`, the active stored `:OntologyVersion` (when
+`use_active_ontology`), `model=SchemaModel.CUSTOM` plus `entity_types`, and
+finally `ontology_template`.
 
 === Environment Variables
 
@@ -365,6 +490,10 @@ NAM_SCHEMA_CONFIG__ENTITY_TYPES='["PERSON","PRODUCT"]'  # For custom model
 NAM_SCHEMA_CONFIG__ENABLE_SUBTYPES=true
 NAM_SCHEMA_CONFIG__STRICT_TYPES=false
 NAM_SCHEMA_CONFIG__CUSTOM_SCHEMA_PATH=/path/to/schema.json
+NAM_SCHEMA_CONFIG__ONTOLOGY_PATH=/etc/ontology.yaml
+NAM_SCHEMA_CONFIG__USE_ACTIVE_ONTOLOGY=true
+NAM_SCHEMA_CONFIG__ONTOLOGY_TEMPLATE=poleo
+NAM_SCHEMA_CONFIG__VALIDATION_MODE=strict        # permissive, strict
 ----
 
 === Schema Models
@@ -383,23 +512,94 @@ NAM_SCHEMA_CONFIG__CUSTOM_SCHEMA_PATH=/path/to/schema.json
 |User-defined entity types
 |===
 
+[#resolution-configuration]
 == Resolution Configuration
 
-Settings for entity resolution (deduplication).
+Settings for entity resolution and deduplication.
 
 === Python Configuration
 
 [source,python]
 ----
-from neo4j_agent_memory import ResolutionConfig, ResolverStrategy
+from neo4j_agent_memory.config.settings import ResolutionConfig, ResolverStrategy
 
 resolution_config = ResolutionConfig(
-    strategy=ResolverStrategy.COMPOSITE,
+    strategy=ResolverStrategy.COMPOSITE,  # OntologyResolver on bolt
     exact_threshold=1.0,                  # Exact match threshold
     fuzzy_threshold=0.85,                 # Fuzzy match threshold
-    semantic_threshold=0.9,               # Semantic similarity threshold
+    semantic_threshold=0.8,               # Semantic similarity threshold
+    fuzzy_scorer="token_sort_ratio",      # RapidFuzz scorer
+    # -- ontology-aware resolution on the ingestion path (v0.7) --
+    resolve_on_ingest=True,               # Resolve mentions while storing a message
+    auto_merge_threshold=0.90,            # Merge at or above this score
+    review_threshold=0.85,                # Pending SAME_AS between the two bands
+    candidate_limit=12,                   # Blocking candidates per mention/bucket
+    use_alias_gazetteer=True,             # Use EntityTypeDef.aliases
+    use_embedding_blocking=True,          # Also block via the entity vector index
+    context_window_chars=90,              # Mention context half-width
+    scope="global",                       # "global" | "user"
 )
 ----
+
+==== Ingest-Time Resolution Fields (v0.7)
+
+[cols="2,1,3", options="header"]
+|===
+| Field | Default | Description
+
+| `resolve_on_ingest`
+| `True`
+| Resolve extracted mentions against stored entities while storing a message.
+  The single opt-out for v0.7's ingest-time resolution — set `False` for the
+  pre-v0.7 behaviour (one node per distinct surface form). Only takes effect
+  with an `OntologyResolver` (that is, `strategy=COMPOSITE` on bolt).
+
+| `auto_merge_threshold`
+| `0.90`
+| Score at or above which a mention merges onto the matched entity.
+  Overridable per entity type via `EntityTypeDef.resolution_threshold`.
+
+| `review_threshold`
+| `0.85`
+| Score at or above which the mention is stored as its own node with a pending
+  `SAME_AS` edge to the match, for human review. Overridable per entity type
+  via `EntityTypeDef.review_threshold`. Must be `<=` `auto_merge_threshold`;
+  the inversion is rejected at settings construction.
+
+| `candidate_limit`
+| `12`
+| Maximum blocking candidates fetched per mention and per bucket. The
+  per-episode exact-key query is capped at `candidate_limit x mentions`, and
+  never above 200 rows.
+
+| `use_alias_gazetteer`
+| `True`
+| Use `EntityTypeDef.aliases` as blocking keys and as a `1.0` match rule.
+
+| `use_embedding_blocking`
+| `True`
+| Also generate candidates from the entity vector index. Needs an embedder;
+  without one the embedding score component drops out and the remaining
+  weights are renormalized.
+
+| `context_window_chars`
+| `90`
+| Half-width of the mention context window compared against a candidate's
+  stored context or description during scoring.
+
+| `scope`
+| `global`
+| `global` matches against every stored entity (the pre-v0.7 behaviour, since
+  `:Entity` nodes are global). `user` restricts candidates to entities the
+  tenant has mentioned, via
+  `+(:Conversation {user_identifier})-[:HAS_MESSAGE]->(:Message)-[:MENTIONS]->(:Entity)+`.
+|===
+
+`auto_merge_threshold` / `review_threshold` are the single source for both write
+paths: the ingestion path uses them directly, and
+`LongTermMemory.add_entity` gets them through the resolver delegation (or
+explicitly via `DeduplicationConfig.from_resolution_config()`). See
+xref:how-to/tune-entity-resolution.adoc[Tune Entity Resolution].
 
 === Environment Variables
 
@@ -408,7 +608,16 @@ resolution_config = ResolutionConfig(
 NAM_RESOLUTION__STRATEGY=composite        # none, exact, fuzzy, semantic, composite
 NAM_RESOLUTION__EXACT_THRESHOLD=1.0
 NAM_RESOLUTION__FUZZY_THRESHOLD=0.85
-NAM_RESOLUTION__SEMANTIC_THRESHOLD=0.9
+NAM_RESOLUTION__SEMANTIC_THRESHOLD=0.8
+NAM_RESOLUTION__FUZZY_SCORER=token_sort_ratio
+NAM_RESOLUTION__RESOLVE_ON_INGEST=true
+NAM_RESOLUTION__AUTO_MERGE_THRESHOLD=0.90
+NAM_RESOLUTION__REVIEW_THRESHOLD=0.85
+NAM_RESOLUTION__CANDIDATE_LIMIT=12
+NAM_RESOLUTION__USE_ALIAS_GAZETTEER=true
+NAM_RESOLUTION__USE_EMBEDDING_BLOCKING=true
+NAM_RESOLUTION__CONTEXT_WINDOW_CHARS=90
+NAM_RESOLUTION__SCOPE=global              # global, user
 ----
 
 === Resolver Strategies
@@ -430,7 +639,11 @@ NAM_RESOLUTION__SEMANTIC_THRESHOLD=0.9
 |Embedding similarity matching
 
 |`COMPOSITE`
-|Combine all strategies
+|Default. On bolt this builds `OntologyResolver` — type-constrained blocking in
+Cypher, the ontology's alias gazetteer and per-type thresholds, three decision
+bands and two-pass episode resolution. It composes the fuzzy and semantic
+strategies rather than replacing them. Without a connected Neo4j client (NAMS,
+or a client built before connect) it falls back to `CompositeResolver`.
 |===
 
 == LLM Configuration
@@ -885,61 +1098,39 @@ NAM_ENRICHMENT__USER_AGENT=neo4j-agent-memory/1.0
 
 See the xref:how-to/entities.adoc[Working with Entities] guide for detailed usage documentation.
 
+[#deduplication]
 == Deduplication Configuration
 
-Settings for entity deduplication during ingest.
+Deduplication is configured through `resolution` (above). There is no
+`deduplication` section on `MemorySettings` and no `NAM_DEDUPLICATION__*`
+environment variables — `resolution.auto_merge_threshold` and
+`resolution.review_threshold` are the bands both the message-ingestion path and
+`long_term.add_entity` use, and `resolution.strategy` selects the resolver
+behind them.
 
-=== Python Configuration
+`DeduplicationConfig` is a dataclass, not a settings section: pass it to
+`LongTermMemory` when you construct the layer yourself. Its fields are
+`enabled`, `auto_merge_threshold` (0.95), `flag_threshold` (0.85),
+`use_fuzzy_matching` (True), `fuzzy_threshold` (0.9), `max_candidates` (10) and
+`match_same_type_only` (True).
 
 [source,python]
 ----
-from neo4j_agent_memory import DeduplicationConfig, DeduplicationStrategy
+from neo4j_agent_memory.memory import DeduplicationConfig, LongTermMemory
 
-dedup_config = DeduplicationConfig(
-    enabled=True,                         # Enable deduplication
-    strategy=DeduplicationStrategy.COMPOSITE,
-    embedding_threshold=0.92,             # Similarity for auto-merge
-    fuzzy_threshold=0.85,                 # Fuzzy match threshold
-    create_same_as=True,                  # Create SAME_AS for ambiguous matches
-    same_as_threshold=0.85,               # Threshold for SAME_AS relationships
-    batch_size=100,                       # Entities to process per batch
+# Derive the bands from the resolution settings so the two cannot drift.
+long_term = LongTermMemory(
+    neo4j_client,
+    embedder=embedder,
+    deduplication=DeduplicationConfig.from_resolution_config(settings.resolution),
 )
 ----
 
-=== Environment Variables
-
-[source,bash]
-----
-NAM_DEDUPLICATION__ENABLED=true
-NAM_DEDUPLICATION__STRATEGY=composite     # none, exact, fuzzy, embedding, composite
-NAM_DEDUPLICATION__EMBEDDING_THRESHOLD=0.92
-NAM_DEDUPLICATION__FUZZY_THRESHOLD=0.85
-NAM_DEDUPLICATION__CREATE_SAME_AS=true
-NAM_DEDUPLICATION__SAME_AS_THRESHOLD=0.85
-NAM_DEDUPLICATION__BATCH_SIZE=100
-----
-
-=== Deduplication Strategies
-
-[cols="1,3"]
-|===
-|Strategy |Description
-
-|`NONE`
-|Disable deduplication
-
-|`EXACT`
-|Exact name matching only
-
-|`FUZZY`
-|Fuzzy string matching (rapidfuzz)
-
-|`EMBEDDING`
-|Vector similarity matching
-
-|`COMPOSITE`
-|Combine fuzzy and embedding (default)
-|===
+Per-entity-type overrides live on the ontology (`EntityTypeDef`):
+`resolution_threshold` and `review_threshold`. Per-call, `add_entity(...,
+deduplicate=False)` skips the check for one entity. See
+xref:how-to/deduplication.adoc[Handle Duplicate Entities] and
+xref:how-to/tune-entity-resolution.adoc[Tune Entity Resolution].
 
 == Observability Configuration
 
@@ -1226,13 +1417,11 @@ NAM_EXTRACTION__MERGE_STRATEGY=confidence
 NAM_SCHEMA_CONFIG__MODEL=poleo
 NAM_SCHEMA_CONFIG__ENABLE_SUBTYPES=true
 
-# Resolution
+# Resolution (deduplication thresholds live here too)
 NAM_RESOLUTION__STRATEGY=composite
-
-# Deduplication
-NAM_DEDUPLICATION__ENABLED=true
-NAM_DEDUPLICATION__STRATEGY=composite
-NAM_DEDUPLICATION__EMBEDDING_THRESHOLD=0.92
+NAM_RESOLUTION__RESOLVE_ON_INGEST=true
+NAM_RESOLUTION__AUTO_MERGE_THRESHOLD=0.90
+NAM_RESOLUTION__REVIEW_THRESHOLD=0.85
 
 # Geocoding (for LOCATION entities)
 NAM_GEOCODING__ENABLED=true

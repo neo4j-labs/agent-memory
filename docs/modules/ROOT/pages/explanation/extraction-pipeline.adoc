@@ -5,7 +5,7 @@
 
 Understanding the multi-stage extraction pipeline, trade-offs between speed and accuracy, and how extractors work together.
 
-NOTE: This page describes the *client-side* extraction pipeline used by the *bolt* backend, which you configure (spaCy / GLiNER / LLM). On *NAMS*, extraction runs server-side and is not client-configurable — your extraction settings are ignored. See xref:explanation/backends.adoc#capability-matrix[Bolt vs NAMS].
+NOTE: This page describes the *client-side* extraction pipeline used by the *bolt* backend, which you configure (spaCy / GLiNER2.5 / LLM). On *NAMS*, extraction runs server-side and is not client-configurable — your extraction settings are ignored. See xref:explanation/backends.adoc#capability-matrix[Bolt vs NAMS].
 
 == The Challenge
 
@@ -21,7 +21,7 @@ Machines need help.
 
 neo4j-agent-memory supports three fundamentally different extraction approaches, each with trade-offs:
 
-image::diagrams/extraction-pipeline.png[Multi-stage extraction pipeline: spaCy → GLiNER2 → GLiREL → LLM → Knowledge Graph,width=540,align=left]
+image::diagrams/extraction-pipeline.png[Multi-stage extraction pipeline: spaCy → GLiNER2.5 → LLM → relation validation → Knowledge Graph,width=540,align=left]
 
 === spaCy: Statistical NER
 
@@ -46,9 +46,9 @@ spaCy uses pre-trained statistical models to recognize entities.
 
 *Best for*: Fast initial extraction, common entity types, offline use.
 
-=== GLiNER: Zero-Shot NER
+=== GLiNER2.5: Zero-Shot Joint Extraction
 
-GLiNER uses transformer models to extract entities based on type descriptions, not training data.
+GLiNER2.5 (the `gliner2` package, `fastino/gliner2.5-++*++` checkpoints) extracts entities from type *descriptions* rather than training data, and decodes entities and relations together through its JointIE engine.
 
 [cols="1,1"]
 |===
@@ -57,17 +57,25 @@ GLiNER uses transformer models to extract entities based on type descriptions, n
 | Custom entity types via descriptions
 | Slower than spaCy (neural network)
 
-| Good accuracy on diverse text
-| Requires model download (~400MB)
+| Entities and typed relations in one pass
+| Requires a model download (~407 MB for base-v1)
+
+| Endpoint types enforced during decoding
+| Relation recall collapses past ~400 words
 
 | Confidence scores
-| May hallucinate on ambiguous text
-
-| Works with domain schemas
 | GPU recommended for speed
+
+| Runs offline once the model is cached
+| No coreference, so pronouns are never resolved
 |===
 
-*Best for*: Domain-specific extraction, custom types, balancing speed and accuracy.
+*Best for*: Domain-specific extraction, custom types, typed relations without an LLM call.
+
+[NOTE]
+====
+GLiNER v1 and the separate GLiREL relation model were removed in 0.7. "GLiNER" on its own now refers to that removed stack; the current extractor is `GLiNER2Extractor` on GLiNER2.5. See xref:how-to/migrate-to-gliner2.adoc[Migrate to GLiNER2.5].
+====
 
 === LLM: Context-Aware Extraction
 
@@ -104,23 +112,27 @@ The real power comes from combining extractors in a pipeline:
 [source,python]
 ----
 from neo4j_agent_memory.extraction import ExtractionPipeline, MergeStrategy
+from neo4j_agent_memory.ontology import POLEO_ONTOLOGY
 
 pipeline = ExtractionPipeline(
     stages=[
-        SpacyEntityExtractor(),           # Fast first pass
-        GLiNEREntityExtractor.for_schema("podcast"),  # Domain refinement
+        SpacyEntityExtractor(),                     # Fast first pass
+        GLiNER2Extractor.for_schema("podcast"),     # Domain refinement + relations
     ],
     merge_strategy=MergeStrategy.CONFIDENCE,
+    ontology=POLEO_ONTOLOGY,                        # Enables the validation stage
 )
 ----
 
+The default pipeline order is spaCy → GLiNER2.5 → LLM, followed by relation validation. Each stage is optional; a stage whose dependency is not installed logs a warning and is skipped.
+
 === Why Pipelines?
 
-1. **Speed vs. Cost**: spaCy catches obvious entities instantly; GLiNER refines with domain knowledge; LLM handles the hard cases.
+1. **Speed vs. Cost**: spaCy catches obvious entities instantly; GLiNER2.5 refines with domain knowledge and adds typed relations; the LLM handles the hard cases and preferences.
 
-2. **Redundancy**: Multiple extractors provide confirmation. An entity found by both spaCy and GLiNER is more reliable.
+2. **Redundancy**: Multiple extractors provide confirmation. An entity found by both spaCy and GLiNER2.5 is more reliable.
 
-3. **Coverage**: Different extractors have different strengths. spaCy finds common entities; domain schemas find specialized ones.
+3. **Coverage**: Different extractors have different strengths. spaCy finds common entities; domain schemas find specialized ones; only the LLM stage extracts preferences.
 
 == Merge Strategies
 
@@ -132,7 +144,7 @@ Keep the entity with the highest confidence score:
 
 [source,python]
 ----
-# If spaCy finds "John" (no confidence) and GLiNER finds "John Smith" (0.95)
+# If spaCy finds "John" (0.85 default) and GLiNER2.5 finds "John Smith" (0.95)
 # Result: "John Smith" with confidence 0.95
 ----
 
@@ -144,94 +156,106 @@ Keep all unique entities from all stages:
 
 [source,python]
 ----
-# spaCy: ["John", "Acme"]
-# GLiNER: ["John Smith", "Acme Corp", "NYC"]
-# Result: ["John", "John Smith", "Acme", "Acme Corp", "NYC"]
+# spaCy:      ["John", "Acme"]
+# GLiNER2.5:  ["John Smith", "Acme Corp", "NYC"]
+# Result:     ["John", "John Smith", "Acme", "Acme Corp", "NYC"]
 ----
 
 *Best for*: Maximum recall, when you'll filter/merge later.
 
 === INTERSECTION
 
-Keep only entities found by multiple stages:
+Keep only entities found by more than one stage:
 
 [source,python]
 ----
-# spaCy: ["John", "Acme"]
-# GLiNER: ["John Smith", "Acme", "NYC"]
-# Result: ["Acme"]  # Only "Acme" found by both
+# spaCy:      ["John", "Acme"]
+# GLiNER2.5:  ["John Smith", "Acme", "NYC"]
+# Result:     ["Acme"]  # Only "Acme" found by both
 ----
 
 *Best for*: High precision, when you only want confirmed entities.
 
-=== FIRST
+=== CASCADE
 
-Use first stage's results, fallback to later stages on failure:
-
-[source,python]
-----
-# If spaCy finds entities, use them
-# Otherwise, try GLiNER
-# Otherwise, try LLM
-----
-
-*Best for*: Fast-first extraction with fallback.
-
-=== LAST
-
-Later stages override earlier:
+Use the first stage's results and fill the gaps with later stages:
 
 [source,python]
 ----
-# GLiNER results override spaCy results
-# LLM results override both
+# spaCy's entities are kept as-is
+# GLiNER2.5 and the LLM only add entities spaCy missed
 ----
 
-*Best for*: Trust the "smarter" extractor.
+*Best for*: Trusting a fast first stage while still improving coverage.
+
+=== FIRST_SUCCESS
+
+Stop at the first stage that returns entities:
+
+[source,python]
+----
+# If spaCy finds entities, use them and skip the rest
+# Otherwise try GLiNER2.5, then the LLM
+----
+
+*Best for*: Fast-first extraction with fallback, and for keeping LLM calls rare.
 
 == Domain Schemas
 
-GLiNER's zero-shot capability becomes powerful with domain schemas - descriptions of entity types for your specific use case.
+GLiNER2.5's zero-shot capability becomes powerful with domain schemas - descriptions of entity types for your specific use case.
 
 [source,python]
 ----
-# The "podcast" schema
+# The "podcast" schema (abridged)
 {
-    "PERSON": "A person mentioned or interviewed",
-    "COMPANY": "A company, startup, or business",
-    "PRODUCT": "A product, service, or platform",
-    "CONCEPT": "A concept, methodology, or framework",
+    "person": "A person mentioned in the podcast, including hosts, guests, and people discussed",
+    "company": "A company, startup, or business organization",
+    "product": "A product, service, app, or software tool",
+    "concept": "A business concept, methodology, framework, or strategy",
 }
 
-# GLiNER uses these descriptions to guide extraction
-extractor = GLiNEREntityExtractor.for_schema("podcast")
+# The descriptions are read as annotation guidelines
+extractor = GLiNER2Extractor.for_schema("podcast")
 ----
 
 === Why Descriptions Matter
 
-GLiNER doesn't just match labels - it uses the semantic meaning of descriptions:
+GLiNER2.5 doesn't just match labels - it uses the semantic meaning of descriptions:
 
-* `"PERSON"` → Generic person detection
-* `"A person mentioned or interviewed"` → Focuses on people in interview context, not passing mentions
+* `"person"` → Generic person detection
+* `"A person mentioned in the podcast, including hosts, guests, and people discussed"` → Focuses on people in the interview context, not passing mentions
 
 This is why domain schemas significantly improve extraction quality.
 
-== Relationship Extraction with GLiREL
+== Joint Entity and Relation Decoding
 
-Beyond entities, GLiREL extracts relationships:
+Beyond entities, GLiNER2.5 decodes typed relations in the *same* pass:
 
 [source,python]
 ----
-from neo4j_agent_memory.extraction import GLiNERWithRelationsExtractor
+from neo4j_agent_memory.extraction import GLiNER2Extractor
 
-extractor = GLiNERWithRelationsExtractor.for_poleo()
+extractor = GLiNER2Extractor.for_poleo()
 result = await extractor.extract("Marc works at a16z in San Francisco")
 
-# Entities: [Marc, a16z, San Francisco]
-# Relations: [Marc -[WORKS_AT]-> a16z, a16z -[LOCATED_IN]-> San Francisco]
+# Entities:  [Marc, a16z, San Francisco]
+# Relations: [Marc -[EMPLOYED_BY]-> a16z, a16z -[HEADQUARTERS_AT]-> San Francisco]
 ----
 
-Relationship extraction finds typed connections between entities, building richer knowledge graphs.
+The ontology declares which endpoint types each relationship connects, and the JointIE decoder enforces that *during* beam search rather than filtering afterwards. An `EMPLOYED_BY` edge can only ever run from a person label to an organization label if that is what the ontology declared. Relations therefore come back carrying entity ids (`source_id`/`target_id`), and every endpoint is guaranteed to be one of the entities in the same result.
+
+A consequence worth knowing: relations are only decoded when the ontology declares relationship types. The eight built-in domain catalogs are *label* catalogs; `poleo`, `podcast` and `news` carry relationships, the rest are entity-only until you attach some. See xref:reference/schemas.adoc[Domain Schemas Reference].
+
+=== The Validation Stage
+
+An ontology-aware pipeline runs one more step after merging: `ExtractionResult.validate_relations(ontology, mode="drop")`. Merging several stages can only ever *add* relations the ontology does not permit — the GLiNER2.5 stage constrains endpoints while decoding, the LLM and spaCy stages do not — so the last thing the pipeline does is throw those out and log how many.
+
+=== Two Quiet Failure Modes
+
+GLiNER2.5 has two ways of returning nothing that look like "there was nothing to find":
+
+* **`feasible=False`** means the decoder could not satisfy the ontology's *hard* constraints (uniqueness, acyclicity) and fell back to an empty assignment. The extractor raises a `RuntimeWarning` saying so. The fix is to relax `unique_source`/`acyclic` or lower thresholds, not to conclude the text was empty.
+* **Long input** silently loses relations. Recall degrades sharply past roughly 400 words and can reach zero while entity recall stays fine. The extractor windows anything longer than `max_words` (384) through `extract_long`, and relations whose endpoints land in different windows are dropped.
 
 == Automatic Relationship Storage
 
@@ -251,8 +275,12 @@ await memory.short_term.add_message(
 # This creates:
 # - Entity nodes: Brian Chesky (PERSON), Airbnb (ORGANIZATION), San Francisco (LOCATION)
 # - MENTIONS relationships: Message -> Entity
-# - RELATED_TO relationships: (Brian Chesky)-[:RELATED_TO {relation_type: "FOUNDED"}]->(Airbnb)
+# - RELATED_TO relationships: (Brian Chesky)-[:RELATED_TO {type: "FOUNDED"}]->(Airbnb)
 ----
+
+The relationship type name lives in `r.type`, and the merge key includes it — so one pair of entities can carry several differently-typed edges. `r.relation_type` is written as a mirror of `r.type` for one release; read `r.type`. Each edge also accumulates provenance: `support` (how many times it was observed), `derived`, `extractor`, `source_message_ids` (capped at 25) and `evidence` (capped at 3).
+
+Edges written before 0.7 only carried `relation_type`. An idempotent backfill runs on connect and copies it into `r.type`; it matches nothing once every edge has been migrated.
 
 The relationship storage works for:
 
@@ -292,14 +320,16 @@ Typical extraction times for a 500-word document:
 | 10-50ms
 | N/A
 
-| GLiNER
-| 200-500ms
-| 50-100ms
+| GLiNER2.5 (base-v1)
+| ~600ms
+| 50-150ms
 
 | LLM (GPT-4o-mini)
 | 500-2000ms
 | N/A
 |===
+
+The GLiNER2.5 CPU figure is measured: `benchmarks/compare_extractors.py` on the POLE+O gold set runs `fastino/gliner2.5-base-v1` at roughly 1.6 documents per second on CPU. `small-v1` is faster and `multi-v1` slower.
 
 === Batch Processing
 
@@ -309,12 +339,17 @@ For many documents, use batch extraction:
 ----
 result = await pipeline.extract_batch(
     texts,
-    batch_size=32,      # GLiNER batch size
+    batch_size=10,      # Texts per batch (memory management)
     max_concurrency=5,  # Parallel extractions
 )
 ----
 
-GLiNER specifically benefits from batching on GPU.
+`GLiNER2Extractor.extract_batch()` decodes a slice of texts in one forward pass, which is where GPU batching pays off:
+
+[source,python]
+----
+results = await extractor.extract_batch(texts, batch_size=32)
+----
 
 === Streaming for Long Documents
 
@@ -344,29 +379,51 @@ async for chunk_result in streamer.extract_streaming(long_document):
 | Speed, simplicity
 
 | Domain-specific text
-| GLiNER with schema
-| `[GLiNER]`
+| GLiNER2.5 with a domain template
+| `[GLiNER2.5]`
 | Custom types, good accuracy
 
 | High-value documents
 | Full pipeline
-| `[spaCy → GLiNER → LLM]`
+| `[spaCy → GLiNER2.5 → LLM]`
 | Maximum accuracy
 
 | Mixed workload
 | Tiered pipeline
-| `[spaCy + GLiNER]`
+| `[spaCy + GLiNER2.5]`
 | Balance speed/accuracy
 
-| Relations needed
-| GLiNER + GLiREL
-| `[GLiNERWithRelations]`
-| Entity + relation extraction
+| Typed relations needed
+| GLiNER2.5 on an ontology
+| `[GLiNER2.5]`
+| Entities and relations decode together, endpoints type-checked
 |===
+
+== Quality Expectations
+
+Measured on the POLE+O gold set in `benchmarks/data/` with `benchmarks/compare_extractors.py` (CPU):
+
+[cols="1,1,1,1", options="header"]
+|===
+| Checkpoint | Entity F1 | Relation F1 (lenient / strict) | Throughput
+
+| `fastino/gliner2.5-base-v1`
+| 0.80
+| 0.37 / 0.27
+| ~1.6 docs/s
+
+| `fastino/gliner2.5-small-v1`
+| 0.75
+| _not measured_
+| faster
+|===
+
+Both runs reported zero endpoint-type violations — the point of typed joint decoding. Entity F1 is roughly flat versus the GLiNER stack that came before; what 2.5 buys is typed joint decoding, long context and the boundary architecture, not a jump in entity accuracy. End-to-end zero-shot relation extraction is weak for every model in this class, so treat relation F1 as a floor to improve with per-relation thresholds rather than a finished number.
 
 == See Also
 
 * xref:how-to/entity-extraction.adoc[Configure Entity Extraction] - Practical setup
+* xref:how-to/migrate-to-gliner2.adoc[Migrate to GLiNER2.5] - What changed in 0.7
 * xref:reference/extractors.adoc[Extractor Classes Reference] - API details
 * xref:reference/schemas.adoc[Domain Schemas Reference] - Available schemas
 * xref:how-to/batch-processing.adoc[Process Documents in Batch] - Batch and streaming

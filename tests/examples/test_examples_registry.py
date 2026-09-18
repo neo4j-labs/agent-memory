@@ -57,6 +57,7 @@ NO_ENV_EXAMPLE_OK = {
     "eval-harness": "key-free bolt example; NEO4J_* come from examples/.env.example",
     "existing-graph": "key-free bolt example; NEO4J_* come from examples/.env.example",
     "no_llm": "deliberately credential-free — that is the point of the example",
+    "ontology-extraction": "key-free bolt example; NEO4J_* come from examples/.env.example",
 }
 
 #: Example directories with no dedicated test module, with why. Empty today;

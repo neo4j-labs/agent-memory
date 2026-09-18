@@ -53,7 +53,7 @@ This is the flagship demo application for the `neo4j-agent-memory` library. It d
 | **Map Visualization** | Leaflet + react-leaflet + Turf.js |
 | **Database** | Neo4j 5.x (with APOC plugin) |
 | **LLM** | OpenAI GPT-4o |
-| **Entity Extraction** | spaCy + GLiNER2 + LLM pipeline (via `ExtractionConfig`) |
+| **Entity Extraction** | spaCy + GLiNER2.5 + LLM pipeline (via `ExtractionConfig`) |
 | **Entity Deduplication** | Embedding similarity + fuzzy matching (via `DeduplicationConfig`) |
 | **Entity Enrichment** | Wikipedia/Wikimedia API |
 | **Observability** | OpenTelemetry / Opik tracing support |
@@ -62,7 +62,7 @@ This is the flagship demo application for the `neo4j-agent-memory` library. It d
 
 This example showcases several features from neo4j-agent-memory:
 
-- **`ExtractionConfig`** with `gliner_schema="podcast"` -- uses the podcast-optimized domain schema for entity extraction
+- **`ExtractionConfig`** with `gliner_schema="podcast"` -- uses the podcast-optimized domain schema (labels plus `WORKS_AT` / `FOUNDED` / `LOCATED_IN` / `DISCUSSES` relationships) for entity extraction
 - **`DeduplicationConfig`** -- auto-merges entities at 95%+ similarity, flags for review at 85%+, with fuzzy string matching
 - **Observability** -- optional `get_tracer()` integration for OpenTelemetry/Opik tracing of extraction pipelines
 - **Batch ingest** -- `short_term.add_messages_batch()` with `batch_size`, `generate_embeddings`, `extract_entities` and a progress callback, plus `extract_entities_from_session()` and `generate_embeddings_batch()` for the two post-processing passes
@@ -498,8 +498,8 @@ Podcast Transcript Text
          ▼
 ┌─────────────────┐
 │   Stage 2:      │   Zero-shot, domain-flexible with descriptions
-│   GLiNER2       │   Custom entity types + POLE+O categories
-│   (transformer) │   ~50ms per segment
+│   GLiNER2.5     │   Custom entity types + typed relations (JointIE)
+│   (transformer) │   ~600ms per segment on CPU
 └────────┬────────┘
          ▼
 ┌─────────────────┐
@@ -517,7 +517,7 @@ Podcast Transcript Text
     (with POLE+O type labels)
 ```
 
-The **podcast domain schema** for GLiNER2 is optimized for this content:
+The **podcast domain schema** for GLiNER2.5 is optimized for this content:
 
 | Entity Type | Description | Examples |
 |-------------|-------------|----------|
@@ -600,35 +600,48 @@ Enrichment data is also surfaced in:
 - **Graph View**: Node property panel displays enrichment section with image and description
 - **Map View**: Location popups include enrichment context
 
-### Relationship Extraction with GLiREL
+### Relationship Extraction (no LLM)
 
-In addition to extracting entities, the system can extract relationships between entities using GLiREL (GLiNER for Relations). This creates `RELATED_TO` relationships between Entity nodes, capturing semantic connections like "works_at", "founded_by", "lives_in", etc.
+GLiNER2.5 decodes entities **and** relationships in the same pass through its
+JointIE engine, so relationships cost nothing beyond the extraction already
+running. This creates `RELATED_TO` relationships between Entity nodes, capturing
+semantic connections like employment, founding and location.
 
 #### How It Works
 
 When messages are processed with relationship extraction enabled, the system:
 
-1. **Extracts entities** using the multi-stage pipeline (spaCy + GLiNER2 + LLM)
-2. **Runs GLiREL** on the same text to identify relationships between entity pairs
+1. **Extracts entities and relations together** with `GLiNER2Extractor`, which
+   enforces the ontology's endpoint types while decoding — an `EMPLOYED_BY` edge
+   can only run from a person label to an organization label
+2. **Resolves each relation's endpoints by mention id** (`source_id`/`target_id`),
+   not by name, so a name mentioned twice in one segment does not collapse
 3. **Creates RELATED_TO relationships** in Neo4j with:
-   - `relation_type`: The semantic type (e.g., "WORKS_AT", "FOUNDED_BY")
-   - `confidence`: GLiREL's confidence score (0.0-1.0)
-   - `created_at`: Timestamp of extraction
+   - `type`: The semantic type (e.g. `EMPLOYED_BY`, `RESIDES_AT`) — the canonical
+     property; `relation_type` is kept as a mirror for one release
+   - `confidence`: The decoder's confidence (0.0-1.0)
+   - `support`: How many times the relation was observed
+   - `derived`, `extractor`, `source_message_ids`, `evidence`: provenance
+   - `created_at` / `updated_at`: Timestamps
 
 #### Relationship Types
 
-GLiREL extracts relationships based on the POLE+O ontology:
+The types come from the POLE+O ontology (`neo4j_agent_memory.ontology.POLEO_ONTOLOGY`),
+which declares 16 of them with explicit endpoint typing:
 
-| Relation Type | Description | Example |
-|---------------|-------------|---------|
-| `WORKS_AT` | Person employed by organization | Brian Chesky → Airbnb |
-| `FOUNDED_BY` | Organization founded by person | Airbnb → Brian Chesky |
-| `LIVES_IN` | Person resides in location | Brian Chesky → San Francisco |
-| `LOCATED_IN` | Entity located in place | Airbnb → San Francisco |
-| `MEMBER_OF` | Person belongs to organization | Person → Y Combinator |
-| `SUBSIDIARY_OF` | Organization owned by another | Instagram → Meta |
-| `PARTICIPATED_IN` | Person involved in event | Founder → IPO |
-| `KNOWS` | Person acquainted with person | Brian Chesky → Joe Gebbia |
+| Relation Type | Permitted endpoints | Example |
+|---------------|---------------------|---------|
+| `EMPLOYED_BY` | Person → Organization (unique source) | Brian Chesky → Airbnb |
+| `MEMBER_OF` | Person → Organization | Person → Y Combinator |
+| `RESIDES_AT` | Person → Location (unique source) | Brian Chesky → San Francisco |
+| `HEADQUARTERS_AT` | Organization → Location (unique source) | Airbnb → San Francisco |
+| `LOCATED_AT` | Person / Object / Organization / Event → Location | Airbnb → San Francisco |
+| `SUBSIDIARY_OF` | Organization → Organization (acyclic) | Instagram → Meta |
+| `PARTICIPATED_IN` | Person / Organization → Event | Founder → IPO |
+| `KNOWS` | Person → Person | Brian Chesky → Joe Gebbia |
+
+`ALIAS_OF`, `OWNS`, `USES`, `OCCURRED_AT`, `INVOLVED`, `PARTNER_WITH` and the
+catch-alls `RELATED_TO` / `MENTIONS` (threshold 0.6) complete the set.
 
 #### Backfilling Relationships for Existing Data
 
@@ -654,7 +667,7 @@ Options:
   --limit N             Process only N messages
   --batch-size N        Messages per batch (default: 50)
   --threshold FLOAT     Confidence threshold (default: 0.5)
-  --device cpu|cuda|mps Device for GLiREL model
+  --device cpu|cuda|mps Device for the GLiNER2.5 model
 ```
 
 **Progress display:**
@@ -874,7 +887,7 @@ The `scripts/load_transcripts.py` script processes podcast transcripts with:
 - **Concurrent loading**: Parallel transcript processing for throughput
 - **Resume capability**: Skip already-loaded transcripts for interrupted loads
 - **Real-time progress**: Rich progress bars with ETA
-- **Entity extraction**: Multi-stage NER pipeline (spaCy + GLiNER2 + LLM)
+- **Entity extraction**: Multi-stage NER pipeline (spaCy + GLiNER2.5 + LLM)
 - **Retry logic**: Exponential backoff for transient failures
 - **Detailed statistics**: Files, turns, speakers, and throughput on completion
 
@@ -1330,5 +1343,5 @@ and the preference-delete stub); `load_transcripts.py` ingest +
 `--embeddings-only` + `--repair-links`, `backfill_embeddings.py`,
 `enrich_entities.py` and `geocode_locations.py` against a throwaway Neo4j 5.26;
 `uv lock --check` in `backend/`. Not re-run: the Next.js frontend end-to-end, a
-live chat turn against a real LLM, `backfill_relationships.py`'s GLiREL
+live chat turn against a real LLM, `backfill_relationships.py`'s GLiNER2.5
 inference (its `--status` path was verified), and the full 299-episode load._

@@ -1,0 +1,446 @@
+= Migrate to GLiNER2.5
+:page-product: agent-memory
+:page-pagination:
+:toclevels: 3
+:sectanchors:
+:icons: font
+:source-highlighter: highlight.js
+
+Release 0.7 replaced the local extraction stack. The `gliner` v1 package and the
+separate GLiREL relation model are gone; `GLiNER2Extractor` on GLiNER2.5 does
+both jobs in one pass. This guide covers what to change in your install, your
+code, your configuration and your stored data.
+
+[NOTE]
+====
+*Naming.* "GLiNER" refers to the removed v1 package and its community
+checkpoints. "GLiNER2.5" means the `fastino/gliner2.5-++*++` checkpoints on the
+`gliner2` package. Older docs used "GLiNER2" for the v1 setup; that spelling is
+retired to avoid the collision.
+====
+
+== 1. Update the Install
+
+[source,bash]
+----
+pip install "neo4j-agent-memory[gliner2]"
+----
+
+[cols="2,3", options="header"]
+|===
+| Extra | Status
+
+| `gliner2`
+| The extra to use. Installs `gliner2[local]`, plus `sentencepiece` and
+  `protobuf` — the GLiNER2.5 checkpoints use a DeBERTa-v3 SPM tokenizer and fail
+  confusingly without them.
+
+| `gliner`
+| Deprecated alias of `gliner2`, kept for one release so existing install
+  commands keep working. Removed in 0.8.
+
+| `extraction`
+| Still spaCy + the local model; now carries `gliner2` instead of `gliner`.
+
+| `full`
+| Unchanged spelling; carries `gliner2`.
+|===
+
+You can uninstall `gliner` and `glirel`: nothing in the library imports them any
+more.
+
+== 2. Change the Model Id
+
+[cols="2,1,1,2", options="header"]
+|===
+| Checkpoint | Parameters | On disk | Use
+
+| `fastino/gliner2.5-small-v1`
+| 74M
+| ~296 MB
+| Fast CPU / edge
+
+| `fastino/gliner2.5-base-v1`
+| 194M
+| ~407 MB
+| Default, English
+
+| `fastino/gliner2.5-multi-v1`
+| 287M
+| ~594 MB
+| Multilingual
+|===
+
+Legacy ids — anything under `urchade/`, `gliner-community/` or `numind/` —
+raise a `ValueError` from the constructor, before any download:
+
+[source,text]
+----
+ValueError: 'urchade/gliner_medium-v2.1' is a GLiNER v1 checkpoint and cannot be
+loaded by GLiNER2Extractor (the 2.5 loader rejects the architecture). Use a
+GLiNER2.5 checkpoint such as 'fastino/gliner2.5-base-v1',
+'fastino/gliner2.5-small-v1' or 'fastino/gliner2.5-multi-v1'.
+----
+
+Settings validation does not reject them, so a stale
+`NAM_EXTRACTION__GLINER_MODEL` surfaces at first extraction rather than at
+startup.
+
+== 3. Update Your Code
+
+=== Entity Extraction
+
+[source,python]
+----
+# Before
+from neo4j_agent_memory.extraction import GLiNEREntityExtractor
+
+extractor = GLiNEREntityExtractor.for_schema("podcast")
+extractor = GLiNEREntityExtractor.for_poleo()
+extractor = GLiNEREntityExtractor(entity_labels=["person", "company"])
+
+# After
+from neo4j_agent_memory.extraction import GLiNER2Extractor
+
+extractor = GLiNER2Extractor.for_schema("podcast")
+extractor = GLiNER2Extractor.for_poleo()
+extractor = GLiNER2Extractor(entity_labels=["person", "company"])
+----
+
+`schema=` became `ontology=`, and it accepts more: an `OntologyDocument`, a
+`DomainSchema`, an `EntitySchemaConfig`, or anything else with a `to_ontology()`
+method.
+
+[source,python]
+----
+# Before
+extractor = GLiNEREntityExtractor(schema=my_domain_schema)
+
+# After
+extractor = GLiNER2Extractor(ontology=my_domain_schema)
+extractor = GLiNER2Extractor.for_ontology(my_ontology_document)
+----
+
+=== Relation Extraction
+
+Relations now come from the *same* pass as the entities. There is no second
+model, no second install and no second call.
+
+[source,python]
+----
+# Before
+from neo4j_agent_memory.extraction import (
+    GLiNEREntityExtractor,
+    GLiRELExtractor,
+    GLiNERWithRelationsExtractor,
+)
+
+entity_result = await GLiNEREntityExtractor.for_poleo().extract(text)
+relations = await GLiRELExtractor().extract_relations(text, entities=entity_result.entities)
+
+# or
+extractor = GLiNERWithRelationsExtractor.for_poleo()
+
+# After
+from neo4j_agent_memory.extraction import GLiNER2Extractor
+
+extractor = GLiNER2Extractor.for_poleo()
+result = await extractor.extract(text)
+result.entities
+result.relations
+----
+
+Relations are decoded when three things hold: the call passes
+`extract_relations=True` (the default), the extractor was built with
+`extract_relations=True`, and *the ontology declares relationship types*. That
+last condition is the one that bites: a bare `DomainSchema` is a label catalog
+with no endpoint typing, so `GLiNER2Extractor(ontology=some_domain_schema)`
+returns entities only. The `poleo`, `podcast` and `news` templates declare
+relationships; the other five do not until you attach some.
+
+=== The Builder
+
+The builder keeps its spelling. `with_gliner()` now means GLiNER2.5 and takes
+new keyword arguments:
+
+[source,python]
+----
+extractor = (
+    ExtractorBuilder()
+    .with_spacy()
+    .with_gliner(threshold=0.5, relation_threshold=0.35)
+    .with_llm_fallback()
+    .build()
+)
+
+# Domain template, unchanged
+ExtractorBuilder().with_gliner_schema("podcast", threshold=0.5).build()
+
+# New: extract against an ontology document
+ExtractorBuilder().with_ontology(doc).with_gliner().build()
+----
+
+`with_gliner_relations()` is gone — it had no replacement because it has no job
+left to do.
+
+=== Removed Names
+
+Every one of these raises an `ImportError` naming its replacement:
+
+[cols="2,3", options="header"]
+|===
+| Removed in 0.7 | Replacement
+
+| `GLiNEREntityExtractor`
+| `GLiNER2Extractor`
+
+| `GLiNERConfig`
+| `GLiNER2Extractor` takes its settings as constructor arguments
+
+| `GLiNERWithRelationsExtractor`
+| `GLiNER2Extractor` — entities and relations decode in one pass
+
+| `GLiRELExtractor`
+| `GLiNER2Extractor` — relations come from the same pass as the entities
+
+| `GLiRELConfig`
+| `GLiNER2Extractor`
+
+| `DEFAULT_RELATION_TYPES`
+| Declare relationships on an `OntologyDocument`
+  (`neo4j_agent_memory.ontology.POLEO_ONTOLOGY` is the default)
+
+| `is_gliner_available`
+| `is_gliner2_available`
+
+| `is_glirel_available`
+| `is_gliner2_available`
+
+| `extraction/gliner_extractor.py`
+| `extraction/gliner2_extractor.py`, with `DEFAULT_LABEL_MAPPING` moved to
+  `extraction/label_mapping.py` and `DomainSchema` to
+  `extraction/domain_schemas.py`
+|===
+
+== 4. Output Shape Changes
+
+[cols="2,3", options="header"]
+|===
+| What | Change
+
+| `ExtractedEntity.extractor`
+| `"gliner2"` (was `"gliner"`). Recorded on provenance links, so filters on the
+  old string stop matching.
+
+| `ExtractedEntity.id`
+| New. A per-result *mention* id, scoped to one extraction call.
+
+| `ExtractedEntity.attributes`
+| Keys are now `gliner2_label`, `gliner2_score`, `rescued`, `sentence_id`, plus
+  any values from the opt-in attribute pass.
+
+| `ExtractedRelation.source_id` / `target_id`
+| New. The mention ids of the endpoints. Storage prefers them over a name
+  lookup, so a name mentioned twice no longer collapses into one edge.
+
+| `ExtractedRelation.derived`
+| New. `True` for a relation that was inferred (an inverse mirror) rather than
+  observed.
+
+| Relations present at all
+| Only when the ontology declares relationship types (see above).
+|===
+
+Code that read `entity.attributes["gliner_label"]` or matched
+`extractor == "gliner"` needs updating.
+
+== 5. Configuration Changes
+
+The `ExtractionConfig` field names keep the `gliner_` prefix, so existing
+`NAM_EXTRACTION__GLINER_*` environment variables keep working. What changed:
+
+[cols="2,2,3", options="header"]
+|===
+| Field | Change | Note
+
+| `gliner_model`
+| Default is now `fastino/gliner2.5-base-v1`
+| Was a community v1 checkpoint
+
+| `gliner_relation_threshold`
+| New, default `None`
+| Confidence floor for decoded relations
+
+| `gliner_max_words`
+| New, default `384`
+| Longer input is windowed
+
+| `gliner_chunk_overlap`
+| New, default `64`
+| Word overlap between windows
+
+| `gliner_overlap_policy`
+| New, default `None`
+| Span-overlap policy for the attribute pass
+
+| `gliner_extract_attributes`
+| New, default `False`
+| Opt-in second pass for enum properties
+
+| `gliner_quantize`
+| New, default `False`
+| fp16 weights
+
+| `gliner_compile`
+| New, default `False`
+| `torch.compile`
+|===
+
+`ExtractionConfig` uses `extra="forbid"`, so a misspelled field raises at
+construction rather than being silently dropped.
+
+== 6. Stored Data: the `RELATED_TO` Backfill
+
+Extracted relationships are still `RELATED_TO` edges, but the merge key now
+includes the relationship name:
+
+[source,cypher]
+----
+MERGE (source)-[r:RELATED_TO {type: $relation_type}]->(target)
+----
+
+`r.type` is the canonical property and every reader uses it; `r.relation_type`
+is written as a mirror for one release. Edges also carry provenance: `support`
+(observation count), `derived`, `extractor`, `source_message_ids` (capped at 25)
+and `evidence` (capped at 3).
+
+Edges written before 0.7 only carried `relation_type`. A one-shot backfill runs
+during schema setup on the first connect:
+
+[source,cypher]
+----
+MATCH ()-[r:RELATED_TO]->()
+WHERE r.type IS NULL AND r.relation_type IS NOT NULL
+SET r.type = r.relation_type, r.support = coalesce(r.support, 1)
+----
+
+The query is idempotent — it matches nothing once every edge has been migrated,
+including on an empty database — but it is still a write transaction that scans
+every `RELATED_TO` edge, which is not something to pay for on every connection.
+So it runs **once per database**: completion is recorded on a marker node and
+later connections skip the scan.
+
+[source,cypher]
+----
+(:SchemaMigration {name: "relation_type_backfill", completed_at: datetime()})
+----
+
+To run it again — after bulk-loading pre-0.7 data, say — delete the marker and
+reconnect:
+
+[source,cypher]
+----
+MATCH (m:SchemaMigration {name: "relation_type_backfill"}) DELETE m
+----
+
+To skip it entirely and run the equivalent yourself in batches
+(`apoc.periodic.iterate`), turn it off:
+
+[source,python]
+----
+from neo4j_agent_memory import MemorySettings
+
+settings = MemorySettings(
+    neo4j={"uri": "bolt://localhost:7687", "password": "password"},
+    schema_config={"backfill_relation_types": False},
+)
+----
+
+Or set `NAM_SCHEMA_CONFIG__BACKFILL_RELATION_TYPES=false`. On a very large
+graph, prefer this and migrate during a maintenance window.
+
+Because the merge key changed, one pair of entities can now carry several
+differently-typed edges where before a second type would overwrite the first.
+Expect the edge count to grow on re-ingestion.
+
+== 7. What to Expect from the New Model
+
+GLiNER2.5 is an architecture change, not an accuracy jump. Measured on the
+POLE+O gold set in `benchmarks/data/` with `benchmarks/compare_extractors.py`
+(CPU):
+
+[cols="2,1,1,1", options="header"]
+|===
+| Checkpoint | Entity F1 | Relation F1 (lenient / strict) | Throughput
+
+| `fastino/gliner2.5-base-v1`
+| 0.80
+| 0.37 / 0.27
+| ~1.6 docs/s
+
+| `fastino/gliner2.5-small-v1`
+| 0.75
+| _not measured_
+| faster
+|===
+
+Both runs reported zero endpoint-type violations. What you gain:
+
+* **Typed joint decoding.** Endpoint types are enforced during beam search, not
+  filtered afterwards, so a relation whose endpoints the ontology forbids is
+  never produced.
+* **Long context.** The model trains on sequences up to 4,096 words and decodes
+  spans of any length, instead of a fixed span-width grid.
+* **Descriptions as guidelines.** Entity descriptions are read as annotation
+  guidelines, so a described label extracts noticeably better than a bare one.
+* **One model instead of two.** No separate relation model to install, version
+  or keep in memory.
+
+What you do not gain: entity F1 is roughly flat against the previous stack.
+End-to-end zero-shot relation extraction is weak for every model in this class;
+treat relation F1 as a floor to improve with per-relation thresholds.
+
+=== Two Quiet Failure Modes
+
+* **Relation recall past ~400 words.** It degrades sharply and can reach zero
+  while entity recall stays fine, with no error raised. Input longer than
+  `max_words` is windowed through `extract_long`, and relations whose endpoints
+  land in different windows are lost. Extract per message or per section rather
+  than per long concatenation.
+* **`feasible=False`.** The decoder could not satisfy the ontology's hard
+  constraints (uniqueness, acyclicity) and fell back to an empty assignment.
+  This is *not* "no facts in this text". The extractor raises a
+  `RuntimeWarning` saying so; relax the constraints or lower the thresholds.
+
+== 8. Verify
+
+[source,python]
+----
+from neo4j_agent_memory.extraction import GLiNER2Extractor, is_gliner2_available
+
+assert is_gliner2_available()
+
+extractor = GLiNER2Extractor.for_poleo()
+print(extractor.name, extractor.version, extractor.model_id)
+# gliner2 2.0.0 fastino/gliner2.5-base-v1
+
+result = await extractor.extract("Brian Chesky founded Airbnb in San Francisco.")
+assert result.entities
+assert all(e.id for e in result.entities)
+assert all(r.source_id and r.target_id for r in result.relations)
+----
+
+From the command line:
+
+[source,bash]
+----
+neo4j-agent-memory extract "Brian Chesky founded Airbnb in San Francisco." --format json
+----
+
+== See Also
+
+* xref:reference/extractors.adoc#gliner2extractor[GLiNER2Extractor Reference] - Full parameter list
+* xref:how-to/entity-extraction.adoc[Configure Entity Extraction] - Pipeline setup
+* xref:reference/schemas.adoc[Domain Schemas Reference] - The eight catalogs and their relationships
+* xref:explanation/extraction-pipeline.adoc[How Entity Extraction Works] - Stage design and merge strategies
+* xref:reference/configuration.adoc[Configuration Reference] - Every extraction field

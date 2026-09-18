@@ -1024,19 +1024,18 @@ class TestGetTools:
         centre = Entity(name="Acme Corp", type="ORGANIZATION")
         client.long_term.entities = [centre]
         client.long_term.related = [Entity(name="Ada", type="PERSON")]
+        client.long_term.related_types = {"Ada": "WORKS_AT"}
 
         result = await _entity_graph(client, "Acme Corp", depth=2, nams=False)
 
         assert result["center"] == "Acme Corp"
         assert {"name": "Ada", "type": "PERSON", "is_center": False} in result["nodes"]
-        # "RELATED_TO", centre-as-source: the only thing the bolt stack can
-        # report today. get_related_entities reads relationship properties out
-        # of execute_read's result.data(), which flattens a relationship to
-        # (start, type, end) and loses them, so the property-level type never
-        # survives and source_id is hardcoded to the centre. Pre-existing
-        # library defect, pinned here and in the integration suite so a fix
-        # shows up as a failing assertion rather than going unnoticed.
-        assert {"from": "Acme Corp", "relationship": "RELATED_TO", "to": "Ada"} in result["edges"]
+        # The relation's real semantic type ("WORKS_AT") now survives the
+        # round trip. "from"/"to" are still centre-as-source: that part of
+        # the shape is a separate, documented limitation --
+        # get_related_entities hardcodes source_id to the centre because
+        # GET_ENTITY_RELATIONSHIPS matches undirected -- and is unchanged.
+        assert {"from": "Acme Corp", "relationship": "WORKS_AT", "to": "Ada"} in result["edges"]
         assert client.long_term.related_kwargs[-1]["depth"] == 2
 
     @pytest.mark.asyncio

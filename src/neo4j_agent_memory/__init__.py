@@ -39,7 +39,9 @@ Example usage:
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generic, Literal, cast, overload
 
 from pydantic import BaseModel, Field
@@ -68,6 +70,7 @@ if TYPE_CHECKING:
     from neo4j_agent_memory.nams.long_term import NamsLongTermMemory
     from neo4j_agent_memory.nams.reasoning import NamsReasoningMemory
     from neo4j_agent_memory.nams.short_term import NamsShortTermMemory
+    from neo4j_agent_memory.ontology.protocol import OntologyAPI
     from neo4j_agent_memory.resolution.base import EntityResolver
     from neo4j_agent_memory.services.geocoder import Geocoder
 
@@ -115,6 +118,16 @@ from neo4j_agent_memory.core.protocols import (
     ReasoningProtocol,
     ShortTermProtocol,
 )
+from neo4j_agent_memory.ontology.builtin import POLEO_ONTOLOGY
+from neo4j_agent_memory.ontology.convert import load_ontology
+from neo4j_agent_memory.ontology.models import (
+    EntityTypeDef,
+    OntologyDocument,
+    PropertyDef,
+    RelationshipDef,
+)
+
+logger = logging.getLogger(__name__)
 
 # Bound + defaulted (PEP 696) so bare `MemoryClient` still type-checks under
 # `disallow_any_generics` — it defaults to the base Protocols.
@@ -231,7 +244,7 @@ from neo4j_agent_memory.memory.short_term import (
     ShortTermMemory,
 )
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
 __all__ = [
     # Main client
@@ -299,6 +312,13 @@ __all__ = [
     # Graph
     "Neo4jClient",
     "SchemaManager",
+    # Ontology (v0.7)
+    "OntologyDocument",
+    "EntityTypeDef",
+    "RelationshipDef",
+    "PropertyDef",
+    "POLEO_ONTOLOGY",
+    "load_ontology",
     # Graph Export
     "GraphNode",
     "GraphRelationship",
@@ -399,6 +419,7 @@ class MemoryClient(Generic[_ST, _LT, _RT]):
         resolver: EntityResolver | None = None,
         geocoder: Geocoder | None = None,
         enrichment_provider: _EnrichmentProviderProtocol | None = None,
+        ontology: OntologyDocument | str | Path | None = None,
     ) -> None:
         """
         Initialize the memory client.
@@ -410,8 +431,17 @@ class MemoryClient(Generic[_ST, _LT, _RT]):
             resolver: Optional resolver override (for testing)
             geocoder: Optional geocoder override (for testing)
             enrichment_provider: Optional enrichment provider override (for testing)
+            ontology: The ontology this client extracts and validates against —
+                an :class:`~neo4j_agent_memory.ontology.models.OntologyDocument`
+                or a path to a ``.json``/``.yaml`` file. Highest-priority
+                source; see :meth:`_resolve_ontology` for the full precedence,
+                and :class:`~neo4j_agent_memory.config.settings.SchemaConfig`
+                for the settings-driven alternatives.
         """
         self._settings = settings or MemorySettings()
+        self._ontology_override: OntologyDocument | str | Path | None = ontology
+        self._ontology_document: OntologyDocument | None = None
+        self._validation_mode: Literal["permissive", "strict"] = "permissive"
         # Bolt-only state. ``_client`` and ``_schema_manager`` stay None
         # when ``settings.backend == "nams"``.
         self._client: Neo4jClient | None = None
@@ -438,9 +468,9 @@ class MemoryClient(Generic[_ST, _LT, _RT]):
         self._reasoning: _RT | None = None
         self._query: CypherQueryProtocol | None = None
 
-        # Ontology accessor. Real (``NamsOntology``) on NAMS; a
-        # ``_NamsUnsupported`` sentinel on bolt (ontologies are a NAMS
-        # capability). Wired in connect().
+        # Ontology accessor — an ``OntologyAPI`` implementation on either
+        # backend: ``NamsOntology`` on NAMS, ``BoltOntology`` on bolt.
+        # Wired in connect().
         self._ontology: Any = None
 
         # API-key management accessor. Real (``NamsAuth``) on NAMS; a
@@ -511,6 +541,7 @@ class MemoryClient(Generic[_ST, _LT, _RT]):
         self._schema_manager = SchemaManager(
             self._client,
             vector_dimensions=vector_dimensions,
+            backfill_relation_types=self._settings.schema_config.backfill_relation_types,
         )
         await self._schema_manager.setup_all()
 
@@ -519,6 +550,19 @@ class MemoryClient(Generic[_ST, _LT, _RT]):
         # remediation guidance.
         if self._embedder is not None:
             await self._schema_manager.validate_vector_index_dimensions(vector_dimensions)
+
+        # Ontologies are first-class on bolt too (v0.7): versioned
+        # :Ontology/:OntologyVersion nodes behind the same OntologyAPI the
+        # hosted backend exposes. Wired before the ontology is resolved, since
+        # resolution may read the active version through it.
+        from neo4j_agent_memory.ontology.store import BoltOntology
+
+        self._ontology = BoltOntology(self._client)
+
+        # Resolve the one ontology the whole runtime agrees on. Must run
+        # *before* _create_extractor(), which compiles it into the GLiNER2.5
+        # JointIE schema and the LLM prompt.
+        self._ontology_document, self._validation_mode = await self._resolve_ontology()
 
         # Initialize extractor (use override if provided)
         self._extractor = self._extractor_override or self._create_extractor()
@@ -559,8 +603,14 @@ class MemoryClient(Generic[_ST, _LT, _RT]):
             self._extractor,
             multi_tenant=multi_tenant,
             default_llm_provider=default_llm_provider,
+            ontology=self._ontology_document,
+            validation_mode=self._validation_mode,
+            resolver=self._resolver,
+            resolution_config=self._settings.resolution,
         )
         self._short_term = cast(_ST, short_term_impl)
+        from neo4j_agent_memory.memory.long_term import DeduplicationConfig
+
         long_term_impl = LongTermMemory(
             self._client,
             self._embedder,
@@ -569,6 +619,12 @@ class MemoryClient(Generic[_ST, _LT, _RT]):
             self._geocoder,
             self._enrichment_service,
             multi_tenant=multi_tenant,
+            ontology=self._ontology_document,
+            validation_mode=self._validation_mode,
+            # One set of thresholds: ``add_entity``'s auto-merge / review
+            # bands are projected from ResolutionConfig, so they cannot
+            # drift from the ingestion path's resolver.
+            deduplication=DeduplicationConfig.from_resolution_config(self._settings.resolution),
         )
         self._long_term = cast(_LT, long_term_impl)
         reasoning_impl = ReasoningMemory(
@@ -606,16 +662,7 @@ class MemoryClient(Generic[_ST, _LT, _RT]):
 
         self._query = BoltCypherQuery(self._client)
 
-        # Ontologies are a NAMS capability — sentinel on bolt.
         from neo4j_agent_memory.nams._unsupported import _NamsUnsupported
-
-        self._ontology = _NamsUnsupported(
-            accessor="ontology",
-            message="Ontologies (typed, validated, versioned domain schemas) are a "
-            "NAMS capability.",
-            workaround="On bolt, define a custom schema with SchemaModel.CUSTOM "
-            "(see client.schema / SchemaManager).",
-        )
 
         self._auth = _NamsUnsupported(
             accessor="auth",
@@ -623,6 +670,124 @@ class MemoryClient(Generic[_ST, _LT, _RT]):
             "to your own Neo4j with NEO4J_PASSWORD, not a NAMS API key.",
             workaround="Manage NAMS keys from the dashboard at memory.neo4jlabs.com.",
         )
+
+    async def _resolve_ontology(self) -> tuple[OntologyDocument, Literal["permissive", "strict"]]:
+        """Resolve the single ontology (and validation mode) for this session.
+
+        Every consumer — the GLiNER2.5 JointIE schema, the LLM extractor
+        prompt, relation validation on ingest, the strict write paths — is
+        handed the *same* document, resolved once at connect time.
+
+        Document precedence (first hit wins):
+
+        1. the explicit ``ontology=`` keyword on the constructor (a document,
+           or a path loaded via :func:`~neo4j_agent_memory.ontology.convert.load_ontology`),
+        2. ``schema_config.ontology_path``,
+        3. ``schema_config.custom_schema_path``,
+        4. the active stored ``:OntologyVersion`` when
+           ``schema_config.use_active_ontology`` is ``True`` and one is bound,
+        5. ``schema_config.model == SchemaModel.CUSTOM`` with
+           ``schema_config.entity_types`` — an ad-hoc document with one entity
+           type per name, mapped onto POLE+O through
+           :func:`~neo4j_agent_memory.extraction.label_mapping.map_label_to_poleo`,
+        6. the built-in template named by ``schema_config.ontology_template``.
+
+        Validation-mode precedence: ``schema_config.validation_mode``, then the
+        stored active version's mode (only when that was the document source),
+        then ``"strict"`` if ``schema_config.strict_types`` else
+        ``"permissive"``.
+
+        Returns:
+            ``(document, validation_mode)``.
+        """
+        from neo4j_agent_memory.config.settings import SchemaModel
+        from neo4j_agent_memory.ontology.builtin import get_template
+        from neo4j_agent_memory.ontology.convert import load_ontology
+        from neo4j_agent_memory.ontology.models import DomainInfo
+
+        schema_config = self._settings.schema_config
+        document: OntologyDocument | None = None
+        stored_mode: str | None = None
+
+        # 1. explicit keyword
+        override = self._ontology_override
+        if override is not None:
+            if isinstance(override, (str, Path)):
+                document = load_ontology(override)
+            else:
+                document = override
+
+        # 2. + 3. file paths from settings
+        if document is None:
+            for path in (schema_config.ontology_path, schema_config.custom_schema_path):
+                if path:
+                    document = load_ontology(path)
+                    break
+
+        # 4. the ontology activated in this database
+        if document is None and schema_config.use_active_ontology and self._ontology is not None:
+            try:
+                active = await self._ontology.get_active()
+            except NotSupportedError:
+                # Nothing bound in this database — fall through.
+                document = None
+            except SchemaError as exc:
+                # The bound version's stored document does not parse. Falling
+                # through to the next source keeps ``connect()`` working, which
+                # is what makes the recovery call — ``client.ontology.delete()``
+                # or ``activate()`` on a good revision — reachable at all.
+                logger.warning(
+                    "Ignoring the active ontology version: %s Falling back to the "
+                    "next ontology source in precedence order.",
+                    exc,
+                )
+                document = None
+            else:
+                document = active.document
+                stored_mode = active.validation_mode
+
+        # 5. ad-hoc document from SchemaModel.CUSTOM + entity_types
+        if document is None and schema_config.model == SchemaModel.CUSTOM:
+            names = schema_config.entity_types or []
+            if names:
+                from neo4j_agent_memory.extraction.label_mapping import map_label_to_poleo
+
+                entity_types = []
+                for name in names:
+                    pole_type, subtype = map_label_to_poleo(name)
+                    entity_types.append(
+                        EntityTypeDef(label=name, pole_type=pole_type, subtype=subtype)
+                    )
+                document = OntologyDocument(
+                    domain=DomainInfo(
+                        id="custom",
+                        name="custom",
+                        description="Ad-hoc ontology built from schema_config.entity_types.",
+                    ),
+                    entity_types=entity_types,
+                )
+
+        # 6. built-in template
+        if document is None:
+            try:
+                document = get_template(schema_config.ontology_template)
+            except ValueError:
+                logger.warning(
+                    "Unknown ontology_template %r; falling back to the built-in POLE+O ontology.",
+                    schema_config.ontology_template,
+                )
+                document = POLEO_ONTOLOGY
+
+        # Validation mode
+        mode: Literal["permissive", "strict"]
+        if schema_config.validation_mode is not None:
+            mode = schema_config.validation_mode
+        elif stored_mode in ("permissive", "strict"):
+            mode = cast('Literal["permissive", "strict"]', stored_mode)
+        else:
+            mode = "strict" if schema_config.strict_types else "permissive"
+
+        return document, mode
 
     async def _connect_nams(self) -> None:
         """Connect to the hosted NAMS service via HTTP transport.
@@ -955,16 +1120,20 @@ class MemoryClient(Generic[_ST, _LT, _RT]):
         return self._query
 
     @property
-    def ontology(self) -> Any:
-        """Ontology lifecycle accessor — **NAMS only**.
+    def ontology(self) -> OntologyAPI:
+        """Ontology lifecycle accessor — available on **both** backends.
 
-        Returns the :class:`~neo4j_agent_memory.nams.ontology.NamsOntology`
-        accessor on NAMS, exposing ``list``, ``get``, ``get_active``,
-        ``clone``, ``create``, ``update``, ``activate``, and ``delete``.
+        Returns an :class:`~neo4j_agent_memory.ontology.protocol.OntologyAPI`
+        implementation: :class:`~neo4j_agent_memory.nams.ontology.NamsOntology`
+        on NAMS, :class:`~neo4j_agent_memory.ontology.store.BoltOntology` on
+        bolt (v0.7). Both expose ``list``, ``get``, ``get_active``, ``clone``,
+        ``create``, ``update``, ``activate``, ``delete``, ``import_``,
+        ``diff``, ``migrate`` and ``get_migration``.
 
-        On bolt, returns a sentinel whose method calls raise
-        :class:`NotSupportedError` (define a custom schema with
-        ``SchemaModel.CUSTOM`` instead).
+        Where a backend cannot honour an operation it raises
+        :class:`NotSupportedError` — on bolt that is ``import_(url=...)`` and
+        the extraction-backed import formats; ``migrate`` runs synchronously
+        there rather than as a background job.
 
         Example::
 
@@ -978,7 +1147,38 @@ class MemoryClient(Generic[_ST, _LT, _RT]):
         """
         if self._ontology is None:
             raise NotConnectedError("Client not connected. Use 'async with' or call connect().")
-        return self._ontology
+        return cast("OntologyAPI", self._ontology)
+
+    @property
+    def ontology_document(self) -> OntologyDocument | None:
+        """The effective ontology this client extracts and validates against.
+
+        Resolved once at connect time — see :meth:`_resolve_ontology` for the
+        precedence — and handed to the extractor factory, short-term memory
+        and long-term memory.
+
+        Returns:
+            The :class:`~neo4j_agent_memory.ontology.models.OntologyDocument`,
+            or ``None`` before :meth:`connect` and on the NAMS backend, where
+            extraction and validation run server-side. Use
+            :attr:`ontology` (``client.ontology.get_active()``) there.
+        """
+        return self._ontology_document
+
+    @property
+    def validation_mode(self) -> Literal["permissive", "strict"]:
+        """How strictly the write paths enforce :attr:`ontology_document`.
+
+        ``"strict"`` makes ``long_term.add_entity`` / ``add_relationship``
+        raise :class:`~neo4j_agent_memory.core.exceptions.ValidationError` for
+        anything the ontology does not declare, and makes message ingestion
+        drop undeclared entities. ``"permissive"`` (the default) writes them
+        and only drops relations the ontology forbids.
+
+        Returns:
+            The resolved mode. ``"permissive"`` before :meth:`connect`.
+        """
+        return self._validation_mode
 
     @property
     def auth(self) -> Any:
@@ -1610,6 +1810,7 @@ class MemoryClient(Generic[_ST, _LT, _RT]):
             extraction_config=config,
             schema_config=self._settings.schema_config,
             llm_config=self._settings.llm,
+            ontology=self._ontology_document,
         )
 
     def _resolve_vector_dimensions(self) -> int:
@@ -1665,6 +1866,22 @@ class MemoryClient(Generic[_ST, _LT, _RT]):
         # ResolverStrategy is exhausted above; COMPOSITE is the last possible
         # value, so no trailing fallback return is reachable.
         if config.strategy == ResolverStrategy.COMPOSITE:
+            if self._client is not None:
+                # On bolt, COMPOSITE means the ontology-aware resolver: it
+                # composes the same fuzzy/semantic strategies but blocks
+                # type-constrained in Cypher, honours the ontology's aliases
+                # and per-type thresholds, and can resolve a whole episode in
+                # two passes. Requires a connected client, which is why
+                # _create_resolver() runs after _connect_bolt() has one.
+                from neo4j_agent_memory.resolution.ontology import OntologyResolver
+
+                return OntologyResolver(
+                    self._client,
+                    ontology=self._ontology_document,
+                    embedder=self._embedder,
+                    config=config,
+                )
+
             from neo4j_agent_memory.resolution.composite import CompositeResolver
 
             return CompositeResolver(

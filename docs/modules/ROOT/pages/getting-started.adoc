@@ -139,13 +139,13 @@ Choose the extras that match your needs:
 |spaCy NER extraction (local)
 |`pip install neo4j-agent-memory[spacy]`
 
-|`gliner`
-|GLiNER zero-shot NER (local)
-|`pip install neo4j-agent-memory[gliner]`
+|`gliner2`
+|GLiNER2.5 zero-shot entity + relation extraction (local)
+|`pip install "neo4j-agent-memory[gliner2]"`
 
 |`extraction`
-|Full extraction pipeline (spaCy + GLiNER)
-|`pip install neo4j-agent-memory[extraction]`
+|Full extraction pipeline (spaCy + GLiNER2.5)
+|`pip install "neo4j-agent-memory[extraction]"`
 
 |`sentence-transformers`
 |Local embeddings with Sentence Transformers

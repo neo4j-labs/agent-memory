@@ -69,9 +69,9 @@ Extracted entities come back mapped onto POLE+O types with a subtype, so `drug` 
 
 [source,python]
 ----
-from neo4j_agent_memory.extraction import GLiNEREntityExtractor
+from neo4j_agent_memory.extraction import GLiNER2Extractor
 
-extractor = GLiNEREntityExtractor.for_schema("business", threshold=0.4)
+extractor = GLiNER2Extractor.for_schema("business", threshold=0.4)
 
 result = await extractor.extract(
     "CEO Sarah Mitchell said TechVision Cloud revenue reached $2.4 billion, up 34%."
@@ -94,7 +94,7 @@ There is no built-in `financial` schema — finance is a good example of a domai
 
 [source,python]
 ----
-from neo4j_agent_memory.extraction import DomainSchema, GLiNEREntityExtractor
+from neo4j_agent_memory.extraction import DomainSchema, GLiNER2Extractor
 
 financial_schema = DomainSchema(
     name="financial",
@@ -111,7 +111,7 @@ financial_schema = DomainSchema(
     },
 )
 
-extractor = GLiNEREntityExtractor(schema=financial_schema, threshold=0.4)
+extractor = GLiNER2Extractor(ontology=financial_schema, threshold=0.4)
 
 text = """
     Client meeting with Acme Investment Holdings regarding their Q4 portfolio review.
@@ -147,7 +147,7 @@ ecommerce_schema = DomainSchema(
     },
 )
 
-extractor = GLiNEREntityExtractor(schema=ecommerce_schema, threshold=0.4)
+extractor = GLiNER2Extractor(ontology=ecommerce_schema, threshold=0.4)
 
 text = """
     Customer inquiry from Jane Doe (Gold member) about order #ORD-98765.
@@ -164,11 +164,11 @@ for entity in result.filter_invalid_entities().entities:
 
 === Define Entity Types
 
-A GLiNER extractor takes a `DomainSchema`: a name plus a `{label: description}` mapping. Labels are lowercase (GLiNER prefers them that way) and the description is the prompt.
+`GLiNER2Extractor(ontology=...)` accepts a `DomainSchema`: a name plus a `{label: description}` mapping. Labels are lowercase (the models prefer them that way) and the description is the prompt. The extractor calls `to_ontology()` on it, so a `DomainSchema`, an `EntitySchemaConfig` or a full `OntologyDocument` are all accepted in the same slot.
 
 [source,python]
 ----
-from neo4j_agent_memory.extraction import DomainSchema, GLiNEREntityExtractor
+from neo4j_agent_memory.extraction import DomainSchema, GLiNER2Extractor
 
 insurance_schema = DomainSchema(
     name="insurance",
@@ -182,7 +182,17 @@ insurance_schema = DomainSchema(
     },
 )
 
-extractor = GLiNEREntityExtractor(schema=insurance_schema, threshold=0.4)
+extractor = GLiNER2Extractor(ontology=insurance_schema, threshold=0.4)
+----
+
+`DomainSchema.to_ontology()` converts the catalog explicitly when you want the
+`OntologyDocument` itself — to attach typed relationships, or to store and
+activate it:
+
+[source,python]
+----
+doc = insurance_schema.to_ontology()
+print(doc.labels())
 ----
 
 [TIP]
@@ -196,7 +206,7 @@ extractor = GLiNEREntityExtractor(schema=insurance_schema, threshold=0.4)
 
 [source,python]
 ----
-from neo4j_agent_memory.extraction import DomainSchema, GLiNEREntityExtractor, get_schema
+from neo4j_agent_memory.extraction import DomainSchema, GLiNER2Extractor, get_schema
 
 base_schema = get_schema("business")
 
@@ -209,16 +219,16 @@ extended_schema = DomainSchema(
     },
 )
 
-extractor = GLiNEREntityExtractor(schema=extended_schema, threshold=0.4)
+extractor = GLiNER2Extractor(ontology=extended_schema, threshold=0.4)
 ----
 
 === Persist Schemas to Neo4j
 
-`SchemaManager` stores `EntitySchemaConfig` — the POLE+O type registry used for validation and for `MemorySettings.schema_config`, which is a different object from the GLiNER `DomainSchema` above. Persist one, then derive the extractor schema from it:
+`SchemaManager` stores `EntitySchemaConfig` — the POLE+O type registry used for validation and for `MemorySettings.schema_config`, which is a different object from the `DomainSchema` above. Persist one, then hand it straight to the extractor: `EntitySchemaConfig` has a `to_ontology()` method, so no hand-rolled conversion is needed.
 
 [source,python]
 ----
-from neo4j_agent_memory.extraction import DomainSchema, GLiNEREntityExtractor
+from neo4j_agent_memory.extraction import GLiNER2Extractor
 from neo4j_agent_memory.schema import EntitySchemaConfig, EntityTypeConfig, SchemaManager
 
 insurance_types = EntitySchemaConfig(
@@ -246,65 +256,85 @@ print(f"Schema saved with ID: {stored.id}")
 # Load it in another session and build the extractor from it.
 loaded = await manager.load_schema("insurance")
 assert loaded is not None
-extractor = GLiNEREntityExtractor(
-    schema=DomainSchema(
-        name=loaded.name,
-        entity_types={
-            entity_type.name.lower(): entity_type.description or entity_type.name
-            for entity_type in loaded.entity_types
-        },
-    ),
-    threshold=0.4,
-)
+extractor = GLiNER2Extractor(ontology=loaded, threshold=0.4)
 ----
+
+[NOTE]
+====
+`EntitySchemaConfig` carries entity types and their subtypes but no endpoint
+typing, so an extractor built from one decodes entities only. To get typed
+relations, declare them on an `OntologyDocument` — see the ontology guide.
+====
 
 == Relationship Extraction
 
-=== GLiREL (No LLM Required)
+=== No LLM Required
 
-GLiREL is an optional dependency (`pip install glirel`) — check for it before constructing the combined extractor.
+GLiNER2.5 decodes relations in the same pass as the entities — there is no second
+model and no separate install. Relations appear when the ontology declares
+relationship types, which the `poleo`, `podcast` and `news` templates do:
 
 [source,python]
 ----
-from neo4j_agent_memory.extraction import GLiNERWithRelationsExtractor, is_glirel_available
+from neo4j_agent_memory.extraction import GLiNER2Extractor, is_gliner2_available
 
-if is_glirel_available():
-    extractor = GLiNERWithRelationsExtractor.for_schema("business", entity_threshold=0.4)
+if is_gliner2_available():
+    extractor = GLiNER2Extractor.for_schema("podcast", threshold=0.4)
 
     text = """
-        Jane Doe purchased a Trailrunner 90 from our Manhattan store.
-        The product was manufactured by Northwind Industries.
+        Brian Chesky founded Airbnb in San Francisco and still works there.
     """
 
     result = await extractor.extract(text)
 
     for rel in result.relations:
         print(f"  ({rel.source}) -[:{rel.relation_type}]-> ({rel.target})")
-        # (Jane Doe) -[:PURCHASED]-> (Trailrunner 90)
-        # (Trailrunner 90) -[:MANUFACTURED_BY]-> (Northwind Industries)
+        # (Brian Chesky) -[:FOUNDED]-> (Airbnb)
+        # (Airbnb) -[:LOCATED_IN]-> (San Francisco)
 ----
+
+Every relation also carries `source_id`/`target_id` — the mention ids of the
+entities in the same result — so storage never has to guess which "Airbnb" an
+edge meant.
 
 === Custom Relationship Types
 
-`relation_types` is a `{name: description}` mapping, the same shape as a schema's entity types:
+A `DomainSchema` declares no endpoint typing, so relationship types are attached
+when converting it to an ontology. Each `RelationshipDef` names a `source` and a
+`target` label the schema declares:
 
 [source,python]
 ----
-financial_relations = {
-    "ADVISES": "A financial advisor advises a client",
-    "HOLDS": "An account holds a security position",
-    "TRADED": "An executed trade in a security",
-    "SUBSIDIARY_OF": "A company is a subsidiary of a parent company",
-    "CUSTODIED_AT": "Assets are custodied at an institution",
-}
+from neo4j_agent_memory.extraction import GLiNER2Extractor, get_schema
+from neo4j_agent_memory.ontology import RelationshipDef
 
-extractor = GLiNERWithRelationsExtractor.for_schema(
-    "business",
-    entity_threshold=0.4,
-    relation_threshold=0.4,
-    relation_types=financial_relations,
+doc = get_schema("business").to_ontology(
+    relationships=[
+        RelationshipDef(
+            type="ADVISES",
+            source="person",
+            target="company",
+            description="A financial advisor advises a client company",
+            threshold=0.35,
+        ),
+        RelationshipDef(
+            type="SUBSIDIARY_OF",
+            source="company",
+            target="company",
+            description="A company is a subsidiary of a parent company",
+            acyclic=True,
+        ),
+    ],
 )
+
+extractor = GLiNER2Extractor.for_ontology(doc, threshold=0.4)
 ----
+
+Per-relation thresholds matter: crowded relations get squeezed out of the decode
+at the default floor. Sweep them with `benchmarks/compare_extractors.py`. The
+constraint flags (`unique_source`, `unique_target`, `acyclic`, `allow_self`,
+`inverse`) are enforced during decoding — see the ontology guide for the full
+set.
 
 == See Also
 

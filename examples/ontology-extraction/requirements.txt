@@ -1,0 +1,8 @@
+# Ontology-driven extraction example.
+#
+#   pip install -r examples/ontology-extraction/requirements.txt
+#
+# `extraction` brings GLiNER2.5 (the `gliner2` package) and spaCy;
+# `sentence-transformers` brings the local embedder. No LLM extra: this
+# example runs with llm=None and needs no API key.
+neo4j-agent-memory[extraction,sentence-transformers]>=0.7.0,<0.8

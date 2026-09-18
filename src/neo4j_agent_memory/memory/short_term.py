@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from enum import Enum
@@ -14,8 +15,11 @@ from pydantic import BaseModel, Field
 from neo4j_agent_memory.core.exceptions import NotSupportedError
 from neo4j_agent_memory.core.memory import BaseMemory, MemoryEntry
 from neo4j_agent_memory.core.protocols import ShortTermProtocol
+from neo4j_agent_memory.extraction.base import ExtractedEntity, ExtractionResult
 from neo4j_agent_memory.graph import queries
 from neo4j_agent_memory.graph.query_builder import build_create_entity_query
+
+logger = logging.getLogger(__name__)
 
 
 def _llm_summarizer(
@@ -95,6 +99,107 @@ def _to_python_datetime(neo4j_datetime: Any) -> datetime:
         return cast(datetime, neo4j_datetime.to_native())
     except AttributeError:
         return datetime.now(timezone.utc)
+
+
+_SENTENCE_BOUNDARY_CHARS = ".!?\n"
+_EVIDENCE_FALLBACK_CHARS = 200
+
+
+def _sentence_window(content: str, start: int, end: int) -> str:
+    """Expand ``content[start:end]`` outward to sentence boundaries.
+
+    Walks backward from ``start`` to the nearest sentence-ending
+    punctuation (or a newline) and forward from ``end`` to the next one,
+    so the returned snippet reads as a full sentence (or run of
+    sentences) around the given span rather than an arbitrary character
+    slice. Pure and deterministic — no NLP or sentence tokenizer involved.
+
+    Args:
+        content: The text to slice.
+        start: Start offset of the span to expand around.
+        end: End offset (exclusive) of the span to expand around.
+
+    Returns:
+        The expanded, whitespace-trimmed snippet.
+    """
+    length = len(content)
+    start = max(0, min(start, length))
+    end = max(start, min(end, length))
+
+    left = 0
+    for i in range(start - 1, -1, -1):
+        if content[i] in _SENTENCE_BOUNDARY_CHARS:
+            left = i + 1
+            break
+
+    right = length
+    for i in range(end, length):
+        if content[i] in _SENTENCE_BOUNDARY_CHARS:
+            right = i + 1
+            break
+
+    return content[left:right].strip()
+
+
+def _relation_evidence(content: str | None, source_name: str, target_name: str) -> str | None:
+    """Derive a deterministic evidence snippet for an extracted relation.
+
+    When both ``source_name`` and ``target_name`` can be located in
+    ``content`` (case-insensitive substring search), the evidence is the
+    sentence window spanning both mentions (see :func:`_sentence_window`).
+    Otherwise, falls back to the first 200 characters of ``content``, kept
+    simple and deterministic rather than attempting sentence segmentation
+    without a located span.
+
+    Args:
+        content: Source text the relation was extracted from (typically
+            the triggering message content). ``None`` when no evidence
+            source is available.
+        source_name: Name of the relation's source entity.
+        target_name: Name of the relation's target entity.
+
+    Returns:
+        The evidence snippet, or ``None`` when ``content`` is empty/absent.
+    """
+    if not content:
+        return None
+
+    lowered = content.lower()
+    source_pos = lowered.find(source_name.lower())
+    target_pos = lowered.find(target_name.lower())
+
+    if source_pos != -1 and target_pos != -1:
+        span_start = min(source_pos, target_pos)
+        span_end = max(source_pos + len(source_name), target_pos + len(target_name))
+        window = _sentence_window(content, span_start, span_end)
+        if window:
+            return window
+
+    return content[:_EVIDENCE_FALLBACK_CHARS].strip() or None
+
+
+def _extraction_stats(
+    *,
+    messages_processed: int = 0,
+    entities_extracted: int = 0,
+    entities_created: int = 0,
+    entities_merged: int = 0,
+    relations_extracted: int = 0,
+) -> dict[str, int]:
+    """Stats dict returned by :meth:`ShortTermMemory.extract_entities_from_session`.
+
+    ``entities_extracted`` counts *mentions*, which is what the key has always
+    meant and what callers still read. With ingest-time resolution on, several
+    mentions routinely resolve onto one node, so the node counts are reported
+    separately rather than folded into it.
+    """
+    return {
+        "messages_processed": messages_processed,
+        "entities_extracted": entities_extracted,
+        "entities_created": entities_created,
+        "entities_merged": entities_merged,
+        "relations_extracted": relations_extracted,
+    }
 
 
 def _build_metadata_filter_clause_json(
@@ -238,10 +343,14 @@ def _build_metadata_filter_clause(
 
 
 if TYPE_CHECKING:
+    from neo4j_agent_memory.config.settings import ResolutionConfig
     from neo4j_agent_memory.embeddings.base import Embedder
     from neo4j_agent_memory.extraction.base import EntityExtractor
     from neo4j_agent_memory.graph.client import Neo4jClient
     from neo4j_agent_memory.llm.protocol import LLMProvider
+    from neo4j_agent_memory.ontology.models import OntologyDocument
+    from neo4j_agent_memory.resolution.base import EntityResolver
+    from neo4j_agent_memory.resolution.ontology import EntityResolution
 
 
 class MessageRole(str, Enum):
@@ -329,6 +438,10 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         *,
         multi_tenant: bool = False,
         default_llm_provider: LLMProvider | None = None,
+        ontology: OntologyDocument | None = None,
+        validation_mode: Literal["permissive", "strict"] = "permissive",
+        resolver: EntityResolver | None = None,
+        resolution_config: ResolutionConfig | None = None,
     ):
         """Initialize short-term memory.
 
@@ -342,10 +455,98 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
                 ``summarizer`` is passed. Wired automatically by
                 :class:`MemoryClient` from ``settings.llm`` when it is a
                 Provider instance.
+            ontology: The effective ontology, when one is configured. Wired by
+                :class:`~neo4j_agent_memory.MemoryClient`. Extracted relations
+                that the ontology does not permit are dropped before storage.
+            validation_mode: ``"strict"`` additionally drops extracted
+                entities whose ``(type, subtype)`` the ontology does not
+                declare; ``"permissive"`` (the default, and the pre-v0.7
+                behaviour) stores them.
+            resolver: Entity resolver used on the ingestion path. Only an
+                :class:`~neo4j_agent_memory.resolution.ontology.OntologyResolver`
+                resolves mentions during ingestion — every other strategy
+                (and ``None``) leaves the path exactly as it was before v0.7,
+                one node per distinct surface form.
+            resolution_config: Resolution settings. ``resolve_on_ingest=False``
+                is the single switch that turns ingest-time resolution off.
         """
         super().__init__(client, embedder, extractor)
         self._multi_tenant = multi_tenant
         self._default_llm_provider = default_llm_provider
+        self._ontology = ontology
+        self._validation_mode = validation_mode
+        self._resolver = resolver
+        self._resolution_config = resolution_config
+
+    def _apply_ontology(self, result: ExtractionResult) -> ExtractionResult:
+        """Enforce the ontology on a freshly extracted result before storage.
+
+        Relations that the ontology does not permit are always dropped —
+        storing an edge the schema forbids is never what the caller wanted.
+        A violation coming out of the GLiNER2.5 stage is logged at warning
+        level rather than debug, because JointIE constrains endpoint types
+        *during* decoding: a violation there means the compiled schema and the
+        ontology have drifted apart.
+
+        In ``"strict"`` mode, entities whose ``(type, subtype)`` the ontology
+        does not declare are dropped as well (with a warning), along with any
+        relation that referenced them.
+
+        Args:
+            result: The extraction result, already passed through
+                :meth:`ExtractionResult.filter_invalid_entities`.
+
+        Returns:
+            The result to persist. Returned unchanged when no ontology is
+            configured or nothing violated it.
+        """
+        ontology = self._ontology
+        if ontology is None:
+            return result
+
+        if self._validation_mode == "strict" and result.entities:
+            kept: list[ExtractedEntity] = []
+            undeclared_types: set[str] = set()
+            for entity in result.entities:
+                if ontology.declares(entity.type, entity.subtype):
+                    kept.append(entity)
+                else:
+                    undeclared_types.add(entity.full_type)
+            dropped = len(result.entities) - len(kept)
+            if dropped:
+                undeclared = sorted(undeclared_types)
+                logger.warning(
+                    "Dropping %d extracted entity/entities with types not declared by "
+                    "ontology %r (validation_mode='strict'): %s",
+                    dropped,
+                    ontology.domain.name,
+                    ", ".join(undeclared),
+                )
+                result = ExtractionResult(
+                    entities=kept,
+                    relations=result.relations,
+                    preferences=result.preferences,
+                    source_text=result.source_text,
+                )
+
+        result, violations = result.validate_relations(ontology, mode="drop")
+        if violations:
+            from_gliner2 = any(e.extractor == "gliner2" for e in result.entities)
+            message = "Dropped %d extracted relation(s) not permitted by ontology %r: %s"
+            summary = ", ".join(
+                f"{r.source} -[{r.relation_type}]-> {r.target}" for r in violations[:10]
+            )
+            if from_gliner2:
+                logger.warning(
+                    message + " — JointIE enforces endpoint types during decoding, so this "
+                    "points at a mis-compiled schema",
+                    len(violations),
+                    ontology.domain.name,
+                    summary,
+                )
+            else:
+                logger.debug(message, len(violations), ontology.domain.name, summary)
+        return result
 
     def _enforce_multi_tenant(self, user_identifier: str | None) -> None:
         """Raise if multi-tenant is on and ``user_identifier`` is missing."""
@@ -504,7 +705,11 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         # Extract entities if enabled (done separately for performance)
         if extract_entities and self._extractor is not None:
             for msg in all_created:
-                await self._extract_and_link_entities(msg, extract_relations=extract_relations)
+                await self._extract_and_link_entities(
+                    msg,
+                    extract_relations=extract_relations,
+                    user_identifier=user_identifier,
+                )
 
         return all_created
 
@@ -756,7 +961,11 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         else:
             # 'auto' — preserve historical behavior.
             if extract_entities and self._extractor is not None:
-                await self._extract_and_link_entities(message, extract_relations=extract_relations)
+                await self._extract_and_link_entities(
+                    message,
+                    extract_relations=extract_relations,
+                    user_identifier=user_identifier,
+                )
 
         return message
 
@@ -1123,6 +1332,7 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         skip_existing: bool = True,
         extract_relations: bool = True,
         on_progress: Callable[[int, int], None] | None = None,
+        user_identifier: str | None = None,
     ) -> dict[str, int]:
         """
         Extract entities and relations from all messages in a session.
@@ -1136,12 +1346,19 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
             skip_existing: Skip messages that already have entity links (MENTIONS relationships)
             extract_relations: Whether to also extract and store relations between entities
             on_progress: Progress callback (processed_count, total_count)
+            user_identifier: Tenant these messages belong to, used to scope
+                resolution candidates when ``resolution.scope="user"``.
 
         Returns:
-            Stats dict with 'messages_processed', 'entities_extracted', and 'relations_extracted' counts
+            Stats dict with ``messages_processed``, ``entities_extracted``
+            (mentions seen — kept for backward compatibility),
+            ``entities_created`` and ``entities_merged`` (the node counts:
+            with ingest-time resolution on, several mentions routinely land on
+            one node, so the mention count overstates what was written) and
+            ``relations_extracted``.
         """
         if self._extractor is None:
-            return {"messages_processed": 0, "entities_extracted": 0, "relations_extracted": 0}
+            return _extraction_stats()
 
         # Get messages to process
         if skip_existing:
@@ -1152,12 +1369,13 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         results = await self._client.execute_read(query, {"session_id": session_id})
 
         if not results:
-            return {"messages_processed": 0, "entities_extracted": 0, "relations_extracted": 0}
+            return _extraction_stats()
 
         total = len(results)
         processed = 0
         entities_extracted = 0
         relations_extracted = 0
+        node_stats: dict[str, int] = {"entities_created": 0, "entities_merged": 0}
 
         # Process in batches
         for i in range(0, total, batch_size):
@@ -1173,50 +1391,28 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
                 # Filter out invalid entities (stopwords, numbers, etc.)
                 extraction_result = extraction_result.filter_invalid_entities()
 
-                # Track entity name to ID mapping for relation linking
-                entity_name_to_id: dict[str, str] = {}
+                # Enforce the ontology, exactly as the add_message path does.
+                extraction_result = self._apply_ontology(extraction_result)
 
-                for entity in extraction_result.entities:
-                    # Create or get entity with dynamic labels for type/subtype
-                    entity_id = str(uuid4())
-                    entity_subtype = getattr(entity, "subtype", None)
-                    create_query = build_create_entity_query(entity.type, entity_subtype)
-                    await self._client.execute_write(
-                        create_query,
-                        {
-                            "id": entity_id,
-                            "name": entity.name,
-                            "type": entity.type,
-                            "subtype": entity_subtype,
-                            "canonical_name": entity.name,
-                            "description": None,
-                            "embedding": None,
-                            "confidence": entity.confidence,
-                            "metadata": None,
-                            "location": None,  # Required for LOCATION entities
-                        },
-                    )
-
-                    # Store mapping for relation linking
-                    entity_name_to_id[entity.name.lower().strip()] = entity_id
-
-                    # Link message to entity
-                    await self._client.execute_write(
-                        queries.LINK_MESSAGE_TO_ENTITY,
-                        {
-                            "message_id": message_id,
-                            "entity_id": entity_id,
-                            "confidence": entity.confidence,
-                            "start_pos": entity.start_pos,
-                            "end_pos": entity.end_pos,
-                        },
-                    )
-                    entities_extracted += 1
+                # Same storage path as add_message: resolve (when enabled),
+                # MERGE, link MENTIONS.
+                entity_name_to_id, mention_id_to_node_id = await self._persist_entities(
+                    extraction_result,
+                    message_id,
+                    user_identifier=user_identifier,
+                    stats=node_stats,
+                )
+                entities_extracted += len(extraction_result.entities)
 
                 # Store extracted relations
                 if extract_relations and extraction_result.relations:
                     stored = await self._store_relations(
-                        extraction_result.relations, entity_name_to_id
+                        extraction_result.relations,
+                        entity_name_to_id,
+                        message_id=message_id,
+                        evidence=content,
+                        extractor=getattr(self._extractor, "name", None),
+                        mention_id_to_node_id=mention_id_to_node_id,
                     )
                     relations_extracted += stored
 
@@ -1226,11 +1422,13 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
             if on_progress:
                 on_progress(processed, total)
 
-        return {
-            "messages_processed": processed,
-            "entities_extracted": entities_extracted,
-            "relations_extracted": relations_extracted,
-        }
+        return _extraction_stats(
+            messages_processed=processed,
+            entities_extracted=entities_extracted,
+            entities_created=node_stats["entities_created"],
+            entities_merged=node_stats["entities_merged"],
+            relations_extracted=relations_extracted,
+        )
 
     async def _ensure_conversation(
         self,
@@ -1332,14 +1530,271 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
             },
         )
 
+    def _ingest_resolver(self) -> Any | None:
+        """The resolver to use on the ingestion path, or ``None``.
+
+        Ingest-time resolution needs the episode-level, type-constrained
+        blocking that only
+        :class:`~neo4j_agent_memory.resolution.ontology.OntologyResolver`
+        provides. Any other strategy — and ``resolve_on_ingest=False`` —
+        leaves the path exactly as it behaved before v0.7.
+        """
+        if self._resolver is None:
+            return None
+        if self._resolution_config is not None and not self._resolution_config.resolve_on_ingest:
+            return None
+        from neo4j_agent_memory.resolution.ontology import OntologyResolver
+
+        return self._resolver if isinstance(self._resolver, OntologyResolver) else None
+
+    def _entity_metadata(
+        self,
+        entity: ExtractedEntity,
+        resolution: EntityResolution | None,
+    ) -> str | None:
+        """Build the JSON metadata blob stored on a freshly created entity.
+
+        Carries stage attribution (``extracted_by``), the resolution decision,
+        the extractor's own label and character offsets, and the context
+        window — the last of which is what lets a *later* resolution compare
+        contexts instead of names alone.
+
+        Args:
+            entity: The extracted mention.
+            resolution: The resolution decision, when resolution ran.
+
+        Returns:
+            A JSON string, or ``None`` when there is nothing worth storing.
+        """
+        from neo4j_agent_memory.resolution.ontology import MAX_STORED_CONTEXT_CHARS
+
+        payload: dict[str, Any] = {}
+        extracted_by = getattr(entity, "extractor", None)
+        if extracted_by is not None:
+            payload["extracted_by"] = extracted_by
+        if resolution is not None:
+            payload["resolution"] = {
+                "action": resolution.action,
+                "score": round(resolution.score, 4),
+                "match_type": resolution.match_type,
+            }
+        attributes = getattr(entity, "attributes", None) or {}
+        gliner2_label = attributes.get("gliner2_label")
+        if gliner2_label:
+            payload["gliner2_label"] = gliner2_label
+        if entity.start_pos is not None and entity.end_pos is not None:
+            payload["start_pos"] = entity.start_pos
+            payload["end_pos"] = entity.end_pos
+        if entity.context:
+            payload["context"] = entity.context[:MAX_STORED_CONTEXT_CHARS]
+        return json.dumps(payload) if payload else None
+
+    async def _persist_entities(
+        self,
+        result: ExtractionResult,
+        message_id: str,
+        *,
+        user_identifier: str | None = None,
+        stats: dict[str, int] | None = None,
+    ) -> tuple[dict[str, str], dict[str, str]]:
+        """Resolve, store and link every entity extracted from one message.
+
+        The single entity-writing path: ``add_message``, the batch loader and
+        :meth:`extract_entities_from_session` all come through here.
+
+        When ingest-time resolution is on, each mention lands in one of three
+        bands:
+
+        * ``merged`` — no new node. The message is linked to the matched
+          entity and the mention's surface form is appended to its aliases.
+        * ``review`` — the node is created as usual, plus a pending
+          ``SAME_AS`` edge to the matched entity, so
+          ``find_potential_duplicates()`` surfaces the pair.
+        * ``created`` — the pre-v0.7 behaviour.
+
+        Args:
+            result: Extraction result, already filtered and ontology-checked.
+            message_id: Id of the message these entities were extracted from;
+                every stored entity is linked back to it with ``MENTIONS``.
+            user_identifier: Tenant to scope candidate blocking to when
+                ``resolution.scope="user"``.
+            stats: Optional counter dict. ``"entities_created"`` and
+                ``"entities_merged"`` are incremented per mention, so callers
+                can report how many *nodes* an ingest produced rather than how
+                many mentions it saw.
+
+        Returns:
+            ``(entity_name_to_id, mention_id_to_node_id)`` — the lowercased
+            surface form of each mention mapped onto the node it resolved to,
+            and the per-result mention id (``ExtractedEntity.id``) mapped onto
+            the same, so :meth:`_store_relations` can wire typed relations
+            precisely even when one name is mentioned twice.
+        """
+        entity_name_to_id: dict[str, str] = {}
+        mention_id_to_node_id: dict[str, str] = {}
+        if not result.entities:
+            return entity_name_to_id, mention_id_to_node_id
+
+        resolutions: list[EntityResolution | None] = [None] * len(result.entities)
+        resolver = self._ingest_resolver()
+        if resolver is not None:
+            try:
+                resolutions = list(
+                    await resolver.resolve_episode(result.entities, user_identifier=user_identifier)
+                )
+            except Exception:
+                # Resolution is an enhancement, never a gate on storing the
+                # message's entities: fall back to the unresolved path.
+                logger.warning(
+                    "Entity resolution failed for message %s; storing mentions unresolved",
+                    message_id,
+                    exc_info=True,
+                )
+                resolutions = [None] * len(result.entities)
+
+        for entity, resolution in zip(result.entities, resolutions):
+            node_id = await self._persist_entity(
+                entity, resolution, entity_name_to_id=entity_name_to_id, stats=stats
+            )
+            if node_id is None:
+                continue
+            entity_name_to_id[entity.name.lower().strip()] = node_id
+            mention_id = getattr(entity, "id", None)
+            if mention_id is not None:
+                mention_id_to_node_id[mention_id] = node_id
+
+            await self._client.execute_write(
+                queries.LINK_MESSAGE_TO_ENTITY,
+                {
+                    "message_id": message_id,
+                    "entity_id": node_id,
+                    "confidence": entity.confidence,
+                    "start_pos": entity.start_pos,
+                    "end_pos": entity.end_pos,
+                },
+            )
+
+        return entity_name_to_id, mention_id_to_node_id
+
+    async def _persist_entity(
+        self,
+        entity: ExtractedEntity,
+        resolution: EntityResolution | None,
+        *,
+        entity_name_to_id: dict[str, str],
+        stats: dict[str, int] | None = None,
+    ) -> str | None:
+        """Write (or reuse) the node for one mention and return its id.
+
+        Args:
+            entity: The extracted mention.
+            resolution: Its resolution decision, or ``None`` when resolution
+                did not run.
+            entity_name_to_id: Nodes already written for this message, which
+                is how an intra-episode merge finds the anchor mention's node.
+            stats: Optional counter dict, incremented under
+                ``"entities_merged"`` or ``"entities_created"`` according to
+                what this mention actually did.
+
+        Returns:
+            The node id the message should be linked to, or ``None`` when
+            nothing could be written.
+        """
+        action = resolution.action if resolution is not None else "created"
+
+        if action == "merged" and resolution is not None:
+            target_id = resolution.matched_entity_id
+            if target_id is None and resolution.matched_entity_name:
+                target_id = entity_name_to_id.get(resolution.matched_entity_name.lower().strip())
+            if target_id is not None:
+                surface = entity.name.strip()
+                if surface and surface.lower() != (resolution.canonical_name or "").strip().lower():
+                    await self._client.execute_write(
+                        queries.ADD_ENTITY_ALIAS,
+                        {"id": target_id, "alias": surface},
+                    )
+                if stats is not None:
+                    stats["entities_merged"] = stats.get("entities_merged", 0) + 1
+                return target_id
+            # The anchor was never written (an extractor produced a mention
+            # the create path rejected) — fall through and create the node.
+            logger.debug(
+                "Resolution merged %r onto an entity that was not written; creating it instead",
+                entity.name,
+            )
+
+        entity_id = str(uuid4())
+        subtype = getattr(entity, "subtype", None)
+        create_query = build_create_entity_query(entity.type, subtype)
+        rows = await self._client.execute_write(
+            create_query,
+            {
+                "id": entity_id,
+                "name": entity.name,
+                "type": entity.type,
+                "subtype": subtype,
+                "canonical_name": (
+                    resolution.canonical_name if resolution is not None else entity.name
+                )
+                or entity.name,
+                "description": None,
+                "embedding": None,
+                "confidence": entity.confidence,
+                "metadata": self._entity_metadata(entity, resolution),
+                "location": None,  # Required for LOCATION entities
+            },
+        )
+        # The query MERGEs on (name, type): when the node already existed,
+        # ON MATCH keeps its original id and the freshly minted one is
+        # discarded. Adopt what the database actually holds, otherwise every
+        # later write keyed on the generated id silently does nothing.
+        if rows and rows[0].get("e") and rows[0]["e"].get("id"):
+            entity_id = str(rows[0]["e"]["id"])
+
+        if stats is not None:
+            stats["entities_created"] = stats.get("entities_created", 0) + 1
+
+        if action == "review" and resolution is not None and resolution.matched_entity_id:
+            await self._client.execute_write(
+                queries.CREATE_SAME_AS_RELATIONSHIP,
+                {
+                    "source_id": entity_id,
+                    "target_id": resolution.matched_entity_id,
+                    "confidence": resolution.score,
+                    "match_type": resolution.match_type or "hybrid",
+                    "status": "pending",
+                },
+            )
+        elif action == "review" and resolution is not None and resolution.matched_entity_name:
+            target_id = entity_name_to_id.get(resolution.matched_entity_name.lower().strip())
+            if target_id is not None and target_id != entity_id:
+                await self._client.execute_write(
+                    queries.CREATE_SAME_AS_RELATIONSHIP,
+                    {
+                        "source_id": entity_id,
+                        "target_id": target_id,
+                        "confidence": resolution.score,
+                        "match_type": resolution.match_type or "hybrid",
+                        "status": "pending",
+                    },
+                )
+
+        return entity_id
+
     async def _extract_and_link_entities(
-        self, message: Message, *, extract_relations: bool = True
+        self,
+        message: Message,
+        *,
+        extract_relations: bool = True,
+        user_identifier: str | None = None,
     ) -> None:
         """Extract entities from message and link them.
 
         Args:
             message: The message to extract entities from
             extract_relations: Whether to also extract and store relations between entities
+            user_identifier: Tenant this message belongs to, used to scope
+                resolution candidates when ``resolution.scope="user"``.
         """
         if self._extractor is None:
             return
@@ -1349,111 +1804,152 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         # Filter out invalid entities (stopwords, numbers, etc.)
         result = result.filter_invalid_entities()
 
-        # Track entity name to ID mapping for relation linking
-        entity_name_to_id: dict[str, str] = {}
+        # Enforce the ontology (drops forbidden relations; in strict mode also
+        # entities whose type the ontology does not declare).
+        result = self._apply_ontology(result)
 
-        for entity in result.entities:
-            # Create or get entity with dynamic labels for type/subtype
-            entity_id = str(uuid4())
-            entity_subtype = getattr(entity, "subtype", None)
-            create_query = build_create_entity_query(entity.type, entity_subtype)
-            # Stage attribution: which extractor produced this entity?
-            # Stored in metadata so it's queryable via apoc / JSON helpers
-            # without changing the constraint or index footprint.
-            extracted_by = getattr(entity, "extractor", None)
-            metadata_payload = (
-                json.dumps({"extracted_by": extracted_by}) if extracted_by is not None else None
-            )
-            await self._client.execute_write(
-                create_query,
-                {
-                    "id": entity_id,
-                    "name": entity.name,
-                    "type": entity.type,
-                    "subtype": entity_subtype,
-                    "canonical_name": entity.name,
-                    "description": None,
-                    "embedding": None,
-                    "confidence": entity.confidence,
-                    "metadata": metadata_payload,
-                    "location": None,  # Required for LOCATION entities
-                },
-            )
-
-            # Store mapping for relation linking
-            entity_name_to_id[entity.name.lower().strip()] = entity_id
-
-            # Link message to entity
-            await self._client.execute_write(
-                queries.LINK_MESSAGE_TO_ENTITY,
-                {
-                    "message_id": str(message.id),
-                    "entity_id": entity_id,
-                    "confidence": entity.confidence,
-                    "start_pos": entity.start_pos,
-                    "end_pos": entity.end_pos,
-                },
-            )
+        entity_name_to_id, mention_id_to_node_id = await self._persist_entities(
+            result, str(message.id), user_identifier=user_identifier
+        )
 
         # Store extracted relations
         if extract_relations and result.relations:
-            await self._store_relations(result.relations, entity_name_to_id)
+            await self._store_relations(
+                result.relations,
+                entity_name_to_id,
+                message_id=str(message.id),
+                evidence=message.content,
+                extractor=getattr(self._extractor, "name", None),
+                mention_id_to_node_id=mention_id_to_node_id,
+            )
 
     async def _store_relations(
         self,
         relations: list[Any],
         entity_name_to_id: dict[str, str],
+        *,
+        message_id: str | None = None,
+        evidence: str | None = None,
+        extractor: str | None = None,
+        mention_id_to_node_id: dict[str, str] | None = None,
     ) -> int:
-        """Store extracted relations as RELATED_TO relationships between entities.
+        """Store extracted relations as typed RELATED_TO relationships.
 
-        This method first tries to use the local entity_name_to_id mapping
-        (for entities extracted from the same message), then falls back to
-        looking up entities by name in the database (for cross-message relations).
+        Resolution order per relation:
+
+        1. If the relation carries ``source_id``/``target_id`` mention ids
+           (see ``ExtractedRelation.source_id``/``target_id``) that both
+           appear in ``mention_id_to_node_id``, use those resolved node
+           ids directly. This is the precise path for extractors that
+           decode entities and relations jointly, where two different
+           mentions of the same name must not collide.
+        2. Otherwise, fall back to the local ``entity_name_to_id`` mapping
+           (entities extracted from the same message).
+        3. Otherwise, fall back to a name-based lookup in the database,
+           which supports relations between entities mentioned in
+           different messages.
+
+        Each write carries lightweight provenance — see
+        ``queries.CREATE_ENTITY_RELATION_BY_ID`` / ``_BY_NAME`` for how
+        ``support``, ``derived``, ``source_message_ids`` and ``evidence``
+        accumulate across repeated observations of the same
+        (source, type, target) triple.
 
         Args:
-            relations: List of ExtractedRelation objects from the extractor
-            entity_name_to_id: Mapping of lowercase entity names to their IDs
+            relations: List of ExtractedRelation objects from the extractor.
+            entity_name_to_id: Mapping of lowercase entity names to their
+                node ids (entities extracted from the same message).
+            message_id: Id of the message these relations were extracted
+                from, recorded on ``r.source_message_ids``.
+            evidence: Source text (typically the triggering message
+                content) used to derive a per-relation evidence snippet —
+                see :func:`_relation_evidence`.
+            extractor: Name of the extractor that produced ``relations``,
+                recorded on ``r.extractor``.
+            mention_id_to_node_id: Mapping of per-result mention ids (as
+                set on ``ExtractedEntity.id`` and referenced by
+                ``ExtractedRelation.source_id``/``target_id``) to the
+                Neo4j node id created for that mention.
 
         Returns:
-            Number of relations successfully stored
+            Number of relations successfully stored.
         """
         if not relations:
             return 0
 
+        mention_id_to_node_id = mention_id_to_node_id or {}
         stored_count = 0
+
         for relation in relations:
             source_name = relation.source.lower().strip()
             target_name = relation.target.lower().strip()
 
-            # First try the local mapping (entities from same message)
-            source_id = entity_name_to_id.get(source_name)
-            target_id = entity_name_to_id.get(target_name)
+            # Prefer mention ids, when the relation carries them and both
+            # resolve to a node created in this extraction call — precise
+            # even when the same name is mentioned more than once.
+            source_id = None
+            target_id = None
+            source_mention_id = getattr(relation, "source_id", None)
+            target_mention_id = getattr(relation, "target_id", None)
+            if source_mention_id is not None and target_mention_id is not None:
+                source_id = mention_id_to_node_id.get(source_mention_id)
+                target_id = mention_id_to_node_id.get(target_mention_id)
+
+            # Fall back to the local per-message name mapping.
+            if not (source_id and target_id):
+                source_id = entity_name_to_id.get(source_name)
+                target_id = entity_name_to_id.get(target_name)
+
+            params = {
+                "id": str(uuid4()),
+                "relation_type": relation.relation_type,
+                "confidence": relation.confidence,
+                "derived": getattr(relation, "derived", False),
+                "extractor": extractor,
+                "message_id": message_id,
+                "evidence": _relation_evidence(evidence, relation.source, relation.target),
+            }
 
             if source_id and target_id:
-                # Both entities found locally, use ID-based query
+                # Both endpoints landed on the same node -- two surface forms
+                # that resolution merged together. "X has no relationship with
+                # Y" sentences are the common source. A self-loop RELATED_TO is
+                # never what the extractor meant, so drop the relation.
+                if source_id == target_id:
+                    logger.debug(
+                        "Skipping self-referential relation %r -[%s]-> %r: both "
+                        "endpoints resolved to entity %s",
+                        relation.source,
+                        relation.relation_type,
+                        relation.target,
+                        source_id,
+                    )
+                    continue
+                # Both entities resolved, use the ID-based query.
                 await self._client.execute_write(
                     queries.CREATE_ENTITY_RELATION_BY_ID,
-                    {
-                        "source_id": source_id,
-                        "target_id": target_id,
-                        "relation_type": relation.relation_type,
-                        "confidence": relation.confidence,
-                    },
+                    {"source_id": source_id, "target_id": target_id, **params},
                 )
                 stored_count += 1
             else:
-                # Try name-based lookup for cross-message relations
+                # Try name-based lookup for cross-message relations. The query
+                # yields no rows when either endpoint cannot be found *or*
+                # when both names resolve to one node (its own self-loop
+                # guard) -- either way nothing was stored.
                 result = await self._client.execute_write(
                     queries.CREATE_ENTITY_RELATION_BY_NAME,
-                    {
-                        "source_name": relation.source,
-                        "target_name": relation.target,
-                        "relation_type": relation.relation_type,
-                        "confidence": relation.confidence,
-                    },
+                    {"source_name": relation.source, "target_name": relation.target, **params},
                 )
                 if result:
                     stored_count += 1
+                else:
+                    logger.debug(
+                        "Stored no edge for relation %r -[%s]-> %r: an endpoint "
+                        "is unknown, or both resolve to the same entity",
+                        relation.source,
+                        relation.relation_type,
+                        relation.target,
+                    )
 
         return stored_count
 

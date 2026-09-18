@@ -5,9 +5,18 @@
 
 Reference for entity extraction classes and the extraction pipeline.
 
+[NOTE]
+====
+GLiNER v1 and GLiREL were removed in 0.7. `GLiNEREntityExtractor`,
+`GLiRELExtractor`, `GLiNERWithRelationsExtractor`, `is_gliner_available`,
+`is_glirel_available` and `DEFAULT_RELATION_TYPES` now raise `ImportError`
+with a migration hint. See xref:how-to/migrate-to-gliner2.adoc[Migrate to GLiNER2.5].
+====
+
 == EntityExtractor Protocol
 
-All extractors implement the `EntityExtractor` protocol:
+All extractors implement the `EntityExtractor` protocol, which has a single
+method:
 
 [source,python]
 ----
@@ -15,39 +24,77 @@ from typing import Protocol
 from neo4j_agent_memory.extraction import ExtractionResult
 
 class EntityExtractor(Protocol):
-    async def extract(self, text: str) -> ExtractionResult:
-        """Extract entities from text."""
-        ...
-
-    async def extract_batch(
+    async def extract(
         self,
-        texts: list[str],
-        batch_size: int = 10,
-        max_concurrency: int = 5,
-    ) -> BatchExtractionResult:
-        """Extract entities from multiple texts."""
+        text: str,
+        *,
+        entity_types: list[str] | None = None,
+        extract_relations: bool = True,
+        extract_preferences: bool = True,
+    ) -> ExtractionResult:
+        """Extract entities, relations and preferences from text."""
         ...
 ----
+
+Batch extraction is not part of the protocol. `GLiNER2Extractor` and
+`ExtractionPipeline` each provide an `extract_batch()` of their own with
+different signatures — see the sections below.
 
 == ExtractionResult
 
-Result of entity extraction:
+Result of entity extraction (a Pydantic model):
 
 [source,python]
 ----
-@dataclass
-class ExtractionResult:
-    entities: list[ExtractedEntity]
+class ExtractionResult(BaseModel):
+    entities: list[ExtractedEntity] = []
+    relations: list[ExtractedRelation] = []
+    preferences: list[ExtractedPreference] = []
     source_text: str | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
     def entity_count(self) -> int: ...
+    @property
+    def relation_count(self) -> int: ...
+    @property
+    def preference_count(self) -> int: ...
 
-    def filter_by_type(self, entity_type: str) -> ExtractionResult: ...
-    def filter_by_confidence(self, min_confidence: float) -> ExtractionResult: ...
+    def entities_by_type(self) -> dict[str, list[ExtractedEntity]]: ...
+    def get_entities_of_type(self, entity_type: str) -> list[ExtractedEntity]: ...
     def filter_invalid_entities(self) -> ExtractionResult: ...
+    def validate_relations(
+        self,
+        ontology: OntologyDocument,
+        *,
+        mode: Literal["warn", "drop", "raise"] = "warn",
+    ) -> tuple[ExtractionResult, list[ExtractedRelation]]: ...
 ----
+
+=== validate_relations
+
+Checks every relation against the ontology's endpoint typing. A relation is a
+violation when its `relation_type` is not declared, when either endpoint cannot
+be resolved to an entity in the same result, or when the resolved endpoint
+labels are not a declared `(source, type, target)` pattern. Endpoints resolve by
+`source_id`/`target_id` first, then by normalized name.
+
+[cols="1,3", options="header"]
+|===
+| `mode` | Behaviour
+
+| `warn`
+| Log the violations and keep them (the default)
+
+| `drop`
+| Return a copy without them
+
+| `raise`
+| Raise `ValueError`
+|===
+
+The return value is `(result, violations)`. An ontology that declares no
+relationships cannot express a violation, so the result passes through
+untouched.
 
 == ExtractedEntity
 
@@ -55,21 +102,51 @@ Individual extracted entity:
 
 [source,python]
 ----
-@dataclass
-class ExtractedEntity:
+class ExtractedEntity(BaseModel):
     name: str
-    entity_type: str
-    confidence: float
+    type: str                                # PERSON | ORGANIZATION | LOCATION | EVENT | OBJECT
     subtype: str | None = None
     start_pos: int | None = None
     end_pos: int | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
+    confidence: float = 1.0
+    context: str | None = None
+    attributes: dict[str, Any] = {}
+    extractor: str | None = None
+    id: str | None = None
 
     @property
-    def full_type(self) -> str:
-        """Returns 'TYPE:SUBTYPE' or just 'TYPE'."""
-        ...
+    def normalized_name(self) -> str: ...    # lowercased, stripped
+
+    @property
+    def full_type(self) -> str: ...          # "TYPE:SUBTYPE" or "TYPE"
 ----
+
+`id` is a per-result *mention* id, scoped to one extraction call. Joint
+entity+relation models (GLiNER2.5) set it so relations can reference the exact
+mention rather than a name — which matters when the same name occurs twice in
+one text.
+
+== ExtractedRelation
+
+[source,python]
+----
+class ExtractedRelation(BaseModel):
+    source: str                              # source entity name
+    target: str                              # target entity name
+    relation_type: str
+    confidence: float = 1.0
+    source_id: str | None = None             # ExtractedEntity.id of the source mention
+    target_id: str | None = None             # ExtractedEntity.id of the target mention
+    derived: bool = False
+
+    @property
+    def as_triple(self) -> tuple[str, str, str]: ...
+----
+
+`derived` is `True` when the relation was inferred rather than directly
+observed (an inverse mirror, for example). Storage folds it with `AND` across
+repeated observations, so once a relation is asserted with `derived=False` it
+stays `False`.
 
 == SpacyEntityExtractor
 
@@ -82,6 +159,9 @@ Statistical NER using spaCy models.
 SpacyEntityExtractor(
     model: str = "en_core_web_sm",
     type_mapping: dict[str, str] | None = None,
+    subtype_mapping: dict[str, str] | None = None,
+    default_confidence: float = 0.85,
+    context_window: int = 50,
 )
 ----
 
@@ -98,6 +178,18 @@ SpacyEntityExtractor(
 | `type_mapping`
 | _default mapping_
 | Map spaCy labels to POLE+O types
+
+| `subtype_mapping`
+| _default mapping_
+| Map spaCy labels to POLE+O subtypes
+
+| `default_confidence`
+| `0.85`
+| Confidence assigned to every entity (spaCy reports no per-entity score)
+
+| `context_window`
+| `50`
+| Characters of surrounding text captured per entity
 |===
 
 === Default Type Mapping
@@ -132,19 +224,48 @@ extractor = SpacyEntityExtractor(model="en_core_web_sm")
 result = await extractor.extract("John works at Apple in California")
 ----
 
-== GLiNEREntityExtractor
+[#gliner2extractor]
+== GLiNER2Extractor
 
-Zero-shot NER using GLiNER models with domain schemas.
+Joint entity and relation extraction with a GLiNER2.5 checkpoint, locally and
+without an LLM call. Requires the `gliner2` extra:
+
+[source,bash]
+----
+pip install "neo4j-agent-memory[gliner2]"
+----
+
+GLiNER2.5 decodes entities *and* relations in one pass through its JointIE
+engine, and it enforces the ontology's endpoint types during beam search rather
+than filtering afterwards. Relations therefore come back carrying entity ids,
+and every endpoint is guaranteed to be one of the entities in the same result.
+
+Preferences are never extracted — pair this extractor with
+`LLMEntityExtractor` when you need them.
 
 === Constructor
 
 [source,python]
 ----
-GLiNEREntityExtractor(
-    model: str = "gliner-community/gliner_medium-v2.5",
-    schema: DomainSchema | str | None = None,
+GLiNER2Extractor(
+    model: str = "fastino/gliner2.5-base-v1",
+    *,
+    ontology: OntologyDocument | DomainSchema | EntitySchemaConfig | None = None,
+    entity_labels: list[str] | dict[str, str] | None = None,
     threshold: float = 0.5,
+    relation_threshold: float | None = None,
     device: str = "cpu",
+    quantize: bool = False,
+    compile: bool = False,
+    max_words: int = 384,
+    chunk_overlap: int = 64,
+    overlap_policy: str | None = None,
+    extract_relations: bool = True,
+    extract_attributes: bool = False,
+    attribute_tolerance: int = 2,
+    context_window: int = 50,
+    label_mapping: dict[str, tuple[str, str | None]] | None = None,
+    joint_config: Any | None = None,
 )
 ----
 
@@ -155,58 +276,284 @@ GLiNEREntityExtractor(
 | Parameter | Default | Description
 
 | `model`
-| `gliner-community/gliner_medium-v2.5`
-| GLiNER model name
+| `fastino/gliner2.5-base-v1`
+| GLiNER2.5 checkpoint id or local path. A GLiNER v1 id (`urchade/++*++`,
+  `gliner-community/++*++`, `numind/++*++`) raises `ValueError` before anything
+  is downloaded.
 
-| `schema`
+| `ontology`
 | `None`
-| Domain schema (name or object)
+| The schema to extract against: an `OntologyDocument`, anything with a
+  `to_ontology()` method (a `DomainSchema`, an `EntitySchemaConfig`), or `None`
+  for the built-in POLE+O ontology.
+
+| `entity_labels`
+| `None`
+| Convenience alternative to `ontology` — labels as a list, or as a
+  `{label: description}` mapping. Produces a relationship-free ad-hoc ontology
+  and is ignored when `ontology` is given.
 
 | `threshold`
 | `0.5`
-| Confidence threshold (0.0-1.0)
+| Entity confidence floor passed to the decoder.
+
+| `relation_threshold`
+| `None`
+| Confidence floor applied to decoded relations. `None` keeps whatever the
+  ontology's per-relation thresholds selected.
 
 | `device`
 | `cpu`
-| Device for inference (`cpu`, `cuda`)
+| Inference device (`cpu`, `cuda`, `mps`). Passed to the loader as
+  `map_location`.
+
+| `quantize`
+| `False`
+| Load the weights in fp16.
+
+| `compile`
+| `False`
+| Run the weights through `torch.compile`.
+
+| `max_words`
+| `384`
+| Longest input decoded in one pass. Longer text is windowed.
+
+| `chunk_overlap`
+| `64`
+| Word overlap between windows.
+
+| `overlap_policy`
+| `None`
+| Span-overlap policy for the attribute pass (`flat`, `nested`, `allow`,
+  `longest`). `None` keeps the checkpoint's default.
+
+| `extract_relations`
+| `True`
+| Set `False` to decode entities only.
+
+| `extract_attributes`
+| `False`
+| Run the opt-in second pass that recovers the ontology's enum properties as
+  span attributes.
+
+| `attribute_tolerance`
+| `2`
+| Character slack when joining the attribute pass back onto entity spans (the
+  two passes tokenize independently).
+
+| `context_window`
+| `50`
+| Characters of surrounding text captured per entity.
+
+| `label_mapping`
+| `None`
+| Override for the label -> `(TYPE, SUBTYPE)` table. Defaults to the ontology's
+  own label map over `DEFAULT_LABEL_MAPPING`.
+
+| `joint_config`
+| `None`
+| A ready-made `JointIEConfig`. When given it is used verbatim and `threshold`
+  no longer applies.
+|===
+
+=== Models
+
+[cols="2,1,1,2", options="header"]
+|===
+| Checkpoint | Parameters | On disk | Use
+
+| `fastino/gliner2.5-small-v1`
+| 74M
+| ~296 MB
+| Fast CPU / edge
+
+| `fastino/gliner2.5-base-v1`
+| 194M
+| ~407 MB
+| Default, English
+
+| `fastino/gliner2.5-multi-v1`
+| 287M
+| ~594 MB
+| Multilingual
+|===
+
+=== Properties
+
+[cols="1,3", options="header"]
+|===
+| Property | Description
+
+| `name`
+| `"gliner2"` — recorded on every entity it produces (`ExtractedEntity.extractor`)
+
+| `version`
+| The installed `gliner2` version, or `"unknown"`
+
+| `model_id`
+| The checkpoint this extractor loads
+
+| `ontology`
+| The `OntologyDocument` compiled into the JointIE schema
+
+| `model`
+| The loaded checkpoint (downloaded lazily on first use)
+
+| `joint`
+| The JointIE engine, sharing weights with `model`
 |===
 
 === Factory Methods
 
 [source,python]
 ----
-# Create with named schema
-extractor = GLiNEREntityExtractor.for_schema("podcast")
-extractor = GLiNEREntityExtractor.for_schema("poleo", threshold=0.6)
+from neo4j_agent_memory.extraction import GLiNER2Extractor
 
-# Create for POLE+O model
-extractor = GLiNEREntityExtractor.for_poleo()
+# A built-in domain template (entity labels with descriptions)
+extractor = GLiNER2Extractor.for_schema("podcast")
+extractor = GLiNER2Extractor.for_schema("poleo", threshold=0.6)
+
+# The built-in POLE+O ontology
+extractor = GLiNER2Extractor.for_poleo()
+
+# Your own ontology, with typed relationships
+extractor = GLiNER2Extractor.for_ontology(doc, device="cuda")
 ----
 
 === Example
 
 [source,python]
 ----
-from neo4j_agent_memory.extraction import GLiNEREntityExtractor
+from neo4j_agent_memory.extraction import GLiNER2Extractor
 
-# With domain schema
-extractor = GLiNEREntityExtractor.for_schema("podcast")
-result = await extractor.extract("Marc Andreessen discusses AI on the show")
+extractor = GLiNER2Extractor.for_poleo()
+result = await extractor.extract("Brian Chesky founded Airbnb in San Francisco.")
+
+for entity in result.entities:
+    print(entity.name, entity.full_type, entity.id)
+
+for relation in result.relations:
+    print(relation.source, relation.relation_type, relation.target, relation.source_id)
+----
+
+Relations are decoded only when all three of these hold: the call passes
+`extract_relations=True` (the default), the extractor was built with
+`extract_relations=True`, and the ontology declares at least one relationship
+type. A `DomainSchema` converted with `to_ontology()` declares none unless you
+attach them — see xref:reference/schemas.adoc[Domain Schemas Reference].
+
+=== Batch Extraction
+
+[source,python]
+----
+results = await extractor.extract_batch(
+    texts,
+    entity_types=None,       # restrict to these labels or POLE+O types
+    batch_size=8,            # texts decoded per forward pass
+    on_progress=lambda done, total: print(f"{done}/{total}"),
+)
+----
+
+Returns one `ExtractionResult` per input text, in input order. Texts within
+`max_words` go through the engine's batched decoding; longer texts are windowed
+individually.
+
+=== Windowing Long Input
+
+Relation recall degrades sharply past roughly 400 words and can reach zero with
+no error raised. Input longer than `max_words` (384 words by default) is
+therefore windowed through the engine's `extract_long` with `chunk_overlap` word
+overlap. Relations whose endpoints fall in different windows are lost.
+
+For document-scale extraction, prefer explicit chunking with
+xref:reference/extractors.adoc#streamingextractor[StreamingExtractor] or
+per-message extraction over one long concatenation.
+
+=== Warnings
+
+[cols="1,3", options="header"]
+|===
+| Condition | Behaviour
+
+| `feasible=False` on the decoder result
+| A `RuntimeWarning` and a log warning. The decoder could not satisfy the
+  ontology's hard constraints and fell back to an empty assignment. This is
+  *not* the same as "no facts in this text" — relax `unique_source`/`acyclic`
+  constraints or lower the thresholds.
+
+| A GLiNER v1 checkpoint id
+| `ValueError` from the constructor, naming the GLiNER2.5 replacements. Raised
+  before any download.
+
+| `gliner2` not installed
+| `ImportError` naming `pip install "neo4j-agent-memory[gliner2]"`, raised when
+  the model is first loaded (not at construction).
+|===
+
+Two load-time warnings the checkpoint emits and nobody can act on — the
+tokenizer's `extra_special_tokens` serialization, and DeBERTa-v2/v3 having no
+SDPA kernel so attention falls back to eager — are suppressed.
+
+=== Attribute Pass
+
+With `extract_attributes=True` the extractor runs a second forward pass built
+from the ontology's enum properties and joins the decoded values back onto the
+entity spans by `(label, start_pos)` within `attribute_tolerance` characters.
+This is opt-in because it doubles the forward passes; it is also the only way to
+recover qualifiers, since `JointSchema` carries no node or edge properties.
+
+Every entity carries these keys in `attributes` regardless:
+
+[cols="1,3", options="header"]
+|===
+| Key | Value
+
+| `gliner2_label`
+| The label as the model emitted it, before POLE+O mapping
+
+| `gliner2_score`
+| The decoded confidence
+
+| `rescued`
+| Whether the span came from the decoder's rescue pass
+
+| `sentence_id`
+| The sentence the span was found in, when the engine reports one
+|===
+
+=== Checking Availability
+
+[source,python]
+----
+from neo4j_agent_memory.extraction import is_gliner2_available
+
+if not is_gliner2_available():
+    print('Install with: pip install "neo4j-agent-memory[gliner2]"')
 ----
 
 == LLMEntityExtractor
 
-LLM-based extraction using OpenAI models.
+LLM-based extraction. Provider-aware: given a `StructuredExtractor` provider it
+uses native structured outputs, otherwise it falls back to prompt-engineered
+JSON.
 
 === Constructor
 
 [source,python]
 ----
 LLMEntityExtractor(
-    model: str = "gpt-4o-mini",
+    provider: LLMProvider | StructuredExtractor | None = None,
+    *,
+    model: str | None = None,
     api_key: str | None = None,
     entity_types: list[str] | None = None,
+    subtypes: dict[str, list[str]] | None = None,
+    extraction_prompt: str | None = None,
     temperature: float = 0.0,
+    extract_relations: bool = True,
+    extract_preferences: bool = True,
+    ontology: OntologyDocument | None = None,
 )
 ----
 
@@ -216,21 +563,49 @@ LLMEntityExtractor(
 |===
 | Parameter | Default | Description
 
+| `provider`
+| `None`
+| An `LLMProvider` or `StructuredExtractor`. When omitted, one is built from
+  `model`/`api_key`.
+
 | `model`
 | `gpt-4o-mini`
-| OpenAI model name
+| Legacy model id used to build a default provider
 
 | `api_key`
 | _from env_
-| OpenAI API key
+| Legacy API key used to build a default provider
 
 | `entity_types`
 | _POLE+O types_
-| Entity types to extract
+| Flat type names the model should emit; defaults to the ontology's `pole_type`
+  values when `ontology` is set
+
+| `subtypes`
+| _POLE+O table_
+| Per-type subtype hints; derived from the ontology when one is set
+
+| `extraction_prompt`
+| _built-in_
+| Override for the prompt template
 
 | `temperature`
 | `0.0`
-| LLM temperature
+| Sampling temperature
+
+| `extract_relations`
+| `True`
+| Whether to request relations
+
+| `extract_preferences`
+| `True`
+| Whether to request preferences
+
+| `ontology`
+| `None`
+| When set, the prompt's type guidance is generated from the ontology —
+  annotation guidelines plus the legal `SOURCE -[REL]-> TARGET` catalogue — so
+  the model emits declared relationship names instead of inventing its own
 |===
 
 === Example
@@ -245,15 +620,20 @@ result = await extractor.extract("John Smith, CEO of Acme, spoke at the conferen
 
 == ExtractionPipeline
 
-Multi-stage extraction combining multiple extractors.
+Multi-stage extraction combining several extractors.
 
 === Constructor
 
 [source,python]
 ----
 ExtractionPipeline(
-    stages: list[EntityExtractor],
+    stages: list[ExtractionStage | EntityExtractor],
     merge_strategy: MergeStrategy = MergeStrategy.CONFIDENCE,
+    stop_on_success: bool = False,
+    min_entities_for_success: int = 1,
+    fallback_on_error: bool = True,
+    *,
+    ontology: OntologyDocument | None = None,
 )
 ----
 
@@ -264,20 +644,28 @@ ExtractionPipeline(
 | Strategy | Description
 
 | `CONFIDENCE`
-| Keep entity with highest confidence
+| Keep the highest-confidence version of each entity (the default)
 
 | `UNION`
 | Keep all unique entities from all stages
 
 | `INTERSECTION`
-| Keep only entities found by multiple stages
+| Keep only entities found by more than one stage
 
-| `FIRST`
-| Use first stage's result, fallback to later stages
+| `CASCADE`
+| Use the first stage's results, fill gaps with later stages
 
-| `LAST`
-| Use last stage's result, override earlier
+| `FIRST_SUCCESS`
+| Stop at the first stage that returns entities
 |===
+
+=== Relation Validation Stage
+
+When `ontology` is set, the merged result runs through
+`ExtractionResult.validate_relations(ontology, mode="drop")` as a final step, and
+the number of dropped relations is logged. Merging results from several stages
+can only ever *add* relations the ontology does not permit: the GLiNER2.5 stage
+constrains endpoints during decoding, the LLM and spaCy stages do not.
 
 === Example
 
@@ -285,21 +673,39 @@ ExtractionPipeline(
 ----
 from neo4j_agent_memory.extraction import (
     ExtractionPipeline,
-    SpacyEntityExtractor,
-    GLiNEREntityExtractor,
+    GLiNER2Extractor,
     MergeStrategy,
+    SpacyEntityExtractor,
 )
+from neo4j_agent_memory.ontology import POLEO_ONTOLOGY
 
 pipeline = ExtractionPipeline(
     stages=[
         SpacyEntityExtractor(),
-        GLiNEREntityExtractor.for_schema("podcast"),
+        GLiNER2Extractor.for_poleo(),
     ],
     merge_strategy=MergeStrategy.CONFIDENCE,
+    ontology=POLEO_ONTOLOGY,
 )
 
 result = await pipeline.extract(text)
 ----
+
+=== Batch Extraction
+
+[source,python]
+----
+batch = await pipeline.extract_batch(
+    texts,
+    batch_size=10,
+    max_concurrency=5,
+    on_progress=lambda done, total: print(f"{done}/{total}"),
+    fail_fast=False,
+)
+----
+
+Returns a `BatchExtractionResult`. See
+xref:how-to/batch-processing.adoc[Process Documents in Batch].
 
 == ExtractorBuilder
 
@@ -325,86 +731,61 @@ extractor = (
 |===
 | Method | Description
 
-| `.with_spacy(model)`
-| Add spaCy extractor
+| `.with_spacy(model="en_core_web_sm")`
+| Add the spaCy stage
 
-| `.with_gliner(threshold)`
-| Add GLiNER with default schema
+| `.with_gliner(model=None, threshold=0.5, device="cpu", *, model_name=None, relation_threshold=None)`
+| Add the GLiNER2.5 stage on the current ontology (POLE+O when none is set)
 
-| `.with_gliner_schema(name, threshold)`
-| Add GLiNER with domain schema
+| `.with_gliner_schema(name, model=None, threshold=0.5, device="cpu", *, relation_threshold=None)`
+| Add the GLiNER2.5 stage on a built-in domain template
 
-| `.with_llm(model)`
-| Add LLM extractor
+| `.with_ontology(doc)`
+| Extract against an explicit `OntologyDocument` (call `.with_gliner()` to add the GLiNER2.5 stage)
+  and gives the LLM stage the ontology's POLE+O types
 
-| `.with_llm_fallback(model)`
-| Add LLM as fallback stage
+| `.with_schema(schema_config)`
+| Extract against an `EntitySchemaConfig`, converted to an ontology
+
+| `.with_entity_types(types)`
+| Set the flat type set (and the GLiNER2.5 labels when no ontology is set)
+
+| `.with_confidence_threshold(threshold)`
+| Set the GLiNER2.5 entity threshold; raises `ValueError` outside `[0.0, 1.0]`
+
+| `.with_llm(model="gpt-4o-mini")`
+| Add the LLM stage
+
+| `.with_llm_fallback(model="gpt-4o-mini")`
+| Same stage, spelled for a fallback position
 
 | `.merge_by_confidence()`
-| Use confidence merge strategy
+| Use the `CONFIDENCE` merge strategy (the default)
 
-| `.merge_union()`
-| Use union merge strategy
+| `.merge_by_union()`
+| Use the `UNION` merge strategy
+
+| `.merge_by_intersection()`
+| Use the `INTERSECTION` merge strategy
+
+| `.merge_by_cascade()`
+| Use the `CASCADE` merge strategy
+
+| `.extract_relations(enabled=True)`
+| Enable or disable relation extraction
+
+| `.extract_preferences(enabled=True)`
+| Enable or disable preference extraction
 
 | `.build()`
-| Create extractor/pipeline
+| Create the extractor. One stage is returned directly; several are wrapped in
+  an `ExtractionPipeline` carrying the ontology.
 |===
 
-== GLiRELExtractor
+`with_gliner` keeps its spelling — "gliner" means GLiNER2.5 throughout the
+configuration surface.
 
-Relation extraction using GLiREL (requires GLiNER entities first).
-
-=== Constructor
-
-[source,python]
-----
-GLiRELExtractor(
-    model: str = "jackboyla/glirel_base",
-    relation_types: dict[str, str] | None = None,
-    threshold: float = 0.5,
-    device: str = "cpu",
-)
-----
-
-=== Example
-
-[source,python]
-----
-from neo4j_agent_memory.extraction import (
-    GLiNEREntityExtractor,
-    GLiRELExtractor,
-)
-
-# Extract entities first
-entity_extractor = GLiNEREntityExtractor.for_poleo()
-entity_result = await entity_extractor.extract(text)
-
-# Then extract relations
-relation_extractor = GLiRELExtractor()
-relations = await relation_extractor.extract_relations(
-    text,
-    entities=entity_result.entities,
-)
-
-for rel in relations:
-    print(f"{rel.source} -[{rel.relation_type}]-> {rel.target}")
-----
-
-== GLiNERWithRelationsExtractor
-
-Combined entity and relation extraction.
-
-[source,python]
-----
-from neo4j_agent_memory.extraction import GLiNERWithRelationsExtractor
-
-extractor = GLiNERWithRelationsExtractor.for_poleo()
-result = await extractor.extract("John works at Acme Corp")
-
-print(result.entities)   # [John, Acme Corp]
-print(result.relations)  # [John -[WORKS_AT]-> Acme Corp]
-----
-
+[#streamingextractor]
 == StreamingExtractor
 
 Process long documents in chunks.
@@ -417,6 +798,7 @@ streamer = StreamingExtractor(
     base_extractor,
     chunk_size=4000,
     overlap=200,
+    chunk_by_tokens=False,
     split_on_sentences=True,
 )
 
@@ -428,8 +810,15 @@ async for chunk_result in streamer.extract_streaming(long_document):
 result = await streamer.extract(long_document, deduplicate=True)
 ----
 
+`chunk_size` and `overlap` are characters by default, tokens when
+`chunk_by_tokens=True`. GLiNER2.5 also windows internally at `max_words`;
+streaming is the right tool when you want chunk-level results, progress or
+control over the boundaries.
+
 == See Also
 
+* xref:how-to/migrate-to-gliner2.adoc[Migrate to GLiNER2.5] - Old to new names
 * xref:reference/schemas.adoc[Domain Schemas Reference] - Available schemas
 * xref:how-to/entity-extraction.adoc[Configure Entity Extraction] - Pipeline setup
 * xref:how-to/batch-processing.adoc[Process Documents in Batch] - Batch extraction
+* xref:explanation/extraction-pipeline.adoc[How Extraction Works] - Stage design

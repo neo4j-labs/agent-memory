@@ -23,6 +23,87 @@ async with MemoryClient(settings) as client:
     )
 ----
 
+== Constructor
+
+`MemoryClient` builds this layer for you; the signature matters when you
+construct it directly.
+
+[source,python]
+----
+LongTermMemory(
+    client: Neo4jClient,
+    embedder: Embedder | None = None,
+    extractor: EntityExtractor | None = None,
+    resolver: EntityResolver | None = None,
+    geocoder: Geocoder | None = None,
+    enrichment_service: BackgroundEnrichmentService | None = None,
+    entity_types: list[str] | None = None,
+    strict_types: bool = False,
+    deduplication: DeduplicationConfig | None = None,
+    *,
+    multi_tenant: bool = False,
+    ontology: OntologyDocument | None = None,
+    validation_mode: Literal["permissive", "strict"] = "permissive",
+)
+----
+
+[cols="1,1,3", options="header"]
+|===
+| Parameter | Type | Description
+
+| `resolver`
+| `EntityResolver \| None`
+| Resolver used by `add_entity`. When it is an `OntologyResolver` (the default
+  on bolt), `_check_for_duplicates` delegates to its `resolve_one()`, so
+  `add_entity` and message ingestion share one normalisation, one blocking
+  strategy and one set of thresholds. Any other resolver keeps the pre-v0.7
+  embedding-similarity path.
+
+| `deduplication`
+| `DeduplicationConfig \| None`
+| Deduplication bands for the non-delegated path. Derive it from the resolution
+  settings with `DeduplicationConfig.from_resolution_config(settings.resolution)`
+  so the two cannot drift.
+
+| `ontology`
+| `OntologyDocument \| None`
+| _v0.7._ The effective ontology, used for strict-mode validation and for
+  mapping `(pole_type, subtype)` pairs onto declared labels. `MemoryClient`
+  passes its resolved document.
+
+| `validation_mode`
+| `"permissive" \| "strict"`
+| _v0.7._ `strict` makes `add_entity` and `add_relationship` raise
+  `ValidationError`; `permissive` (the pre-v0.7 behaviour) writes anyway.
+  Ignored when `ontology` is `None`.
+|===
+
+=== Strict-mode validation
+
+With `validation_mode="strict"` and an ontology configured:
+
+[cols="1,2", options="header"]
+|===
+| Rejected | Raised by
+
+| An entity whose `(type, subtype)` the ontology declares no label for. A
+  declared base type still validates when only the subtype is unknown.
+| `add_entity`
+
+| A relationship type the ontology does not declare
+| `add_relationship`
+
+| An endpoint whose stored type maps onto no declared label
+| `add_relationship`
+
+| An endpoint pair the ontology does not permit for that relationship
+  (`OntologyDocument.permits`)
+| `add_relationship`
+|===
+
+Both raise `neo4j_agent_memory.core.exceptions.ValidationError`, whose
+`details` carries the offending type, labels and ontology name.
+
 == Entity Operations
 
 === add_entity
@@ -264,6 +345,11 @@ facts = await long_term.get_facts(
 ----
 
 == Deduplication Operations
+
+Bands come from `ResolutionConfig`: at or above `auto_merge_threshold` a new
+entity merges onto the match, at or above `review_threshold` it is created with
+a pending `SAME_AS` edge for review. Message ingestion writes into the same
+review queue as of v0.7.
 
 === find_potential_duplicates
 

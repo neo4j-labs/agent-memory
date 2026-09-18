@@ -1,0 +1,126 @@
+{
+  "name": "poleo_resolution_gold",
+  "description": "Gold entity-resolution clusters for the documents in poleo_gold.json. Mention ids are '<case id>:m<n>' and every mention text is a literal substring of that case's text.",
+  "mentions": [
+    {"id": "poleo-01:m1", "text": "Priya Raghavan", "type": "PERSON", "doc": "poleo-01"},
+    {"id": "poleo-01:m2", "text": "Acme Corp", "type": "ORGANIZATION", "doc": "poleo-01"},
+    {"id": "poleo-01:m3", "text": "Acme", "type": "ORGANIZATION", "doc": "poleo-01"},
+    {"id": "poleo-01:m4", "text": "ACME Corporation", "type": "ORGANIZATION", "doc": "poleo-01"},
+    {"id": "poleo-01:m5", "text": "Ascent 9", "type": "OBJECT", "doc": "poleo-01"},
+    {"id": "poleo-01:m6", "text": "Lisbon", "type": "LOCATION", "doc": "poleo-01"},
+
+    {"id": "poleo-02:m1", "text": "Marcus Bell", "type": "PERSON", "doc": "poleo-02"},
+    {"id": "poleo-02:m2", "text": "Marcus", "type": "PERSON", "doc": "poleo-02"},
+    {"id": "poleo-02:m3", "text": "Northwind Logistics", "type": "ORGANIZATION", "doc": "poleo-02"},
+    {"id": "poleo-02:m4", "text": "Northwind", "type": "ORGANIZATION", "doc": "poleo-02"},
+    {"id": "poleo-02:m5", "text": "Harbour Freight Union", "type": "ORGANIZATION", "doc": "poleo-02"},
+    {"id": "poleo-02:m6", "text": "Rotterdam", "type": "LOCATION", "doc": "poleo-02"},
+
+    {"id": "poleo-03:m1", "text": "Vesper Analytics", "type": "ORGANIZATION", "doc": "poleo-03"},
+    {"id": "poleo-03:m2", "text": "Vesper", "type": "ORGANIZATION", "doc": "poleo-03"},
+    {"id": "poleo-03:m3", "text": "Acme Corp", "type": "ORGANIZATION", "doc": "poleo-03"},
+    {"id": "poleo-03:m4", "text": "Kestrel Robotics", "type": "ORGANIZATION", "doc": "poleo-03"},
+    {"id": "poleo-03:m5", "text": "Dublin", "type": "LOCATION", "doc": "poleo-03"},
+
+    {"id": "poleo-04:m1", "text": "Lisbon Rail Summit", "type": "EVENT", "doc": "poleo-04"},
+    {"id": "poleo-04:m2", "text": "Alcantara conference hall", "type": "LOCATION", "doc": "poleo-04"},
+    {"id": "poleo-04:m3", "text": "Priya Raghavan", "type": "PERSON", "doc": "poleo-04"},
+    {"id": "poleo-04:m4", "text": "Kestrel Robotics", "type": "ORGANIZATION", "doc": "poleo-04"},
+    {"id": "poleo-04:m5", "text": "inspection drone", "type": "OBJECT", "doc": "poleo-04"},
+
+    {"id": "poleo-05:m1", "text": "Nadia Osei", "type": "PERSON", "doc": "poleo-05"},
+    {"id": "poleo-05:m2", "text": "42 Rua do Sol", "type": "LOCATION", "doc": "poleo-05"},
+    {"id": "poleo-05:m3", "text": "Tomas Leal", "type": "PERSON", "doc": "poleo-05"},
+
+    {"id": "poleo-06:m1", "text": "Dr. Amara Chen", "type": "PERSON", "doc": "poleo-06"},
+    {"id": "poleo-06:m2", "text": "A.C.", "type": "PERSON", "doc": "poleo-06"},
+    {"id": "poleo-06:m3", "text": "Riverside Housing Trust", "type": "ORGANIZATION", "doc": "poleo-06"},
+    {"id": "poleo-06:m4", "text": "The trust", "type": "ORGANIZATION", "doc": "poleo-06"},
+    {"id": "poleo-06:m5", "text": "four minibuses", "type": "OBJECT", "doc": "poleo-06"},
+
+    {"id": "poleo-07:m1", "text": "J. Marchetti", "type": "PERSON", "doc": "poleo-07"},
+    {"id": "poleo-07:m2", "text": "Giulia Marchetti", "type": "PERSON", "doc": "poleo-07"},
+    {"id": "poleo-07:m3", "text": "Veneto Review", "type": "ORGANIZATION", "doc": "poleo-07"},
+
+    {"id": "poleo-08:m1", "text": "Kestrel Robotics", "type": "ORGANIZATION", "doc": "poleo-08"},
+    {"id": "poleo-08:m2", "text": "Kestrel", "type": "ORGANIZATION", "doc": "poleo-08"},
+    {"id": "poleo-08:m3", "text": "Halcyon 200", "type": "OBJECT", "doc": "poleo-08"},
+    {"id": "poleo-08:m4", "text": "Sofia Brandao", "type": "PERSON", "doc": "poleo-08"},
+    {"id": "poleo-08:m5", "text": "Porto workshop", "type": "LOCATION", "doc": "poleo-08"},
+
+    {"id": "poleo-09:m1", "text": "Harbour Freight Union", "type": "ORGANIZATION", "doc": "poleo-09"},
+    {"id": "poleo-09:m2", "text": "The union", "type": "ORGANIZATION", "doc": "poleo-09"},
+    {"id": "poleo-09:m3", "text": "annual safety review", "type": "EVENT", "doc": "poleo-09"},
+    {"id": "poleo-09:m4", "text": "Antwerp", "type": "LOCATION", "doc": "poleo-09"},
+    {"id": "poleo-09:m5", "text": "Marcus Bell", "type": "PERSON", "doc": "poleo-09"},
+    {"id": "poleo-09:m6", "text": "Rotterdam", "type": "LOCATION", "doc": "poleo-09"},
+
+    {"id": "poleo-10:m1", "text": "Northwind Logistics", "type": "ORGANIZATION", "doc": "poleo-10"},
+    {"id": "poleo-10:m2", "text": "Northwind", "type": "ORGANIZATION", "doc": "poleo-10"},
+    {"id": "poleo-10:m3", "text": "Malaga", "type": "LOCATION", "doc": "poleo-10"},
+    {"id": "poleo-10:m4", "text": "Acme Corporation", "type": "ORGANIZATION", "doc": "poleo-10"},
+    {"id": "poleo-10:m5", "text": "Elena Duarte", "type": "PERSON", "doc": "poleo-10"},
+    {"id": "poleo-10:m6", "text": "Lisbon", "type": "LOCATION", "doc": "poleo-10"}
+  ],
+  "clusters": {
+    "poleo-01:m1": "priya-raghavan",
+    "poleo-01:m2": "acme",
+    "poleo-01:m3": "acme",
+    "poleo-01:m4": "acme",
+    "poleo-01:m5": "ascent-9",
+    "poleo-01:m6": "lisbon",
+
+    "poleo-02:m1": "marcus-bell",
+    "poleo-02:m2": "marcus-bell",
+    "poleo-02:m3": "northwind-logistics",
+    "poleo-02:m4": "northwind-logistics",
+    "poleo-02:m5": "harbour-freight-union",
+    "poleo-02:m6": "rotterdam",
+
+    "poleo-03:m1": "vesper-analytics",
+    "poleo-03:m2": "vesper-analytics",
+    "poleo-03:m3": "acme",
+    "poleo-03:m4": "kestrel-robotics",
+    "poleo-03:m5": "dublin",
+
+    "poleo-04:m1": "lisbon-rail-summit",
+    "poleo-04:m2": "alcantara-conference-hall",
+    "poleo-04:m3": "priya-raghavan",
+    "poleo-04:m4": "kestrel-robotics",
+    "poleo-04:m5": "inspection-drone",
+
+    "poleo-05:m1": "nadia-osei",
+    "poleo-05:m2": "42-rua-do-sol",
+    "poleo-05:m3": "tomas-leal",
+
+    "poleo-06:m1": "amara-chen",
+    "poleo-06:m2": "amara-chen",
+    "poleo-06:m3": "riverside-housing-trust",
+    "poleo-06:m4": "riverside-housing-trust",
+    "poleo-06:m5": "riverside-minibuses",
+
+    "poleo-07:m1": "giulia-marchetti",
+    "poleo-07:m2": "giulia-marchetti",
+    "poleo-07:m3": "veneto-review",
+
+    "poleo-08:m1": "kestrel-robotics",
+    "poleo-08:m2": "kestrel-robotics",
+    "poleo-08:m3": "halcyon-200",
+    "poleo-08:m4": "sofia-brandao",
+    "poleo-08:m5": "porto-workshop",
+
+    "poleo-09:m1": "harbour-freight-union",
+    "poleo-09:m2": "harbour-freight-union",
+    "poleo-09:m3": "annual-safety-review",
+    "poleo-09:m4": "antwerp",
+    "poleo-09:m5": "marcus-bell",
+    "poleo-09:m6": "rotterdam",
+
+    "poleo-10:m1": "northwind-logistics",
+    "poleo-10:m2": "northwind-logistics",
+    "poleo-10:m3": "malaga",
+    "poleo-10:m4": "acme",
+    "poleo-10:m5": "elena-duarte",
+    "poleo-10:m6": "lisbon"
+  }
+}

@@ -11,7 +11,15 @@ Install with CLI extras:
 
 [source,bash]
 ----
-pip install neo4j-agent-memory[cli]
+pip install "neo4j-agent-memory[cli]"
+----
+
+The `extract` command's default extractor is GLiNER2.5, so add the model extra
+too:
+
+[source,bash]
+----
+pip install "neo4j-agent-memory[cli,gliner2]"
 ----
 
 == Commands
@@ -43,32 +51,57 @@ neo4j-agent-memory extract [OPTIONS] TEXT
 
 | `--file`, `-f`
 | _none_
-| Read text from file instead
-
-| `--extractor`, `-e`
-| `gliner`
-| Extractor to use: `gliner`, `spacy`, `llm`, `hybrid`
-
-| `--entity-types`, `-t`
-| _all_
-| Entity types to extract (can repeat)
+| Read text from a file instead
 
 | `--format`
 | `table`
 | Output format: `table`, `json`, `jsonl`
 
-| `--threshold`
-| `0.5`
-| Confidence threshold (0.0-1.0)
-
 | `--schema`
-| `poleo`
-| Domain schema: `poleo`, `podcast`, `news`, etc.
+| _none_
+| Path to an `EntitySchemaConfig` YAML file
 
-| `--verbose`, `-v`
+| `--ontology`
+| _none_
+| Path to an ontology document (JSON or YAML) to extract against
+
+| `--gliner-schema`
+| _none_
+| Built-in domain schema: `poleo`, `podcast`, `news`, `scientific`, `business`,
+  `entertainment`, `medical`, `legal`
+
+| `--entity-types`, `-e`
+| _all_
+| Entity types to extract (can repeat)
+
+| `--extractor`
+| `gliner`
+| Extractor to use: `gliner` (GLiNER2.5), `llm`, `hybrid`
+
+| `--model`
+| _extractor default_
+| Model for the GLiNER2.5 or LLM extractor (GLiNER2.5 default:
+  `fastino/gliner2.5-base-v1`)
+
+| `--relations` / `--no-relations`
+| `--relations`
+| Extract relations between entities
+
+| `--preferences` / `--no-preferences`
+| `--no-preferences`
+| Extract preferences/sentiments (LLM extractor only)
+
+| `--confidence-threshold`
+| `0.5`
+| Minimum confidence threshold (0.0-1.0)
+
+| `--quiet`, `-q`
 | `false`
-| Show extraction details
+| Suppress the progress spinner
 |===
+
+`--ontology`, `--schema` and `--entity-types` are alternatives for the same slot
+and are consulted in that order.
 
 ==== Examples
 
@@ -87,13 +120,19 @@ echo "Sarah lives in London" | neo4j-agent-memory extract -
 neo4j-agent-memory extract --extractor llm "..."
 
 # Filter entity types
-neo4j-agent-memory extract -t Person -t Organization "..."
+neo4j-agent-memory extract -e Person -e Organization "..."
 
 # JSON output
 neo4j-agent-memory extract --format json "..."
 
-# Use domain schema
-neo4j-agent-memory extract --schema podcast "..."
+# Use a built-in domain schema
+neo4j-agent-memory extract --gliner-schema podcast "..."
+
+# Use your own ontology (entity labels and typed relationships)
+neo4j-agent-memory extract --ontology my-ontology.yaml "..."
+
+# Entities only, on the small checkpoint
+neo4j-agent-memory extract --model fastino/gliner2.5-small-v1 --no-relations "..."
 ----
 
 ==== Output Formats
@@ -102,14 +141,17 @@ neo4j-agent-memory extract --schema podcast "..."
 
 [source]
 ----
-┏━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━━┓
-┃ Entity         ┃ Type         ┃ Subtype     ┃ Confidence  ┃
-┡━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━━┩
-│ John Smith     │ PERSON       │ INDIVIDUAL  │ 0.95        │
-│ Acme Corp      │ ORGANIZATION │ COMPANY     │ 0.92        │
-│ New York       │ LOCATION     │ CITY        │ 0.88        │
-└────────────────┴──────────────┴─────────────┴─────────────┘
+                      Extracted Entities
+┏━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━┓
+┃ Type         ┃ Name         ┃ Confidence ┃ Attributes       ┃
+┡━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━┩
+│ PERSON       │ John Smith   │       0.95 │ {"gliner2_label"…│
+│ ORGANIZATION │ Acme Corp    │       0.92 │ {"gliner2_label"…│
+│ LOCATION     │ New York     │       0.88 │ {"gliner2_label"…│
+└──────────────┴──────────────┴────────────┴──────────────────┘
 ----
+
+Relations and preferences print as further tables when the run produced any.
 
 *JSON:*
 
@@ -117,14 +159,14 @@ neo4j-agent-memory extract --schema podcast "..."
 ----
 {
   "entities": [
-    {"name": "John Smith", "type": "PERSON", "subtype": "INDIVIDUAL", "confidence": 0.95},
-    {"name": "Acme Corp", "type": "ORGANIZATION", "subtype": "COMPANY", "confidence": 0.92}
+    {"type": "PERSON", "name": "John Smith", "confidence": 0.95, "attributes": {"gliner2_label": "person"}},
+    {"type": "ORGANIZATION", "name": "Acme Corp", "confidence": 0.92, "attributes": {"gliner2_label": "organization"}}
   ],
-  "metadata": {
-    "extractor": "gliner",
-    "schema": "poleo",
-    "duration_ms": 234
-  }
+  "relations": [
+    {"source": "John Smith", "relation_type": "EMPLOYED_BY", "target": "Acme Corp", "confidence": 0.71, "attributes": {}}
+  ],
+  "preferences": [],
+  "source_text": "John Smith works at Acme Corp in New York"
 }
 ----
 
@@ -132,9 +174,13 @@ neo4j-agent-memory extract --schema podcast "..."
 
 [source]
 ----
-{"name": "John Smith", "type": "PERSON", "subtype": "INDIVIDUAL", "confidence": 0.95}
-{"name": "Acme Corp", "type": "ORGANIZATION", "subtype": "COMPANY", "confidence": 0.92}
+{"type": "entity", "data": {"type": "PERSON", "name": "John Smith", "confidence": 0.95, "attributes": {}}}
+{"type": "entity", "data": {"type": "ORGANIZATION", "name": "Acme Corp", "confidence": 0.92, "attributes": {}}}
+{"type": "relation", "data": {"source": "John Smith", "relation_type": "EMPLOYED_BY", "target": "Acme Corp", "confidence": 0.71}}
 ----
+
+Each line is tagged with its `type` (`entity`, `relation` or `preference`), so a
+stream can carry all three.
 
 === schemas
 
@@ -213,6 +259,57 @@ neo4j-agent-memory schemas show medical --format yaml
 
 # Validate schema file
 neo4j-agent-memory schemas validate custom_schema.yaml
+----
+
+=== ontology
+
+Validate and compile ontology documents. Ontology *management* (create, update,
+activate, diff) lives on the Python API — see `client.ontology`.
+
+==== ontology validate
+
+[source,bash]
+----
+neo4j-agent-memory ontology validate FILE
+----
+
+Loads `FILE` (`.json`/`.yaml`) through `load_ontology`, so an `EntitySchemaConfig`
+file is accepted and converted, then reports everything
+`OntologyDocument.validate_structure()` finds: duplicate labels, relationship
+endpoints that name no declared label, bad inverse pairs, and `pole_type` values
+outside POLE+O. Exits `1` on any problem.
+
+Output on success:
+
+[source]
+----
+✓ Ontology 'POLE+O' is valid.
+  Entity types: Person, Organization, Location, Event, Object
+  Relationship types: KNOWS, ALIAS_OF, MEMBER_OF, EMPLOYED_BY, ...
+  Relationship patterns: 70
+----
+
+==== ontology compile
+
+[source,bash]
+----
+neo4j-agent-memory ontology compile FILE
+----
+
+Compiles the ontology into the GLiNER2.5 JointIE schema and prints it as JSON.
+Useful while authoring: it shows exactly which entity labels and typed
+relationships the model will decode against. Requires `gliner2`; without it the
+command exits `1` with an install hint.
+
+==== Examples
+
+[source,bash]
+----
+# Check an ontology before loading it
+neo4j-agent-memory ontology validate ontology.yaml
+
+# See what the model will actually decode
+neo4j-agent-memory ontology compile ontology.yaml | jq .
 ----
 
 === stats

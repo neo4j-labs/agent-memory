@@ -184,9 +184,10 @@ async def _report_graph(settings: MemorySettings, entity_id: UUID) -> None:
     """Show the graph the shared brain buys you: one hop off an entity."""
     async with MemoryClient(settings) as client:
         for other, relationship in await client.long_term.get_related_entities(entity_id):
-            # relationship.type is the Neo4j edge type (always RELATED_TO);
-            # the semantic relation we wrote (BENEFICIAL_OWNER_OF) lives in a
-            # property on that edge. See the README's Limitations section.
+            # relationship.type is the semantic relation we wrote
+            # (BENEFICIAL_OWNER_OF); the Neo4j edge label underneath stays
+            # RELATED_TO so memory writes are distinguishable from any
+            # domain-graph edges the node also carries.
             print(f"Graph: Acme Corp —[{relationship.type}]— {other.name} ({other.type})")
 
 

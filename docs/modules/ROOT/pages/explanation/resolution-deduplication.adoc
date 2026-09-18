@@ -10,6 +10,8 @@ Understanding how agent memory systems handle duplicate and variant entity refer
 
 NOTE: The resolution and deduplication strategies here are *client-side*, configurable on the *bolt* backend. On *NAMS*, resolution and dedup run server-side automatically: `add_entity` runs the full resolution cascade synchronously and reports a `resolution` outcome (`created` / `merged` / `review_pending`), with ambiguous matches landing in a `SAME_AS` review queue. The manual review APIs (`find_potential_duplicates`, `merge_duplicate_entities`) are bolt-only. See xref:explanation/backends.adoc#capability-matrix[Bolt vs NAMS].
 
+IMPORTANT: As of v0.7, bolt message ingestion resolves extracted mentions *by default* (`resolution.resolve_on_ingest=True`). Before v0.7, only `add_entity` deduplicated and ingestion stored one node per distinct surface form. See <<resolution-on-ingest>>.
+
 == The Entity Resolution Problem
 
 When agents process conversations and documents, the same real-world entity often appears with different names, spellings, or references:
@@ -94,7 +96,89 @@ When agents retrieve context for responses, duplicate entities mean:
 - Redundant context (same information repeated under different names)
 - Confused reasoning (treating variants as different entities)
 
+[#resolution-on-ingest]
+== Where Resolution Happens
+
+Two write paths reach the same decision through the same component.
+
+`long_term.add_entity(...)`::
+Deduplicates explicitly and returns a `(Entity, DeduplicationResult)` tuple.
+This path existed before v0.7 and is unchanged in shape.
+
+Message ingestion (`short_term.add_message`, the batch loader,
+`extract_entities_from_session`)::
+Resolves every extracted mention, *by default*, as part of storing the message.
+This is the v0.7 behaviour change. It is a real change in what your graph looks
+like — fewer entity nodes than mentions, aliases accumulating on survivors, and
+pending `SAME_AS` edges appearing without anyone calling `add_entity` — so it
+gets one switch, `resolution.resolve_on_ingest=False`, that restores the old
+behaviour exactly.
+
+What makes one decision out of two paths is `OntologyResolver`, the resolver
+that `strategy=COMPOSITE` builds on bolt. `LongTermMemory._check_for_duplicates`
+delegates to its `resolve_one()` when it is the configured resolver, so both
+paths share one normalisation, one blocking strategy and one set of thresholds
+— the pre-v0.7 embedding-similarity path remains for every other resolver.
+`DeduplicationConfig.from_resolution_config()` projects `ResolutionConfig` onto
+the older `DeduplicationConfig` shape for code that builds a `LongTermMemory`
+directly.
+
+Resolution is an enhancement, never a gate: if a blocking query fails, the
+failure is logged and the mentions are stored unresolved.
+
+=== Why an episode needs two passes
+
+Resolving mention-by-mention against stored entities is not enough. A message
+that mentions "Acme" and "Acme Corp" for the first time has no stored anchor for
+either, so a single pass creates two nodes and the graph is fragmented from the
+first message. `OntologyResolver.resolve_episode()` therefore runs a second pass
+over the still-unmatched mentions, clustering them against each other and
+anchoring on the one seen first — the node the caller is about to create for it
+becomes what the later variants attach to.
+
+The same structure is what makes batched blocking possible: one exact-key query
+per `(episode, type)` rather than one per mention, and one `embed_batch` call for
+the whole message.
+
+=== Three bands, not two
+
+A binary merge/create decision forces a bad trade: merge aggressively and
+corrupt entities, or never merge and fragment them. The middle band is the
+answer — at or above `review_threshold` but below `auto_merge_threshold`, the
+node is created *and* a pending `SAME_AS` edge records the suspicion, so
+`find_potential_duplicates()` can surface it for a human without blocking
+ingestion. A steady stream of *rejected* reviews at high confidence is the
+signal that `auto_merge_threshold` is about to start making the same mistake
+silently.
+
+For the knobs, per-type overrides and measurement, see
+xref:how-to/tune-entity-resolution.adoc[Tune Entity Resolution].
+
 == Resolution Strategies
+
+=== Ontology-Aware Resolution (v0.7 default)
+
+`OntologyResolver` composes the simpler strategies below rather than replacing
+them — the fuzzy component is still RapidFuzz, the embedding component is still
+cosine similarity over the configured embedder — and adds what a graph needs:
+
+* **Blocking in Cypher**, so candidate generation does not scan entities in
+  Python. The exact-key bucket is one query per episode and type; the
+  token-prefix and vector-index buckets are only queried when that bucket
+  produced no exact match.
+* **Deterministic evidence first.** An exact normalized match, a declared
+  ontology alias, or an acronym expansion short-circuits the weighted score
+  entirely. A controlled vocabulary beats a similarity computation, and it works
+  with embeddings switched off.
+* **Type-aware normalisation.** Organizations lose their legal suffix, people
+  lose titles and generational suffixes — before anything is compared.
+* **Rules that refuse to overreach.** A whole-token prefix between two
+  organizations ("Apple" / "Apple Bank") only clears the auto-merge line when
+  the embeddings or context corroborate it; otherwise it lands in the review
+  band. Low-entropy names ("N600", "Ada") are penalised, because fuzzy
+  similarity is close to meaningless on them.
+* **Ontology-driven configuration.** `EntityTypeDef.aliases` is the gazetteer;
+  `resolution_threshold` and `review_threshold` are per-type bands.
 
 === Embedding-Based Similarity
 
@@ -516,6 +600,7 @@ weekly_review = await memory.long_term.find_potential_duplicates(limit=200)
 
 == See Also
 
+* xref:how-to/tune-entity-resolution.adoc[Tune Entity Resolution]
 * xref:explanation/extraction-pipeline.adoc[How Entity Extraction Works]
 * xref:explanation/poleo-model.adoc[The POLE+O Data Model]
 * xref:how-to/deduplication.adoc[Configure Entity Deduplication]

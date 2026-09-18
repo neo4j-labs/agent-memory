@@ -47,7 +47,7 @@ Reference guides are *information-oriented*. They describe the machinery and how
 | Reference | Description
 
 | xref:reference/extractors.adoc[Extractor Classes]
-| SpacyEntityExtractor, GLiNEREntityExtractor, LLMEntityExtractor, ExtractionPipeline.
+| SpacyEntityExtractor, GLiNER2Extractor, LLMEntityExtractor, ExtractionPipeline.
 
 | xref:reference/schemas.adoc[Domain Schemas]
 | Built-in schemas (POLE+O, podcast, news, etc.) and custom schema creation.
@@ -82,7 +82,7 @@ pip install neo4j-agent-memory
 pip install neo4j-agent-memory[all]
 
 # Specific extras
-pip install neo4j-agent-memory[gliner,openai,cli]
+pip install "neo4j-agent-memory[gliner2,openai,cli]"
 ----
 
 === Minimal Example

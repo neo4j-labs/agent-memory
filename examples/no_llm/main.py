@@ -7,7 +7,7 @@ deterministic test environments:
 
 - ``llm=None`` on ``MemorySettings`` — no LLM client is ever constructed.
 - A local embedder (sentence-transformers) — no embeddings API is called.
-- A local extractor pipeline (spaCy + GLiNER) with the LLM fallback disabled.
+- A local extractor pipeline (spaCy + GLiNER2.5) with the LLM fallback disabled.
 - ``backend="bolt"`` — pinned, so a ``MEMORY_API_KEY`` in the environment does
   not silently redirect this demo to the hosted service.
 
@@ -20,7 +20,7 @@ Requirements:
     pip install "neo4j-agent-memory[extraction,sentence-transformers]"
     python -m spacy download en_core_web_sm
 
-Model weights (sentence-transformers ~90 MB, GLiNER ~500 MB) download once on
+Model weights (sentence-transformers ~90 MB, GLiNER2.5 ~407 MB) download once on
 first run; see the README's "Truly offline" section for warming the caches and
 running with ``HF_HUB_OFFLINE=1``.
 
@@ -42,7 +42,7 @@ from neo4j_agent_memory.config.settings import (
     ExtractionConfig,
     ExtractorType,
 )
-from neo4j_agent_memory.extraction import create_extractor, is_gliner_available
+from neo4j_agent_memory.extraction import create_extractor, is_gliner2_available
 from neo4j_agent_memory.schema import TraceOutcome
 
 SESSION_ID = "no-llm-demo"
@@ -83,7 +83,7 @@ def load_env() -> None:
 def check_local_stack() -> None:
     """Fail fast when the local extraction stack is incomplete.
 
-    Without this guard a missing spaCy model or GLiNER install degrades
+    Without this guard a missing spaCy model or GLiNER2.5 install degrades
     silently: ``ExtractionPipeline`` swallows per-stage failures, so the run
     would print an empty-looking context instead of an error.
     """
@@ -97,8 +97,8 @@ def check_local_stack() -> None:
         if not spacy.util.is_package(SPACY_MODEL):
             missing.append(f"spaCy model — python -m spacy download {SPACY_MODEL}")
 
-    if not is_gliner_available():
-        missing.append('GLiNER — pip install "neo4j-agent-memory[extraction]"')
+    if not is_gliner2_available():
+        missing.append('GLiNER2.5 — pip install "neo4j-agent-memory[extraction]"')
 
     try:
         import sentence_transformers  # noqa: F401
@@ -151,7 +151,7 @@ async def main() -> None:
 
     # Build the local pipeline up front so we can both (a) show what it
     # extracts and (b) hand the same loaded models to the client, instead of
-    # loading spaCy and GLiNER twice.
+    # loading spaCy and GLiNER2.5 twice.
     extractor = create_extractor(settings.extraction)
     print(f"extractor: {type(extractor).__name__}")
 
@@ -161,7 +161,7 @@ async def main() -> None:
         raise SystemExit(
             "The local pipeline extracted nothing from the demo sentence — something "
             f"is wrong with the install. Check that the {SPACY_MODEL} model and the "
-            "GLiNER weights load, then re-run."
+            "GLiNER2.5 weights load, then re-run."
         )
     for entity in extraction.entities:
         print(f"  extracted locally: {entity.name} ({entity.full_type})")
