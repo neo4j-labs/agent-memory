@@ -13,6 +13,7 @@ from uuid import uuid4
 
 import pytest
 
+import neo4j_agent_memory.resolution.ontology as ontology_module
 from neo4j_agent_memory.config.settings import ResolutionConfig
 from neo4j_agent_memory.extraction.base import (
     ExtractedEntity,
@@ -28,6 +29,7 @@ from neo4j_agent_memory.ontology.models import (
 from neo4j_agent_memory.resolution.base import EntityResolver
 from neo4j_agent_memory.resolution.ontology import (
     LOW_ENTROPY_PENALTY,
+    PREFIX_CORROBORATION_MIN,
     PREFIX_RULE_BARE,
     PREFIX_RULE_CORROBORATED,
     OntologyResolver,
@@ -218,6 +220,118 @@ class TestNormalizeName:
     def test_entropy_is_low_for_short_repetitive_names(self) -> None:
         assert normalize_name("N600").entropy < 2.5
         assert normalize_name("Northwind Logistics").entropy > 2.5
+
+
+# =============================================================================
+# Similarity primitives
+# =============================================================================
+
+
+#: Name and context pairs the resolver actually sees, used to hold the
+#: :mod:`difflib` fallbacks to RapidFuzz's scores.
+SIMILARITY_PAIRS: list[tuple[str, str]] = [
+    # The pair that exposed the divergence: one fact, two phrasings, sharing
+    # their vocabulary but not their character offsets.
+    (
+        "Freight out of the Rotterdam depot is handled by Northwind.",
+        "Northwind Logistics ships freight out of the Rotterdam depot.",
+    ),
+    ("northwind", "northwind logistics"),
+    ("acme", "acme corporation"),
+    ("apple", "apple bank"),
+    ("kansas", "kansas city"),
+    ("new york university", "new york"),
+    ("ada lovelace", "lovelace ada"),
+    ("isabel turner", "turner"),
+    ("john smith", "jon smyth"),
+    ("n600", "n610"),
+    ("acme", "globex"),
+]
+
+
+class TestSimilarityFallbacks:
+    """The stdlib twins of the RapidFuzz scorers score like RapidFuzz.
+
+    ``rapidfuzz`` is an optional extra, and the CI ``test`` job installs no
+    extras — so in CI the fallbacks are what decide every merge. A fallback
+    that scores differently means the same corpus resolves differently
+    depending on which extras happen to be installed, which is exactly what
+    :meth:`TestEpisodeResolution.test_independent_context_still_corroborates`
+    caught: the old positional ``SequenceMatcher`` ratio put a corroborating
+    context pair under :data:`PREFIX_CORROBORATION_MIN`.
+    """
+
+    #: ``difflib``'s Ratcliff-Obershelp matching is not RapidFuzz's indel
+    #: distance, so the twins mirror the scorer *composition*, not the metric.
+    TOLERANCE = 0.08
+
+    @staticmethod
+    def _force_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+        """Make the module behave as if ``rapidfuzz`` were not installed."""
+        monkeypatch.setattr(ontology_module, "_rapidfuzz", lambda: None)
+
+    @pytest.mark.parametrize("scorer", ["fuzzy_similarity", "context_similarity"])
+    def test_the_two_implementations_agree(
+        self, scorer: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Every pair, both implementations, one report of what drifted.
+
+        Needs RapidFuzz to have something to compare against, so this is the
+        developer-environment half of the guard; the behavioural assertions
+        below run everywhere, including the CI job that has no extras.
+        """
+        pytest.importorskip("rapidfuzz")
+        score = getattr(ontology_module, scorer)
+
+        with_rapidfuzz = [score(left, right) for left, right in SIMILARITY_PAIRS]
+        self._force_fallback(monkeypatch)
+        without = [score(left, right) for left, right in SIMILARITY_PAIRS]
+
+        divergent = {
+            pair: (expected, actual)
+            for pair, expected, actual in zip(SIMILARITY_PAIRS, with_rapidfuzz, without)
+            if expected is None or actual is None or abs(expected - actual) > self.TOLERANCE
+        }
+        assert not divergent, f"{scorer} fallback diverges from RapidFuzz on {divergent}"
+
+    def test_context_fallback_clears_the_corroboration_floor(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Runs with or without RapidFuzz, and pins the regression itself."""
+        from difflib import SequenceMatcher
+
+        left, right = SIMILARITY_PAIRS[0]
+        # What the fallback used to be: a positional ratio over two windows
+        # onto the same fact, which does not clear the floor.
+        positional = SequenceMatcher(None, left.lower(), right.lower()).ratio()
+        assert positional < PREFIX_CORROBORATION_MIN
+
+        self._force_fallback(monkeypatch)
+        score = ontology_module.context_similarity(left, right)
+
+        assert score is not None
+        assert score >= PREFIX_CORROBORATION_MIN
+
+    def test_fuzzy_fallback_is_insensitive_to_word_order(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``token_sort`` semantics, not character offsets."""
+        self._force_fallback(monkeypatch)
+
+        assert ontology_module.fuzzy_similarity("ada lovelace", "lovelace ada") == 1.0
+
+    def test_fuzzy_fallback_scores_whole_substring_containment_high(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``partial``/``WRatio`` semantics, which ``_score`` exists to cap.
+
+        Without them the fallback rated "northwind" against "northwind
+        logistics" at 0.64, so the whole-substring safety net never mattered
+        and the two environments banded prefix pairs differently.
+        """
+        self._force_fallback(monkeypatch)
+
+        assert ontology_module.fuzzy_similarity("northwind", "northwind logistics") >= 0.85
 
 
 # =============================================================================

@@ -38,6 +38,7 @@ from .conftest import (
     StubJointIEEngine,
     StubJointRelation,
     StubJointResult,
+    StubLLMExtractor,
     StubModel,
 )
 
@@ -850,18 +851,27 @@ class TestFactoryWiring:
         assert isinstance(extractor, GLiNER2Extractor)
         assert extractor.ontology is doc
 
-    def test_with_ontology_does_not_enable_a_gliner_stage(self) -> None:
+    def test_with_ontology_does_not_enable_a_gliner_stage(
+        self, llm_extractor_stub: type[StubLLMExtractor]
+    ) -> None:
         """Naming an ontology says *what* to extract, not *how*."""
         from neo4j_agent_memory.extraction.base import NoOpExtractor
         from neo4j_agent_memory.extraction.factory import ExtractorBuilder
-        from neo4j_agent_memory.extraction.llm_extractor import LLMEntityExtractor
 
-        builder = ExtractorBuilder().with_ontology(_tiny_ontology())
+        ontology = _tiny_ontology()
+        builder = ExtractorBuilder().with_ontology(ontology)
         assert builder._enable_gliner is False
         assert isinstance(builder.build(), NoOpExtractor)
 
-        llm_only = ExtractorBuilder().with_ontology(_tiny_ontology()).with_llm().build()
-        assert isinstance(llm_only, LLMEntityExtractor)
+        llm_only = ExtractorBuilder().with_ontology(ontology).with_llm().build()
+
+        # Exactly one stage was constructed, and it is the LLM one: a single
+        # extractor rather than a pipeline, and nothing GLiNER-shaped.
+        assert isinstance(llm_only, llm_extractor_stub)
+        assert not isinstance(llm_only, GLiNER2Extractor)
+        assert llm_extractor_stub.instances == [llm_only]
+        # ...and the ontology reached it, which is what naming one is for.
+        assert llm_only.ontology is ontology
 
     def test_builder_with_gliner_defaults_to_the_new_model(self) -> None:
         from neo4j_agent_memory.extraction.factory import ExtractorBuilder
@@ -1030,7 +1040,9 @@ class TestConfidenceThresholdIsApplied:
         )
         assert strict.min_confidence == 0.75
 
-    def test_builder_threshold_reaches_the_pipeline(self) -> None:
+    def test_builder_threshold_reaches_the_pipeline(
+        self, llm_extractor_stub: type[StubLLMExtractor]
+    ) -> None:
         from neo4j_agent_memory.extraction.factory import ExtractorBuilder
         from neo4j_agent_memory.extraction.pipeline import ExtractionPipeline
 
@@ -1039,6 +1051,13 @@ class TestConfidenceThresholdIsApplied:
         )
         assert isinstance(pipeline, ExtractionPipeline)
         assert pipeline.min_confidence == 0.7
+        # Both stages, in build order — the floor is the pipeline's, not a
+        # single stage's, so there has to be more than one stage for it to be
+        # a floor *on the merged result*.
+        stages = [_stage(pipeline, i) for i in range(len(pipeline.stages))]
+        assert [type(stage) for stage in stages] == [GLiNER2Extractor, llm_extractor_stub]
+        # And GLiNER2.5 decodes at the same floor rather than its default.
+        assert stages[0].threshold == 0.7
 
     @pytest.mark.asyncio
     async def test_low_confidence_entities_and_their_relations_are_dropped(self) -> None:

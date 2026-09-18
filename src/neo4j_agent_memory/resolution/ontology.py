@@ -32,6 +32,7 @@ import unicodedata
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 from typing import TYPE_CHECKING, Any, Literal
 
 from neo4j_agent_memory.graph import queries
@@ -259,13 +260,133 @@ def _rapidfuzz() -> Any | None:
     return fuzz
 
 
+# ``rapidfuzz`` is an optional extra, so every similarity primitive below has a
+# stdlib twin built on :class:`difflib.SequenceMatcher`. The twins mirror
+# RapidFuzz's *scorer composition* (which strings get compared against which),
+# not its edit-distance metric: Ratcliff-Obershelp is not the indel distance, so
+# the two agree exactly on realistic name/context pairs and drift by a few
+# points on word salad. Mirroring the composition is what matters — the plain
+# ``SequenceMatcher(left, right).ratio()`` this replaces scored the *same*
+# inputs on either side of the auto-merge and corroboration lines differently
+# depending on whether an optional dependency happened to be installed.
+
+#: RapidFuzz's ``WRatio`` weights, reproduced so the fallback bands match.
+_WRATIO_UNBASE_SCALE = 0.95
+_WRATIO_LENGTH_RATIO_FLOOR = 1.5
+_WRATIO_LENGTH_RATIO_CEILING = 8.0
+_WRATIO_PARTIAL_SCALE = 0.9
+_WRATIO_LONG_PARTIAL_SCALE = 0.6
+
+#: A partial match at or above this ratio is treated as whole-substring
+#: containment, exactly as RapidFuzz's ``partial_ratio`` does.
+_PARTIAL_RATIO_CEILING = 0.995
+
+
+def _difflib_ratio(left: str, right: str) -> float:
+    """``SequenceMatcher`` ratio, with RapidFuzz's empty-string handling.
+
+    ``difflib`` scores two empty strings at 1.0; RapidFuzz scores anything
+    involving an empty string at 0.
+    """
+    if not left or not right:
+        return 0.0
+    return SequenceMatcher(None, left, right).ratio()
+
+
+def _sorted_tokens(text: str) -> str:
+    """``text``'s whitespace-separated tokens, sorted and rejoined."""
+    return " ".join(sorted(text.split()))
+
+
+def _partial_ratio_fallback(left: str, right: str) -> float:
+    """``difflib`` stand-in for RapidFuzz's ``partial_ratio``.
+
+    The shorter string is compared against every window of the longer one that
+    an existing matching block could align it to — bounded work, unlike a scan
+    of every offset.
+    """
+    shorter, longer = (left, right) if len(left) <= len(right) else (right, left)
+    if not shorter or not longer:
+        return 0.0
+    best = 0.0
+    for block in SequenceMatcher(None, shorter, longer).get_matching_blocks():
+        start = max(0, block.b - block.a)
+        window = longer[start : start + len(shorter)]
+        best = max(best, _difflib_ratio(shorter, window))
+        if best >= _PARTIAL_RATIO_CEILING:
+            return 1.0
+    return best
+
+
+def _token_sort_ratio_fallback(left: str, right: str) -> float:
+    """``difflib`` stand-in for RapidFuzz's ``token_sort_ratio``."""
+    return _difflib_ratio(_sorted_tokens(left), _sorted_tokens(right))
+
+
+def _token_set_ratio_fallback(left: str, right: str) -> float:
+    """``difflib`` stand-in for RapidFuzz's ``token_set_ratio``.
+
+    The shared tokens are compared against themselves plus each side's
+    leftovers, so two sentences built from the same vocabulary in a different
+    order score on what they have in common rather than on character offsets.
+    """
+    left_tokens = set(left.split())
+    right_tokens = set(right.split())
+    if not left_tokens or not right_tokens:
+        return 0.0
+    intersection = " ".join(sorted(left_tokens & right_tokens))
+    combined_left = f"{intersection} {' '.join(sorted(left_tokens - right_tokens))}".strip()
+    combined_right = f"{intersection} {' '.join(sorted(right_tokens - left_tokens))}".strip()
+    return max(
+        _difflib_ratio(intersection, combined_left),
+        _difflib_ratio(intersection, combined_right),
+        _difflib_ratio(combined_left, combined_right),
+    )
+
+
+def _partial_token_ratio_fallback(left: str, right: str) -> float:
+    """``difflib`` stand-in for RapidFuzz's ``partial_token_ratio``.
+
+    Any shared token makes the partial *token-set* comparison a perfect
+    substring match, which is how RapidFuzz reaches 100 there.
+    """
+    if set(left.split()) & set(right.split()):
+        return 1.0
+    return _partial_ratio_fallback(_sorted_tokens(left), _sorted_tokens(right))
+
+
+def _wratio_fallback(left: str, right: str) -> float:
+    """``difflib`` stand-in for RapidFuzz's ``WRatio``.
+
+    Same cascade: a plain ratio, a length-ratio-gated token comparison, then
+    partial comparisons discounted by how lopsided the two lengths are.
+    """
+    if not left or not right:
+        return 0.0
+    base = _difflib_ratio(left, right)
+    length_ratio = max(len(left), len(right)) / min(len(left), len(right))
+    token = max(_token_sort_ratio_fallback(left, right), _token_set_ratio_fallback(left, right))
+    if length_ratio < _WRATIO_LENGTH_RATIO_FLOOR:
+        return max(base, token * _WRATIO_UNBASE_SCALE)
+    partial_scale = (
+        _WRATIO_PARTIAL_SCALE
+        if length_ratio < _WRATIO_LENGTH_RATIO_CEILING
+        else _WRATIO_LONG_PARTIAL_SCALE
+    )
+    return max(
+        base,
+        _partial_ratio_fallback(left, right) * partial_scale,
+        _partial_token_ratio_fallback(left, right) * _WRATIO_UNBASE_SCALE * partial_scale,
+    )
+
+
 def fuzzy_similarity(left: str, right: str) -> float:
     """String similarity in ``[0, 1]``.
 
     Uses the maximum of RapidFuzz's ``WRatio`` and ``token_sort_ratio`` (the
     former handles substrings and partial matches, the latter word order), and
-    falls back to :class:`difflib.SequenceMatcher` when RapidFuzz is not
-    installed — ``rapidfuzz`` is an optional extra.
+    falls back to the :mod:`difflib` twins of those two scorers when RapidFuzz
+    is not installed — ``rapidfuzz`` is an optional extra.
 
     Args:
         left: First string (already normalized by the caller).
@@ -278,14 +399,18 @@ def fuzzy_similarity(left: str, right: str) -> float:
         return 0.0
     fuzz = _rapidfuzz()
     if fuzz is None:
-        from difflib import SequenceMatcher
-
-        return SequenceMatcher(None, left, right).ratio()
+        return max(_wratio_fallback(left, right), _token_sort_ratio_fallback(left, right))
     return max(float(fuzz.WRatio(left, right)), float(fuzz.token_sort_ratio(left, right))) / 100.0
 
 
 def context_similarity(left: str | None, right: str | None) -> float | None:
     """Token-set similarity between two context windows.
+
+    Two windows onto the same fact rarely share a character alignment — "…out
+    of the Rotterdam depot is handled by Northwind" against "Northwind
+    Logistics ships freight out of the Rotterdam depot" — so this is a
+    token-set comparison (RapidFuzz's ``token_set_ratio``, or its :mod:`difflib`
+    twin when RapidFuzz is not installed), never a positional one.
 
     Args:
         left: The mention's ±``context_window_chars`` window, if captured.
@@ -300,9 +425,7 @@ def context_similarity(left: str | None, right: str | None) -> float | None:
         return None
     fuzz = _rapidfuzz()
     if fuzz is None:
-        from difflib import SequenceMatcher
-
-        return SequenceMatcher(None, left.lower(), right.lower()).ratio()
+        return _token_set_ratio_fallback(left.lower(), right.lower())
     return float(fuzz.token_set_ratio(left.lower(), right.lower())) / 100.0
 
 

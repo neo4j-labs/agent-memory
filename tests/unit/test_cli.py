@@ -818,7 +818,9 @@ class TestExtractGLiNER2Flags:
         mock_builder.with_gliner.assert_not_called()
         mock_builder.with_gliner_schema.assert_not_called()
 
-    def test_llm_extractor_with_an_ontology_builds_no_gliner_stage(self, runner, tmp_path):
+    def test_llm_extractor_with_an_ontology_builds_no_gliner_stage(
+        self, runner, tmp_path, llm_extractor_stub
+    ):
         """The same thing against the real builder, not a mock chain."""
         from neo4j_agent_memory.extraction.factory import ExtractorBuilder
         from neo4j_agent_memory.ontology import POLEO_ONTOLOGY, load_ontology
@@ -826,11 +828,17 @@ class TestExtractGLiNER2Flags:
         path = tmp_path / "ontology.json"
         path.write_text(POLEO_ONTOLOGY.model_dump_json())
 
-        builder = ExtractorBuilder().with_ontology(load_ontology(path)).with_llm()
+        ontology = load_ontology(path)
+        builder = ExtractorBuilder().with_ontology(ontology).with_llm()
         extractor = builder.build()
 
         assert builder._enable_gliner is False
-        assert type(extractor).__name__ == "LLMEntityExtractor"
+        # One stage, and it is the LLM one: build() returns the lone stage
+        # rather than a pipeline, so a GLiNER2.5 stage would have made this a
+        # pipeline of two.
+        assert isinstance(extractor, llm_extractor_stub)
+        assert llm_extractor_stub.instances == [extractor]
+        assert extractor.ontology is ontology
 
 
 class TestOntologyCommand:

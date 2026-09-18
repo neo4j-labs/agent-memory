@@ -276,3 +276,56 @@ def gliner2_stub(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
     monkeypatch.setitem(sys.modules, "gliner2", gliner2)
     monkeypatch.setitem(sys.modules, "gliner2.joint_ie", joint_ie)
     return gliner2
+
+
+class StubLLMExtractor:
+    """Provider-free stand-in for ``LLMEntityExtractor``.
+
+    The real constructor resolves an LLM adapter eagerly
+    (``from_provider("openai/gpt-4o-mini")``), so merely *building* a pipeline
+    with an LLM stage raises ``ImportError: No llm adapter available`` in the
+    CI ``test`` job, which installs neither ``openai`` nor ``litellm``. This
+    records the keyword arguments the factory passed instead, so a test can
+    assert on how the stage was wired without any provider at all.
+
+    Carrying ``name`` + ``extract`` satisfies the ``ExtractionStage`` protocol,
+    so ``ExtractionPipeline`` keeps the instance as the stage rather than
+    wrapping it.
+    """
+
+    #: Every instance built while the stub was installed, in build order.
+    instances: list[StubLLMExtractor] = []
+
+    name = "llm"
+
+    def __init__(self, **kwargs: Any) -> None:
+        self.kwargs = kwargs
+        self.model = kwargs.get("model")
+        self.ontology = kwargs.get("ontology")
+        self.entity_types = kwargs.get("entity_types")
+        StubLLMExtractor.instances.append(self)
+
+    async def extract(self, text: str, **kwargs: Any) -> Any:
+        """Extract nothing, successfully."""
+        from neo4j_agent_memory.extraction.base import ExtractionResult
+
+        return ExtractionResult(entities=[], relations=[], source_text=text)
+
+
+@pytest.fixture
+def llm_extractor_stub(monkeypatch: pytest.MonkeyPatch) -> type[StubLLMExtractor]:
+    """Replace ``LLMEntityExtractor`` with :class:`StubLLMExtractor`.
+
+    ``ExtractorBuilder.build`` and the ``create_*`` factories import the class
+    from ``neo4j_agent_memory.extraction.llm_extractor`` at call time, so the
+    patch has to land on *that* module's attribute — ``factory`` never holds a
+    reference to bind over.
+
+    Returns:
+        The stub class, whose ``instances`` list is reset for this test.
+    """
+    import neo4j_agent_memory.extraction.llm_extractor as llm_module
+
+    StubLLMExtractor.instances = []
+    monkeypatch.setattr(llm_module, "LLMEntityExtractor", StubLLMExtractor)
+    return StubLLMExtractor
