@@ -273,6 +273,64 @@ def neo4j_connection():
         container.stop()
 
 
+def _wipe_database(config: dict) -> None:
+    """Delete every node (and therefore every relationship) in ``config``.
+
+    Indexes and constraints are left alone: they are schema, every client
+    re-asserts them on ``connect()``, and dropping them would make each test
+    pay for rebuilding the vector indexes.
+    """
+    from neo4j import GraphDatabase
+
+    auth = (config["username"], config["password"])
+    with GraphDatabase.driver(config["uri"], auth=auth) as driver, driver.session() as session:
+        session.run("MATCH (n) DETACH DELETE n").consume()
+
+
+def _touches_neo4j(request) -> bool:
+    """Whether this test will read or write the shared database."""
+    if request.node.get_closest_marker("requires_neo4j") is not None:
+        return True
+    # The strands end-to-end classes carry only ``integration`` but reach the
+    # database through ``neo4j_env``; ``memory_client`` pulls in
+    # ``neo4j_connection`` transitively, so the closure catches those too.
+    return "neo4j_connection" in request.fixturenames
+
+
+@pytest.fixture(autouse=True)
+def _clean_database(request):
+    """Start every database-bound example test from an empty graph.
+
+    CI runs the whole of ``tests/examples`` against **one** Neo4j service, so
+    without this each test sees everything the earlier ones left behind. Three
+    real failures came out of that, all invisible locally (no ``NEO4J_URI``, so
+    the tests skipped) and all order-dependent:
+
+    * the ontology-extraction example counted ``:Entity {type:'ORGANIZATION'}``
+      nodes globally and tripped over other examples' organizations;
+    * both strands examples asserted on an ``Acme Corp`` entity that an earlier
+      example had already created, so their own seed merged into that node
+      instead of writing one with an embedding, and the vector search missed
+      it.
+
+    Wiping *before* rather than after is deliberate: it protects a test from
+    whatever ran before it, including tests that fail half-way through and
+    never reach their own cleanup. No example test depends on state written by
+    another — every one either seeds what it needs or drives an example's
+    ``main()`` from scratch, and the ``memory_client`` fixture already wiped
+    the graph on teardown.
+    """
+    if _touches_neo4j(request):
+        config = (
+            request.getfixturevalue("neo4j_connection")
+            if "neo4j_connection" in request.fixturenames
+            else _check_neo4j_env_available()
+        )
+        if config is not None:
+            _wipe_database(config)
+    yield
+
+
 @pytest.fixture
 def neo4j_env(neo4j_connection, monkeypatch):
     """

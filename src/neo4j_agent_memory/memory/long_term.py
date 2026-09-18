@@ -548,6 +548,18 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
         Looks both endpoints' POLE+O typing up in one read, maps each onto its
         ontology label, and checks the ``(source, type, target)`` pattern.
 
+        An ontology that declares **no** relationships is not a statement that
+        the graph may hold none — it is a schema that says nothing about
+        edges, and it cannot express a violation. This mirrors
+        :meth:`ExtractionResult.validate_relations
+        <neo4j_agent_memory.extraction.base.ExtractionResult.validate_relations>`,
+        which passes a result through untouched for the same reason. It also
+        keeps ``SchemaModel.CUSTOM`` usable: the ad-hoc document
+        :meth:`MemoryClient._resolve_ontology` builds from
+        ``schema_config.entity_types`` has no way to declare a relationship, so
+        enforcing here would make every ``add_relationship`` on a custom schema
+        in strict mode unreachable.
+
         Args:
             source_id: Id of the source ``:Entity`` node.
             target_id: Id of the target ``:Entity`` node.
@@ -559,7 +571,7 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
                 does not permit that endpoint pair.
         """
         ontology = self._strict_ontology
-        if ontology is None:
+        if ontology is None or not ontology.relationships:
             return
 
         declared = {rel_type.lower() for rel_type in ontology.relationship_types()}
@@ -721,6 +733,7 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
                     if name not in existing_entity.aliases and name != existing_entity.name:
                         await self._add_alias_to_entity(dedup_result.matched_entity_id, name)
                         existing_entity.aliases.append(name)
+                    await self._backfill_embedding(existing_entity, embedding)
                     return existing_entity, dedup_result
 
         # Geocode if this is a LOCATION entity
@@ -1595,6 +1608,46 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
     # =========================================================================
     # Entity Deduplication Methods
     # =========================================================================
+
+    async def _backfill_embedding(
+        self,
+        entity: Entity,
+        embedding: list[float] | None,
+    ) -> None:
+        """Give a merged-into node a usable embedding when it has none.
+
+        ``add_entity`` returns early on an auto-merge, so the node the caller's
+        name folded into never goes through the ``MERGE`` write (whose
+        ``ON MATCH SET e.embedding = COALESCE($embedding, e.embedding)`` would
+        have supplied one). Nothing else backfills it, and merges are reached
+        by exact name, alias and gazetteer hits — not only by vector
+        similarity — so the node can easily have no embedding at all: entities
+        written by the message-ingestion path do not carry one. The result is a
+        node that exists, holds the merged aliases, and is invisible to
+        ``search_entities()`` because the vector index has nothing to match.
+        Seeding an entity that a previous run already created therefore
+        silently lost it from semantic search.
+
+        An embedding of the *wrong* width is replaced for the same reason: the
+        index is sized from ``embedder.dimensions``, so a vector of another
+        length is equally unsearchable. A usable embedding is left alone —
+        re-embedding on every merge would be a write per mention, and the
+        canonical node's own vector is the better one to keep.
+
+        Args:
+            entity: The node the new name merged into (updated in place).
+            embedding: Embedding computed for the incoming name, if any.
+        """
+        if embedding is None:
+            return
+        current = entity.embedding
+        if current is not None and len(current) == len(embedding):
+            return
+        await self._client.execute_write(
+            queries.UPDATE_ENTITY_EMBEDDING,
+            {"id": str(entity.id), "embedding": embedding},
+        )
+        entity.embedding = embedding
 
     async def _check_for_duplicates(
         self,

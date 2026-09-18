@@ -255,9 +255,16 @@ class TestExampleSettings:
 # End to end (real database, real GLiNER2.5 inference)
 # ---------------------------------------------------------------------------
 
+# Every query below is scoped to the entities *this example* mentioned, via
+# the MENTIONS edges from its own two sessions. CI runs the whole of
+# tests/examples against one database, so a global `MATCH (e:Entity {type:
+# 'ORGANIZATION'})` counted every organization any other example had written —
+# and the "fewer nodes than mentions" claim then failed for a reason that had
+# nothing to do with resolution.
 ORG_NODES = """
-MATCH (e:Entity {type: 'ORGANIZATION'})
-RETURN e.name AS name, coalesce(e.aliases, []) AS aliases
+MATCH (c:Conversation)-[:HAS_MESSAGE]->(:Message)-[:MENTIONS]->(e:Entity)
+WHERE c.session_id IN $sessions AND e.type = 'ORGANIZATION'
+RETURN DISTINCT e.name AS name, coalesce(e.aliases, []) AS aliases
 """
 
 ORG_MENTIONS = """
@@ -267,7 +274,12 @@ RETURN count(*) AS mentions
 """
 
 TYPED_EDGES = """
-MATCH (:Entity)-[r:RELATED_TO]->(:Entity)
+MATCH (c:Conversation)-[:HAS_MESSAGE]->(:Message)-[:MENTIONS]->(e:Entity)
+WHERE c.session_id IN $sessions
+WITH collect(DISTINCT e) AS demo
+UNWIND demo AS source
+MATCH (source)-[r:RELATED_TO]->(target:Entity)
+WHERE target IN demo
 RETURN r.type AS relation_type, r.support AS support, r.derived AS derived
 """
 
@@ -275,6 +287,18 @@ STORED_ONTOLOGIES = """
 MATCH (o:Ontology)
 OPTIONAL MATCH (v:OntologyVersion)
 RETURN count(DISTINCT o) AS ontologies, count(DISTINCT v) AS versions
+"""
+
+# What the example leaves behind: its two conversations, their messages, and
+# every entity those messages mention. The autouse wipe in conftest.py already
+# guarantees a clean *start*; this keeps the run from handing its organizations
+# on to anything that reads the database without going through that fixture.
+CLEANUP = """
+MATCH (c:Conversation)
+WHERE c.session_id IN $sessions
+OPTIONAL MATCH (c)-[:HAS_MESSAGE]->(m:Message)
+OPTIONAL MATCH (m)-[:MENTIONS]->(e:Entity)
+DETACH DELETE c, m, e
 """
 
 
@@ -286,21 +310,25 @@ def test_example_runs_end_to_end(neo4j_env):
 
     from neo4j_agent_memory import MemoryClient
 
+    module = _load_example()
+    sessions = list(module.SESSIONS)
+
+    async def cleanup() -> None:
+        async with MemoryClient(module.build_settings()) as client:
+            await client.graph.execute_write(CLEANUP, {"sessions": sessions})
+
     try:
-        module = _load_example()
         asyncio.run(module.main())
-        sessions = list(module.SESSIONS)
 
         async def read_back() -> dict[str, Any]:
+            scope = {"sessions": sessions}
             async with MemoryClient(module.build_settings()) as client:
                 return {
-                    "orgs": list(await client.query.cypher(ORG_NODES)),
+                    "orgs": list(await client.query.cypher(ORG_NODES, scope)),
                     "org_mentions": int(
-                        (await client.query.cypher(ORG_MENTIONS, {"sessions": sessions}))[0][
-                            "mentions"
-                        ]
+                        (await client.query.cypher(ORG_MENTIONS, scope))[0]["mentions"]
                     ),
-                    "edges": list(await client.query.cypher(TYPED_EDGES)),
+                    "edges": list(await client.query.cypher(TYPED_EDGES, scope)),
                     "ontologies": (await client.query.cypher(STORED_ONTOLOGIES))[0],
                 }
 
@@ -339,4 +367,7 @@ def test_example_runs_end_to_end(neo4j_env):
         assert int(state["ontologies"]["ontologies"]) == 0
         assert int(state["ontologies"]["versions"]) == 0
     finally:
-        sys.modules.pop("ontology_extraction_main", None)
+        try:
+            asyncio.run(cleanup())
+        finally:
+            sys.modules.pop("ontology_extraction_main", None)

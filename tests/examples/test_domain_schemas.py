@@ -133,15 +133,25 @@ class StubExtractor:
     GLiNER2.5 decodes entities and relations in one pass, so the stub carries
     both — plus the ``ontology`` the runner inspects to decide whether the
     relation demo has anything to decode.
+
+    ``name`` and ``version`` mirror the real extractor's identity attributes.
+    ``--store`` reads ``version`` to record provenance on the ``:Extractor``
+    node, so a stub without it took the whole storage step down on attribute
+    access alone.
     """
+
+    #: Mirrors ``GLiNER2Extractor.name`` (a class attribute there too).
+    name = "gliner2"
 
     def __init__(
         self,
         relations: list[ExtractedRelation] | None = None,
         ontology: Any = None,
+        version: str = "0.0.0-stub",
     ) -> None:
         self.relations = relations or []
         self.ontology = ontology if ontology is not None else get_template("poleo")
+        self.version = version
         self.extract_calls = 0
         self.batch_calls = 0
 

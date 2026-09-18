@@ -208,8 +208,22 @@ class OntologyDocument(_Lenient):
         a ``Customer = PERSON:INDIVIDUAL`` label would assert something the
         caller did not, so it stays undeclared and strict mode still rejects it.
 
+        **A declared label is accepted in place of a POLE+O type.** Domain
+        ontologies — ``SchemaModel.CUSTOM``, and anything built by
+        ``adopt_existing_graph`` — store the *label* as the entity's ``type``:
+        a ``:Movie`` node adopted as ``MOVIE`` is persisted with
+        ``type="MOVIE"``, while the ontology declares it as
+        ``label="MOVIE", pole_type="OBJECT", subtype="MOVIE"`` (the ad-hoc
+        document maps each custom name through ``map_label_to_poleo`` so the
+        GLiNER2.5 compile keeps working). Looking only at ``pole_type`` made
+        every such entity undeclared, so strict mode rejected the very writes
+        the adoption was performed to allow. The label match is tried *after*
+        the POLE+O lookup, so nothing that resolved before resolves differently
+        now.
+
         Args:
-            pole_type: One of the five POLE+O types (any casing).
+            pole_type: One of the five POLE+O types, or a declared label
+                (any casing).
             subtype: Optional subtype (any casing).
 
         Returns:
@@ -233,16 +247,30 @@ class OntologyDocument(_Lenient):
                 first = et.label
         if base is not None:
             return base
-        return first if wanted_subtype is None else None
+        if first is not None and wanted_subtype is None:
+            return first
+
+        # Fallback: the caller named a declared label rather than a POLE+O
+        # type. A stated subtype must be the one the ontology declares for
+        # that label (or absent) -- same rule as above, for the same reason.
+        for et in self.entity_types:
+            if et.label.upper() != wanted_type:
+                continue
+            et_subtype = et.subtype.upper() if et.subtype else None
+            if wanted_subtype is None or et_subtype == wanted_subtype:
+                return et.label
+        return None
 
     def declares(self, pole_type: str, subtype: str | None = None) -> bool:
-        """Whether the ontology declares an entity type for this POLE+O pair.
+        """Whether the ontology declares an entity type for this pair.
 
         Deliberately defined in terms of :meth:`label_for`, so the two answers
-        can never disagree: anything that resolves to a label is declared.
+        can never disagree: anything that resolves to a label is declared —
+        including a declared label passed in place of a POLE+O type.
 
         Args:
-            pole_type: One of the five POLE+O types (any casing).
+            pole_type: One of the five POLE+O types, or a declared label
+                (any casing).
             subtype: Optional subtype (any casing).
 
         Returns:

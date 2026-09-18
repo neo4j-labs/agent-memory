@@ -1897,12 +1897,35 @@ RETURN o.id AS ontology_id,
        head(versions).validation_mode AS latest_validation_mode
 """
 
+# Written to be silent against a database that has never stored an ontology.
+# ``connect()`` runs this query on every connection, and Neo4j raises a
+# WARNING notification for every token the query names that the store has never
+# seen. The previous spelling produced three on a fresh database —
+# ``is_active``, ``created_at`` and the ``HAS_VERSION`` relationship type — and
+# most databases never store an ontology, so they never went away.
+#
+# Two rules make it quiet, both verified against 5.26:
+#
+# * The parent is reached through the ``ontology_id`` the version node already
+#   stores, not through the ``[:HAS_VERSION]`` edge. ``Ontology.id`` is backed
+#   by a constraint, so that key is always known.
+# * Every remaining property is read through a *variable* subscript
+#   (``v[k]`` for ``k`` drawn from ``keys(v)``). A static ``v.is_active`` — and
+#   a literal subscript, ``v['is_active']`` — is resolved at planning time and
+#   still warns; a variable one is not resolvable, so nothing is reported.
+#
+# Same columns, same "newest active version wins" ordering. ORDER BY/LIMIT move
+# ahead of the parent lookup, which only narrows the work.
 GET_ACTIVE_ONTOLOGY_VERSION = """
-MATCH (v:OntologyVersion {is_active: true})
-OPTIONAL MATCH (o:Ontology)-[:HAS_VERSION]->(v)
-RETURN v, o AS ontology
-ORDER BY v.created_at DESC
+MATCH (v:OntologyVersion)
+WHERE any(k IN keys(v) WHERE k = 'is_active' AND v[k] = true)
+WITH v,
+     head([k IN keys(v) WHERE k = 'ontology_id' | v[k]]) AS ontology_id,
+     head([k IN keys(v) WHERE k = 'created_at' | v[k]]) AS created_at
+ORDER BY created_at DESC
 LIMIT 1
+OPTIONAL MATCH (o:Ontology {id: ontology_id})
+RETURN v, o AS ontology
 """
 
 # Single-write activation: bind one version and clear the flag on every

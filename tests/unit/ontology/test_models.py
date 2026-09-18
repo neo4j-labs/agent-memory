@@ -600,6 +600,75 @@ class TestLabelForFallback:
         assert doc.label_for("PERSON", "PERSONA") == "Person"
 
 
+class TestCustomLabelResolution:
+    """A custom domain type is stored as the entity's ``type``, not a POLE+O one.
+
+    ``SchemaModel.CUSTOM`` + ``schema_config.entity_types=["PERSON", "MOVIE",
+    "GENRE"]`` builds an ad-hoc document that keeps the custom name as the
+    *label* and maps it onto POLE+O for the extractor's benefit (``MOVIE`` ->
+    ``OBJECT:MOVIE``). Nodes, though, are written with ``type="MOVIE"`` — so a
+    lookup that only consulted ``pole_type`` called every adopted ``:Movie``
+    undeclared and strict mode rejected it.
+    """
+
+    @staticmethod
+    def _custom_document() -> OntologyDocument:
+        from neo4j_agent_memory.extraction.label_mapping import map_label_to_poleo
+
+        entity_types = []
+        for name in ("PERSON", "MOVIE", "GENRE"):
+            pole_type, subtype = map_label_to_poleo(name)
+            entity_types.append(EntityTypeDef(label=name, pole_type=pole_type, subtype=subtype))
+        return _doc(entity_types)
+
+    def test_the_ad_hoc_document_maps_custom_names_onto_poleo(self):
+        doc = self._custom_document()
+        by_label = {et.label: (et.pole_type, et.subtype) for et in doc.entity_types}
+        assert by_label == {
+            "PERSON": ("PERSON", None),
+            "MOVIE": ("OBJECT", "MOVIE"),
+            "GENRE": ("OBJECT", "GENRE"),
+        }
+        assert doc.labels() == ["PERSON", "MOVIE", "GENRE"]
+
+    def test_a_declared_label_resolves_in_place_of_a_pole_type(self):
+        doc = self._custom_document()
+        assert doc.label_for("MOVIE") == "MOVIE"
+        assert doc.label_for("GENRE") == "GENRE"
+        assert doc.declares("MOVIE") is True
+        assert doc.declares("GENRE") is True
+        # Case-insensitive: the label is the name, whatever it is spelled as.
+        assert doc.label_for("movie") == "MOVIE"
+        assert doc.declares("Genre") is True
+
+    def test_the_poleo_pair_keeps_resolving_too(self):
+        doc = self._custom_document()
+        assert doc.label_for("OBJECT", "MOVIE") == "MOVIE"
+        assert doc.label_for("PERSON") == "PERSON"
+
+    def test_an_undeclared_name_is_still_undeclared(self):
+        doc = self._custom_document()
+        assert doc.label_for("STUDIO") is None
+        assert doc.declares("STUDIO") is False
+
+    def test_a_label_match_rejects_a_subtype_it_does_not_declare(self):
+        doc = self._custom_document()
+        assert doc.label_for("MOVIE", "SHORT_FILM") is None
+        assert doc.declares("MOVIE", "SHORT_FILM") is False
+        # The one it does declare resolves.
+        assert doc.label_for("MOVIE", "MOVIE") == "MOVIE"
+
+    def test_a_pole_type_lookup_still_wins_over_a_same_named_label(self):
+        """Nothing that resolved before resolves differently now."""
+        doc = _doc(
+            [
+                EntityTypeDef(label="EVENT", pole_type="OBJECT", subtype="EVENT"),
+                EntityTypeDef(label="Meeting", pole_type="EVENT", subtype="MEETING"),
+            ]
+        )
+        assert doc.label_for("EVENT") == "Meeting"
+
+
 @pytest.mark.parametrize("pole_type", sorted(POLEO_TYPES))
 def test_every_poleo_type_validates(pole_type: str):
     doc = _doc([EntityTypeDef(label=pole_type.title(), pole_type=pole_type)])

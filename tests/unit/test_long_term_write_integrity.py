@@ -696,3 +696,210 @@ class TestStrictAddRelationship:
         assert relationship.type == "SELLS_TO"
         # No validation lookup happened at all.
         mock_client.execute_read.assert_not_called()
+
+
+# -----------------------------------------------------------------------------
+# Strict enforcement against a CUSTOM (non-POLE+O) schema
+# -----------------------------------------------------------------------------
+
+
+def custom_ontology() -> OntologyDocument:
+    """The ad-hoc document ``SchemaModel.CUSTOM`` builds for a Movies graph.
+
+    ``MemoryClient._resolve_ontology`` maps each ``schema_config.entity_types``
+    name through ``map_label_to_poleo`` so the GLiNER2.5 compile has a POLE+O
+    type to work with, and keeps the custom name as the *label*. Nodes,
+    however, are written with the custom name as their ``type`` — an adopted
+    ``:Movie`` node is ``(:Entity:Movie {type: 'MOVIE'})``.
+    """
+    from neo4j_agent_memory.extraction.label_mapping import map_label_to_poleo
+    from neo4j_agent_memory.ontology.models import (
+        DomainInfo,
+        EntityTypeDef,
+        OntologyDocument,
+    )
+
+    entity_types = []
+    for name in ("PERSON", "MOVIE", "GENRE"):
+        pole_type, subtype = map_label_to_poleo(name)
+        entity_types.append(EntityTypeDef(label=name, pole_type=pole_type, subtype=subtype))
+    return OntologyDocument(
+        domain=DomainInfo(id="custom", name="custom"),
+        entity_types=entity_types,
+    )
+
+
+@pytest.fixture
+def custom_strict_memory(mock_client: MagicMock, mock_embedder: MagicMock) -> LongTermMemory:
+    return LongTermMemory(
+        client=mock_client,
+        embedder=mock_embedder,
+        deduplication=DeduplicationConfig(enabled=False),
+        ontology=custom_ontology(),
+        validation_mode="strict",
+    )
+
+
+class TestStrictCustomSchema:
+    """A custom domain type is the node's ``type``; strict mode must accept it."""
+
+    @pytest.mark.parametrize(
+        ("name", "entity_type"),
+        [("Bob Singh", "PERSON"), ("Inception", "MOVIE"), ("Science Fiction", "GENRE")],
+    )
+    @pytest.mark.asyncio
+    async def test_every_declared_custom_type_is_written(
+        self,
+        custom_strict_memory: LongTermMemory,
+        mock_client: MagicMock,
+        name: str,
+        entity_type: str,
+    ) -> None:
+        """Each declared label reaches the write, through the public API."""
+        mock_client.execute_write.return_value = [
+            {"e": stored_node(name=name, type=entity_type, subtype=None)}
+        ]
+
+        entity, _ = await custom_strict_memory.add_entity(name, entity_type)
+
+        assert entity.type == entity_type
+        assert entity.name == name
+
+    @pytest.mark.asyncio
+    async def test_an_undeclared_custom_type_still_raises(
+        self, custom_strict_memory: LongTermMemory
+    ) -> None:
+        with pytest.raises(ValidationError, match="STUDIO"):
+            await custom_strict_memory.add_entity("A24", "STUDIO")
+
+    @pytest.mark.asyncio
+    async def test_an_ontology_with_no_relationships_cannot_forbid_an_edge(
+        self, custom_strict_memory: LongTermMemory, mock_client: MagicMock
+    ) -> None:
+        """A schema silent about edges says nothing, so it rejects nothing.
+
+        The ad-hoc CUSTOM document has no way to declare a relationship, so
+        enforcing here would make every ``add_relationship`` under
+        ``strict_types=True`` unreachable — which is what broke the
+        existing-graph example's ``DIRECTED`` / ``IN_GENRE`` writes.
+        """
+        mock_client.execute_write.return_value = [{"id": str(uuid4()), "confidence": 1.0}]
+
+        relationship = await custom_strict_memory.add_relationship(uuid4(), uuid4(), "IN_GENRE")
+
+        assert relationship.type == "IN_GENRE"
+        # No endpoint lookup: there was nothing to check.
+        mock_client.execute_read.assert_not_called()
+
+
+# -----------------------------------------------------------------------------
+# Embedding backfill on an auto-merge
+# -----------------------------------------------------------------------------
+
+
+class TestMergedEntityKeepsAUsableEmbedding:
+    """A merged-into node with no embedding is invisible to vector search.
+
+    ``add_entity`` returns early on an auto-merge, skipping the MERGE whose
+    ``ON MATCH SET e.embedding = COALESCE($embedding, e.embedding)`` would have
+    supplied one. Merges are reached by exact name, alias and gazetteer hits as
+    well as by vector similarity, so the node can easily have none.
+    """
+
+    @staticmethod
+    def _merging_memory(client: MagicMock, embedder: MagicMock) -> LongTermMemory:
+        memory = LongTermMemory(
+            client=client,
+            embedder=embedder,
+            deduplication=DeduplicationConfig(),
+        )
+        return memory
+
+    @pytest.mark.asyncio
+    async def test_a_merge_backfills_a_missing_embedding(
+        self, mock_client: MagicMock, mock_embedder: MagicMock
+    ) -> None:
+        from neo4j_agent_memory.memory.long_term import DeduplicationResult
+
+        existing_id = uuid4()
+        memory = self._merging_memory(mock_client, mock_embedder)
+        mock_client.execute_read.return_value = [
+            {"e": stored_node(id=str(existing_id), name="Acme Corp", embedding=None)}
+        ]
+        memory._check_for_duplicates = AsyncMock(  # type: ignore[method-assign]
+            return_value=DeduplicationResult(
+                is_duplicate=True,
+                action="merged",
+                matched_entity_id=existing_id,
+                matched_entity_name="Acme Corp",
+                similarity_score=1.0,
+                match_type="exact",
+            )
+        )
+
+        entity, dedup = await memory.add_entity("Acme Corp", "ORGANIZATION")
+
+        assert dedup.action == "merged"
+        assert entity.id == existing_id
+        assert entity.embedding == [0.1] * 384
+        writes = [call[0] for call in mock_client.execute_write.call_args_list]
+        assert any(call[0] == queries.UPDATE_ENTITY_EMBEDDING for call in writes), writes
+        backfill = next(c for c in writes if c[0] == queries.UPDATE_ENTITY_EMBEDDING)
+        assert backfill[1] == {"id": str(existing_id), "embedding": [0.1] * 384}
+
+    @pytest.mark.asyncio
+    async def test_a_usable_embedding_is_left_alone(
+        self, mock_client: MagicMock, mock_embedder: MagicMock
+    ) -> None:
+        from neo4j_agent_memory.memory.long_term import DeduplicationResult
+
+        existing_id = uuid4()
+        memory = self._merging_memory(mock_client, mock_embedder)
+        mock_client.execute_read.return_value = [
+            {"e": stored_node(id=str(existing_id), name="Acme Corp", embedding=[0.9] * 384)}
+        ]
+        memory._check_for_duplicates = AsyncMock(  # type: ignore[method-assign]
+            return_value=DeduplicationResult(
+                is_duplicate=True,
+                action="merged",
+                matched_entity_id=existing_id,
+                matched_entity_name="Acme Corp",
+                similarity_score=1.0,
+                match_type="exact",
+            )
+        )
+
+        entity, _ = await memory.add_entity("Acme Corp", "ORGANIZATION")
+
+        assert entity.embedding == [0.9] * 384
+        writes = [call[0][0] for call in mock_client.execute_write.call_args_list]
+        assert queries.UPDATE_ENTITY_EMBEDDING not in writes
+
+    @pytest.mark.asyncio
+    async def test_an_embedding_of_the_wrong_width_is_replaced(
+        self, mock_client: MagicMock, mock_embedder: MagicMock
+    ) -> None:
+        """The vector index is sized from ``embedder.dimensions``."""
+        from neo4j_agent_memory.memory.long_term import DeduplicationResult
+
+        existing_id = uuid4()
+        memory = self._merging_memory(mock_client, mock_embedder)
+        mock_client.execute_read.return_value = [
+            {"e": stored_node(id=str(existing_id), name="Acme Corp", embedding=[0.9] * 1536)}
+        ]
+        memory._check_for_duplicates = AsyncMock(  # type: ignore[method-assign]
+            return_value=DeduplicationResult(
+                is_duplicate=True,
+                action="merged",
+                matched_entity_id=existing_id,
+                matched_entity_name="Acme Corp",
+                similarity_score=1.0,
+                match_type="exact",
+            )
+        )
+
+        entity, _ = await memory.add_entity("Acme Corp", "ORGANIZATION")
+
+        assert entity.embedding == [0.1] * 384
+        writes = [call[0][0] for call in mock_client.execute_write.call_args_list]
+        assert queries.UPDATE_ENTITY_EMBEDDING in writes

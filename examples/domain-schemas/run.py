@@ -477,7 +477,12 @@ def bolt_long_term(client: MemoryClient) -> LongTermMemory:
 
 
 def _extractor_version(extractor: GLiNER2Extractor) -> str | None:
-    """Version of the installed gliner2 package, when available."""
+    """Version of the installed gliner2 package, when available.
+
+    ``GLiNER2Extractor.version`` already falls back to ``"unknown"`` when the
+    distribution metadata cannot be read; this only turns that sentinel into
+    the ``None`` that ``register_extractor`` wants for "not recorded".
+    """
     version = extractor.version
     return None if version == "unknown" else version
 
