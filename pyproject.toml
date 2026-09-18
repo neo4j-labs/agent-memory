@@ -1,6 +1,6 @@
 [project]
 name = "neo4j-agent-memory"
-version = "0.6.0"
+version = "0.7.0"
 description = "A comprehensive memory system for AI agents using Neo4j"
 readme = "README-pypi.md"
 license = { text = "Apache-2.0" }
@@ -118,12 +118,22 @@ aws = ["boto3>=1.26.0"]
 # major bump is free to reshape.
 strands = ["strands-agents>=1.52,<2", "boto3>=1.26.0"]
 
-# Entity extraction
+# Entity extraction. `sentencepiece` and `protobuf` are hard requirements of
+# the GLiNER2.5 checkpoints (a DeBERTa-v3 SPM tokenizer) that gliner2 itself
+# does not declare, so they are pinned here.
 spacy = ["spacy>=3.7.0"]
-gliner = ["gliner>=0.2.0"]
+gliner2 = ["gliner2[local]>=2.0,<3", "sentencepiece>=0.2", "protobuf>=5"]
+# Deprecated alias of [gliner2], kept for one release so existing install
+# commands keep working. Removed in 0.8.
+gliner = ["gliner2[local]>=2.0,<3", "sentencepiece>=0.2", "protobuf>=5"]
 
-# Extraction pipeline (spaCy + GLiNER)
-extraction = ["spacy>=3.7.0", "gliner>=0.2.0"]
+# Extraction pipeline (spaCy + GLiNER2.5)
+extraction = [
+    "spacy>=3.7.0",
+    "gliner2[local]>=2.0,<3",
+    "sentencepiece>=0.2",
+    "protobuf>=5",
+]
 
 # Entity resolution
 fuzzy = ["rapidfuzz>=3.0.0"]
@@ -223,7 +233,7 @@ all = [
 
 # Full install including local models and extraction pipeline
 full = [
-    "neo4j-agent-memory[all,sentence-transformers,spacy,gliner,instructor]",
+    "neo4j-agent-memory[all,sentence-transformers,spacy,gliner2,instructor]",
 ]
 
 [project.scripts]
@@ -339,20 +349,15 @@ plugins = ["pydantic.mypy"]
 # ships py.typed and resolves cleanly, so the stale block was removed. yaml is
 # covered by typeshed's types-PyYAML, now a declared dev dependency so clean CI
 # resolves it (it was previously only ambiently present, which made the mypy
-# error count non-reproducible). Confirmed that gliner 0.2.24 ships no
-# py.typed marker; it is suppressed via the override below. google.adk 2.x and
+# error count non-reproducible). gliner2 2.0.0 ships a py.typed marker and needs
+# no override; the lazy import sites keep every handle typed `Any` because its
+# functions are unannotated and a typed handle would trip "call to untyped
+# function" under --strict. google.adk 2.x and
 # google.genai *do* ship py.typed, but both are optional extras, so the
 # per-module overrides below stay: they keep `mypy src` clean in environments
 # where the [google-adk] extra is not installed (the ADK MemoryService imports
 # them at a typed boundary). nest_asyncio (used only by the llamaindex integration)
-# is likewise suppressed per-module below. The remaining dep that genuinely
-# ships no type information is glirel; its import diagnostics are intentionally
-# left in the budget and will be addressed later (local stubs vs. per-module
-# ignore), not suppressed here.
-
-[[tool.mypy.overrides]]
-module = "gliner"
-ignore_missing_imports = true
+# is likewise suppressed per-module below.
 
 [[tool.mypy.overrides]]
 module = "google.adk.*"

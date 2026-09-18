@@ -164,7 +164,10 @@ class TestCLIHelp:
         assert "Extract entities from text" in result.output
         assert "--format" in result.output
         assert "--schema" in result.output
+        assert "--ontology" in result.output
+        assert "--gliner-schema" in result.output
         assert "--extractor" in result.output
+        assert "fastino/gliner2.5-base-v1" in result.output
 
     def test_schemas_help(self, runner):
         """Test schemas command help."""
@@ -212,6 +215,7 @@ class TestExtractCommand:
         mock_builder_class.return_value = mock_builder
         mock_builder.with_gliner.return_value = mock_builder
         mock_builder.with_confidence_threshold.return_value = mock_builder
+        mock_builder.extract_relations.return_value = mock_builder
 
         mock_extractor = MagicMock()
         mock_builder.build.return_value = mock_extractor
@@ -242,6 +246,7 @@ class TestExtractCommand:
         mock_builder_class.return_value = mock_builder
         mock_builder.with_gliner.return_value = mock_builder
         mock_builder.with_confidence_threshold.return_value = mock_builder
+        mock_builder.extract_relations.return_value = mock_builder
 
         mock_extractor = MagicMock()
         mock_builder.build.return_value = mock_extractor
@@ -274,6 +279,7 @@ class TestExtractCommand:
         mock_builder.with_schema.return_value = mock_builder
         mock_builder.with_gliner.return_value = mock_builder
         mock_builder.with_confidence_threshold.return_value = mock_builder
+        mock_builder.extract_relations.return_value = mock_builder
 
         mock_extractor = MagicMock()
         mock_builder.build.return_value = mock_extractor
@@ -303,6 +309,7 @@ class TestExtractCommand:
         mock_builder_class.return_value = mock_builder
         mock_builder.with_llm.return_value = mock_builder
         mock_builder.with_confidence_threshold.return_value = mock_builder
+        mock_builder.extract_relations.return_value = mock_builder
 
         mock_extractor = MagicMock()
         mock_builder.build.return_value = mock_extractor
@@ -333,6 +340,7 @@ class TestExtractCommand:
         mock_builder.with_gliner.return_value = mock_builder
         mock_builder.with_llm.return_value = mock_builder
         mock_builder.with_confidence_threshold.return_value = mock_builder
+        mock_builder.extract_relations.return_value = mock_builder
 
         mock_extractor = MagicMock()
         mock_builder.build.return_value = mock_extractor
@@ -361,6 +369,7 @@ class TestExtractCommand:
         mock_builder_class.return_value = mock_builder
         mock_builder.with_gliner.return_value = mock_builder
         mock_builder.with_confidence_threshold.return_value = mock_builder
+        mock_builder.extract_relations.return_value = mock_builder
 
         mock_extractor = MagicMock()
         mock_builder.build.return_value = mock_extractor
@@ -388,6 +397,7 @@ class TestExtractCommand:
         mock_builder_class.return_value = mock_builder
         mock_builder.with_gliner.return_value = mock_builder
         mock_builder.with_confidence_threshold.return_value = mock_builder
+        mock_builder.extract_relations.return_value = mock_builder
 
         mock_extractor = MagicMock()
         mock_builder.build.return_value = mock_extractor
@@ -416,6 +426,7 @@ class TestExtractCommand:
         mock_builder_class.return_value = mock_builder
         mock_builder.with_gliner.return_value = mock_builder
         mock_builder.with_confidence_threshold.return_value = mock_builder
+        mock_builder.extract_relations.return_value = mock_builder
 
         mock_extractor = MagicMock()
         mock_builder.build.return_value = mock_extractor
@@ -445,6 +456,7 @@ class TestExtractCommand:
         mock_builder_class.return_value = mock_builder
         mock_builder.with_gliner.return_value = mock_builder
         mock_builder.with_confidence_threshold.return_value = mock_builder
+        mock_builder.extract_relations.return_value = mock_builder
 
         mock_extractor = MagicMock()
         mock_builder.build.return_value = mock_extractor
@@ -472,6 +484,7 @@ class TestExtractCommand:
             mock_builder_class.return_value = mock_builder
             mock_builder.with_gliner.return_value = mock_builder
             mock_builder.with_confidence_threshold.return_value = mock_builder
+            mock_builder.extract_relations.return_value = mock_builder
 
             mock_extractor = MagicMock()
             mock_builder.build.return_value = mock_extractor
@@ -641,6 +654,7 @@ class TestTableOutput:
         mock_builder_class.return_value = mock_builder
         mock_builder.with_gliner.return_value = mock_builder
         mock_builder.with_confidence_threshold.return_value = mock_builder
+        mock_builder.extract_relations.return_value = mock_builder
 
         mock_extractor = MagicMock()
         mock_builder.build.return_value = mock_extractor
@@ -669,6 +683,7 @@ class TestTableOutput:
         mock_builder_class.return_value = mock_builder
         mock_builder.with_gliner.return_value = mock_builder
         mock_builder.with_confidence_threshold.return_value = mock_builder
+        mock_builder.extract_relations.return_value = mock_builder
 
         mock_extractor = MagicMock()
         mock_builder.build.return_value = mock_extractor
@@ -689,3 +704,304 @@ class TestTableOutput:
 
         assert result.exit_code == 0
         assert "No entities extracted" in result.output
+
+
+class TestExtractGLiNER2Flags:
+    """The GLiNER2.5-era flags on ``extract``."""
+
+    def _builder(self, mock_builder_class, sample_extraction_result):
+        from unittest.mock import AsyncMock, MagicMock
+
+        mock_builder = MagicMock()
+        mock_builder_class.return_value = mock_builder
+        for method in (
+            "with_gliner",
+            "with_gliner_schema",
+            "with_ontology",
+            "with_schema",
+            "with_llm",
+            "with_confidence_threshold",
+            "extract_relations",
+        ):
+            getattr(mock_builder, method).return_value = mock_builder
+        mock_extractor = MagicMock()
+        mock_builder.build.return_value = mock_extractor
+        mock_extractor.extract = AsyncMock(return_value=sample_extraction_result)
+        return mock_builder
+
+    def test_gliner_schema_choice_is_validated(self, runner):
+        result = runner.invoke(cli, ["extract", "text", "--gliner-schema", "nonexistent"])
+        assert result.exit_code == 2
+        assert "nonexistent" in result.output
+
+    @patch("neo4j_agent_memory.cli.main.ExtractorBuilder")
+    def test_gliner_schema_selects_the_template(
+        self, mock_builder_class, runner, sample_extraction_result
+    ):
+        mock_builder = self._builder(mock_builder_class, sample_extraction_result)
+
+        result = runner.invoke(
+            cli, ["extract", "text", "--gliner-schema", "podcast", "--quiet", "--format", "json"]
+        )
+
+        assert result.exit_code == 0
+        mock_builder.with_gliner_schema.assert_called_once_with("podcast", model=None)
+        mock_builder.with_gliner.assert_not_called()
+
+    @patch("neo4j_agent_memory.cli.main.ExtractorBuilder")
+    def test_ontology_path_is_loaded(
+        self, mock_builder_class, runner, sample_extraction_result, tmp_path
+    ):
+        from neo4j_agent_memory.ontology import POLEO_ONTOLOGY
+
+        mock_builder = self._builder(mock_builder_class, sample_extraction_result)
+        path = tmp_path / "ontology.json"
+        path.write_text(POLEO_ONTOLOGY.model_dump_json())
+
+        result = runner.invoke(
+            cli, ["extract", "text", "--ontology", str(path), "--quiet", "--format", "json"]
+        )
+
+        assert result.exit_code == 0
+        mock_builder.with_ontology.assert_called_once()
+        doc = mock_builder.with_ontology.call_args[0][0]
+        assert doc.labels() == POLEO_ONTOLOGY.labels()
+        mock_builder.with_schema.assert_not_called()
+
+    @patch("neo4j_agent_memory.cli.main.ExtractorBuilder")
+    def test_no_relations_is_threaded_to_the_builder(
+        self, mock_builder_class, runner, sample_extraction_result
+    ):
+        mock_builder = self._builder(mock_builder_class, sample_extraction_result)
+
+        result = runner.invoke(
+            cli, ["extract", "text", "--no-relations", "--quiet", "--format", "json"]
+        )
+
+        assert result.exit_code == 0
+        mock_builder.extract_relations.assert_called_once_with(False)
+
+    @patch("neo4j_agent_memory.cli.main.ExtractorBuilder")
+    def test_llm_extractor_with_an_ontology_stays_llm_only(
+        self, mock_builder_class, runner, sample_extraction_result, tmp_path
+    ):
+        """``--extractor llm --ontology x.yaml`` must not build a GLiNER stage.
+
+        The ontology says *what* to extract; ``--extractor`` says how. While
+        ``with_ontology()`` also flipped the GLiNER2.5 stage on, this command
+        line quietly downloaded and ran a 407 MB checkpoint.
+        """
+        from neo4j_agent_memory.ontology import POLEO_ONTOLOGY
+
+        mock_builder = self._builder(mock_builder_class, sample_extraction_result)
+        path = tmp_path / "ontology.json"
+        path.write_text(POLEO_ONTOLOGY.model_dump_json())
+
+        result = runner.invoke(
+            cli,
+            [
+                "extract",
+                "text",
+                "--extractor",
+                "llm",
+                "--ontology",
+                str(path),
+                "--quiet",
+                "--format",
+                "json",
+            ],
+        )
+
+        assert result.exit_code == 0
+        mock_builder.with_ontology.assert_called_once()
+        mock_builder.with_llm.assert_called_once()
+        mock_builder.with_gliner.assert_not_called()
+        mock_builder.with_gliner_schema.assert_not_called()
+
+    def test_llm_extractor_with_an_ontology_builds_no_gliner_stage(self, runner, tmp_path):
+        """The same thing against the real builder, not a mock chain."""
+        from neo4j_agent_memory.extraction.factory import ExtractorBuilder
+        from neo4j_agent_memory.ontology import POLEO_ONTOLOGY, load_ontology
+
+        path = tmp_path / "ontology.json"
+        path.write_text(POLEO_ONTOLOGY.model_dump_json())
+
+        builder = ExtractorBuilder().with_ontology(load_ontology(path)).with_llm()
+        extractor = builder.build()
+
+        assert builder._enable_gliner is False
+        assert type(extractor).__name__ == "LLMEntityExtractor"
+
+
+class TestOntologyCommand:
+    """Tests for the `ontology validate` / `ontology compile` commands."""
+
+    VALID = {
+        "domain": {"id": "support", "name": "support"},
+        "entity_types": [
+            {
+                "label": "Customer",
+                "pole_type": "PERSON",
+                "subtype": "INDIVIDUAL",
+                "description": "A person who reported a ticket.",
+            },
+            {"label": "Vendor", "pole_type": "ORGANIZATION"},
+        ],
+        "relationships": [
+            {"type": "BUYS_FROM", "source": "Customer", "target": "Vendor"},
+        ],
+    }
+
+    def _write(self, tmp_path, payload, name="ontology.json"):
+        path = tmp_path / name
+        path.write_text(json.dumps(payload))
+        return path
+
+    def test_ontology_help(self, runner):
+        result = runner.invoke(cli, ["ontology", "--help"])
+        assert result.exit_code == 0
+        assert "validate" in result.output
+        assert "compile" in result.output
+
+    def test_registered_on_the_root_group(self, runner):
+        result = runner.invoke(cli, ["--help"])
+        assert result.exit_code == 0
+        assert "ontology" in result.output
+
+    def test_validate_sound_document(self, runner, tmp_path):
+        path = self._write(tmp_path, self.VALID)
+
+        result = runner.invoke(cli, ["ontology", "validate", str(path)])
+
+        assert result.exit_code == 0
+        assert "is valid" in result.output
+        assert "Customer" in result.output
+        assert "BUYS_FROM" in result.output
+
+    def test_validate_reports_every_problem_and_exits_one(self, runner, tmp_path):
+        broken = {
+            "domain": {"id": "broken", "name": "broken"},
+            "entity_types": [{"label": "Customer", "pole_type": "HUMAN"}],
+            "relationships": [
+                {"type": "BUYS_FROM", "source": "Customer", "target": "Nowhere"},
+            ],
+        }
+        path = self._write(tmp_path, broken, "broken.json")
+
+        result = runner.invoke(cli, ["ontology", "validate", str(path)])
+
+        assert result.exit_code == 1
+        assert "problem" in result.output
+        assert "HUMAN" in result.output
+        assert "Nowhere" in result.output
+
+    def test_validate_accepts_a_legacy_entity_schema_file(self, runner, tmp_path):
+        # An EntitySchemaConfig file is converted on the way in; the POLE+O
+        # relation types it carries need all five types declared to resolve.
+        path = self._write(
+            tmp_path,
+            {
+                "name": "legacy",
+                "entity_types": [
+                    {"name": name}
+                    for name in ("PERSON", "ORGANIZATION", "LOCATION", "EVENT", "OBJECT")
+                ],
+            },
+            "legacy.json",
+        )
+
+        result = runner.invoke(cli, ["ontology", "validate", str(path)])
+
+        assert result.exit_code == 0
+        assert "is valid" in result.output
+        assert "PERSON" in result.output
+
+    def test_validate_reports_an_unreadable_file(self, runner, tmp_path):
+        path = tmp_path / "ontology.txt"
+        path.write_text("not an ontology")
+
+        result = runner.invoke(cli, ["ontology", "validate", str(path)])
+
+        assert result.exit_code == 1
+        assert "Could not load ontology" in result.output
+
+    def test_validate_missing_file(self, runner, tmp_path):
+        result = runner.invoke(cli, ["ontology", "validate", str(tmp_path / "nope.json")])
+        assert result.exit_code != 0
+
+    def test_compile_prints_the_joint_schema_json(self, runner, tmp_path, monkeypatch):
+        # A stand-in JointSchema with a to_dict(), installed as gliner2 so the
+        # command runs without the optional dependency.
+        import sys
+        import types
+
+        class FakeJointSchema:
+            def __init__(self):
+                self.payload = {"entities": [], "relations": []}
+
+            def entity(self, name, description=None, **kwargs):
+                self.payload["entities"].append(name)
+                return self
+
+            def relation(self, name, head, tail, description=None, **kwargs):
+                self.payload["relations"].append({"type": name, "head": head, "tail": tail})
+                return self
+
+            def no_self_loops(self, relation=None):
+                return self
+
+            def to_dict(self):
+                return self.payload
+
+        module = types.ModuleType("gliner2")
+        joint_ie = types.ModuleType("gliner2.joint_ie")
+        joint_ie.JointSchema = FakeJointSchema
+        module.joint_ie = joint_ie
+        monkeypatch.setitem(sys.modules, "gliner2", module)
+        monkeypatch.setitem(sys.modules, "gliner2.joint_ie", joint_ie)
+
+        path = self._write(tmp_path, self.VALID)
+
+        result = runner.invoke(cli, ["ontology", "compile", str(path)])
+
+        assert result.exit_code == 0
+        payload = json.loads(result.output)
+        assert payload["entities"] == ["Customer", "Vendor"]
+        assert payload["relations"] == [
+            {"type": "BUYS_FROM", "head": ["Customer"], "tail": ["Vendor"]}
+        ]
+
+    def test_compile_prints_an_install_hint_without_gliner2(self, runner, tmp_path, monkeypatch):
+        import importlib
+
+        real_import_module = importlib.import_module
+
+        def fake_import_module(name, *args, **kwargs):
+            if name.startswith("gliner2"):
+                raise ImportError("No module named 'gliner2'")
+            return real_import_module(name, *args, **kwargs)
+
+        monkeypatch.setattr(importlib, "import_module", fake_import_module)
+
+        path = self._write(tmp_path, self.VALID)
+
+        result = runner.invoke(cli, ["ontology", "compile", str(path)])
+
+        assert result.exit_code == 1
+        assert "gliner2 is not installed" in result.output
+        assert "neo4j-agent-memory[gliner2]" in result.output
+
+    def test_compile_rejects_a_broken_document(self, runner, tmp_path):
+        broken = {
+            "domain": {"id": "broken", "name": "broken"},
+            "entity_types": [{"label": "Customer", "pole_type": "PERSON"}],
+            "relationships": [
+                {"type": "BUYS_FROM", "source": "Customer", "target": "Nowhere"},
+            ],
+        }
+        path = self._write(tmp_path, broken, "broken.json")
+
+        result = runner.invoke(cli, ["ontology", "compile", str(path)])
+
+        assert result.exit_code == 1
+        assert "Could not compile ontology" in result.output

@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """Domain-schema entity extraction with neo4j-agent-memory.
 
-One runner, eight built-in GLiNER domain schemas. Each schema ships a synthetic
+One runner, eight built-in domain ontologies. Each schema ships a synthetic
 corpus under ``samples/`` and the runner does the same five things for all of
 them:
 
-1. Build a GLiNER extractor from ``ExtractionConfig`` (the same path
+1. Build a GLiNER2.5 extractor from ``ExtractionConfig`` (the same path
    ``MemorySettings.extraction`` takes internally, so it transfers to apps).
 2. Extract entities per document and print them grouped by POLE+O type.
 3. Summarise the run with per-domain highlight sections.
-4. Optionally demo GLiREL relations, native batch inference or streaming
+4. Optionally demo typed relations, native batch inference or streaming
    extraction (``--relations`` / ``--batch`` / ``--streaming``).
 5. Optionally store the result in Neo4j with provenance, relationships and a
    read-back (``--store``, automatic when ``NEO4J_URI`` is set).
@@ -21,9 +21,9 @@ Usage::
     python run.py --schema news --relations --store
     python run.py --schema podcast --device mps --threshold 0.5
 
-Everything runs locally: GLiNER for extraction, sentence-transformers for the
-embeddings used by the storage step. No LLM and no API key are involved. The
-GLiNER model (~500 MB) downloads once on first use.
+Everything runs locally: GLiNER2.5 for extraction, sentence-transformers for
+the embeddings used by the storage step. No LLM and no API key are involved.
+The GLiNER2.5 model (~407 MB) downloads once on first use.
 
 All sample documents are synthetic. Quotes, figures and events are invented for
 demonstration; nothing in them is attributable to any real person or company.
@@ -50,19 +50,17 @@ from neo4j_agent_memory.config.settings import ExtractorType
 from neo4j_agent_memory.extraction import (
     ExtractedEntity,
     ExtractedRelation,
-    GLiNEREntityExtractor,
-    GLiNERWithRelationsExtractor,
+    GLiNER2Extractor,
     create_gliner_extractor,
     create_streaming_extractor,
     get_schema,
-    is_gliner_available,
-    is_glirel_available,
+    is_gliner2_available,
     list_schemas,
 )
 from neo4j_agent_memory.memory.long_term import Entity, LongTermMemory
 
 EXAMPLE_DIR = Path(__file__).resolve().parent
-EXTRACTOR_NAME = "GLiNEREntityExtractor"
+EXTRACTOR_NAME = "GLiNER2Extractor"
 LOCAL_EMBEDDING_MODEL = os.getenv("LOCAL_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 DEFAULT_STORE_LIMIT = 30
 RULE = "=" * 70
@@ -73,11 +71,12 @@ SYNTHETIC_BANNER = (
 )
 
 RELATIONS_NOTE = """
-    Relationships can be extracted two ways, neither of which needs this
-    runner's entity pass to change:
+    Relationships come out of the same pass as the entities, with the endpoint
+    types the ontology declares enforced during decoding:
 
-      * GLiREL, locally and with no LLM call — `python run.py --schema {schema}
-        --relations` (install the optional `glirel` package first).
+      * `python run.py --schema {schema} --relations` — no extra model, no LLM
+        call. Only the ontologies that declare relationships (poleo, podcast,
+        news) produce edges.
       * The LLM extractor stage, when you need free-form relation types —
         `ExtractionConfig(extractor_type=ExtractorType.PIPELINE,
         enable_llm_fallback=True)`.
@@ -113,7 +112,7 @@ def build_parser() -> argparse.ArgumentParser:
     """Build the CLI parser."""
     parser = argparse.ArgumentParser(
         prog="run.py",
-        description="Extract entities from a synthetic corpus with a GLiNER domain schema.",
+        description="Extract entities from a synthetic corpus with a GLiNER2.5 domain ontology.",
     )
     parser.add_argument(
         "--schema",
@@ -129,27 +128,27 @@ def build_parser() -> argparse.ArgumentParser:
         "--threshold",
         type=float,
         default=None,
-        help="GLiNER confidence threshold (default: the schema's tuned value).",
+        help="Entity confidence threshold (default: the schema's tuned value).",
     )
     parser.add_argument(
         "--model",
         default=None,
-        help="GLiNER model id (default: the library default).",
+        help="GLiNER2.5 model id (default: the library default).",
     )
     parser.add_argument(
         "--device",
         default=os.getenv("GLINER_DEVICE", "cpu"),
-        help="Device for GLiNER inference: cpu, cuda or mps (default: cpu).",
+        help="Device for GLiNER2.5 inference: cpu, cuda or mps (default: cpu).",
     )
     parser.add_argument(
         "--relations",
         action="store_true",
-        help="Run the GLiREL relation-extraction demo (no LLM call).",
+        help="Run the typed relation-extraction demo (no LLM call).",
     )
     parser.add_argument(
         "--batch",
         action="store_true",
-        help="Run the native GLiNER batch-inference demo.",
+        help="Run the native GLiNER2.5 batch-inference demo.",
     )
     parser.add_argument(
         "--streaming",
@@ -205,12 +204,12 @@ def resolve_demos(args: argparse.Namespace, sample: SampleSet) -> tuple[str, ...
 
 def create_extractor(
     sample: SampleSet, args: argparse.Namespace
-) -> tuple[GLiNEREntityExtractor, ExtractionConfig]:
+) -> tuple[GLiNER2Extractor, ExtractionConfig]:
     """Build the extractor via the config-driven factory.
 
     ``create_gliner_extractor`` is the same code path ``MemorySettings.extraction``
     uses internally, so this transfers unchanged to an application. The terse
-    alternative is ``GLiNEREntityExtractor.for_schema(sample.schema_name)``.
+    alternative is ``GLiNER2Extractor.for_schema(sample.schema_name)``.
     """
     config = ExtractionConfig(
         gliner_schema=sample.schema_name,
@@ -219,21 +218,9 @@ def create_extractor(
         **({"gliner_model": args.model} if args.model else {}),
     )
     extractor = create_gliner_extractor(config)
-    if not isinstance(extractor, GLiNEREntityExtractor):  # pragma: no cover - factory contract
-        raise TypeError(f"Expected a GLiNEREntityExtractor, got {type(extractor).__name__}")
+    if not isinstance(extractor, GLiNER2Extractor):  # pragma: no cover - factory contract
+        raise TypeError(f"Expected a GLiNER2Extractor, got {type(extractor).__name__}")
     return extractor, config
-
-
-def create_relation_extractor(
-    sample: SampleSet, args: argparse.Namespace, config: ExtractionConfig
-) -> GLiNERWithRelationsExtractor:
-    """Build the combined GLiNER + GLiREL extractor for this schema."""
-    return GLiNERWithRelationsExtractor.for_schema(
-        sample.schema_name,
-        gliner_model=config.gliner_model,
-        entity_threshold=config.gliner_threshold,
-        device=args.device,
-    )
 
 
 # --------------------------------------------------------------------------- #
@@ -344,7 +331,7 @@ def deduplicate(entities: list[ExtractedEntity]) -> list[ExtractedEntity]:
 
 
 async def extract_documents(
-    extractor: GLiNEREntityExtractor, sample: SampleSet
+    extractor: GLiNER2Extractor, sample: SampleSet
 ) -> list[ExtractedEntity]:
     """Extract from every document in the corpus, printing as it goes."""
     all_entities: list[ExtractedEntity] = []
@@ -365,20 +352,17 @@ async def extract_documents(
     return all_entities
 
 
-async def demo_relations(
-    sample: SampleSet, args: argparse.Namespace, config: ExtractionConfig
-) -> list[ExtractedRelation]:
-    """Extract relations with GLiREL — no LLM call involved."""
+async def demo_relations(extractor: GLiNER2Extractor, sample: SampleSet) -> list[ExtractedRelation]:
+    """Print the typed relations from the same pass as the entities."""
     print(RULE)
-    print("RELATION EXTRACTION (GLiREL — no LLM required)")
+    print("RELATION EXTRACTION (GLiNER2.5 joint decoding — no LLM required)")
     print(RULE)
-    if not is_glirel_available():
-        print("\n  GLiREL is not installed, so this demo is skipped.")
-        print("  It is opt-in (last released 2025-04): pip install glirel")
-        print("  GLiREL extracts relationships locally, without LLM calls.\n")
+    if not extractor.ontology.relationships:
+        print(f"\n  The '{sample.schema_name}' ontology declares no relationships,")
+        print("  so this pass has nothing to decode. Declare them on an")
+        print("  OntologyDocument (see neo4j_agent_memory.ontology) to get edges.\n")
         return []
 
-    extractor = create_relation_extractor(sample, args, config)
     doc = sample.documents[0]
     print(f"\nExtracting relations from: {doc.title}")
     result = (await extractor.extract(doc.content)).filter_invalid_entities()
@@ -394,10 +378,10 @@ async def demo_relations(
     return list(result.relations)
 
 
-async def demo_batch(extractor: GLiNEREntityExtractor, sample: SampleSet) -> None:
-    """Process the whole corpus with GLiNER's native batch inference."""
+async def demo_batch(extractor: GLiNER2Extractor, sample: SampleSet) -> None:
+    """Process the whole corpus with the engine's batched decoding."""
     print(RULE)
-    print("BATCH EXTRACTION (native GLiNER batch inference)")
+    print("BATCH EXTRACTION (native GLiNER2.5 batch inference)")
     print(RULE)
     print()
 
@@ -410,14 +394,14 @@ async def demo_batch(extractor: GLiNEREntityExtractor, sample: SampleSet) -> Non
     print(f"  Processed: {len(results)} documents")
     print(f"  Total entities (batch): {total_entities}")
     print(
-        "\n  Note: GLiNEREntityExtractor.extract_batch returns a plain\n"
+        "\n  Note: GLiNER2Extractor.extract_batch returns a plain\n"
         "  list[ExtractionResult] (one per input, GPU-efficient). The\n"
         "  multi-stage ExtractionPipeline.extract_batch returns a\n"
         "  BatchExtractionResult with success/failure bookkeeping instead.\n"
     )
 
 
-async def demo_streaming(extractor: GLiNEREntityExtractor, sample: SampleSet) -> None:
+async def demo_streaming(extractor: GLiNER2Extractor, sample: SampleSet) -> None:
     """Chunk a long document and extract chunk by chunk."""
     print(RULE)
     print("STREAMING EXTRACTION (for long documents)")
@@ -492,14 +476,10 @@ def bolt_long_term(client: MemoryClient) -> LongTermMemory:
     return long_term
 
 
-def _extractor_version() -> str | None:
-    """Version of the installed gliner package, when available."""
-    try:
-        from importlib.metadata import version
-
-        return version("gliner")
-    except Exception:  # pragma: no cover - metadata is best-effort
-        return None
+def _extractor_version(extractor: GLiNER2Extractor) -> str | None:
+    """Version of the installed gliner2 package, when available."""
+    version = extractor.version
+    return None if version == "unknown" else version
 
 
 async def store_graph(
@@ -507,6 +487,7 @@ async def store_graph(
     entities: list[ExtractedEntity],
     relations: list[ExtractedRelation],
     config: ExtractionConfig,
+    extractor: GLiNER2Extractor,
     *,
     uri: str,
     limit: int,
@@ -523,10 +504,11 @@ async def store_graph(
 
         await long_term.register_extractor(
             EXTRACTOR_NAME,
-            version=_extractor_version(),
+            version=_extractor_version(extractor),
             config={
                 "schema": sample.schema_name,
                 "threshold": config.gliner_threshold,
+                "relation_threshold": config.gliner_relation_threshold,
                 "model": config.gliner_model,
             },
         )
@@ -576,7 +558,7 @@ async def store_graph(
             )
             stored_relations += 1
         if relations:
-            print(f"  Stored {stored_relations}/{len(relations)} GLiREL relations as RELATED_TO")
+            print(f"  Stored {stored_relations}/{len(relations)} typed relations as RELATED_TO")
 
         await read_back(long_term, sample, unique_stored)
 
@@ -631,15 +613,15 @@ async def main(argv: list[str] | None = None) -> int:
 
     sample = get_sample(args.schema)
     if sample.schema_name not in list_schemas():  # pragma: no cover - registry guard
-        print(f"Schema '{sample.schema_name}' is not a built-in GLiNER schema: {list_schemas()}")
+        print(f"Schema '{sample.schema_name}' is not a built-in schema: {list_schemas()}")
         return 2
 
-    if not is_gliner_available():
-        print("  ERROR: GLiNER is not installed.")
-        print("\n  To run this example, install GLiNER:")
+    if not is_gliner2_available():
+        print("  ERROR: GLiNER2.5 is not installed.")
+        print("\n  To run this example, install it:")
         print("    uv sync --all-extras")
-        print('    # or: pip install "neo4j-agent-memory[gliner]"')
-        print("\n  The GLiNER model (~500 MB) downloads on first use.")
+        print('    # or: pip install "neo4j-agent-memory[gliner2]"')
+        print("\n  The GLiNER2.5 model (~407 MB) downloads on first use.")
         return 0
 
     extractor, config = create_extractor(sample, args)
@@ -651,7 +633,7 @@ async def main(argv: list[str] | None = None) -> int:
 
     relations: list[ExtractedRelation] = []
     if RELATIONS in demos:
-        relations = await demo_relations(sample, args, config)
+        relations = await demo_relations(extractor, sample)
     if BATCH in demos:
         await demo_batch(extractor, sample)
     if STREAMING in demos:
@@ -665,7 +647,7 @@ async def main(argv: list[str] | None = None) -> int:
         print("\n--store was requested but NEO4J_URI is not set.")
         return 2
     if store and uri:
-        await store_graph(sample, entities, relations, config, uri=uri, limit=args.limit)
+        await store_graph(sample, entities, relations, config, extractor, uri=uri, limit=args.limit)
     else:
         print("\nSet NEO4J_URI (and pass --store) to persist this graph in Neo4j.")
     return 0

@@ -24,7 +24,7 @@ A graph-native memory system for AI agents. Store conversations, build knowledge
 
 ![The Neo4j Agent Memory entity extraction pipeline](img/extraction-pipeline.png)
 
-**Plus:** multi-stage entity extraction (spaCy / GLiNER / LLM), relationship extraction (GLiREL), background enrichment (Wikipedia / Diffbot), geospatial queries, [MCP server](#mcp-server) with 16 tools, and integrations with [LangChain, Pydantic AI, Google ADK, Strands, CrewAI, and more](#framework-integrations).
+**Plus:** multi-stage entity extraction (spaCy / GLiNER2.5 / LLM) with typed relations decoded in the same pass, background enrichment (Wikipedia / Diffbot), geospatial queries, [MCP server](#mcp-server) with 16 tools, and integrations with [LangChain, Pydantic AI, Google ADK, Strands, CrewAI, and more](#framework-integrations).
 
 **Production features:** adopt an existing Neo4j graph as long-term memory (`client.schema.adopt_existing_graph(...)`), multi-tenant scoping (`user_identifier=`), fire-and-forget [buffered writes](examples/buffered-writes/) (`client.buffered.submit(...)`), [consolidation primitives](examples/audit-trail/) (`client.consolidation.dedupe_entities(...)`), an [eval harness](examples/eval-harness/) (`client.eval.run(suite)`), and explicit `:TOUCHED` audit edges from reasoning steps to entities.
 
@@ -199,7 +199,8 @@ pip install neo4j-agent-memory[litellm]              # + LiteLLM universal fallb
 pip install neo4j-agent-memory[mcp]                  # + MCP server
 pip install neo4j-agent-memory[langchain]            # + LangChain
 pip install neo4j-agent-memory[all]                  # Everything except heavy local ML
-pip install neo4j-agent-memory[full]                 # Everything including spaCy, GLiNER, sentence-transformers, instructor
+pip install neo4j-agent-memory[gliner2]              # + GLiNER2.5 local entity + relation extraction
+pip install neo4j-agent-memory[full]                 # Everything including spaCy, GLiNER2.5, sentence-transformers, instructor
 ```
 
 Provider extras follow native-first resolution: with both `[openai]` and `[litellm]` installed, an `"openai/..."` model uses the native adapter; an unsupported provider like `"groq/..."` falls through to LiteLLM. See [Bring your own model](https://neo4j.com/labs/agent-memory/how-to/bring-your-own-model.html) for details.
@@ -271,8 +272,8 @@ See [`examples/README.md`](examples/README.md) for the full index. Highlights:
 
 | Example | Framework | Description |
 |---------|-----------|-------------|
-| [`no_llm/`](examples/no_llm/) | Standalone | Run with `llm=None` plus local sentence-transformers + spaCy/GLiNER (air-gapped, deterministic) |
-| [Domain Schema Examples](examples/domain-schemas/) | Standalone | 8 GLiNER2 extraction scripts with factory pattern, batch extraction, streaming, and GLiREL relations |
+| [`no_llm/`](examples/no_llm/) | Standalone | Run with `llm=None` plus local sentence-transformers + spaCy/GLiNER2.5 (air-gapped, deterministic) |
+| [Domain Schema Examples](examples/domain-schemas/) | Standalone | 8 GLiNER2.5 domain schemas through one runner: factory pattern, batch extraction, streaming, and joint entity + relation decoding |
 | [Google Cloud Integration](examples/google_cloud_integration/) | Google ADK | Progressive tutorial: Vertex AI, ADK, MCP server, and MemoryIntegration with session strategies |
 | [Google ADK Demo](examples/google_adk_demo/) | Google ADK | Standalone demo of Neo4jMemoryService with session storage, search, and preferences |
 

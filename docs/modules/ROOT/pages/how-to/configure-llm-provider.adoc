@@ -77,7 +77,7 @@ settings = MemorySettings(
     neo4j={"password": "p"},
     llm=None,
     extraction=ExtractionConfig(
-        extractor_type=ExtractorType.GLINER,  # or SPACY / PIPELINE
+        extractor_type=ExtractorType.GLINER,  # GLiNER2.5; or SPACY / PIPELINE
         enable_llm_fallback=False,
     ),
 )

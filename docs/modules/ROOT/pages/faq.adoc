@@ -132,7 +132,7 @@ The pipeline runs multiple extractors in sequence and merges their results:
 
 [source]
 ----
-Text → [spaCy] → [GLiNER] → [LLM] → Merge → Filter → Results
+Text → [spaCy] → [GLiNER2.5] → [LLM] → Merge → Validate relations → Results
 ----
 
 [cols="1,2,1"]
@@ -143,9 +143,9 @@ Text → [spaCy] → [GLiNER] → [LLM] → Merge → Filter → Results
 |Statistical NER for common entity types
 |~1ms
 
-|**GLiNER**
-|Zero-shot NER with custom types
-|~50ms
+|**GLiNER2.5**
+|Zero-shot joint entity + relation decoding against the ontology
+|~600ms (CPU, base-v1)
 
 |**LLM**
 |Context-aware extraction for complex cases
@@ -163,15 +163,15 @@ Yes, you can use any extractor individually:
 ----
 from neo4j_agent_memory.extraction import (
     SpacyEntityExtractor,
-    GLiNEREntityExtractor,
+    GLiNER2Extractor,
     LLMEntityExtractor,
 )
 
 # Just spaCy
 extractor = SpacyEntityExtractor()
 
-# Just GLiNER
-extractor = GLiNEREntityExtractor.for_schema("podcast")
+# Just GLiNER2.5
+extractor = GLiNER2Extractor.for_schema("podcast")
 
 # Just LLM
 extractor = LLMEntityExtractor(model="gpt-4o-mini")
@@ -215,44 +215,41 @@ When using multiple extractors, you need to combine their results. Available str
 |spaCy alone
 
 |Domain-specific extraction
-|GLiNER with domain schema
+|GLiNER2.5 with a domain template
 
 |Custom entity types without training
-|GLiNER with custom schema
+|GLiNER2.5 with your own ontology
 
 |Complex text with context
 |Full pipeline with LLM fallback
 
-|Relationship extraction
-|LLM extractor
+|Typed relationship extraction
+|GLiNER2.5 on an ontology that declares relationships
 
 |Cost-sensitive applications
-|spaCy + GLiNER (no LLM)
+|spaCy + GLiNER2.5 (no LLM)
 |===
 
 
-== GLiNER and Domain Schemas
+== GLiNER2.5 and Domain Schemas
 
 [[schemas-gliner-only]]
-=== Are domain schemas only used with GLiNER?
+=== Are domain schemas only used with GLiNER2.5?
 
-[IMPORTANT]
-====
-**Yes, domain schemas are specific to GLiNER.** They leverage GLiNER's ability to accept entity type descriptions at inference time, which helps the model understand what to extract.
-====
+Domain schemas are read most fully by GLiNER2.5, but since 0.7 the LLM stage also reads the ontology they convert into.
 
 [cols="1,3"]
 |===
 |Extractor |Schema Support
 
 |**spaCy**
-|Uses a fixed set of trained entity types (PERSON, ORG, GPE, etc.) -- cannot use domain schemas
+|Uses a fixed set of trained entity types (PERSON, ORG, GPE, etc.). An ontology can only rename spaCy's labels onto POLE+O types and subtypes, not change what the model finds.
 
 |**LLM**
-|Uses a prompt-based approach with entity type names but not the detailed descriptions from schemas
+|When an ontology is configured, the prompt carries its annotation guidelines and the legal `SOURCE -[REL]-> TARGET` catalogue.
 
-|**GLiNER**
-|The only extractor that uses the full schema with descriptions
+|**GLiNER2.5**
+|Compiles the ontology into a JointIE schema: descriptions become annotation guidelines and declared relationships constrain decoding.
 |===
 
 [[labels-vs-schemas]]
@@ -262,15 +259,15 @@ When using multiple extractors, you need to combine their results. Available str
 
 [source,python]
 ----
-extractor = GLiNEREntityExtractor(entity_labels=["person", "company"])
+extractor = GLiNER2Extractor(entity_labels=["person", "company"])
 ----
 
-**Domain schemas** include descriptions that help GLiNER understand what to extract:
+**Domain schemas** include descriptions that help GLiNER2.5 understand what to extract:
 
 [source,python]
 ----
 # Schema includes detailed descriptions
-extractor = GLiNEREntityExtractor.for_schema("podcast")
+extractor = GLiNER2Extractor.for_schema("podcast")
 # {"person": "A person mentioned in the podcast, including hosts, guests...", ...}
 ----
 
@@ -279,7 +276,7 @@ Domain schemas significantly improve extraction accuracy, especially for ambiguo
 [[schemas-with-pipeline]]
 === Can I use domain schemas with the full pipeline?
 
-Yes, when using the `ExtractorBuilder`, the schema applies to the GLiNER stage:
+Yes, when using the `ExtractorBuilder`, the schema applies to the GLiNER2.5 stage:
 
 [source,python]
 ----
@@ -287,7 +284,7 @@ extractor = (
     ExtractorBuilder()
     .with_spacy()                              # Uses spaCy's built-in types
     .with_gliner_schema("podcast", threshold=0.5)  # Uses podcast schema
-    .with_llm_fallback()                       # Uses entity type names
+    .with_llm_fallback()                       # Gets the same ontology
     .merge_by_confidence()
     .build()
 )
@@ -344,15 +341,18 @@ my_schema = DomainSchema(
     },
 )
 
-extractor = GLiNEREntityExtractor(schema=my_schema)
+extractor = GLiNER2Extractor(ontology=my_schema)
 ----
+
+The `ontology=` argument accepts anything with a `to_ontology()` method, so a
+`DomainSchema` or an `EntitySchemaConfig` works directly.
 
 See xref:how-to/entity-extraction.adoc#custom-schemas[Creating Custom Schemas] for more examples.
 
 [[poleo-mapping]]
 === Do schema entity types map to POLE+O types?
 
-Yes, GLiNER entity types are automatically mapped to POLE+O types for Neo4j storage:
+Yes, extracted labels are automatically mapped to POLE+O types for Neo4j storage:
 
 * `person`, `author`, `actor`, `director` → `PERSON`
 * `company`, `organization`, `institution` → `ORGANIZATION`
@@ -360,11 +360,17 @@ Yes, GLiNER entity types are automatically mapped to POLE+O types for Neo4j stor
 * `event`, `meeting`, `case` → `EVENT`
 * Everything else → `OBJECT` (with subtype from the label)
 
-You can also add custom mappings:
+The ontology's own labels win, with `DEFAULT_LABEL_MAPPING` underneath as the
+fallback. To override the table outright, pass `label_mapping=`:
 
 [source,python]
 ----
-extractor.add_label_mapping("podcast_episode", "EVENT", "PODCAST_EPISODE")
+from neo4j_agent_memory.extraction import DEFAULT_LABEL_MAPPING, GLiNER2Extractor
+
+extractor = GLiNER2Extractor(
+    entity_labels=["podcast_episode"],
+    label_mapping={**DEFAULT_LABEL_MAPPING, "podcast_episode": ("EVENT", "PODCAST_EPISODE")},
+)
 ----
 
 
@@ -406,7 +412,7 @@ spaCy's English models recognize:
 
 Not without training a custom model. spaCy's NER is based on statistical models trained on specific entity types.
 
-TIP: For custom entity types, use GLiNER instead.
+TIP: For custom entity types, use GLiNER2.5 instead.
 
 [[spacy-model-choice]]
 === Which spaCy model should I use?
@@ -474,7 +480,7 @@ LLM extraction requires an API call to the language model provider, which adds n
 
 For high-throughput scenarios, consider:
 
-* Using spaCy + GLiNER without LLM fallback
+* Using spaCy + GLiNER2.5 without LLM fallback
 * Batching texts and processing in parallel
 * Using a faster model like `gpt-3.5-turbo`
 
@@ -503,7 +509,7 @@ results = await pipeline.extract_batch(
 Benefits:
 * Parallel processing with configurable concurrency
 * Progress tracking callback
-* GPU batch processing for GLiNER (native batch support)
+* `GLiNER2Extractor.extract_batch()` decodes a slice of texts in one forward pass
 
 [[streaming-extraction]]
 === How do I handle very long documents?
@@ -530,20 +536,16 @@ result = await extractor.extract(long_document)
 [[relation-extraction-llm-free]]
 === Can I extract relationships without LLM calls?
 
-Yes, use GLiREL (GLiNER + Relation Extraction):
+Yes. GLiNER2.5 decodes entities and relations in one pass, so relations come for
+free with the extraction you already run:
 
 [source,python]
 ----
-from neo4j_agent_memory.extraction import (
-    ExtractorBuilder,
-    GLiNEREntityExtractor,
-)
+from neo4j_agent_memory.extraction import ExtractorBuilder
 
-# Enable GLiREL for relation extraction
 extractor = (
     ExtractorBuilder()
-    .with_gliner_schema("podcast")
-    .with_gliner_relations(threshold=0.3)  # GLiREL for relations
+    .with_gliner_schema("podcast")   # podcast declares WORKS_AT, FOUNDED, ...
     .build()
 )
 
@@ -551,7 +553,12 @@ result = await extractor.extract(text)
 # result.relations populated without LLM calls
 ----
 
-GLiREL extracts relations using a fine-tuned model -- no API costs.
+Relations are only decoded when the ontology declares relationship types. The
+`poleo`, `podcast` and `news` templates do; the other five are entity-only until
+you attach relationships. Use `.with_ontology(doc).with_gliner()` for your own.
+
+The separate GLiREL model was removed in 0.7 -- see
+xref:how-to/migrate-to-gliner2.adoc[Migrate to GLiNER2.5].
 
 
 == Entity Resolution and Deduplication
@@ -892,7 +899,7 @@ tracer = get_tracer(
 With tracing enabled, you get visibility into:
 
 * **Memory operations** -- reads, writes, searches with timing
-* **Extraction pipeline** -- each stage (spaCy, GLiNER, LLM) with duration
+* **Extraction pipeline** -- each stage (spaCy, GLiNER2.5, LLM) with duration
 * **LLM calls** -- tokens, latency, costs
 * **Entity resolution** -- matches, merges, SAME_AS creation
 
@@ -937,11 +944,11 @@ config = ExtractionConfig(
 )
 ----
 
-. **Use GPU acceleration for GLiNER**:
+. **Use GPU acceleration for GLiNER2.5**:
 +
 [source,python]
 ----
-extractor = GLiNEREntityExtractor(device="cuda")  # or "mps" for Mac
+extractor = GLiNER2Extractor(device="cuda")  # or "mps" for Mac
 ----
 
 . **Use batch extraction for multiple documents**:
@@ -951,19 +958,22 @@ extractor = GLiNEREntityExtractor(device="cuda")  # or "mps" for Mac
 results = await pipeline.extract_batch(texts, batch_size=10)
 ----
 
-. **Use GLiREL instead of LLM for relations**:
+. **Let GLiNER2.5 do the relations instead of the LLM**:
 +
 [source,python]
 ----
-extractor = ExtractorBuilder().with_gliner_relations().build()
+extractor = ExtractorBuilder().with_gliner_schema("podcast").build()
 ----
 
-. **Use a smaller GLiNER model**:
+. **Use a smaller GLiNER2.5 checkpoint**:
 +
 [source,python]
 ----
-extractor = GLiNEREntityExtractor(model="gliner-community/gliner_small-v2.5")
+extractor = GLiNER2Extractor(model="fastino/gliner2.5-small-v1")
 ----
++
+Or trade precision for speed with `quantize=True` (fp16) and `compile=True`
+(`torch.compile`).
 
 [[memory-footprint]]
 === What's the memory footprint?
@@ -975,12 +985,21 @@ extractor = GLiNEREntityExtractor(model="gliner-community/gliner_small-v2.5")
 |spaCy (`en_core_web_sm`)
 |~50MB RAM
 
-|GLiNER (`medium-v2.5`)
-|~500MB RAM + ~500MB disk for model
+|GLiNER2.5 (`gliner2.5-small-v1`, 74M params)
+|~296MB on disk
+
+|GLiNER2.5 (`gliner2.5-base-v1`, 194M params, the default)
+|~407MB on disk
+
+|GLiNER2.5 (`gliner2.5-multi-v1`, 287M params, multilingual)
+|~594MB on disk
 
 |LLM
 |Minimal (API-based)
 |===
+
+Disk figures are the downloaded checkpoints. Resident memory depends on the
+torch build and on whether `quantize=True` is set.
 
 [[caching]]
 === Can I cache extraction results?
@@ -1005,13 +1024,18 @@ result = await cached_extract(text_hash, text)
 == Troubleshooting
 
 [[gliner-download-fails]]
-=== GLiNER model download fails
+=== GLiNER2.5 model download fails
 
 If the model download fails, try:
 
 . Check your internet connection
 . Set `HF_HUB_OFFLINE=0` to allow downloads
-. Manually download from HuggingFace and set local path
+. Manually download from HuggingFace and pass the local path as `model=`
+
+A `ValueError` naming a "GLiNER v1 checkpoint" is a different problem: the id
+you passed (`urchade/...`, `gliner-community/...`, `numind/...`) is from the
+removed v1 stack. Use `fastino/gliner2.5-base-v1` -- see
+xref:how-to/migrate-to-gliner2.adoc[Migrate to GLiNER2.5].
 
 [[spacy-model-not-found]]
 === spaCy model not found
@@ -1047,11 +1071,18 @@ print("they" in ENTITY_STOPWORDS)    # Check specific word
 [[memory-errors]]
 === Memory errors with large texts
 
-GLiNER has a context window limit. For large texts:
+GLiNER2.5 trains on sequences up to 4,096 words, but *relation* recall
+collapses past roughly 400 words -- often to zero, with no error. The extractor
+therefore windows anything longer than `max_words` (384) automatically, and
+relations whose endpoints land in different windows are lost. For large texts:
 
-. Split into smaller chunks
-. Process chunks separately
+. Extract per message or per document section rather than per concatenation
+. Use `StreamingExtractor` when you want chunk-level results and progress
 . Merge and deduplicate results
+
+A related symptom is an empty result with a `RuntimeWarning` about
+`feasible=False`: that means the decoder could not satisfy the ontology's hard
+constraints (uniqueness, acyclicity), *not* that the text had no entities.
 
 [[extra-forbidden-from-env]]
 === Why does `MemorySettings(...)` raise `extra_forbidden` for `neo4j_uri` / `openai_api_key`?
@@ -1087,29 +1118,37 @@ class MySettings(MemorySettings):
 ----
 
 [[gliner-not-installed]]
-=== ImportError: GLiNER not installed
+=== ImportError: GLiNER2.5 not installed
 
-GLiNER is an optional dependency. Install with:
+GLiNER2.5 is an optional dependency. Install with:
 
 [source,bash]
 ----
-pip install neo4j-agent-memory[gliner]
+pip install "neo4j-agent-memory[gliner2]"
 # or
 uv sync --all-extras
 ----
+
+The `[extraction]` and `[full]` extras include it too. `[gliner]` still works as
+a deprecated alias of `[gliner2]` and is removed in 0.8.
 
 Check availability in code:
 
 [source,python]
 ----
-from neo4j_agent_memory.extraction import is_gliner_available
+from neo4j_agent_memory.extraction import GLiNER2Extractor, is_gliner2_available
 
-if is_gliner_available():
-    extractor = GLiNEREntityExtractor.for_schema("podcast")
+if is_gliner2_available():
+    extractor = GLiNER2Extractor.for_schema("podcast")
 else:
-    print("GLiNER not available, using spaCy only")
+    print("GLiNER2.5 not available, using spaCy only")
     extractor = SpacyEntityExtractor()
 ----
+
+Importing one of the names removed in 0.7 (`GLiNEREntityExtractor`,
+`GLiRELExtractor`, `GLiNERWithRelationsExtractor`, `is_gliner_available`,
+`is_glirel_available`, `DEFAULT_RELATION_TYPES`) raises an `ImportError` that
+names its replacement.
 
 
 == See Also

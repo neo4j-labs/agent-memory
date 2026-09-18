@@ -8,7 +8,7 @@ How to run labeled regression tests against your memory graph using the
 evaluation harness.
 
 [.lead]
-The harness is a *scaffold*, not a benchmark — three dimensions, simple
+The harness is a *scaffold*, not a benchmark — five dimensions, simple
 metrics, no opinionated dataset. Use it to detect regressions when you
 change extraction settings, dedup thresholds, or schema, *not* to make
 "library X scores Y on benchmark Z" claims.
@@ -27,7 +27,27 @@ change extraction settings, dedup thresholds, or schema, *not* to make
 
 | Preference fidelity
 | F1 score of `client.long_term.get_preferences_for(user, active_only=True)` against the expected active preference ids per user.
+
+| Extraction quality _(v0.7)_
+| Relation F1 when a case declares `expected_relations`, entity micro-F1 otherwise. Runs the *client's configured extractor* over the case text and matches one-to-one under the default alias-tolerant policy.
+
+| Resolution quality _(v0.7)_
+| B-cubed F1 of the *client's configured resolver* — `resolve_batch(mentions)` — against labeled gold clusters.
 |===
+
+The two v0.7 dimensions need a component the client may not have: an extractor
+and a resolver respectively. When one is missing — a NAMS-backed client, or an
+`llm=None` client with no local resolver — the dimension is *skipped cleanly*:
+its report field stays `None` and the dimension name is appended to
+`report.skipped`. A skipped dimension is excluded from `overall_score` rather
+than scoring zero, so a missing extractor cannot look like a regression.
+
+[source,python]
+----
+report = await client.eval.run(suite)
+if "extraction" in report.skipped:
+    print("no extractor configured - extraction dimension not scored")
+----
 
 == Goal
 
@@ -38,7 +58,9 @@ Run a suite of labeled cases and score each dimension:
 from neo4j_agent_memory.memory.eval import (
     AuditCase,
     EvalSuite,
+    ExtractionCase,
     PreferenceCase,
+    ResolutionCase,
     RetrievalCase,
 )
 
@@ -62,6 +84,26 @@ suite = EvalSuite(
             expected_active_pref_ids={"pref-senior-healthcare"},
         ),
     ],
+    extraction=[
+        ExtractionCase(
+            text="Sara Okafor joined Anthem as a principal consultant.",
+            expected_entities=[
+                {"name": "Sara Okafor", "type": "PERSON"},
+                {"name": "Anthem", "type": "ORGANIZATION"},
+            ],
+            expected_relations=[("Sara Okafor", "EMPLOYED_BY", "Anthem")],
+        ),
+    ],
+    resolution=[
+        ResolutionCase(
+            mentions=[
+                ("Anthem", "ORGANIZATION"),
+                ("Anthem Inc", "ORGANIZATION"),
+                ("Aetna", "ORGANIZATION"),
+            ],
+            gold_clusters={"Anthem": "a", "Anthem Inc": "a", "Aetna": "b"},
+        ),
+    ],
 )
 
 report = await client.eval.run(suite)
@@ -69,7 +111,28 @@ print(f"Overall: {report.overall_score:.2f}")
 print(f"Retrieval recall: {report.retrieval.score:.2f}")
 print(f"Audit recall:     {report.audit.score:.2f}")
 print(f"Pref F1:          {report.preference.score:.2f}")
+if report.extraction:
+    print(f"Extraction F1:    {report.extraction.score:.2f}")
+if report.resolution:
+    print(f"Resolution B3 F1: {report.resolution.score:.2f}")
+print(f"Skipped: {report.skipped}")
 ----
+
+`ExtractionCase` coerces dict and tuple entries into `ExpectedEntity` /
+`ExpectedRelation` objects on construction, so gold data can be written inline
+or loaded from JSON. When a case declares `expected_relations` it is scored on
+relations *only* — split entity and relation expectations into separate cases if
+you want both numbers.
+
+`ResolutionCase.gold_clusters` maps each mention name to a cluster id, and
+predicted clusters come from each resolved entity's `cluster_id` (falling back
+to `canonical_name`). Mentions sharing a name overwrite each other in both maps,
+so give repeated mentions distinct names when that matters.
+
+Seed the canonical entities the case expects before running it. `resolve_batch`
+resolves each mention independently against the *stored* graph, so on an empty
+database every mention resolves to itself and B-cubed recall floors out for
+reasons unrelated to your thresholds.
 
 == Steps
 
@@ -133,7 +196,9 @@ By default every dimension with cases is evaluated. To run a subset:
 report = await client.eval.run(suite, dimensions=["audit"])
 ----
 
-Skipped dimensions show as `None` on the report.
+Skipped dimensions show as `None` on the report. A dimension with no cases is
+simply not run; one that had cases but no component to run them lands in
+`report.skipped` as well.
 
 === 3. Inspect per-case detail
 
@@ -163,6 +228,9 @@ payload = {
     "audit": report.audit.score if report.audit else None,
     "retrieval": report.retrieval.score if report.retrieval else None,
     "preference": report.preference.score if report.preference else None,
+    "extraction": report.extraction.score if report.extraction else None,
+    "resolution": report.resolution.score if report.resolution else None,
+    "skipped": report.skipped,
 }
 Path("eval-report.json").write_text(json.dumps(payload, indent=2))
 
@@ -197,5 +265,7 @@ you the score over time instead of a single snapshot.
 
 == See Also
 
+* xref:how-to/tune-entity-resolution.adoc[Tune Entity Resolution] — using the
+  resolution dimension to compare threshold settings.
 * xref:how-to/consolidation.adoc[Memory Consolidation]
 * `examples/eval-harness/` — the runnable example.

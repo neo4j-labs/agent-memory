@@ -43,8 +43,8 @@ for index, error_msg in result.get_errors():
 ====
 *Tuning batch size and concurrency*
 
-* **GLiNER on GPU**: `batch_size=32, max_concurrency=1` — let the GPU saturate with larger batches rather than many small concurrent runs
-* **GLiNER on CPU**: `batch_size=10, max_concurrency=4` — smaller batches, more parallelism
+* **GLiNER2.5 on GPU**: `batch_size=32, max_concurrency=1` — let the GPU saturate with larger batches rather than many small concurrent runs
+* **GLiNER2.5 on CPU**: `batch_size=10, max_concurrency=4` — smaller batches, more parallelism
 * **LLM via API**: `batch_size=1, max_concurrency=10` — one doc per worker, limited by API rate limits
 ====
 
@@ -52,14 +52,20 @@ for index, error_msg in result.get_errors():
 
 [source,python]
 ----
-extractor = GLiNEREntityExtractor.for_schema("ecommerce")
+extractor = GLiNER2Extractor.for_schema("business")
 
-result = await extractor.extract_batch(
-    texts=product_descriptions,
+# GLiNER2Extractor.extract_batch() decodes each slice in one forward pass and
+# returns a plain list[ExtractionResult] — no max_concurrency, no per-item
+# error wrapper.
+results = await extractor.extract_batch(
+    product_descriptions,
     batch_size=50,         # Larger batches for GPU throughput
-    max_concurrency=10,
 )
 ----
+
+Wrap the extractor in an `ExtractionPipeline` when you want the
+`BatchExtractionResult` shape (per-item success flags, `max_concurrency`,
+`fail_fast`).
 
 === Financial Compliance (Accuracy Priority)
 
@@ -67,14 +73,14 @@ result = await extractor.extract_batch(
 ----
 pipeline = ExtractionPipeline(
     stages=[
-        GLiNEREntityExtractor.for_schema("financial"),
+        GLiNER2Extractor.for_schema("business"),
         LLMEntityExtractor(
             model="gpt-4o",
             extract_relations=True,
             temperature=0,           # Deterministic output
         ),
     ],
-    merge_strategy="union",          # Keep all extractions
+    merge_strategy=MergeStrategy.UNION,   # Keep all extractions
 )
 
 result = await pipeline.extract_batch(compliance_documents)

@@ -214,7 +214,10 @@ literal task `"Aggregated session reasoning"`. Assert on the step count, not on
 
 == 8. The active ontology
 
-The ontology is the schema server-side extraction is validated against. It is a NAMS-only accessor:
+The ontology is the schema server-side extraction is validated against. The
+accessor is available on both backends (on bolt it is stored in your own Neo4j
+and drives local extraction — see
+xref:how-to/ontology-driven-extraction.adoc[Drive Extraction From an Ontology]):
 
 [source,python]
 ----

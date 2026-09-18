@@ -190,9 +190,22 @@ class TestSnippetImports:
             "EntityTypeConfig",
             "RelationTypeConfig",
             "StreamingExtractor",
-            "GLiNERWithRelationsExtractor",
-            "SpacyEntityExtractor",
+            # GLiNER2Extractor / is_gliner2_available live behind
+            # extraction.__getattr__ (lazy, so the module imports without the
+            # gliner2 extra), which hasattr() on the package does not see.
+            "GLiNER2Extractor",
+            "is_gliner2_available",
+            # Removed in 0.7. These appear only in the "Before" snippets of
+            # how-to/migrate-to-gliner2.adoc, which exists to show the old
+            # spelling next to the new one; extraction.__getattr__ raises
+            # ImportError for each with a replacement hint. Do not reintroduce
+            # them anywhere else.
             "GLiNEREntityExtractor",
+            "GLiNERWithRelationsExtractor",
+            "GLiRELExtractor",
+            "is_gliner_available",
+            "is_glirel_available",
+            "SpacyEntityExtractor",
             "LLMEntityExtractor",
             "ExtractionPipeline",
             "MergeStrategy",
@@ -267,6 +280,20 @@ class TestSnippetImports:
             "VertexAIEmbeddingProvider",
             # CrewAI bridge (from neo4j_agent_memory.integrations.crewai)
             "llm_provider_from_crewai",
+            # v0.7 ontology package. The checker only probes the extraction /
+            # models / config / memory submodules, and these two are not
+            # re-exported at the package root.
+            "get_template",
+            "list_templates",
+            # Evaluation harness cases live in neo4j_agent_memory.memory.eval,
+            # which the `memory` package does not re-export (the probe checks
+            # `neo4j_agent_memory.memory`, not its submodules).
+            "EvalSuite",
+            "RetrievalCase",
+            "AuditCase",
+            "PreferenceCase",
+            "ExtractionCase",
+            "ResolutionCase",
         }
         actual_missing = set(missing) - allowed_missing
 

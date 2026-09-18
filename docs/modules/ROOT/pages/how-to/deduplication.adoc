@@ -16,6 +16,57 @@ When building context graphs from conversations and documents, the same real-wor
 
 image::diagrams/entity-dedup-flow.png[Entity deduplication flow: similarity thresholds route new entities to auto-merge, flag for review, or create as new,width=540,align=left]
 
+[IMPORTANT]
+====
+*Two paths, one decision (v0.7).* `add_entity` deduplicates explicitly and
+returns a `DeduplicationResult`, as it always has. *Message ingestion now
+resolves extracted mentions too, by default* — see
+<<ingest-time-resolution>>. Both paths go through `OntologyResolver` when
+`resolution.strategy=COMPOSITE` (the default on bolt), so they share one set of
+thresholds. For the resolver's stages and knobs, see
+xref:how-to/tune-entity-resolution.adoc[Tune Entity Resolution].
+====
+
+[#ingest-time-resolution]
+== Deduplicate During Ingestion
+
+Nothing to switch on: storing a message resolves the mentions extracted from it
+against the entities already in the graph.
+
+[source,python]
+----
+await client.short_term.add_message("s1", "user", "Acme Corp filed the ticket.")
+await client.short_term.add_message("s1", "user", "Acme also reported a second outage.")
+
+# One Organization node, with "Acme" recorded as an alias of "Acme Corp".
+# get_entity_by_name checks name, canonical_name and aliases, so either
+# surface form finds the same node.
+entity = await client.long_term.get_entity_by_name("Acme")
+----
+
+Per mention, one of three things happens: the mention *merges* onto a matched
+entity (no new node; the message's `MENTIONS` edge points at the match and the
+surface form is appended to its `aliases`), it lands in the *review* band (a new
+node plus a pending `SAME_AS` edge to the match), or it is *created*. The
+decision is recorded in the created node's `metadata` as
+`resolution.action` / `resolution.score` / `resolution.match_type`.
+
+To restore the pre-v0.7 behaviour — one node per distinct surface form, no
+blocking queries during ingestion — set one field:
+
+[source,python]
+----
+from neo4j_agent_memory import MemorySettings
+from neo4j_agent_memory.config.settings import ResolutionConfig
+
+settings = MemorySettings(
+    neo4j={"uri": "bolt://localhost:7687", "password": "password"},
+    resolution=ResolutionConfig(resolve_on_ingest=False),
+)
+----
+
+`add_entity` keeps deduplicating either way.
+
 == Prerequisites
 
 * Neo4j database running with vector indexes
@@ -26,46 +77,78 @@ image::diagrams/entity-dedup-flow.png[Entity deduplication flow: similarity thre
 
 === Basic Configuration
 
-Enable deduplication when adding entities:
+Deduplication is on by default. Configure the bands once, on the client, and
+both write paths use them:
 
 [source,python]
 ----
 from neo4j_agent_memory import MemoryClient, MemorySettings
-from neo4j_agent_memory.memory import DeduplicationConfig
+from neo4j_agent_memory.config.settings import ResolutionConfig
 
 settings = MemorySettings(
-    neo4j={"uri": "bolt://localhost:7687", "password": "password"}
+    neo4j={"uri": "bolt://localhost:7687", "password": "password"},
+    resolution=ResolutionConfig(
+        auto_merge_threshold=0.90,   # Merge at or above this score
+        review_threshold=0.85,       # Flag for review between 0.85 and 0.90
+    ),
 )
 
-client = MemoryClient(settings)
+async with MemoryClient(settings) as client:
+    entity, result = await client.long_term.add_entity(
+        "JPMorgan Chase",
+        "ORGANIZATION",
+    )
 
-# Configure deduplication
-dedup_config = DeduplicationConfig(
-    auto_merge_threshold=0.95,  # Auto-merge above 95% similarity
-    flag_threshold=0.85,         # Flag for review between 85-95%
-    use_fuzzy_matching=True,     # Also use string similarity
-    match_same_type_only=True,   # Only match within same entity type
+    # Check what happened
+    if result.action == "none":
+        print(f"Created new entity: {entity.name}")
+    elif result.action == "merged":
+        print(f"Merged with existing: {result.matched_entity_name}")
+    elif result.action == "flagged":
+        print(f"Flagged for review against: {result.matched_entity_name}")
+----
+
+`DeduplicationResult.action` is `"none"`, `"merged"` or `"flagged"`;
+`is_duplicate`, `similarity_score`, `match_type` and `matched_entity_id` carry
+the rest of the decision.
+
+`DeduplicationConfig` still exists, as a constructor argument on
+`LongTermMemory` for code that builds the layer itself.
+`DeduplicationConfig.from_resolution_config(settings.resolution)` derives it
+from the same bands so the two cannot drift:
+
+[source,python]
+----
+from neo4j_agent_memory.memory import DeduplicationConfig, LongTermMemory
+
+long_term = LongTermMemory(
+    neo4j_client,
+    embedder=embedder,
+    deduplication=DeduplicationConfig.from_resolution_config(settings.resolution),
 )
+----
 
-# Add entity with deduplication
-entity, result = await client.long_term.add_entity(
-    name="JPMorgan Chase",
-    entity_type="ORGANIZATION",
-    deduplication=dedup_config,
-)
+=== Per-Entity Thresholds
 
-# Check what happened
-if result.action == "created":
-    print(f"Created new entity: {entity.name}")
-elif result.action == "merged":
-    print(f"Merged with existing: {result.matched_entity_name}")
-elif result.action == "flagged":
-    print(f"Flagged for review against: {result.matched_entity_name}")
+When the ontology declares an entity type, its `resolution_threshold` and
+`review_threshold` override the global bands for mentions of that type — person
+names are far more ambiguous than product ids:
+
+[source,yaml]
+----
+entity_types:
+  - label: Customer
+    pole_type: PERSON
+    resolution_threshold: 0.95
+    review_threshold: 0.88
 ----
 
 === Domain-Specific Thresholds
 
-Adjust thresholds based on your domain's accuracy requirements:
+Adjust thresholds based on your domain's accuracy requirements. The
+`DeduplicationConfig` snippets below apply when you construct `LongTermMemory`
+yourself; on a `MemoryClient`, set `auto_merge_threshold` / `review_threshold`
+on `ResolutionConfig` instead:
 
 .Financial Services (High Precision)
 [source,python]
@@ -109,39 +192,35 @@ content_config = DeduplicationConfig(
 
 [source,python]
 ----
-# Get entities flagged for review
-duplicates = await client.long_term.find_potential_duplicates(
-    min_confidence=0.85,
-    status="pending",
-    limit=50,
-)
+# Every pair with a pending SAME_AS edge, highest confidence first.
+duplicates = await client.long_term.find_potential_duplicates(limit=50)
 
 for entity1, entity2, confidence in duplicates:
     print(f"\nPotential duplicate ({confidence:.1%} confidence):")
     print(f"  Entity 1: {entity1.name} ({entity1.type})")
     print(f"  Entity 2: {entity2.name} ({entity2.type})")
-    print(f"  E1 properties: {entity1.properties}")
-    print(f"  E2 properties: {entity2.properties}")
+    print(f"  E1 metadata: {entity1.metadata}")
+    print(f"  E2 metadata: {entity2.metadata}")
 ----
+
+`find_potential_duplicates` takes `limit` only — it always returns `pending`
+pairs, and the band that produced them is `resolution.review_threshold`. Filter
+on `confidence` in your own loop if you want to work the queue in tranches.
 
 === Confirm or Reject Duplicates
 
 [source,python]
 ----
-# After human review, confirm they are the same entity
-await client.long_term.review_duplicate(
-    entity1_id=entity1.id,
-    entity2_id=entity2.id,
-    confirm=True,  # True = same entity, False = different entities
-)
+# After human review, confirm they are the same entity.
+# The ids are positional; `confirm` is keyword-only.
+await client.long_term.review_duplicate(entity1.id, entity2.id, confirm=True)
 
 # Or reject - they are different entities
-await client.long_term.review_duplicate(
-    entity1_id=entity1.id,
-    entity2_id=entity2.id,
-    confirm=False,
-)
+await client.long_term.review_duplicate(entity1.id, entity2.id, confirm=False)
 ----
+
+`confirm=True` merges the pair and marks the `SAME_AS` edge `confirmed`;
+`confirm=False` marks it `rejected` and leaves both nodes in place.
 
 === Automated Review Rules
 
@@ -152,23 +231,21 @@ Create rules for automatic review:
 async def auto_review_duplicates():
     """Apply automated rules to pending duplicates."""
 
-    duplicates = await client.long_term.find_potential_duplicates(
-        status="pending",
-        limit=100,
-    )
+    duplicates = await client.long_term.find_potential_duplicates(limit=100)
 
     for entity1, entity2, confidence in duplicates:
+        meta1 = entity1.metadata or {}
+        meta2 = entity2.metadata or {}
+
         # Rule 1: Same SKU = definitely same product
-        if (entity1.type == "PRODUCT" and
-            entity1.properties.get("sku") == entity2.properties.get("sku")):
+        if entity1.type == "OBJECT" and meta1.get("sku") == meta2.get("sku"):
             await client.long_term.review_duplicate(
                 entity1.id, entity2.id, confirm=True
             )
             continue
 
         # Rule 2: Same ticker = same security
-        if (entity1.type == "SECURITY" and
-            entity1.properties.get("ticker") == entity2.properties.get("ticker")):
+        if entity1.type == "OBJECT" and meta1.get("ticker") == meta2.get("ticker"):
             await client.long_term.review_duplicate(
                 entity1.id, entity2.id, confirm=True
             )
@@ -190,31 +267,22 @@ async def auto_review_duplicates():
 
 [source,python]
 ----
-# Manually merge two entities you know are the same
-await client.long_term.merge_entities(
-    primary_id=entity1.id,      # Entity to keep
-    duplicate_id=entity2.id,    # Entity to merge and delete
-    merge_properties=True,       # Combine properties from both
-    keep_aliases=True,           # Store duplicate name as alias
+# Manually merge two entities you know are the same.
+# `target` survives; `source` is marked merged and its name becomes an alias.
+result = await client.long_term.merge_duplicate_entities(
+    source_id=duplicate.id,
+    target_id=survivor.id,
 )
+if result is not None:
+    source, target = result
 ----
 
-=== Merge with Property Strategy
-
-[source,python]
-----
-# Custom property merging
-await client.long_term.merge_entities(
-    primary_id=entity1.id,
-    duplicate_id=entity2.id,
-    property_strategy={
-        "description": "longest",     # Keep longer description
-        "confidence": "highest",      # Keep higher confidence
-        "created_at": "earliest",     # Keep earliest date
-        "updated_at": "latest",       # Keep latest date
-    },
-)
-----
+The survivor keeps its own properties, gains the source's name as an alias, and
+inherits every edge the source carried — `MENTIONS`, `RELATED_TO` (both
+directions), `SAME_AS`, `EXTRACTED_FROM`, `EXTRACTED_BY` and `APPLIES_TO` — so
+merging never drops graph context. There is no property-merge strategy
+parameter; write the properties you want onto the survivor with `update_entity`
+before or after merging.
 
 == Disable Deduplication
 
@@ -257,34 +325,37 @@ for item in verified_product_catalog:
 stats = await client.long_term.get_deduplication_stats()
 
 print(f"Total entities: {stats.total_entities}")
-print(f"Auto-merged: {stats.auto_merged_count}")
-print(f"Pending review: {stats.pending_review_count}")
-print(f"Confirmed merges: {stats.confirmed_count}")
-print(f"Rejected (different): {stats.rejected_count}")
+print(f"Merged away: {stats.merged_entities}")
+print(f"SAME_AS edges: {stats.same_as_relationships}")
+print(f"Pending review: {stats.pending_reviews}")
+----
 
-# Calculate quality metrics
-if stats.confirmed_count + stats.rejected_count > 0:
-    precision = stats.confirmed_count / (stats.confirmed_count + stats.rejected_count)
-    print(f"Flagging precision: {precision:.1%}")
+`DeduplicationStats` carries exactly those four counters. For confirmed-vs-
+rejected ratios, read the `SAME_AS` edges directly:
+
+[source,python]
+----
+rows = await client.query.cypher("""
+    MATCH ()-[r:SAME_AS]->()
+    RETURN r.status AS status, count(*) AS n
+""")
 ----
 
 === Adjust Thresholds Based on Quality
 
 [source,python]
 ----
-# If rejection rate is high, raise thresholds
-if stats.rejected_count > stats.confirmed_count:
-    print("High rejection rate - consider raising thresholds")
-
-    new_config = DeduplicationConfig(
-        auto_merge_threshold=0.98,  # More conservative
-        flag_threshold=0.90,
-    )
-
-# If too many pending reviews, raise auto-merge threshold
-if stats.pending_review_count > 1000:
-    print("Large review queue - consider raising auto-merge threshold")
+# A large review queue means the review band is too wide (or nobody is
+# working it): raise review_threshold, or raise auto_merge_threshold if the
+# pairs you do review keep turning out to be the same entity.
+if stats.pending_reviews > 1000:
+    print("Large review queue - retune the bands")
 ----
+
+Both bands live on `ResolutionConfig` now
+(`auto_merge_threshold` / `review_threshold`), and they are what the ingestion
+path and `add_entity` both use. See
+xref:how-to/tune-entity-resolution.adoc[Tune Entity Resolution].
 
 == Best Practices
 
@@ -323,37 +394,34 @@ entity_type = "RETAIL_BRAND"
 
 === 3. Add Known Aliases Upfront
 
-[source,python]
+Declare them in the ontology, where the resolver reads them as a gazetteer (an
+exact alias hit scores 1.0, with or without an embedder):
+
+[source,yaml]
 ----
-entity, _ = await client.long_term.add_entity(
-    name="JPMorgan Chase & Co.",
-    entity_type="FINANCIAL_INSTITUTION",
-    attributes={
-        "aliases": ["JPMorgan", "Chase", "JPMC", "Chase Bank"],
-    },
-)
+entity_types:
+  - label: Organization
+    pole_type: ORGANIZATION
+    aliases:
+      JPMorgan Chase & Co.: ["JPMorgan", "Chase", "JPMC", "Chase Bank"]
 ----
 
 === 4. Regular Review Cycles
 
 [source,python]
 ----
-# Daily: High-confidence flags
-daily = await client.long_term.find_potential_duplicates(
-    min_confidence=0.90,
-    limit=50,
-)
+pairs = await client.long_term.find_potential_duplicates(limit=200)
 
-# Weekly: Lower-confidence flags
-weekly = await client.long_term.find_potential_duplicates(
-    min_confidence=0.85,
-    max_confidence=0.90,
-    limit=200,
-)
+# Daily: the high-confidence end of the queue
+daily = [p for p in pairs if p[2] >= 0.90]
+
+# Weekly: everything else
+weekly = [p for p in pairs if p[2] < 0.90]
 ----
 
 == See Also
 
+* xref:how-to/tune-entity-resolution.adoc[Tune Entity Resolution]
 * xref:how-to/entities.adoc[Work with Entities]
 * xref:how-to/entity-extraction.adoc[Configure Entity Extraction]
 * xref:explanation/resolution-deduplication.adoc[Entity Resolution Concepts]

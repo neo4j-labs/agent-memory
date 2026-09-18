@@ -330,10 +330,10 @@ class StreamingExtractor:
 
     Example:
         ```python
-        from neo4j_agent_memory.extraction import GLiNEREntityExtractor
+        from neo4j_agent_memory.extraction import GLiNER2Extractor
         from neo4j_agent_memory.extraction.streaming import StreamingExtractor
 
-        extractor = GLiNEREntityExtractor.for_schema("podcast")
+        extractor = GLiNER2Extractor.for_schema("podcast")
         streamer = StreamingExtractor(extractor, chunk_size=4000)
 
         # Stream results

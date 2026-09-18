@@ -62,7 +62,7 @@ pip install neo4j-agent-memory[all]
 
 This installs:
 - The core memory library
-- GLiNER for entity extraction
+- GLiNER2.5 for entity and relation extraction
 - OpenAI client for embeddings
 - Neo4j driver for database connection
 
@@ -197,7 +197,7 @@ import asyncio
 import os
 from dotenv import load_dotenv
 from neo4j_agent_memory import MemoryClient, MemorySettings
-from neo4j_agent_memory.extraction import GLiNEREntityExtractor
+from neo4j_agent_memory.extraction import GLiNER2Extractor
 
 load_dotenv()
 
@@ -208,7 +208,7 @@ async def main():
 
     async with MemoryClient(settings) as client:
         # Create an entity extractor
-        extractor = GLiNEREntityExtractor.for_poleo()
+        extractor = GLiNER2Extractor.for_poleo()
         print("✓ Entity extractor ready!")
 
         # Sample conversation
@@ -315,7 +315,7 @@ import asyncio
 import os
 from dotenv import load_dotenv
 from neo4j_agent_memory import MemoryClient, MemorySettings
-from neo4j_agent_memory.extraction import GLiNEREntityExtractor
+from neo4j_agent_memory.extraction import GLiNER2Extractor
 
 load_dotenv()
 
@@ -325,7 +325,7 @@ async def main():
     )
 
     async with MemoryClient(settings) as client:
-        extractor = GLiNEREntityExtractor.for_poleo()
+        extractor = GLiNER2Extractor.for_poleo()
 
         session_id = "shopping-session-002"
 
@@ -532,9 +532,10 @@ docker start neo4j-memory
 
 Double-check your password in `.env` matches what you set in Docker.
 
-=== GLiNER Download Slow
+=== Model Download Slow
 
-The first run downloads the GLiNER model (~500MB). This is normal and only happens once.
+The first run downloads the GLiNER2.5 model (~407 MB for the default
+`fastino/gliner2.5-base-v1`). This is normal and only happens once.
 
 == Clean Up
 

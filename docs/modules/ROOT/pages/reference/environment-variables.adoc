@@ -177,32 +177,77 @@ Standard AWS environment variables used by boto3 when using Bedrock embeddings o
 | `NAM_EXTRACTION__ENABLE_GLINER`
 | bool
 | `true`
-| Enable GLiNER extractor
+| Enable the GLiNER2.5 extractor stage
 
 | `NAM_EXTRACTION__ENABLE_LLM_FALLBACK`
 | bool
-| `false`
+| `true`
 | Enable LLM extractor as fallback
 
 | `NAM_EXTRACTION__GLINER_MODEL`
 | string
-| `gliner-community/gliner_medium-v2.5`
-| GLiNER model name
+| `fastino/gliner2.5-base-v1`
+| GLiNER2.5 checkpoint (`small-v1` / `base-v1` / `multi-v1`). GLiNER v1 ids are rejected.
 
 | `NAM_EXTRACTION__GLINER_SCHEMA`
 | string
-| `poleo`
-| Domain schema for GLiNER
+| _unset_
+| Built-in domain template for the GLiNER2.5 stage
 
 | `NAM_EXTRACTION__GLINER_THRESHOLD`
 | float
 | `0.5`
-| Confidence threshold (0.0-1.0)
+| Entity confidence threshold (0.0-1.0)
+
+| `NAM_EXTRACTION__GLINER_RELATION_THRESHOLD`
+| float
+| _unset_
+| Confidence floor for decoded relations
+
+| `NAM_EXTRACTION__GLINER_DEVICE`
+| string
+| `cpu`
+| Inference device (`cpu` / `cuda` / `mps`)
+
+| `NAM_EXTRACTION__GLINER_MAX_WORDS`
+| int
+| `384`
+| Longest input decoded in one pass; longer text is windowed
+
+| `NAM_EXTRACTION__GLINER_CHUNK_OVERLAP`
+| int
+| `64`
+| Word overlap between windows
+
+| `NAM_EXTRACTION__GLINER_OVERLAP_POLICY`
+| string
+| _unset_
+| Span-overlap policy for the attribute pass (`flat` / `nested` / `allow` / `longest`)
+
+| `NAM_EXTRACTION__GLINER_EXTRACT_ATTRIBUTES`
+| bool
+| `false`
+| Run the opt-in attribute pass for enum properties
+
+| `NAM_EXTRACTION__GLINER_QUANTIZE`
+| bool
+| `false`
+| Load the GLiNER2.5 weights in fp16
+
+| `NAM_EXTRACTION__GLINER_COMPILE`
+| bool
+| `false`
+| Run the GLiNER2.5 weights through `torch.compile`
 
 | `NAM_EXTRACTION__SPACY_MODEL`
 | string
 | `en_core_web_sm`
 | spaCy model name
+
+| `NAM_EXTRACTION__SPACY_CONFIDENCE`
+| float
+| `0.85`
+| Confidence assigned to every spaCy entity
 
 | `NAM_EXTRACTION__LLM_MODEL`
 | string
@@ -212,7 +257,74 @@ Standard AWS environment variables used by boto3 when using Bedrock embeddings o
 | `NAM_EXTRACTION__MERGE_STRATEGY`
 | string
 | `confidence`
-| Merge strategy for multi-stage extraction
+| Merge strategy for multi-stage extraction (`union`, `intersection`, `confidence`, `cascade`)
+
+| `NAM_EXTRACTION__EXTRACT_RELATIONS`
+| bool
+| `true`
+| Whether to extract relations
+
+| `NAM_EXTRACTION__EXTRACT_PREFERENCES`
+| bool
+| `true`
+| Whether to extract preferences
+
+| `NAM_EXTRACTION__CONFIDENCE_THRESHOLD`
+| float
+| `0.5`
+| Minimum confidence for extracted entities
+|===
+
+== Schema and Ontology Configuration
+
+[cols="2,1,1,3", options="header"]
+|===
+| Variable | Type | Default | Description
+
+| `NAM_SCHEMA_CONFIG__MODEL`
+| string
+| `poleo`
+| Schema model (`poleo`, `legacy`, `custom`)
+
+| `NAM_SCHEMA_CONFIG__ENTITY_TYPES`
+| JSON array
+| _unset_
+| Custom entity types, used when `MODEL=custom`
+
+| `NAM_SCHEMA_CONFIG__ENABLE_SUBTYPES`
+| bool
+| `true`
+| Track entity subtypes
+
+| `NAM_SCHEMA_CONFIG__STRICT_TYPES`
+| bool
+| `false`
+| Reject unknown entity types
+
+| `NAM_SCHEMA_CONFIG__CUSTOM_SCHEMA_PATH`
+| path
+| _unset_
+| Schema file (`.json`/`.yaml`); an `EntitySchemaConfig` or an ontology document
+
+| `NAM_SCHEMA_CONFIG__ONTOLOGY_PATH`
+| path
+| _unset_
+| Ontology document (`.json`/`.yaml`), consulted before `CUSTOM_SCHEMA_PATH`
+
+| `NAM_SCHEMA_CONFIG__USE_ACTIVE_ONTOLOGY`
+| bool
+| `true`
+| Adopt the ontology version activated in the database
+
+| `NAM_SCHEMA_CONFIG__ONTOLOGY_TEMPLATE`
+| string
+| `poleo`
+| Built-in template used as the final fallback
+
+| `NAM_SCHEMA_CONFIG__VALIDATION_MODE`
+| string
+| _unset_
+| `permissive` or `strict` enforcement on the write paths
 |===
 
 == Enrichment Configuration
@@ -285,53 +397,86 @@ Standard AWS environment variables used by boto3 when using Bedrock embeddings o
 |===
 | Variable | Type | Default | Description
 
-| `NAM_RESOLUTION__EMBEDDING_THRESHOLD`
+| `NAM_RESOLUTION__STRATEGY`
+| str
+| `composite`
+| `none`, `exact`, `fuzzy`, `semantic`, `composite`. `composite` builds
+  `OntologyResolver` on bolt.
+
+| `NAM_RESOLUTION__EXACT_THRESHOLD`
 | float
-| `0.85`
-| Embedding similarity threshold
+| `1.0`
+| Exact-match threshold (`EXACT` strategy)
 
 | `NAM_RESOLUTION__FUZZY_THRESHOLD`
 | float
-| `0.9`
+| `0.85`
 | Fuzzy string matching threshold
 
-| `NAM_RESOLUTION__MATCH_SAME_TYPE_ONLY`
+| `NAM_RESOLUTION__SEMANTIC_THRESHOLD`
+| float
+| `0.8`
+| Embedding similarity threshold (`SEMANTIC` strategy)
+
+| `NAM_RESOLUTION__FUZZY_SCORER`
+| str
+| `token_sort_ratio`
+| RapidFuzz scorer name
+
+| `NAM_RESOLUTION__RESOLVE_ON_INGEST`
 | bool
 | `true`
-| Only match entities of same type
+| Resolve extracted mentions while storing a message (v0.7). The single opt-out
+  for ingest-time resolution.
+
+| `NAM_RESOLUTION__AUTO_MERGE_THRESHOLD`
+| float
+| `0.90`
+| Merge a mention onto the match at or above this score. Per-type override:
+  `EntityTypeDef.resolution_threshold`.
+
+| `NAM_RESOLUTION__REVIEW_THRESHOLD`
+| float
+| `0.85`
+| Store the mention plus a pending `SAME_AS` edge between this and the
+  auto-merge line. Must be `<=` `AUTO_MERGE_THRESHOLD`.
+
+| `NAM_RESOLUTION__CANDIDATE_LIMIT`
+| int
+| `12`
+| Blocking candidates per mention and per bucket
+
+| `NAM_RESOLUTION__USE_ALIAS_GAZETTEER`
+| bool
+| `true`
+| Use the ontology's `aliases` as blocking keys and as a 1.0 match rule
+
+| `NAM_RESOLUTION__USE_EMBEDDING_BLOCKING`
+| bool
+| `true`
+| Also block via the entity vector index (needs an embedder)
+
+| `NAM_RESOLUTION__CONTEXT_WINDOW_CHARS`
+| int
+| `90`
+| Half-width of the mention context window used in scoring
+
+| `NAM_RESOLUTION__SCOPE`
+| str
+| `global`
+| `global` or `user`. `user` restricts candidates to entities the tenant has
+  mentioned.
 |===
 
 == Deduplication Configuration
 
-[cols="2,1,1,3", options="header"]
-|===
-| Variable | Type | Default | Description
-
-| `NAM_DEDUPLICATION__ENABLED`
-| bool
-| `true`
-| Enable entity deduplication
-
-| `NAM_DEDUPLICATION__AUTO_MERGE_THRESHOLD`
-| float
-| `0.95`
-| Auto-merge if similarity >= threshold
-
-| `NAM_DEDUPLICATION__FLAG_THRESHOLD`
-| float
-| `0.85`
-| Flag for review if >= threshold
-
-| `NAM_DEDUPLICATION__USE_FUZZY_MATCHING`
-| bool
-| `true`
-| Use fuzzy string matching
-
-| `NAM_DEDUPLICATION__MAX_CANDIDATES`
-| int
-| `10`
-| Maximum candidates to check
-|===
+There is no `deduplication` settings section, and no `NAM_DEDUPLICATION__*`
+variables — they are ignored if set. Deduplication thresholds live on
+`ResolutionConfig` (`NAM_RESOLUTION__AUTO_MERGE_THRESHOLD` /
+`NAM_RESOLUTION__REVIEW_THRESHOLD` above), which is what both the ingestion path
+and `long_term.add_entity` use. `DeduplicationConfig` remains as a constructor
+argument on `LongTermMemory` for code that builds the layer directly; derive it
+with `DeduplicationConfig.from_resolution_config(settings.resolution)`.
 
 == Observability
 
@@ -392,6 +537,7 @@ export OPENAI_API_KEY=sk-...
 # Extraction pipeline
 export NAM_EXTRACTION__ENABLE_SPACY=true
 export NAM_EXTRACTION__ENABLE_GLINER=true
+export NAM_EXTRACTION__GLINER_MODEL=fastino/gliner2.5-base-v1
 export NAM_EXTRACTION__GLINER_SCHEMA=podcast
 
 # Background enrichment

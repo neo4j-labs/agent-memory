@@ -114,7 +114,7 @@ Configuration:
   backend (requested): bolt
   embedding: SentenceTransformersProvider — sentence-transformers/all-MiniLM-L6-v2
   llm: None
-  extractor: ExtractionPipeline (SpacyEntityExtractor, GLiNEREntityExtractor)
+  extractor: ExtractionPipeline (SpacyEntityExtractor, GLiNER2Extractor)
 
 Phase 1: Vertex AI Embeddings        → skipped (GOOGLE_CLOUD_PROJECT not set)
 Phase 2: Google ADK MemoryService

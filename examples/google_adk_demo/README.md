@@ -112,7 +112,7 @@ python demo.py --no-agent   # skip the model entirely; ingest a dict session
 ```
 embedding: SentenceTransformersProvider
 llm: None
-extractor: ExtractionPipeline (SpacyEntityExtractor, GLiNEREntityExtractor)
+extractor: ExtractionPipeline (SpacyEntityExtractor, GLiNER2Extractor)
 backend: bolt
 
 1. First turn — ADK Runner writing into Neo4j

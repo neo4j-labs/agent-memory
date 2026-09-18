@@ -1,7 +1,7 @@
 """Smoke tests for the domain-schemas example.
 
 The example is one parametrized runner (``examples/domain-schemas/run.py``) plus
-one sample corpus per GLiNER domain schema (``examples/domain-schemas/samples/``).
+one sample corpus per built-in domain ontology (``examples/domain-schemas/samples/``).
 
 These tests *execute* ``run.main()`` for all eight schemas against a stub
 extractor, so no model is downloaded and no database is needed — that is what
@@ -25,6 +25,7 @@ import pytest
 
 from neo4j_agent_memory.extraction import ExtractedEntity, ExtractedRelation, ExtractionResult
 from neo4j_agent_memory.extraction import list_schemas as library_schemas
+from neo4j_agent_memory.ontology import get_template
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLES_DIR = REPO_ROOT / "examples"
@@ -127,10 +128,20 @@ STUB_RELATIONS = [
 
 
 class StubExtractor:
-    """Stand-in for ``GLiNEREntityExtractor`` with no model load."""
+    """Stand-in for ``GLiNER2Extractor`` with no model load.
 
-    def __init__(self, relations: list[ExtractedRelation] | None = None) -> None:
+    GLiNER2.5 decodes entities and relations in one pass, so the stub carries
+    both — plus the ``ontology`` the runner inspects to decide whether the
+    relation demo has anything to decode.
+    """
+
+    def __init__(
+        self,
+        relations: list[ExtractedRelation] | None = None,
+        ontology: Any = None,
+    ) -> None:
         self.relations = relations or []
+        self.ontology = ontology if ontology is not None else get_template("poleo")
         self.extract_calls = 0
         self.batch_calls = 0
 
@@ -166,9 +177,8 @@ class StubExtractor:
 
 @pytest.fixture
 def stub_runner(runner: ModuleType, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
-    """``run`` with GLiNER available and the extractors replaced by stubs."""
-    extractor = StubExtractor()
-    relation_extractor = StubExtractor(relations=STUB_RELATIONS)
+    """``run`` with GLiNER2.5 available and the extractor replaced by a stub."""
+    extractors: dict[str, StubExtractor] = {}
 
     def fake_create_extractor(sample: Any, args: Any) -> tuple[Any, Any]:
         from neo4j_agent_memory import ExtractionConfig
@@ -177,15 +187,19 @@ def stub_runner(runner: ModuleType, monkeypatch: pytest.MonkeyPatch) -> ModuleTy
             gliner_schema=sample.schema_name,
             gliner_threshold=args.threshold if args.threshold is not None else sample.threshold,
         )
+        extractor = StubExtractor(
+            relations=STUB_RELATIONS,
+            ontology=get_template(sample.schema_name),
+        )
+        extractors[sample.schema_name] = extractor
+        runner.stub_extractor = extractor  # type: ignore[attr-defined]
         return extractor, config
 
-    monkeypatch.setattr(runner, "is_gliner_available", lambda: True)
+    monkeypatch.setattr(runner, "is_gliner2_available", lambda: True)
     monkeypatch.setattr(runner, "create_extractor", fake_create_extractor)
-    monkeypatch.setattr(runner, "create_relation_extractor", lambda *_args: relation_extractor)
     monkeypatch.delenv("NEO4J_URI", raising=False)
     monkeypatch.setattr(runner, "load_env", lambda: None)
-    runner.stub_extractor = extractor  # type: ignore[attr-defined]
-    runner.stub_relation_extractor = relation_extractor  # type: ignore[attr-defined]
+    runner.stub_extractors = extractors  # type: ignore[attr-defined]
     return runner
 
 
@@ -250,7 +264,7 @@ class TestRegressionGuards:
         return (SCHEMAS_DIR / "run.py").read_text(encoding="utf-8")
 
     def test_no_batch_extraction_result_misuse(self, runner_source: str) -> None:
-        """``GLiNEREntityExtractor.extract_batch`` returns a plain list."""
+        """``GLiNER2Extractor.extract_batch`` returns a plain list."""
         assert "BatchExtractionResult]" not in runner_source
         assert "batch_result.total_items" not in runner_source
 
@@ -260,7 +274,7 @@ class TestRegressionGuards:
 
     def test_gliner_guard_is_the_explicit_check(self, runner_source: str) -> None:
         """A ``try/except ImportError`` around the factory can never fire."""
-        assert "is_gliner_available()" in runner_source
+        assert "is_gliner2_available()" in runner_source
         assert "except ImportError as e" not in runner_source
 
     def test_storage_is_pinned_and_local(self, runner_source: str) -> None:
@@ -317,7 +331,6 @@ class TestRunnerExecution:
         schema: str,
     ) -> None:
         """``--relations --batch --streaming`` works for any schema."""
-        monkeypatch.setattr(stub_runner, "is_glirel_available", lambda: True)
         exit_code = asyncio.run(
             stub_runner.main(
                 ["--schema", schema, "--no-store", "--relations", "--batch", "--streaming"]
@@ -326,25 +339,43 @@ class TestRunnerExecution:
         out = capsys.readouterr().out
 
         assert exit_code == 0
-        assert "Dana Ruiz -[WORKS_AT]-> Northwind Payments" in out
+        if get_template(schema).relationships:
+            assert "Dana Ruiz -[WORKS_AT]-> Northwind Payments" in out
+        else:
+            # Only poleo/podcast/news declare typed relationships; the rest say so.
+            assert "declares no relationships" in out
         assert "BATCH EXTRACTION" in out
         assert "Total entities (batch):" in out
         assert "STREAMING EXTRACTION" in out
         assert "After deduplication:" in out
 
-    def test_glirel_missing_prints_optin_hint(
+    def test_relation_demo_explains_an_ontology_without_relationships(
         self,
         stub_runner: ModuleType,
-        monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        monkeypatch.setattr(stub_runner, "is_glirel_available", lambda: False)
+        """``medical`` declares labels only, so the relation pass says so."""
+        exit_code = asyncio.run(
+            stub_runner.main(["--schema", "medical", "--no-store", "--relations"])
+        )
+        out = capsys.readouterr().out
+
+        assert exit_code == 0
+        assert "declares no relationships" in out
+        assert "OntologyDocument" in out
+
+    def test_relation_demo_prints_typed_edges(
+        self,
+        stub_runner: ModuleType,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """``news`` declares relationships, so the decoded edges are printed."""
         exit_code = asyncio.run(stub_runner.main(["--schema", "news", "--no-store", "--relations"]))
         out = capsys.readouterr().out
 
         assert exit_code == 0
-        assert "GLiREL is not installed" in out
-        assert "pip install glirel" in out
+        assert "GLiNER2.5 joint decoding" in out
+        assert "Dana Ruiz -[WORKS_AT]-> Northwind Payments" in out
 
     def test_extract_only_skips_demos(
         self, stub_runner: ModuleType, capsys: pytest.CaptureFixture[str]
@@ -363,15 +394,16 @@ class TestRunnerExecution:
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """With GLiNER uninstalled the runner explains itself and exits 0."""
-        monkeypatch.setattr(runner, "is_gliner_available", lambda: False)
+        """With GLiNER2.5 uninstalled the runner explains itself and exits 0."""
+        monkeypatch.setattr(runner, "is_gliner2_available", lambda: False)
         monkeypatch.setattr(runner, "load_env", lambda: None)
         exit_code = asyncio.run(runner.main(["--schema", "legal", "--no-store"]))
         out = capsys.readouterr().out
 
         assert exit_code == 0
-        assert "GLiNER is not installed" in out
+        assert "GLiNER2.5 is not installed" in out
         assert "uv sync --all-extras" in out
+        assert "neo4j-agent-memory[gliner2]" in out
 
     def test_list_flag(
         self,
@@ -434,18 +466,15 @@ def test_storage_path_writes_a_graph(
     except Exception as exc:  # pragma: no cover - environment dependent
         pytest.skip(f"Neo4j not reachable at {uri}: {exc}")
 
-    extractor = StubExtractor()
-    relation_extractor = StubExtractor(relations=STUB_RELATIONS)
+    extractor = StubExtractor(relations=STUB_RELATIONS, ontology=get_template("poleo"))
 
     def fake_create_extractor(sample: Any, args: Any) -> tuple[Any, Any]:
         from neo4j_agent_memory import ExtractionConfig
 
         return extractor, ExtractionConfig(gliner_schema=sample.schema_name, gliner_threshold=0.4)
 
-    monkeypatch.setattr(runner, "is_gliner_available", lambda: True)
-    monkeypatch.setattr(runner, "is_glirel_available", lambda: True)
+    monkeypatch.setattr(runner, "is_gliner2_available", lambda: True)
     monkeypatch.setattr(runner, "create_extractor", fake_create_extractor)
-    monkeypatch.setattr(runner, "create_relation_extractor", lambda *_args: relation_extractor)
     monkeypatch.setattr(runner, "load_env", lambda: None)
     monkeypatch.setenv("MEMORY_API_KEY", "nams_not_a_real_key")
 

@@ -5,7 +5,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from neo4j_agent_memory.extraction.base import (
     EntityExtractor,
@@ -14,6 +14,9 @@ from neo4j_agent_memory.extraction.base import (
     ExtractedRelation,
     ExtractionResult,
 )
+
+if TYPE_CHECKING:
+    from neo4j_agent_memory.ontology.models import OntologyDocument
 
 logger = logging.getLogger(__name__)
 
@@ -348,6 +351,54 @@ def merge_extraction_results(
     )
 
 
+def _apply_min_confidence(result: ExtractionResult, min_confidence: float) -> ExtractionResult:
+    """Drop everything below a confidence floor from a merged result.
+
+    A relation survives only if its own confidence clears the floor *and* both
+    endpoints are still present: dropping an entity but keeping an edge that
+    names it would leave storage to resolve a mention that extraction rejected.
+
+    Args:
+        result: The merged result.
+        min_confidence: The floor, as a probability.
+
+    Returns:
+        A new result, or ``result`` itself when nothing was dropped.
+    """
+    entities = [e for e in result.entities if e.confidence >= min_confidence]
+    kept_ids = {e.id for e in entities if e.id is not None}
+    kept_names = {e.normalized_name for e in entities}
+
+    def endpoint_survives(mention_id: str | None, name: str) -> bool:
+        if mention_id is not None:
+            return mention_id in kept_ids
+        return name.lower().strip() in kept_names
+
+    relations = [
+        r
+        for r in result.relations
+        if r.confidence >= min_confidence
+        and endpoint_survives(r.source_id, r.source)
+        and endpoint_survives(r.target_id, r.target)
+    ]
+
+    if len(entities) == len(result.entities) and len(relations) == len(result.relations):
+        return result
+
+    logger.debug(
+        "Confidence floor %.2f dropped %d entities and %d relations",
+        min_confidence,
+        len(result.entities) - len(entities),
+        len(result.relations) - len(relations),
+    )
+    return ExtractionResult(
+        entities=entities,
+        relations=relations,
+        preferences=result.preferences,
+        source_text=result.source_text,
+    )
+
+
 class ExtractionPipeline:
     """Multi-stage entity extraction pipeline.
 
@@ -360,7 +411,7 @@ class ExtractionPipeline:
         pipeline = ExtractionPipeline(
             stages=[
                 SpacyEntityExtractor(),
-                GLiNEREntityExtractor(),
+                GLiNER2Extractor(),
                 LLMEntityExtractor(),
             ],
             merge_strategy=MergeStrategy.CONFIDENCE,
@@ -377,6 +428,9 @@ class ExtractionPipeline:
         stop_on_success: bool = False,
         min_entities_for_success: int = 1,
         fallback_on_error: bool = True,
+        *,
+        ontology: "OntologyDocument | None" = None,
+        min_confidence: float | None = None,
     ):
         """
         Initialize extraction pipeline.
@@ -387,6 +441,17 @@ class ExtractionPipeline:
             stop_on_success: Stop after first stage that returns entities
             min_entities_for_success: Minimum entities to consider a stage successful
             fallback_on_error: Continue to next stage if current stage errors
+            ontology: Optional ontology. When set, the merged result runs
+                through :meth:`ExtractionResult.validate_relations` as a final
+                step with ``mode="drop"``: merging results from several stages
+                can only ever *add* relations the ontology does not permit
+                (the JointIE stage constrains endpoints during decoding, the
+                LLM and spaCy stages do not).
+            min_confidence: Optional confidence floor for the merged result.
+                Entities and relations scoring below it are dropped, as are
+                relations left dangling by a dropped endpoint. This is where a
+                configured ``confidence_threshold`` is enforced for stages that
+                have no threshold of their own (spaCy, the LLM extractor).
         """
         # Wrap extractors in stages if needed
         self.stages: list[ExtractionStage] = []
@@ -400,6 +465,8 @@ class ExtractionPipeline:
         self.stop_on_success = stop_on_success
         self.min_entities_for_success = min_entities_for_success
         self.fallback_on_error = fallback_on_error
+        self.ontology = ontology
+        self.min_confidence = min_confidence
 
     async def extract(
         self,
@@ -508,6 +575,20 @@ class ExtractionPipeline:
             )
         else:
             final_result = merge_extraction_results(successful_results, self.merge_strategy)
+
+        # Final stage: hold the merged result to the configured confidence
+        # floor, then enforce the ontology's relationship endpoint typing.
+        if self.min_confidence is not None:
+            final_result = _apply_min_confidence(final_result, self.min_confidence)
+
+        if self.ontology is not None:
+            final_result, violations = final_result.validate_relations(self.ontology, mode="drop")
+            if violations:
+                logger.debug(
+                    "Pipeline dropped %d relation(s) not permitted by ontology %r",
+                    len(violations),
+                    self.ontology.domain.name,
+                )
 
         total_duration = (time.time() - start_time) * 1000
 
@@ -777,6 +858,10 @@ class ConditionalPipeline(ExtractionPipeline):
                     raise
 
         final_result = merge_extraction_results(successful_results, self.merge_strategy)
+        if self.min_confidence is not None:
+            final_result = _apply_min_confidence(final_result, self.min_confidence)
+        if self.ontology is not None:
+            final_result, _ = final_result.validate_relations(self.ontology, mode="drop")
         total_duration = (time.time() - start_time) * 1000
 
         return PipelineResult(

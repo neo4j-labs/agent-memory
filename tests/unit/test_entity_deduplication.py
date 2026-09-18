@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from neo4j_agent_memory.config.settings import ResolutionConfig
 from neo4j_agent_memory.memory.long_term import (
     DeduplicationConfig,
     DeduplicationResult,
@@ -12,22 +13,39 @@ from neo4j_agent_memory.memory.long_term import (
     DuplicateCandidate,
     LongTermMemory,
 )
+from neo4j_agent_memory.resolution.base import ResolvedEntity
+from neo4j_agent_memory.resolution.ontology import EntityResolution, OntologyResolver
 
 
 class TestDeduplicationConfig:
     """Tests for DeduplicationConfig."""
 
     def test_default_config(self):
-        """Test default configuration values."""
+        """Defaults mirror ResolutionConfig -- one set of v0.7 thresholds.
+
+        They used to be 0.95/0.85/0.9/10, so the same pair of names merged on
+        ``add_entity`` and only got flagged on the ingestion path.
+        """
         config = DeduplicationConfig()
 
         assert config.enabled is True
-        assert config.auto_merge_threshold == 0.95
+        assert config.auto_merge_threshold == 0.90
         assert config.flag_threshold == 0.85
         assert config.use_fuzzy_matching is True
-        assert config.fuzzy_threshold == 0.9
-        assert config.max_candidates == 10
+        assert config.fuzzy_threshold == 0.85
+        assert config.max_candidates == 12
         assert config.match_same_type_only is True
+
+    def test_defaults_match_the_resolution_config(self):
+        """The two shapes must not drift apart again."""
+        resolution = ResolutionConfig()
+        config = DeduplicationConfig()
+
+        assert config.auto_merge_threshold == resolution.auto_merge_threshold
+        assert config.flag_threshold == resolution.review_threshold
+        assert config.fuzzy_threshold == resolution.fuzzy_threshold
+        assert config.max_candidates == resolution.candidate_limit
+        assert config == DeduplicationConfig.from_resolution_config(resolution)
 
     def test_custom_config(self):
         """Test custom configuration."""
@@ -287,11 +305,11 @@ class TestLongTermMemoryDeduplication:
         assert dedup_result.is_duplicate is True
         assert dedup_result.action == "merged"
         assert dedup_result.matched_entity_id == UUID(existing_entity_id)
-        # The contractual property is "above auto_merge_threshold (0.95)".
+        # The contractual property is "above auto_merge_threshold (0.90)".
         # The exact value depends on whether fuzzy matching is enabled (the
         # default DeduplicationConfig averages vector + fuzzy scores, so the
         # combined score ≠ the raw 0.96 vector score from the mock).
-        assert dedup_result.similarity_score >= 0.95
+        assert dedup_result.similarity_score >= 0.90
         # The returned entity should be the existing one
         assert entity.name == "John Smith"
 
@@ -423,7 +441,10 @@ class TestLongTermMemoryDeduplication:
                     "type": "PERSON",
                     "metadata": None,
                 },
-                "r": {"confidence": 0.88, "match_type": "embedding"},
+                "confidence": 0.88,
+                "match_type": "embedding",
+                "status": "pending",
+                "created_at": None,
             }
         ]
 
@@ -809,3 +830,199 @@ class TestDeduplicationConfigurationOptions:
             last_call = read_calls[-1]
             params = last_call[0][1] if len(last_call[0]) > 1 else {}
             assert params.get("limit") == 5
+
+
+class TestDeduplicationConfigFromResolutionConfig:
+    """``DeduplicationConfig`` mirrors the one set of v0.7 thresholds."""
+
+    def test_maps_the_resolution_bands(self):
+        config = DeduplicationConfig.from_resolution_config(
+            ResolutionConfig(
+                auto_merge_threshold=0.93,
+                review_threshold=0.81,
+                candidate_limit=7,
+                fuzzy_threshold=0.77,
+            )
+        )
+
+        assert config.enabled is True
+        assert config.auto_merge_threshold == 0.93
+        assert config.flag_threshold == 0.81
+        assert config.max_candidates == 7
+        assert config.fuzzy_threshold == 0.77
+
+    def test_defaults_round_trip(self):
+        config = DeduplicationConfig.from_resolution_config(ResolutionConfig())
+
+        assert config.auto_merge_threshold == 0.90
+        assert config.flag_threshold == 0.85
+
+
+class TestCheckForDuplicatesAdapter:
+    """``_check_for_duplicates`` delegates to the ontology resolver.
+
+    One dedup mechanism: ``add_entity`` and the message-ingestion path must
+    band identically, so the resolver decides and this method only translates
+    the decision into the older ``DeduplicationResult`` shape.
+    """
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.execute_read = AsyncMock(return_value=[])
+        client.execute_write = AsyncMock(return_value=[])
+        return client
+
+    @pytest.fixture
+    def mock_embedder(self):
+        embedder = MagicMock()
+        embedder.embed = AsyncMock(return_value=[0.1] * 384)
+        return embedder
+
+    def _resolver(self, client, resolution):
+        resolver = OntologyResolver(client, config=ResolutionConfig())
+        resolver.resolve_one = AsyncMock(return_value=resolution)  # type: ignore[method-assign]
+        return resolver
+
+    @pytest.mark.asyncio
+    async def test_merged_resolution_becomes_a_merge(self, mock_client, mock_embedder):
+        matched_id = str(uuid4())
+        memory = LongTermMemory(
+            client=mock_client,
+            embedder=mock_embedder,
+            resolver=self._resolver(
+                mock_client,
+                EntityResolution(
+                    action="merged",
+                    entity_id=matched_id,
+                    canonical_name="John Smith",
+                    score=0.97,
+                    match_type="exact",
+                    matched_entity_id=matched_id,
+                    matched_entity_name="John Smith",
+                ),
+            ),
+        )
+
+        result = await memory._check_for_duplicates("Jon Smith", "PERSON", [0.1] * 384)
+
+        assert result.is_duplicate is True
+        assert result.action == "merged"
+        assert result.matched_entity_id == UUID(matched_id)
+        assert result.matched_entity_name == "John Smith"
+        assert result.similarity_score == 0.97
+        assert result.match_type == "exact"
+        # The resolver, not the old embedding path, produced the decision.
+        assert mock_client.execute_read.await_count == 0
+
+    @pytest.mark.asyncio
+    async def test_review_resolution_becomes_a_flag(self, mock_client, mock_embedder):
+        matched_id = str(uuid4())
+        memory = LongTermMemory(
+            client=mock_client,
+            embedder=mock_embedder,
+            resolver=self._resolver(
+                mock_client,
+                EntityResolution(
+                    action="review",
+                    canonical_name="J. Smith",
+                    score=0.87,
+                    match_type="prefix",
+                    matched_entity_id=matched_id,
+                    matched_entity_name="John Smith",
+                ),
+            ),
+        )
+
+        result = await memory._check_for_duplicates("J. Smith", "PERSON", [0.1] * 384)
+
+        assert result.action == "flagged"
+        assert result.is_duplicate is True
+        assert result.matched_entity_id == UUID(matched_id)
+
+    @pytest.mark.asyncio
+    async def test_created_resolution_is_not_a_duplicate(self, mock_client, mock_embedder):
+        memory = LongTermMemory(
+            client=mock_client,
+            embedder=mock_embedder,
+            resolver=self._resolver(
+                mock_client,
+                EntityResolution(action="created", canonical_name="Grace Hopper"),
+            ),
+        )
+
+        result = await memory._check_for_duplicates("Grace Hopper", "PERSON", [0.1] * 384)
+
+        assert result.is_duplicate is False
+        assert result.action == "none"
+
+    @pytest.mark.asyncio
+    async def test_add_entity_auto_merges_through_the_adapter(self, mock_client, mock_embedder):
+        matched_id = str(uuid4())
+        mock_client.execute_read = AsyncMock(
+            return_value=[
+                {
+                    "e": {
+                        "id": matched_id,
+                        "name": "John Smith",
+                        "canonical_name": "John Smith",
+                        "type": "PERSON",
+                        "subtype": None,
+                        "description": None,
+                        "embedding": [0.1] * 384,
+                        "confidence": 1.0,
+                        "metadata": None,
+                    }
+                }
+            ]
+        )
+        resolver = self._resolver(
+            mock_client,
+            EntityResolution(
+                action="merged",
+                entity_id=matched_id,
+                canonical_name="John Smith",
+                score=0.99,
+                match_type="exact",
+                matched_entity_id=matched_id,
+                matched_entity_name="John Smith",
+            ),
+        )
+        # ``add_entity`` also calls ``resolve`` for canonicalisation.
+        resolver.resolve = AsyncMock(  # type: ignore[method-assign]
+            return_value=ResolvedEntity(
+                original_name="Jon Smith",
+                canonical_name="John Smith",
+                entity_type="PERSON",
+                confidence=0.99,
+                match_type="exact",
+            )
+        )
+        memory = LongTermMemory(client=mock_client, embedder=mock_embedder, resolver=resolver)
+
+        entity, dedup_result = await memory.add_entity(name="Jon Smith", entity_type="PERSON")
+
+        assert dedup_result.action == "merged"
+        assert entity.name == "John Smith"
+        alias_writes = [
+            call for call in mock_client.execute_write.call_args_list if "e.aliases" in str(call[0])
+        ]
+        assert alias_writes, "the merged-away surface form becomes an alias"
+
+    @pytest.mark.asyncio
+    async def test_a_non_ontology_resolver_keeps_the_embedding_path(
+        self, mock_client, mock_embedder
+    ):
+        from neo4j_agent_memory.resolution.fuzzy import FuzzyMatchResolver
+
+        memory = LongTermMemory(
+            client=mock_client,
+            embedder=mock_embedder,
+            resolver=FuzzyMatchResolver(),
+        )
+
+        result = await memory._check_for_duplicates("Jon Smith", "PERSON", [0.1] * 384)
+
+        assert result.action == "none"
+        # The original embedding-similarity query ran.
+        assert mock_client.execute_read.await_count == 1
