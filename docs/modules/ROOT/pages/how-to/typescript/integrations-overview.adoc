@@ -1,112 +1,46 @@
-= Framework Integrations
-:description: Memory-augmented LLM applications with Vercel AI SDK, LangChain JS, Mastra, Strands Agents, LangGraph, PydanticAI, Semantic Kernel, ellmer.
+= TypeScript framework integrations
+:description: Pick a TypeScript agent framework integration for @neo4j-labs/agent-memory.
 
-Each first-class agent framework ships a thin wrapper around `MemoryClient`.
-Pick yours below.
+See also xref:how-to/integrations/index.adoc[the Python framework integrations index] for the equivalent guides in the Python SDK.
+
+Find the right TypeScript integration for your agent framework, each backed by the same `MemoryClient`.
+
+Prerequisites: a configured `MemoryClient` — see xref:sdks/typescript.adoc[the TypeScript SDK page] — and, for the hosted backend, NAMS credentials.
 
 == Vercel AI SDK (TypeScript)
 
-The `agentMemoryMiddleware` injects three-tier context (reflections +
-observations + recent messages) into every model call and persists both the
-user's input and the assistant's response — streamed or not. It implements
-specification v4 (`ai` 7.x / `@ai-sdk/provider` 4.x).
-
-[source,ts]
-----
-import { generateText, wrapLanguageModel } from "ai";
-import { openai } from "@ai-sdk/openai";
-import { MemoryClient } from "@neo4j-labs/agent-memory";
-import { agentMemoryMiddleware } from "@neo4j-labs/agent-memory/middleware/vercel-ai";
-
-const client = new MemoryClient({ endpoint: "https://memory.neo4jlabs.com/v1", apiKey });
-
-const model = wrapLanguageModel({
-  model: openai(process.env.OPENAI_MODEL ?? "gpt-5-mini"),
-  middleware: agentMemoryMiddleware(client, {
-    conversationId: "conv-uuid",
-    userId: "alice@example.com",
-    includeContext: true,
-    persistResponses: true,
-  }),
-});
-
-const result = await generateText({ model, prompt: "What did we decide?" });
-----
-
-See link:vercel-ai.adoc[How-to: integrate with the Vercel AI SDK].
+`agentMemoryMiddleware` injects three-tier context into each model call and
+attempts to persist both the user's input and the assistant's response —
+streamed or not. See xref:how-to/typescript/vercel-ai.adoc[Integrate with the Vercel AI SDK].
 
 == LangChain JS (TypeScript)
 
-`Neo4jChatMessageHistory` is a drop-in `ChatMessageHistory` backed by memory;
-`Neo4jEntityRetriever` returns memory entities as LangChain `Document`s.
-
-[source,ts]
-----
-import {
-  Neo4jChatMessageHistory,
-  Neo4jEntityRetriever,
-} from "@neo4j-labs/agent-memory/integrations/langchain";
-
-const history = new Neo4jChatMessageHistory(client, "conv-uuid");
-await history.addUserMessage("hello");
-
-const retriever = new Neo4jEntityRetriever(client, { topK: 4 });
-const docs = await retriever.invoke("Find entities about Acme Corp");
-----
+`Neo4jChatMessageHistory` and `Neo4jEntityRetriever` supply framework-neutral
+history and retrieval objects that you adapt to LangChain's APIs. See
+xref:how-to/typescript/langchain.adoc[Integrate with LangChain JS].
 
 == Mastra (TypeScript)
 
 `Neo4jMastraMemory` is a thin thread-and-message-history adapter in Mastra's
-vocabulary. It is not a Mastra `Memory` or storage adapter — drive it alongside
-your agent; see link:mastra.adoc[How-to: store Mastra threads in NAMS].
-
-[source,ts]
-----
-import { Neo4jMastraMemory } from "@neo4j-labs/agent-memory/integrations/mastra";
-
-const memory = new Neo4jMastraMemory(client);
-const thread = await memory.createThread({ resourceId: "alice", title: "Scouting" });
-await memory.saveMessage({ threadId: thread.id, role: "user", content: "Hi" });
-----
+vocabulary, driven alongside your agent rather than passed as its `memory`.
+See xref:how-to/typescript/mastra.adoc[Store Mastra threads in NAMS].
 
 == Strands Agents (TypeScript)
 
-`Neo4jMemoryStore` is a Strands `MemoryStore`: hand it to `MemoryManager`
-and long-term entity recall is injected into the agent loop before every
-model call — the preferred way to give a Strands agent memory.
+`Neo4jMemoryStore` is a Strands `MemoryStore`, and `connectMemoryToAgent`
+wires session state and three-tier context injection into a Strands `Agent`
+in one call. See xref:how-to/typescript/strands.adoc[Strands Agents (TypeScript)].
 
-[source,ts]
-----
-import { Agent, MemoryManager } from "@strands-agents/sdk";
-import { Neo4jMemoryStore } from "@neo4j-labs/agent-memory/integrations/strands";
+== Other languages
 
-const store = new Neo4jMemoryStore({ name: "graph", client, userId: "alice" });
-const agent = new Agent({ model, memoryManager: new MemoryManager({ stores: [store] }) });
-----
+Agent Memory also ships clients for languages besides TypeScript.
 
-Separately, `connectMemoryToAgent` returns the `sessionManager` and
-`conversationManager` for a Strands `Agent` — session state persists to a
-NAMS conversation, three-tier context is injected on every model call, and
-reasoning hooks capture each turn.
-
-[source,ts]
-----
-import { Agent } from "@strands-agents/sdk";
-import { connectMemoryToAgent } from "@neo4j-labs/agent-memory/integrations/strands";
-
-const conv = await client.shortTerm.createConversation({ userId: "alice" });
-const agent = new Agent({
-  ...await connectMemoryToAgent(client, { conversationId: conv.id }),
-  model,
-});
-----
-
-See xref:how-to/typescript/strands.adoc[Strands Agents (TypeScript)].
-
-== LangGraph (Python)
-
-`MemoryCheckpointSaver` persists LangGraph state under a memory conversation.
-
+* [[_langgraph_python]][[_pydanticai_python]]**Python** — LangGraph
+  (`MemoryCheckpointSaver`) and PydanticAI (`MemoryToolset`,
+  `inject_memory_context`) integrations are available through the hosted
+  client (`neo4j_agent_memory_client`). For the self-hosted package's Python
+  framework integrations, see xref:how-to/integrations/index.adoc[].
++
 [source,python]
 ----
 from neo4j_agent_memory_client import MemoryClient
@@ -119,34 +53,9 @@ graph = StateGraph(MyState)
 graph.compile(checkpointer=saver)
 ----
 
-== PydanticAI (Python)
-
-`inject_memory_context` returns a system-prompt prefix; `MemoryToolset`
-exposes the 12 memory tools as PydanticAI tools.
-
-[source,python]
-----
-from pydantic_ai import Agent
-from neo4j_agent_memory_client import MemoryClient
-from neo4j_agent_memory_client.integrations.pydantic_ai import (
-    MemoryToolset, inject_memory_context,
-)
-
-client = MemoryClient(endpoint=..., api_key=...)
-toolset = MemoryToolset(client)
-
-@agent.system_prompt
-async def memory_context() -> str:
-    return await inject_memory_context(client, conversation_id="...")
-
-agent = Agent(model="openai:gpt-4o", tools=[*toolset.tools()])
-----
-
-== Semantic Kernel (C#)
-
-`MemoryConnector` provides save/search and a `GetContextPrefixAsync` helper
-suitable for SK kernel functions.
-
+* [[_semantic_kernel_c]]**C#** — `MemoryConnector` provides save/search and a
+  `GetContextPrefixAsync` helper for Semantic Kernel functions:
++
 [source,csharp]
 ----
 using Neo4j.AgentMemory.Integrations.SemanticKernel;
@@ -159,11 +68,10 @@ var hits = await connector.SearchAsync("microservice patterns", limit: 5);
 var contextPrefix = await connector.GetContextPrefixAsync(conversationId);
 ----
 
-== ellmer (R)
-
-`register_memory_tools(client)` returns a list of ellmer `tool()`
-definitions wrapping all 12 memory tools.
-
+* [[_ellmer]]**R** — `register_memory_tools(client)` returns a list of
+  https://ellmer.tidyverse.org/[ellmer] `tool()` definitions wrapping all 12
+  memory tools:
++
 [source,r]
 ----
 library(neo4j.memory)

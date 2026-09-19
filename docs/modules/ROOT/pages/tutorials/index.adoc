@@ -1,120 +1,119 @@
 = Tutorials
 :page-product: agent-memory
-:page-pagination:
 :toclevels: 2
-:page-ad-icon: mortarboard
-:page-ad-title: Context Graphs: Agent Memory with Neo4j
-:page-ad-description: Build an AI agent that records its reasoning into Neo4j and query the trace to understand what it did and why.
-:page-ad-link: https://graphacademy.neo4j.com/courses/genai-context-graphs/?ref=docs-ad-genai-context-graphs
-:page-ad-underline-role: button
-:page-ad-underline: Enroll now
 
-Learn neo4j-agent-memory by building real applications. These tutorials guide you through complete, working examples from start to finish.
+Learn by building one working example. Choose a language and backend here; each lesson then follows one path. The Aura lessons connect to a dedicated Neo4j database through Bolt. The hosted lessons use a NAMS workspace and its data key; the two configurations are separate.
 
-[.lead]
-Tutorials are *learning-oriented*. They take you by the hand through a series of steps to complete a project. They focus on building a **context graph**—the personalized knowledge structure that makes AI agents truly intelligent.
+.Three tutorial routes: Python and Aura, Python and NAMS, and TypeScript and NAMS
+image::diagrams/tutorial-routes.svg["Three tutorial routes stacked vertically (Python and Aura, Python and NAMS, TypeScript and NAMS), each a short chain of lesson boxes starting at a foundation lesson, with solid arrows to continuations and dashed arrows to optional branches",width=100%,link=self]
 
-== Getting Started
+Start with the foundation lesson in your route. The tables identify its continuation and optional branches, including the accounts and tools each adds. Each lesson provides one complete path; you do not need to complete every provider or framework branch.
 
-Pick the path that matches your stack:
+anchor:_python_and_bolt[]
 
-[cols="1,2,1", options="header"]
+== Python and Aura
+
+anchor:_building_real_applications[]
+
+These lessons install `neo4j-agent-memory` 0.6.0 from PyPI and show every local file on the page. All require Python 3.10 or newer, a POSIX shell and capacity for a dedicated Aura instance. Complete cleanup before starting the next lesson with a new empty instance; reuse the local environment and unchanged helpers. Resuming an unfinished lesson uses its *original* instance and saved IDs.
+
+[cols="2,1,3",options="header"]
 |===
-| Tutorial | What You'll Build | Time
+|Lesson and outcome |Place in the route |Additional requirements
 
-| xref:tutorials/nams-quickstart.adoc[NAMS Quickstart (Python)]
-| The hosted-service path. Get an API key, install the SDK, run your first memory operations — no Neo4j to operate. Ideal for prototypes and SaaS deployments.
-| ~10 min
+|xref:tutorials/first-agent-memory.adoc[Build your first memory context]: store and read back supplied records
+|Foundation
+|OpenAI access for embeddings
 
-| xref:tutorials/hosted-quickstart-typescript.adoc[Hosted Quickstart (TypeScript)]
-| Same hosted-service path, TypeScript flavor. Works on Node, Bun, Deno, Cloudflare Workers, and Vercel Edge.
-| ~10 min
+|xref:tutorials/conversation-memory.adoc[Add persistent conversation context to a chatbot]: use stored context in a new model turn
+|Continue the foundation
+|OpenAI chat-model access as well as embeddings
 
-| xref:tutorials/first-agent-memory.adoc[Build Your First Memory-Enabled Agent (Self-Hosted)]
-| A working memory system against your own Neo4j. Stores conversations, extracts entities automatically, enables semantic search. You'll see your context graph in Neo4j Browser.
-| ~30 min
+|xref:tutorials/knowledge-graph.adoc[Build a knowledge graph from documents]: inspect extraction and source provenance
+|Optional extraction branch
+|OpenAI embeddings/chat; local GLiNER, GLiREL and spaCy model downloads
 
-| xref:tutorials/first-agent-memory-typescript.adoc[First Agent Memory (TypeScript, hosted)]
-| TypeScript end-to-end: NAMS + Vercel AI SDK middleware, multi-turn chat with three-tier context recall.
-| ~20 min
-|===
+|xref:tutorials/anthropic-and-local-embeddings.adoc[Extract memory with Anthropic and local embeddings]
+|Optional provider branch
+|Anthropic model access; disk space and network access for a local embedding model
 
-== Building Real Applications
+|xref:tutorials/microsoft-agent-memory.adoc[Build a shopping response with Microsoft Agent Framework memory]
+|Optional framework branch
+|OpenAI embeddings/chat; Microsoft Agent Framework packages
 
-After completing the first tutorial, build complete applications:
+|xref:tutorials/strands-agent-quickstart.adoc[Restore a Strands conversation after a process restart]
+|Optional framework branch
+|AWS credentials; Bedrock chat/inference-profile and embedding-model access in the selected region
 
-[cols="1,2,1", options="header"]
-|===
-| Tutorial | What You'll Build | Time
-
-| xref:tutorials/conversation-memory.adoc[Add Conversation Memory to a Chatbot]
-| A shopping assistant chatbot that remembers users, learns preferences (brands, sizes, budget), and provides personalized recommendations across sessions.
-| ~45 min
-
-| xref:tutorials/knowledge-graph.adoc[Build a Knowledge Graph from Documents]
-| Process financial documents to extract entities (companies, people, securities), discover relationships, and power intelligent Q&A with LLM integration.
-| ~45 min
-
-| xref:tutorials/strands-agent-quickstart.adoc[Build a Strands Agent with Context Graph]
-| Create an AI agent using AWS Strands SDK with persistent memory backed by Neo4j. Uses Amazon Bedrock for LLM and embeddings.
-| ~30 min
-
-| xref:tutorials/mcp-server.adoc[Connect Claude Desktop to Your Knowledge Graph]
-| Set up the MCP server so Claude Desktop can store conversations, extract entities, and query your knowledge graph automatically.
-| ~15 min
+|xref:tutorials/mcp-server.adoc[Store and recall a message from Claude Desktop]
+|Optional desktop branch
+|macOS, Claude Desktop with local MCP support, and a local embedding-model download
 |===
 
-== What You'll Learn
+== Python and NAMS
 
-These tutorials cover the core concepts of neo4j-agent-memory:
+anchor:_what_youll_learn[]
 
-* **Context Graph**: Build and query the knowledge structure that powers personalization
-* **Entity Extraction**: Automatically extract people, companies, products from text
-* **Preference Learning**: Capture and use user preferences for personalization
-* **Semantic Search**: Find information by meaning, not just keywords
-* **Multi-Session Persistence**: Memory that survives across conversations
-* **Agent Integration**: Connect memory to LLMs for intelligent responses
+These lessons also install `neo4j-agent-memory` 0.6.0 and include every local file. They need a NAMS workspace data key; no separate model-provider key is required. Service-managed extraction and distillation can still consume workspace resources. Check the selected workspace's usage limits with its owner before starting.
 
-== Enterprise Examples
+[cols="2,1,3",options="header"]
+|===
+|Lesson and outcome |Place in the route |Workspace responsibility
 
-Each tutorial includes examples for common enterprise use cases:
+|xref:tutorials/nams-quickstart.adoc[Store and read back memory on NAMS]
+|Foundation
+|Dedicated test workspace; permission to create records and perform scoped cleanup
 
-* **Financial Services**: Client profiles, investment preferences, document analysis
-* **Ecommerce Retail**: Customer preferences, product recommendations, purchase history
+|xref:tutorials/ontology-quickstart.adoc[Activate and restore a NAMS ontology]
+|Optional configuration branch
+|Exclusive ontology editing for the exercise; an identified recovery owner; preserve the exact prior binding
 
-== Before You Start
+|xref:tutorials/skills-quickstart.adoc[Distil and download a skill from a recorded procedure]
+|Optional preview evaluation
+|A newly provisioned workspace whose owner has verified it is empty; Skills permissions and capability; an agreed disposal or retention arrangement for steps, tool calls, runs and skills
+|===
 
-The Python tutorials assume:
+The Skills lesson is not an automatic continuation in the workspace used for the preceding lessons. It can finish with a withheld result or retained resources. Read its prerequisites and outcome paths before seeding.
 
-* Python 3.10 or later installed
-* Basic familiarity with Python and async programming
-* Either an API key from link:https://memory.neo4jlabs.com[NAMS] (hosted path) **or** access to a Neo4j database (self-hosted path; setup instructions included)
+== TypeScript and NAMS
 
-The TypeScript tutorials assume:
+anchor:_getting_started[]
+anchor:_enterprise_examples[]
+anchor:_before_you_start[]
+anchor:_tutorial_philosophy[]
+anchor:_getting_help[]
 
-* Node.js 20 or later
-* An API key from link:https://memory.neo4jlabs.com[NAMS]
-* Basic familiarity with TypeScript and async/await
+This route uses Node.js 22 or newer, the maintained source project and its locked dependencies, and a NAMS test workspace/data key. It retains the source build setup described on each page; the Python release version does not identify a compatible npm release. Preserve the checkout's private state between phases and use each lesson's disposition checks.
 
-== Tutorial Philosophy
+[cols="2,1,3",options="header"]
+|===
+|Lesson and outcome |Place in the route |Additional requirements
 
-These tutorials follow the Diataxis "learning-oriented" approach:
+|xref:tutorials/hosted-quickstart-typescript.adoc[Store and read back hosted memory with TypeScript]
+|Foundation
+|No model-provider key; permission for scoped writes and cleanup
 
-* *Step-by-step*: Every action is explicit, with exact commands to run
-* *Hands-on*: You'll build something real, not just read about concepts
-* *One path*: No choices or alternatives - just follow along
-* *Complete*: Each tutorial stands alone and produces a working result
+|xref:tutorials/first-agent-memory-typescript.adoc[Build your first TypeScript agent with memory]
+|Continue the foundation
+|OpenAI model access; independent checks of middleware message persistence
 
-If you're looking for quick answers to specific problems, see the xref:how-to/index.adoc[How-To Guides].
+|xref:tutorials/conversation-memory-typescript.adoc[Recall conversation memory after a restart (TypeScript)]
+|Continue with saved conversation identity
+|OpenAI model access; preserve the original run state between teach and recall
 
-If you want to understand the concepts behind the library, see the xref:explanation/index.adoc[Explanation] section.
+|xref:tutorials/knowledge-graph-typescript.adoc[Ingest documents and inspect extracted entities (TypeScript)]
+|Optional extraction branch
+|Service-managed extraction; no model-provider key
 
-If you need to look up configuration options or API details, see the xref:reference/index.adoc[Reference] section.
+|xref:tutorials/mcp-server-typescript.adoc[Connect Claude Desktop to memory with a TypeScript MCP server]
+|Optional desktop branch
+|macOS, Claude Desktop with local MCP support, and the ability to retain exact tool results for cleanup
+|===
 
-== Getting Help
+== Plan the run
 
-If you get stuck:
+Allow for copying the named files, installing packages and any local models, and configuring the selected service before the first write. A lesson's polling deadline measures how long its client waits; it is not a setup-time estimate or a cancellation of server work.
 
-1. Check the xref:reference/configuration.adoc[Configuration Reference] for environment setup
-2. See the https://github.com/neo4j-labs/agent-memory/discussions[GitHub Discussions] for community help
-3. Report issues at https://github.com/neo4j-labs/agent-memory/issues[GitHub Issues]
+The NAMS foundation stores one conversation and two messages; extraction may add entities. Its extraction wait is bounded at 60 seconds. The Skills fixture adds nine steps and nine simulated tool calls, then may create a run and a skill; each inspection polls for at most two minutes. The TypeScript graph lesson stores two document messages and waits up to 60 seconds before a separate observation can continue the same run. Supported cleanup and retained-resource reporting are part of each hosted lesson, not a promise that every resource can be deleted.
+
+For provider charges, model permissions and workspace quotas, consult the provider account or workspace owner for the selected configuration. These tutorials do not promise a free run. Keep each phase's result separate: storage readback, extraction, model response and final resource disposition can have different outcomes.

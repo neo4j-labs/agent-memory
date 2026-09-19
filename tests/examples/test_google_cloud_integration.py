@@ -131,8 +131,11 @@ class TestStructure:
         assert "img/architecture.excalidraw" in readme
         # Tool counts must match the live server surface asserted below.
         assert "16" in readme and "6 core" in readme
-        # The docker tag CI uses, not 5-enterprise (which needs a licence env var).
-        assert "neo4j:5.26-community" in readme
+        # The bolt path is AuraDB now, documented once in examples/AURA_SETUP.md
+        # rather than re-spelling a local container tag in every example README.
+        assert "AURA_SETUP.md" in readme, (
+            "the README must link the shared Aura setup instructions for the bolt path"
+        )
 
     def test_env_example_has_placeholders_not_literals(self):
         env = (INTEGRATION_DIR / ".env.example").read_text(encoding="utf-8")

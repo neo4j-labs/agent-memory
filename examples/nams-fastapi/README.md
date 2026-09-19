@@ -181,4 +181,6 @@ memory = MemoryIntegration(
 
 ---
 
-_Verified against `neo4j-agent-memory` 0.6.0-dev (branch `examples-updates`), `fastapi` 0.141.1 and `uvicorn` 0.52.4 (the versions `uv pip compile` resolves from `requirements.txt`), with the app driven over ASGI and the NAMS transport mocked (`tests/examples/test_nams_fastapi_example.py`). uvicorn itself is not exercised by the tests. Dated 2026-09-10._
+**Historical verification report — 2026-09-10.** The following records a prior checkout/test report. Its development-version labels, passing counts, and release-availability statements are historical, not evidence of current package compatibility. See the [current source and artifact evidence](../../DOCUMENTATION_REMEDIATION_STATUS.md) before selecting an SDK artifact.
+
+> _Verified against `neo4j-agent-memory` 0.6.0-dev (branch `examples-updates`), `fastapi` 0.141.1 and `uvicorn` 0.52.4 (the versions `uv pip compile` resolves from `requirements.txt`), with the app driven over ASGI and the NAMS transport mocked (`tests/examples/test_nams_fastapi_example.py`). uvicorn itself is not exercised by the tests. Dated 2026-09-10._

@@ -1,0 +1,68 @@
+= Message search and context
+:page-product: agent-memory
+:page-pagination:
+:toclevels: 2
+
+Semantic message search and context assembly from xref:reference/api/short-term.adoc[ShortTermMemory API reference]. Signatures show types, keyword-only arguments (`*`), and defaults; they are reference declarations, not calls to execute directly.
+
+anchor:_search_operations[]
+anchor:_parameters_2[]
+anchor:_returns_2[]
+
+== Search operations (bolt)
+
+=== search_messages
+
+Return matching `Message` objects, ordered by similarity. Each bolt result carries its score in `message.metadata["similarity"]`; results are not `(message, score)` tuples.
+
+// contract: memory/short_term.py:ShortTermMemory.search_messages
+[source,python]
+----
+async def search_messages(
+    query: str,
+    *,
+    session_id: str | None=None,
+    limit: int=10,
+    threshold: float=0.7,
+    metadata_filters: dict[str, Any] | None=None,
+) -> list[Message]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `query` | Search query
+| `session_id` | Optional filter by session
+| `limit` | Maximum results
+| `threshold` | Minimum similarity threshold
+| `metadata_filters` | Optional metadata-based filters. Supports: - Simple equality: {"speaker": "Brian Chesky"} - Comparison operators: {"turn_index": {"$gt": 5}} - List membership: {"source": {"$in": ["podcast", "interview"]}} - Existence check: {"timestamp": {"$exists": True}} - String operations: {"speaker": {"$contains": "Brian"}}
+|===
+
+[IMPORTANT]
+====
+In the current bolt implementation, the accepted `session_id` argument is not applied to semantic search. Search can return messages from other sessions. Use `get_conversation(session_id)` for scoped conversation retrieval; do not treat search or metadata filters as authorization. See xref:reference/backend-capabilities.adoc[Backend capabilities].
+====
+
+[source,python]
+----
+results = await client.short_term.search_messages("weather forecast", threshold=0.7)
+for message in results:
+    print(f"[{message.metadata['similarity']:.2f}] {message.content}")
+----
+
+=== get_context
+
+Return formatted context. Bolt consumes `session_id` and `max_messages` (default 10) from kwargs. A session ID adds its recent conversation messages; when an embedder is configured, global semantic matches are also appended, even when a session ID was supplied. This method does not provide session isolation.
+
+// contract: memory/short_term.py:ShortTermMemory.get_context
+[source,python]
+----
+async def get_context(query: str, **kwargs: Any) -> str: ...
+----
+
+== See also
+
+* xref:reference/api/short-term.adoc[ShortTermMemory API reference]
+* xref:how-to/messages.adoc[Store and search messages]
+* xref:reference/backend-capabilities.adoc[Backend capabilities]
+* xref:reference/api/short-term-messages.adoc#_nams_and_shared_conversation_operations[NAMS and shared conversation operations]

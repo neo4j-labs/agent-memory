@@ -1,0 +1,150 @@
+[
+  {
+    "previous_source": "docs/assets/images/diagrams/excalidraw/buffered-write-flow.excalidraw",
+    "source": "docs/assets/diagrams/excalidraw/buffered-write-flow.excalidraw"
+  },
+  {
+    "previous_source": "docs/assets/images/diagrams/excalidraw/entity-dedup-flow.excalidraw",
+    "source": "docs/assets/diagrams/excalidraw/entity-dedup-flow.excalidraw"
+  },
+  {
+    "previous_source": "docs/assets/images/diagrams/excalidraw/graph-schema.excalidraw",
+    "source": "docs/assets/diagrams/excalidraw/graph-schema.excalidraw"
+  },
+  {
+    "previous_source": "docs/assets/images/diagrams/excalidraw/mcp-server-architecture.excalidraw",
+    "source": "docs/assets/diagrams/excalidraw/mcp-server-architecture.excalidraw"
+  },
+  {
+    "previous_source": "docs/assets/images/diagrams/excalidraw/message-chain.excalidraw",
+    "source": "docs/assets/diagrams/excalidraw/message-chain.excalidraw"
+  },
+  {
+    "previous_source": "docs/assets/images/diagrams/excalidraw/multi-tenant-scoping.excalidraw",
+    "source": "docs/assets/diagrams/excalidraw/multi-tenant-scoping.excalidraw"
+  },
+  {
+    "previous_source": "docs/assets/images/diagrams/excalidraw/poleo-model.excalidraw",
+    "source": "docs/assets/diagrams/excalidraw/poleo-model.excalidraw"
+  },
+  {
+    "previous_source": "docs/assets/images/diagrams/excalidraw/preference-aware-context-graph.excalidraw",
+    "source": "docs/assets/diagrams/excalidraw/preference-aware-context-graph.excalidraw"
+  },
+  {
+    "previous_source": "docs/assets/images/diagrams/excalidraw/reasoning-trace-graph.excalidraw",
+    "source": "docs/assets/diagrams/excalidraw/reasoning-trace-graph.excalidraw"
+  },
+  {
+    "previous_source": "docs/modules/ROOT/images/assets/images/diagrams/excalidraw/extraction-pipeline.excalidraw",
+    "source": "docs/assets/diagrams/excalidraw/extraction-pipeline.excalidraw"
+  },
+  {
+    "previous_source": "docs/modules/ROOT/images/assets/images/diagrams/excalidraw/gds-algorithms-retail.excalidraw",
+    "source": "docs/assets/diagrams/excalidraw/gds-algorithms-retail.excalidraw"
+  },
+  {
+    "previous_source": "docs/modules/ROOT/images/assets/images/diagrams/excalidraw/gds-fallback-flow.excalidraw",
+    "source": "docs/assets/diagrams/excalidraw/gds-fallback-flow.excalidraw"
+  },
+  {
+    "previous_source": "docs/modules/ROOT/images/assets/images/diagrams/excalidraw/graph-schema.excalidraw",
+    "source": "docs/assets/diagrams/excalidraw/graph-schema-legacy-assets.excalidraw"
+  },
+  {
+    "previous_source": "docs/modules/ROOT/images/assets/images/diagrams/excalidraw/memory-architecture.excalidraw",
+    "source": "docs/assets/diagrams/excalidraw/memory-architecture.excalidraw"
+  },
+  {
+    "previous_source": "docs/modules/ROOT/images/assets/images/diagrams/excalidraw/microsoft-agent-architecture.excalidraw",
+    "source": "docs/assets/diagrams/excalidraw/microsoft-agent-architecture.excalidraw"
+  },
+  {
+    "previous_source": "docs/modules/ROOT/images/assets/images/diagrams/excalidraw/microsoft-agent-context-flow.excalidraw",
+    "source": "docs/assets/diagrams/excalidraw/microsoft-agent-context-flow.excalidraw"
+  },
+  {
+    "previous_source": "docs/modules/ROOT/images/assets/images/diagrams/excalidraw/microsoft-agent-memory-layers.excalidraw",
+    "source": "docs/assets/diagrams/excalidraw/microsoft-agent-memory-layers.excalidraw"
+  },
+  {
+    "previous_source": "docs/modules/ROOT/images/assets/images/diagrams/excalidraw/retail-assistant-graph-schema.excalidraw",
+    "source": "docs/assets/diagrams/excalidraw/retail-assistant-graph-schema.excalidraw"
+  },
+  {
+    "previous_source": "docs/modules/ROOT/images/diagrams/excalidraw/adk-memory-service.excalidraw",
+    "source": "docs/assets/diagrams/excalidraw/adk-memory-service.excalidraw"
+  },
+  {
+    "previous_source": "docs/modules/ROOT/images/diagrams/excalidraw/agentcore-memory-provider.excalidraw",
+    "source": "docs/assets/diagrams/excalidraw/agentcore-memory-provider.excalidraw"
+  },
+  {
+    "previous_source": "docs/modules/ROOT/images/diagrams/excalidraw/architecture-overview.excalidraw",
+    "source": "docs/assets/diagrams/excalidraw/architecture-overview.excalidraw"
+  },
+  {
+    "previous_source": "docs/modules/ROOT/images/diagrams/excalidraw/aws-agent-ecosystem.excalidraw",
+    "source": "docs/assets/diagrams/excalidraw/aws-agent-ecosystem.excalidraw"
+  },
+  {
+    "previous_source": "docs/modules/ROOT/images/diagrams/excalidraw/bedrock-embeddings-flow.excalidraw",
+    "source": "docs/assets/diagrams/excalidraw/bedrock-embeddings-flow.excalidraw"
+  },
+  {
+    "previous_source": "docs/modules/ROOT/images/diagrams/excalidraw/cdk-stack-architecture.excalidraw",
+    "source": "docs/assets/diagrams/excalidraw/cdk-stack-architecture.excalidraw"
+  },
+  {
+    "previous_source": "docs/modules/ROOT/images/diagrams/excalidraw/cloudrun-deployment.excalidraw",
+    "source": "docs/assets/diagrams/excalidraw/cloudrun-deployment.excalidraw"
+  },
+  {
+    "previous_source": "docs/modules/ROOT/images/diagrams/excalidraw/extraction-pipeline.excalidraw",
+    "source": "docs/assets/diagrams/excalidraw/extraction-pipeline-legacy-published.excalidraw"
+  },
+  {
+    "previous_source": "docs/modules/ROOT/images/diagrams/excalidraw/full-stack-demo-architecture.excalidraw",
+    "source": "docs/assets/diagrams/excalidraw/full-stack-demo-architecture.excalidraw"
+  },
+  {
+    "previous_source": "docs/modules/ROOT/images/diagrams/excalidraw/google-cloud-architecture.excalidraw",
+    "source": "docs/assets/diagrams/excalidraw/google-cloud-architecture.excalidraw"
+  },
+  {
+    "previous_source": "docs/modules/ROOT/images/diagrams/excalidraw/graph-schema.excalidraw",
+    "source": "docs/assets/diagrams/excalidraw/graph-schema-legacy-published.excalidraw"
+  },
+  {
+    "previous_source": "docs/modules/ROOT/images/diagrams/excalidraw/hybrid-memory-flow.excalidraw",
+    "source": "docs/assets/diagrams/excalidraw/hybrid-memory-flow.excalidraw"
+  },
+  {
+    "previous_source": "docs/modules/ROOT/images/diagrams/excalidraw/lennys-memory-architecture.excalidraw",
+    "source": "docs/assets/diagrams/excalidraw/lennys-memory-architecture.excalidraw"
+  },
+  {
+    "previous_source": "docs/modules/ROOT/images/diagrams/excalidraw/mcp-server-tools.excalidraw",
+    "source": "docs/assets/diagrams/excalidraw/mcp-server-tools.excalidraw"
+  },
+  {
+    "previous_source": "docs/modules/ROOT/images/diagrams/excalidraw/memory-architecture.excalidraw",
+    "source": "docs/assets/diagrams/excalidraw/memory-architecture-legacy-published.excalidraw"
+  },
+  {
+    "previous_source": "docs/modules/ROOT/images/diagrams/excalidraw/memory-types.excalidraw",
+    "source": "docs/assets/diagrams/excalidraw/memory-types.excalidraw"
+  },
+  {
+    "previous_source": "docs/modules/ROOT/images/diagrams/excalidraw/poleo-model.excalidraw",
+    "source": "docs/assets/diagrams/excalidraw/poleo-model-legacy-published.excalidraw"
+  },
+  {
+    "previous_source": "docs/modules/ROOT/images/diagrams/excalidraw/strands-tool-integration.excalidraw",
+    "source": "docs/assets/diagrams/excalidraw/strands-tool-integration.excalidraw"
+  },
+  {
+    "previous_source": "docs/modules/ROOT/images/diagrams/excalidraw/vertex-ai-embeddings-flow.excalidraw",
+    "source": "docs/assets/diagrams/excalidraw/vertex-ai-embeddings-flow.excalidraw"
+  }
+]

@@ -1,197 +1,98 @@
-= Google ADK memory service
-:description: Use neo4j-agent-memory as a Google ADK MemoryService, on local bolt or hosted NAMS.
+= Use with Google ADK
+:page-product: agent-memory
+:page-pagination:
+:toclevels: 2
+:sectanchors:
 
-`Neo4jMemoryService` implements the Google Agent Development Kit (ADK)
-`BaseMemoryService` interface, backing an ADK agent's memory with
-neo4j-agent-memory — on either the bolt or the NAMS backend.
+Connect `Neo4jMemoryService` to an ADK `Runner`, consume one complete run, persist its session, and verify the user's exact text. This recipe selects Bolt with OpenAI embeddings and a Gemini model through the Google AI API.
 
-[NOTE]
-====
-Supported range: *google-adk 2.x* (tested against 2.8.0). Install it with the
-extra:
+== 1. Prepare the selected environment
+
+anchor:_setup[]
+
+Use Python 3.10+ and a POSIX shell. The recipe uses xref:reference/configuration.adoc[`BoltSettings`] to select Neo4j explicitly and disables entity extraction so that message persistence can be checked independently. Use a dedicated AuraDB instance with vector-index support and no incompatible existing vectors. Follow xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the Aura connection setup] and copy its connection values into the exports below. These recipes use the published Python 0.6.0 package; provider access and database execution must be verified in your environment.
+
+include::partial$python-tutorial-setup.adoc[]
 
 [source,bash]
 ----
-pip install "neo4j-agent-memory[google-adk]"
+python -m pip install 'neo4j-agent-memory[google-adk,openai]==0.6.0'
+export NEO4J_URI='neo4j+s://<instance-id>.databases.neo4j.io'
+export NEO4J_USERNAME='neo4j'
+export NEO4J_PASSWORD='replace-with-your-Aura-password'
+export NEO4J_DATABASE='neo4j'
+export OPENAI_API_KEY='replace-with-your-provider-key'
+export GOOGLE_API_KEY='replace-with-your-Google-AI-key'
+unset GOOGLE_GENAI_USE_VERTEXAI
+export ADK_MODEL='replace-with-an-available-Gemini-model-id'
 ----
 
-The extra also pulls `google-genai`, because search results are returned as
-`google.genai.types.Content` objects.
+The OpenAI-backed recipes require access to `text-embedding-3-small`; it produces 1536-dimensional vectors in this configuration. Configure the selected chat model separately where required. Credentials are read from the environment, never printed by the programs.
+
+== 2. Read the complete recipe
+
+Create the subdirectory below, then save both complete files under the displayed names. Run commands from `agent-memory-tutorials/`; Python resolves `common` from the script's `integrations/` directory.
+
+[source,bash]
+----
+mkdir -p integrations
+----
+
+
+The script imports this shared helper from the same directory. It supplies explicit database settings, closes clients through the calling context manager, and fails when expected records are absent. Task traces record the observable outcome of the call; they do not expose hidden model reasoning.
+
+.Complete `integrations/common.py`
+[%collapsible]
 ====
-
-== Setup
-
+.Save as `integrations/common.py`
 [source,python]
 ----
-from neo4j_agent_memory import MemoryClient, MemorySettings
-from neo4j_agent_memory.integrations.google_adk import Neo4jMemoryService
-
-settings = MemorySettings(backend="nams", nams={"api_key": "nams_...",
-                                                "workspace_id": "your-workspace-id"})
-
-async with MemoryClient(settings) as client:
-    memory = Neo4jMemoryService(memory_client=client, extract_on_store=True)
-
-    await memory.add_session_to_memory(session)   # stores messages, extracts entities
-    response = await memory.search_memory(
-        app_name="memory-demo", user_id="user-123", query="user preferences"
-    )
+include::example$integrations/common.py[]
 ----
+====
 
-== Wire it into a Runner
-
-The memory service is passed to `Runner` (or `App`), and the agent reaches it
-through ADK's memory tools: `load_memory` lets the model search memory on
-demand, `preload_memory` injects recent recall into every request.
-
+.Complete `integrations/google_adk_recipe.py`
+[%collapsible]
+====
+.Save as `integrations/google_adk_recipe.py`
 [source,python]
 ----
-import os
+include::example$integrations/google_adk_recipe.py[]
+----
+====
 
-from google.adk.agents import LlmAgent
-from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
-from google.adk.tools import load_memory  # or: preload_memory
-from google.genai import types
+== 3. Run and verify persistence
 
-from neo4j_agent_memory import MemoryClient, MemorySettings
-from neo4j_agent_memory.integrations.google_adk import Neo4jMemoryService
+anchor:_wire_it_into_a_runner[]
+anchor:_reading_search_results[]
+anchor:_writing_memory[]
+anchor:_tool_event_filtering[]
 
-APP_NAME = "memory-demo"
-USER_ID = "user-123"
-
-async with MemoryClient(MemorySettings()) as client:
-    memory_service = Neo4jMemoryService(memory_client=client, user_id=USER_ID)
-    session_service = InMemorySessionService()
-
-    agent = LlmAgent(
-        name="memory_demo",
-        model=os.environ.get("ADK_MODEL", "gemini-2.5-flash"),
-        instruction="Use load_memory to recall anything the user told you before.",
-        tools=[load_memory],
-    )
-    runner = Runner(
-        app_name=APP_NAME,
-        agent=agent,
-        session_service=session_service,
-        memory_service=memory_service,
-    )
-
-    session = await session_service.create_session(app_name=APP_NAME, user_id=USER_ID)
-    async for event in runner.run_async(
-        user_id=USER_ID,
-        session_id=session.id,
-        new_message=types.Content(role="user", parts=[types.Part(text="My sister is Sarah.")]),
-    ):
-        pass  # stream events as you like
-
-    # Persist the turn so the next session can recall it.
-    await memory_service.add_session_to_memory(
-        await session_service.get_session(
-            app_name=APP_NAME, user_id=USER_ID, session_id=session.id
-        )
-    )
+[source,bash]
+----
+python integrations/google_adk_recipe.py
 ----
 
-[TIP]
-====
-`Runner.run_async()` is an async *generator* — iterate it with `async for`, never
-`await` it. `InMemorySessionService.create_session()` / `get_session()` are
-coroutines and must be awaited.
-====
+Expected: a final response, `Verified stored messages`, and an ADK search candidate count. `run_async()` is an async generator and must be iterated; session creation and lookup must be awaited. An error event or exception stops the run. The sample persists the session once after completion; repeatedly ingesting the full session can duplicate messages.
 
-== Reading search results
+== Troubleshooting and cleanup
 
-`search_memory()` returns a `SearchMemoryResponse`, not a list. Each
-`MemoryEntry` carries ADK content plus attribution:
+include::partial$python-integration-troubleshooting.adoc[tag=troubleshooting]
 
-[source,python]
-----
-response = await memory_service.search_memory(
-    app_name="memory-demo", user_id="user-123", query="project deadline"
-)
+== Adapt the integration
 
-for entry in response.memories:
-    text = "".join(part.text or "" for part in entry.content.parts)
-    print(entry.author, entry.timestamp, entry.custom_metadata["memory_type"], text)
-----
+anchor:_conversation_scoping_on_nams[]
+anchor:_parameter_naming[]
+anchor:_see_also[]
 
-* `content` — a `google.genai.types.Content` with text parts.
-* `author` — the message role or ADK agent name for conversation recall;
-  `entity` or `preference` for long-term recall.
-* `timestamp` — ISO-8601 creation time (what `preload_memory` renders).
-* `custom_metadata` — `memory_type`, the similarity `score`, and the source
-  `session_id` / `category` when present.
+Memory is a Runner-level service: `Runner(memory_service=...)`. `LlmAgent` receives `load_memory` (or a deliberately selected `preload_memory` tool), not a `memory=` argument or an invented `@agent.tool` decorator.
 
-Two library-side conveniences sit alongside the ADK contract:
-`get_memories_for_session(session_id)` returns the library's own `MemoryEntry`
-dataclass (with `.content` as a plain string and `.memory_type`), and
-`add_memory(content=..., memory_type="preference", category=...)` writes a
-single memory and returns it.
+`search_memory(app_name=..., user_id=..., query=...)` returns `SearchMemoryResponse`; iterate `.memories`. Each ADK entry carries `content.parts`, `author`, `timestamp` and `custom_metadata`. The convenience `get_memories_for_session(session_id)` returns the library's own entries with string `content`, so do not mix the two result shapes.
 
-== Writing memory
+`add_session_to_memory(session)` stores text-bearing events. `add_events_to_memory(app_name=..., user_id=..., events=..., session_id=...)` supports incremental ingestion. The adapter preserves the agent author in metadata and omits tool-only events; it does not turn tool JSON into extracted facts or automatically record a full reasoning trace.
 
-[cols="1,2"]
-|===
-| Call | Effect
+For NAMS, message search requires a real conversation ID. The service tracks the last session written and uses it for search, or accepts an explicit `session_id`. Without one it skips message search and can still search workspace entities/preferences. This is not cross-conversation message search, and Bolt's unscoped semantic message search is not user authorization. The selected complete program above is Bolt; follow xref:how-to/use-nams.adoc[the hosted guide] before adapting it.
 
-| `add_session_to_memory(session)`
-| Ingests every text-bearing event in the session as a message.
+See xref:how-to/integrations/google-cloud.adoc[Vertex AI embeddings and Google Cloud deployment] for the distinct cloud credentials and infrastructure path.
 
-| `add_events_to_memory(app_name=..., user_id=..., events=[...], session_id=...)`
-| Ingests an incremental slice (e.g. just the latest turn) — what
-  `Context.add_events_to_memory()` sends.
-
-| `add_memory(app_name=..., user_id=..., memories=[MemoryEntry(...)])`
-| Writes explicit ADK memory items — what `Context.add_memory()` sends.
-
-| `add_memory(content=..., memory_type="message" \| "preference", ...)`
-| The library convenience form; returns the created entry.
-|===
-
-ADK authors model turns with the *agent name* (`memory_demo`, `supervisor`, …),
-while the library stores `MessageRole` values. Agent-authored events are stored
-as `assistant` messages with the original author preserved in the message
-metadata as `adk_author`, and re-attributed to that agent name on the way back
-out of `search_memory()`.
-
-== Conversation scoping on NAMS
-
-NAMS message search is *conversation-scoped*; ADK's `search_memory()` does not
-carry a session id. `Neo4jMemoryService` handles this for you:
-
-* It tracks the active session whenever you call `add_session_to_memory`,
-  `add_events_to_memory` or `add_memory`, and scopes `search_memory` to it.
-* You can override per call: `search_memory(query, session_id=...)`.
-* When no session is known on NAMS, it *skips* message search (rather than
-  issuing the unscoped search NAMS rejects) and still returns entity and
-  preference recall, which are workspace-scoped and genuinely cross-session.
-
-On bolt, search is unscoped as before.
-
-== Tool-event filtering
-
-ADK events may carry tool calls (`FunctionCall` / `FunctionResponse`) that have
-no text. The service ingests *only* text parts; tool-only events produce no
-message and never reach the entity-extraction pipeline. This keeps the knowledge
-graph clean — tool JSON is not stringified into it.
-
-== Parameter naming
-
-* `session_id` is the canonical short-term parameter; `conversation_id` is
-  accepted as an alias (`session_id` wins).
-* `add_entity` takes `entity_type` (aliases: `type`, `label`).
-* `search_memory` accepts `query` positionally as well as by keyword; ADK itself
-  always calls it with keywords (`app_name=`, `user_id=`, `query=`).
-
-[NOTE]
-====
-This integration is community-supported and tracks issue
-https://github.com/neo4j-labs/agent-memory/issues/130[#130]. A staging-backed
-e2e suite guards the NAMS compatibility described here.
-====
-
-== See also
-
-* xref:how-to/integrations/google-cloud.adoc[Google Cloud (Vertex AI, ADK)]
-* xref:how-to/use-nams.adoc[Use NAMS]
+include::partial$python-integration-troubleshooting.adoc[tag=closing]

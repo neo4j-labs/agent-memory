@@ -1,0 +1,222 @@
+= Extractor builder
+:page-product: agent-memory
+:page-pagination:
+:toclevels: 2
+
+Build a local extractor from enabled stages, from xref:reference/extractors.adoc[Extractor classes reference]. Import `ExtractorBuilder` from `neo4j_agent_memory.extraction`.
+
+anchor:_builder_methods[]
+anchor:_constructor_5[]
+anchor:_example_5[]
+
+== ExtractorBuilder
+
+Build a local extractor from enabled stages. `build()` returns NoOpExtractor when no stage is enabled, the concrete extractor for one stage, or ExtractionPipeline for multiple stages.
+
+[source,python]
+----
+from neo4j_agent_memory.extraction import ExtractorBuilder
+
+extractor = (
+    ExtractorBuilder()
+    .with_spacy("en_core_web_sm")
+    .with_gliner_schema("podcast", threshold=0.5)
+    .with_llm_fallback("gpt-4o-mini")
+    .merge_by_confidence()
+    .build()
+)
+----
+
+The union method is `merge_by_union()`. `with_schema(EntitySchemaConfig)` copies entity type names into extraction labels; it does not apply relation endpoints, properties, constraints, or indexes. Use the explicit schema/validation APIs for those purposes.
+
+=== with_spacy
+
+Add spaCy extractor to pipeline.
+
+// contract: extraction/factory.py:ExtractorBuilder.with_spacy
+[source,python]
+----
+def with_spacy(model: str='en_core_web_sm') -> ExtractorBuilder: ...
+----
+
+=== with_gliner
+
+Add GLiNER2 extractor to pipeline with simple labels.
+
+// contract: extraction/factory.py:ExtractorBuilder.with_gliner
+[source,python]
+----
+def with_gliner(
+    model: str | None=None,
+    threshold: float=0.5,
+    device: str='cpu',
+    *,
+    model_name: str | None=None,
+) -> ExtractorBuilder: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `model` | GLiNER model identifier (e.g. `gliner-community/gliner_medium-v2.5`).
+| `threshold` | Confidence threshold.
+| `device` | Inference device (`cpu` / `cuda` / `mps`).
+| `model_name` | Alias for `model` (kept for compatibility with the CLI and older call sites).
+|===
+
+=== with_gliner_schema
+
+Add GLiNER2 extractor with a domain schema for better accuracy.
+
+// contract: extraction/factory.py:ExtractorBuilder.with_gliner_schema
+[source,python]
+----
+def with_gliner_schema(
+    schema_name: str,
+    model: str='gliner-community/gliner_medium-v2.5',
+    threshold: float=0.5,
+    device: str='cpu',
+) -> ExtractorBuilder: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `schema_name` | Name of the schema (poleo, podcast, news, scientific, business, entertainment, medical, legal)
+| `model` | GLiNER2 model to use
+| `threshold` | Confidence threshold
+| `device` | Device to run on (cpu, cuda, mps)
+|===
+
+=== with_llm
+
+Add an LLM extractor (alias of :meth:`with_llm_fallback`).
+
+// contract: extraction/factory.py:ExtractorBuilder.with_llm
+[source,python]
+----
+def with_llm(model: str='gpt-4o-mini') -> ExtractorBuilder: ...
+----
+
+=== with_llm_fallback
+
+Add LLM extractor as fallback.
+
+// contract: extraction/factory.py:ExtractorBuilder.with_llm_fallback
+[source,python]
+----
+def with_llm_fallback(model: str='gpt-4o-mini') -> ExtractorBuilder: ...
+----
+
+=== with_entity_types
+
+Set entity types to extract.
+
+// contract: extraction/factory.py:ExtractorBuilder.with_entity_types
+[source,python]
+----
+def with_entity_types(types: list[str]) -> ExtractorBuilder: ...
+----
+
+=== with_schema
+
+Configure entity types from an :class:`EntitySchemaConfig`.
+
+// contract: extraction/factory.py:ExtractorBuilder.with_schema
+[source,python]
+----
+def with_schema(schema_config: EntitySchemaConfig) -> ExtractorBuilder: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `schema_config` | Entity schema configuration. Each `EntityTypeConfig` contributes its `name` to the extractor's type set.
+|===
+
+=== with_confidence_threshold
+
+Set the confidence threshold for entity extraction.
+
+// contract: extraction/factory.py:ExtractorBuilder.with_confidence_threshold
+[source,python]
+----
+def with_confidence_threshold(threshold: float) -> ExtractorBuilder: ...
+----
+
+=== merge_by_union
+
+Use union strategy for merging.
+
+// contract: extraction/factory.py:ExtractorBuilder.merge_by_union
+[source,python]
+----
+def merge_by_union() -> ExtractorBuilder: ...
+----
+
+=== merge_by_intersection
+
+Use intersection strategy for merging.
+
+// contract: extraction/factory.py:ExtractorBuilder.merge_by_intersection
+[source,python]
+----
+def merge_by_intersection() -> ExtractorBuilder: ...
+----
+
+=== merge_by_confidence
+
+Use confidence strategy for merging.
+
+// contract: extraction/factory.py:ExtractorBuilder.merge_by_confidence
+[source,python]
+----
+def merge_by_confidence() -> ExtractorBuilder: ...
+----
+
+=== merge_by_cascade
+
+Use cascade strategy for merging.
+
+// contract: extraction/factory.py:ExtractorBuilder.merge_by_cascade
+[source,python]
+----
+def merge_by_cascade() -> ExtractorBuilder: ...
+----
+
+=== extract_relations
+
+Enable/disable relation extraction.
+
+// contract: extraction/factory.py:ExtractorBuilder.extract_relations
+[source,python]
+----
+def extract_relations(enabled: bool=True) -> ExtractorBuilder: ...
+----
+
+=== extract_preferences
+
+Enable/disable preference extraction.
+
+// contract: extraction/factory.py:ExtractorBuilder.extract_preferences
+[source,python]
+----
+def extract_preferences(enabled: bool=True) -> ExtractorBuilder: ...
+----
+
+=== build
+
+Build the extractor based on configuration.
+
+// contract: extraction/factory.py:ExtractorBuilder.build
+[source,python]
+----
+def build() -> EntityExtractor: ...
+----
+
+
+== See also
+
+* xref:reference/extractors.adoc[Extractor classes reference]
+* xref:reference/extractor-pipeline.adoc[Extraction pipeline]
+* xref:how-to/entity-extraction.adoc[Configure entity extraction]

@@ -1,202 +1,151 @@
-# Cloud Run Deployment for Neo4j Agent Memory MCP Server
+# Deploy the MCP server on Cloud Run
 
-Deploy the Neo4j Agent Memory MCP Server to Google Cloud Run for production use.
+Run the Python MCP server as an authenticated Cloud Run service connected to Neo4j AuraDB. This is an experimental Neo4j Labs deployment example. Complete local packaging and protocol checks before using a cloud project.
 
 ## Prerequisites
 
-1. **Google Cloud Project** with billing enabled
-2. **APIs enabled**:
-   - Cloud Run API
-   - Cloud Build API
-   - Artifact Registry API
-   - Secret Manager API
-3. **Neo4j database** accessible from Cloud Run (e.g., Neo4j Aura)
+- A checkout of this repository, Docker, and Google Cloud CLI.
+- A test Google Cloud project with billing and Cloud Run, Cloud Build, Artifact Registry, Secret Manager, and Vertex AI APIs enabled.
+- Permission to create the required resources, deploy using the runtime service account, and grant the intended developer/service identity `roles/run.invoker`.
+- A dedicated [AuraDB instance](../../examples/AURA_SETUP.md) reachable from Cloud Run and credentials stored in Secret Manager. Use a fresh test database with 768-dimensional vector indexes for the selected embedding configuration.
+- Access to `gemini-embedding-001` in Vertex AI location `us-central1`. The runtime service account needs permission to invoke that model; database secrets alone are insufficient.
 
-## Quick Start
+The image explicitly selects Vertex AI embeddings (`gemini-embedding-001`, 768 dimensions) and the Bolt backend. It disables automatic entity extraction and preference detection, so this path needs no OpenAI key or separate LLM. Message storage, embedding search and explicit graph tools remain available. Installing `[mcp,google]` alone would not select Google providers: the SDK defaults still select OpenAI embeddings, and provider credentials are checked lazily when a tool uses them.
 
-### 1. Set up secrets
+The container uses Streamable HTTP at `/mcp/`. It does not implement application authentication itself; Cloud Run IAM protects the endpoint. The local proxy below supplies the developer's Cloud Run identity. A production MCP client needs its own supported service-to-service authentication path.
 
-Store your Neo4j credentials in Secret Manager:
+## 1. Verify the image locally
+
+Run commands from the repository root:
 
 ```bash
-# Set your project
-export PROJECT_ID=your-project-id
-gcloud config set project $PROJECT_ID
-
-# Create secrets
-echo -n "bolt+s://your-neo4j-host:7687" | gcloud secrets create neo4j-uri --data-file=-
-echo -n "neo4j" | gcloud secrets create neo4j-user --data-file=-
-echo -n "your-password" | gcloud secrets create neo4j-password --data-file=-
+docker build -f deploy/cloudrun/Dockerfile -t neo4j-memory-mcp:local .
+docker run --rm neo4j-memory-mcp:local neo4j-agent-memory mcp serve --help
 ```
 
-### 2. Create Artifact Registry repository
+The Dockerfile must copy `README-pypi.md`, because that is the packaging readme declared by `pyproject.toml`. The context is the repository root, not the `deploy/cloudrun` directory.
+
+For a protocol smoke test, supply the Aura `neo4j+s://` URI, username and password as `NEO4J_URI`, `NEO4J_USER`, and `NEO4J_PASSWORD` through a local, uncommitted environment file. Map the Aura setup's `NEO4J_USERNAME` value to the CLI's `NEO4J_USER` key. Docker runs the MCP application here; the database remains in Aura. Configure local Application Default Credentials (ADC) and select the Vertex AI project. The following mount passes the ADC file read-only; the local process uses your UID/GID so it can read the file without widening its permissions:
+
+```bash
+export PROJECT_ID=your-test-project
+gcloud auth application-default login
+export ADC_FILE="$(gcloud info --format='value(config.paths.global_config_dir)')/application_default_credentials.json"
+docker run --rm --user "$(id -u):$(id -g)" \
+  --env-file /absolute/path/to/test-memory.env \
+  -e GOOGLE_CLOUD_PROJECT="$PROJECT_ID" \
+  -e GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/google-adc.json \
+  --mount "type=bind,src=$ADC_FILE,dst=/run/secrets/google-adc.json,readonly" \
+  -p 8080:8080 neo4j-memory-mcp:local
+```
+
+In another terminal, use the CLI installed by the selected `[mcp]` dependency set:
+
+```bash
+fastmcp list http://127.0.0.1:8080/mcp/ --prompts --resources
+```
+
+Expect the extended profile's registered Bolt tools, prompts and resources. Then call `memory_store_message` with a synthetic message and use `memory_search` with that session ID; confirm the returned text and inspect the stored record in the test database. Registration or a TCP listener does not exercise embedding credentials. Automatic extraction/preference detection remains disabled even though generic tool descriptions mention those optional behaviors. Check supported operations, not just registration counts; the NAMS backend has different applicability. Keep the full build and protocol output with deployment evidence. A metadata check alone does not prove the complete image runs.
+
+## 2. Prepare secrets and the runtime identity
+
+Set the intended project and region. The following commands create resources in that project:
+
+```bash
+export PROJECT_ID=your-test-project
+export REGION=us-central1
+gcloud config set project "$PROJECT_ID"
+gcloud iam service-accounts create neo4j-memory-sa --project "$PROJECT_ID"
+export RUNTIME_SA="neo4j-memory-sa@$PROJECT_ID.iam.gserviceaccount.com"
+```
+
+Create `neo4j-uri`, `neo4j-user`, and `neo4j-password` in Secret Manager using the project's normal secret-entry process. Grant the runtime identity access to each secret before deployment:
+
+```bash
+for SECRET_NAME in neo4j-uri neo4j-user neo4j-password; do
+  gcloud secrets add-iam-policy-binding "$SECRET_NAME" \
+    --member="serviceAccount:$RUNTIME_SA" \
+    --role=roles/secretmanager.secretAccessor
+done
+```
+
+Enable Vertex AI and grant the runtime identity `roles/aiplatform.user` (or your project's narrower equivalent that permits the selected model). Google's [model access-control guide](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/access-control) lists the predefined roles and operation permissions:
+
+```bash
+gcloud services enable aiplatform.googleapis.com --project "$PROJECT_ID"
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="serviceAccount:$RUNTIME_SA" --role=roles/aiplatform.user
+```
+
+Cloud Run supplies ADC through its attached service account; do not mount the developer's local ADC file or bake a service-account key into the deployed image. See Google's [ADC credential lookup guide](https://docs.cloud.google.com/docs/authentication/application-default-credentials) for the local-file and attached-identity paths. `cloudbuild.yaml` supplies `GOOGLE_CLOUD_PROJECT=$PROJECT_ID`; replace that placeholder when applying `service.yaml`. The current CLI provider path uses Vertex AI location `us-central1`, independently of the Cloud Run `_REGION` substitution.
+
+Cloud Run reads these secrets using the service identity. See [Configure secrets for services](https://docs.cloud.google.com/run/docs/configuring/services/secrets) for identity and secret-version requirements. The build/deploy principal also needs the project permissions appropriate to your organization's Cloud Build setup; it is distinct from this runtime identity.
+
+## 3. Build and deploy an authenticated test service
+
+Create the image repository, then submit the checked-in build configuration from the repository root:
 
 ```bash
 gcloud artifacts repositories create neo4j-agent-memory \
-    --repository-format=docker \
-    --location=us-central1 \
-    --description="Neo4j Agent Memory images"
+  --repository-format=docker --location="$REGION"
+gcloud builds submit --config deploy/cloudrun/cloudbuild.yaml \
+  --substitutions="_REGION=$REGION" .
 ```
 
-### 3. Deploy using Cloud Build
+The configuration tags images with Cloud Build's `BUILD_ID`, uses the `neo4j-memory-sa` identity, enables the invoker IAM check, and specifies `--no-allow-unauthenticated`. `service.yaml` is an alternative declarative template; replace its project/image placeholders and review its resource settings before using it. It does not independently remove an existing public IAM grant.
+
+Grant the intended developer access, substituting their identity:
 
 ```bash
-cd neo4j-agent-memory
-gcloud builds submit --config deploy/cloudrun/cloudbuild.yaml .
+gcloud run services add-iam-policy-binding neo4j-memory-mcp \
+  --region="$REGION" --member="user:developer@example.com" \
+  --role=roles/run.invoker
 ```
 
-### 4. Get the service URL
+## 4. Verify authenticated MCP invocation
+
+Use Google's local development proxy, which authenticates as the active Cloud CLI account:
 
 ```bash
-gcloud run services describe neo4j-memory-mcp \
-    --region=us-central1 \
-    --format='value(status.url)'
+gcloud run services proxy neo4j-memory-mcp \
+  --project="$PROJECT_ID" --region="$REGION" --port=8081
 ```
 
-The MCP endpoint is `/mcp/` on that URL, e.g.
-`https://neo4j-memory-mcp-xxxx.run.app/mcp/`. Point your MCP client at that
-full path, not the bare service URL.
-
-### 5. Verify with an MCP client
-
-The `[mcp]` extra installs FastMCP 4, whose CLI can list the server's tools:
+In another terminal:
 
 ```bash
-pip install "neo4j-agent-memory[mcp]"
-fastmcp list https://neo4j-memory-mcp-xxxx.run.app/mcp/ --prompts --resources
+fastmcp list http://127.0.0.1:8081/mcp/ --prompts --resources
 ```
 
-Expect the 16 extended-profile tools, three prompts, and the memory resources.
+Then use a synthetic conversation to verify one supported write/read round trip and confirm it reaches the intended database. A public unauthenticated request should be denied. Stop the local proxy when the check finishes. Google's [developer authentication guide](https://docs.cloud.google.com/run/docs/authenticating/developers) describes the proxy and its limitations; use the [service-to-service authentication guide](https://docs.cloud.google.com/run/docs/authenticating/service-to-service) for deployed callers.
 
-## Transport
+This documentation repair verified package metadata, CLI/settings selection and provider construction with offline mocks locally. A complete Docker build and live Cloud Run/proxy round trip remain deployment checks to execute in the selected environment; they are not certified by a local documentation build.
 
-The container runs the server on **Streamable HTTP**
-(`mcp serve --transport http`), the network transport in the current MCP
-specification.
+## Existing public services
 
-Earlier versions of this image used `--transport sse`, which served the legacy
-HTTP+SSE transport at `/sse` + `/messages`. That transport is deprecated in the
-MCP spec and in FastMCP 4, which this image now builds on. If you are upgrading,
-change client URLs from `/sse` to `/mcp/`. The `--transport sse` flag still
-starts a server, but it logs a deprecation warning and serves Streamable HTTP —
-so a stale client URL will fail rather than silently fall back.
-
-## Manual Deployment
-
-If you prefer to deploy manually:
-
-### Build and push the image
+Omitting an old `--allow-unauthenticated` flag alone does not establish a private service. Review the service's invoker IAM-check setting and current IAM policy. If an existing `allUsers` invoker grant is unintended, remove that specific binding:
 
 ```bash
-# Configure Docker for Artifact Registry
-gcloud auth configure-docker us-central1-docker.pkg.dev
-
-# Build
-docker build -t us-central1-docker.pkg.dev/$PROJECT_ID/neo4j-agent-memory/neo4j-memory-mcp:latest \
-    -f deploy/cloudrun/Dockerfile .
-
-# Push
-docker push us-central1-docker.pkg.dev/$PROJECT_ID/neo4j-agent-memory/neo4j-memory-mcp:latest
+gcloud run services remove-iam-policy-binding neo4j-memory-mcp \
+  --region="$REGION" --member=allUsers --role=roles/run.invoker
 ```
 
-### Deploy to Cloud Run
+Also review any `allAuthenticatedUsers` grant and recheck anonymous and authorized invocation. See [Cloud Run public access](https://docs.cloud.google.com/run/docs/authenticating/public) and the [remove binding command](https://docs.cloud.google.com/sdk/gcloud/reference/run/services/remove-iam-policy-binding). Treat a live policy change as a separate operational action; these files do not alter an already deployed service.
 
-```bash
-gcloud run deploy neo4j-memory-mcp \
-    --image=us-central1-docker.pkg.dev/$PROJECT_ID/neo4j-agent-memory/neo4j-memory-mcp:latest \
-    --region=us-central1 \
-    --platform=managed \
-    --allow-unauthenticated \
-    --memory=1Gi \
-    --cpu=1 \
-    --min-instances=0 \
-    --max-instances=10 \
-    --set-secrets="NEO4J_URI=neo4j-uri:latest,NEO4J_USER=neo4j-user:latest,NEO4J_PASSWORD=neo4j-password:latest"
-```
+## Configuration and troubleshooting
 
-## Configuration
+| Setting | Source or default |
+|---|---|
+| `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD` | Required Secret Manager entries |
+| `NEO4J_DATABASE` | `neo4j`, unless configured otherwise |
+| `GOOGLE_CLOUD_PROJECT` | Deployment project, supplied by Cloud Build or replaced in the service template |
+| Vertex AI identity | Attached runtime service account with model-invocation permission; local smoke test uses mounted ADC |
+| Embedding model / location / dimensions | Image selects `vertex_ai/gemini-embedding-001`, `us-central1`, 768 |
+| Automatic extraction / preferences | `NAM_EXTRACTION__EXTRACTOR_TYPE=none` and `--no-auto-preferences`; no LLM configured |
+| Listener | `0.0.0.0:8080`, Streamable HTTP `/mcp/` |
+| Memory / CPU | 1 GiB / 1 CPU in the example deployment |
+| Instances | 0–10; size and concurrency require workload testing |
 
-### Environment Variables
+For secret denial, check all three secret grants against the configured runtime identity. For database failures, verify TLS, network reachability and credentials. For embedding failures, check ADC, the configured project, Vertex AI API enablement, model access and quotas in `us-central1`. Matching dimensions alone does not make an existing model's vectors compatible; use a fresh database or perform the documented embedding migration. To enable extraction later, configure an explicit LLM/provider and its dependencies/credentials as a separate change. For startup, inspect container logs; the service template uses a TCP startup probe because `/mcp/` is a protocol endpoint, not a health page. Old `/sse` or `/messages` client URLs must be changed to `/mcp/`.
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `NEO4J_URI` | Neo4j connection URI | Required |
-| `NEO4J_USER` | Neo4j username | Required |
-| `NEO4J_PASSWORD` | Neo4j password | Required |
-| `NEO4J_DATABASE` | Neo4j database name | `neo4j` |
-| `PORT` | Server port | `8080` |
-
-### Resource Limits
-
-Default configuration:
-- Memory: 1Gi
-- CPU: 1
-- Min instances: 0 (scale to zero)
-- Max instances: 10
-- Concurrency: 80 requests per instance
-
-Adjust in `service.yaml` or via `gcloud run deploy` flags.
-
-## Security
-
-### Authentication
-
-By default, the service allows unauthenticated access. For production:
-
-1. **Remove `--allow-unauthenticated`** from deploy command
-2. **Configure IAM** for authorized users/services:
-   ```bash
-   gcloud run services add-iam-policy-binding neo4j-memory-mcp \
-       --region=us-central1 \
-       --member="user:email@example.com" \
-       --role="roles/run.invoker"
-   ```
-
-### Network Security
-
-For private Neo4j databases:
-1. Use **VPC Connector** to access private networks
-2. Configure **Cloud NAT** for outbound connections
-3. Use **Private Google Access** for internal services
-
-## Monitoring
-
-### Logs
-
-```bash
-gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=neo4j-memory-mcp" \
-    --limit=100
-```
-
-### Metrics
-
-View in Cloud Console:
-- **Cloud Run > neo4j-memory-mcp > Metrics**
-- Request count, latency, error rate
-- Container instance count
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Connection refused to Neo4j**
-   - Ensure Neo4j allows connections from Cloud Run IP ranges
-   - Check Neo4j is using `bolt+s://` for TLS connections
-
-2. **Secret access denied**
-   - Grant Secret Manager access to the Cloud Run service account:
-     ```bash
-     gcloud secrets add-iam-policy-binding neo4j-uri \
-         --member="serviceAccount:$PROJECT_NUMBER-compute@developer.gserviceaccount.com" \
-         --role="roles/secretmanager.secretAccessor"
-     ```
-
-3. **Out of memory**
-   - Increase memory limit in deployment
-   - Check for memory leaks in logs
-
-## Cost Optimization
-
-- **Scale to zero**: Min instances = 0 means no charges when idle
-- **CPU throttling**: Enabled by default, reduces costs during idle
-- **Right-size**: Start with 1Gi memory, increase only if needed
+Cloud identity and command references were checked against Google's documentation on 13 September 2026. Record the source commit, image digest, package dependencies, service revision, successful protocol output and cleanup with each actual deployment verification.

@@ -1,4 +1,4 @@
-= Run Without an LLM
+= Run without an LLM
 :page-product: agent-memory
 :page-pagination:
 :toclevels: 3
@@ -6,36 +6,45 @@
 :icons: font
 :source-highlighter: highlight.js
 
-include::partial$backend-both.adoc[]
+include::partial$backend-bolt-only.adoc[]
 
-How to use `neo4j-agent-memory` with no LLM provider — useful for air-gapped deployments, environments without an `OPENAI_API_KEY`, or when you want fully deterministic, free, local extraction.
+Use `neo4j-agent-memory` with local extraction and embeddings, without constructing an LLM provider or requiring an `OPENAI_API_KEY`. This example stores its memory in AuraDB, so a network connection to Aura is still required.
 
 == Overview
 
-`MemorySettings.llm` is `Optional[LLMConfig]`. Set it to `None` to opt out of all LLM construction. Combine that with a local embedder (sentence-transformers) and a local extractor (spaCy and/or GLiNER) to get a working `MemoryClient` that never imports `openai`.
+`MemorySettings.llm` accepts a legacy config, a provider string, a provider instance, or `None`. Set it to `None` to opt out of all LLM construction. Combine that with a local embedder (sentence-transformers) and a local extractor (spaCy and/or GLiNER) to get a client that does not construct an LLM provider. A local embedding provider is a separate requirement; `llm=None` alone does not disable cloud embedding calls.
 
 == Prerequisites
 
+Use Python 3.10+ and a POSIX shell. Prepare the example files and environment:
+
+include::partial$python-tutorial-setup.adoc[]
+
 [source,bash]
 ----
-pip install "neo4j-agent-memory[extraction,sentence-transformers]"
+pip install 'neo4j-agent-memory[extraction,sentence-transformers]==0.6.0'
 python -m spacy download en_core_web_sm
 ----
 
-You also need a running Neo4j instance.
+Use a dedicated AuraDB instance configured through xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the Aura connection setup]. Export `NEO4J_URI`, `NEO4J_USERNAME`, and `NEO4J_PASSWORD` for the example, and download the local models into the deployment cache. Local model inference has compute costs and does not guarantee identical outputs across hardware or dependency versions.
 
-== Configuration
+== 1. Configure local providers
 
 [source,python]
 ----
-from pydantic import SecretStr
+import os
 
-from neo4j_agent_memory import MemoryClient, MemorySettings, Neo4jConfig
+from neo4j_agent_memory import MemoryClient, MemorySettings
 from neo4j_agent_memory.config.settings import ExtractionConfig, ExtractorType
 
 settings = MemorySettings(
     backend="bolt",                                    # <1>
-    neo4j=Neo4jConfig(uri="bolt://localhost:7687", password=SecretStr("test-password")),
+    neo4j={
+        "uri": os.environ["NEO4J_URI"],
+        "username": os.environ["NEO4J_USERNAME"],
+        "password": os.environ["NEO4J_PASSWORD"],
+        "database": os.getenv("NEO4J_DATABASE", "neo4j"),
+    },
     llm=None,                                          # <2>
     embedding="sentence-transformers/all-MiniLM-L6-v2", # <3>
     extraction=ExtractionConfig(
@@ -50,23 +59,23 @@ async with MemoryClient(settings) as memory:
     await memory.short_term.add_message("session-1", "user", "John works at Acme")
     print(await memory.get_context("Tell me about John"))
 ----
-<1> Pins the self-hosted backend, so a `MEMORY_API_KEY` in the environment does not redirect this configuration to the hosted service.
+<1> Pins the direct Neo4j backend used by Aura, so a `MEMORY_API_KEY` in the environment does not redirect this configuration to NAMS.
 <2> Explicit opt-out — no LLM client is ever constructed.
 <3> Provider-string shorthand; resolves to a local `SentenceTransformersProvider`. An `EmbeddingProvider` instance also works.
 <4> Required when `llm=None` — see <<validation>>.
 
 [NOTE]
 ====
-This configuration is self-hosted (bolt) only. On the hosted service (NAMS) extraction and embeddings run server-side, so there is no LLM or embedding provider to opt out of — see xref:how-to/use-nams.adoc[Use NAMS].
+This configuration uses the `bolt` backend with Aura. On the hosted memory service (NAMS) extraction and embeddings run server-side, so there is no client-side LLM or embedding provider to opt out of — see xref:how-to/use-nams.adoc[Use NAMS].
 ====
 
 [[validation]]
-== Validation rules
+== 2. Check configuration validation
 
 `MemorySettings` raises a `ValidationError` at construction time if you set `llm=None` together with extraction settings that require an LLM:
 
 * `extraction.extractor_type == ExtractorType.LLM`, or
-* `extraction.enable_llm_fallback is True`.
+* `extraction.extractor_type == ExtractorType.PIPELINE` and `extraction.enable_llm_fallback is True`.
 
 The error message names both fields and points at the minimal fix.
 
@@ -80,7 +89,7 @@ If you _omit_ the `llm` field altogether (rather than passing `None`), the packa
 
 | `llm=None` + `extractor_type=SPACY/GLINER/NONE`, `enable_llm_fallback=False`
 | No
-| Fully local; `openai` is never imported.
+| No LLM construction. Use a local embedding provider as well to avoid cloud embedding calls.
 
 | `llm=None` + LLM-dependent extractor
 | —
@@ -95,12 +104,39 @@ If you _omit_ the `llm` field altogether (rather than passing `None`), the packa
 | Validator skips the auto-fill since no LLM stage is enabled.
 |===
 
-== Worked example
+[#_3_verify_the_local_run]
+== 3. Verify the run with local models
 
-A runnable script lives at `examples/no_llm/main.py` in the repository. It exercises all three memory layers with no LLM and fails fast when the local extraction stack is incomplete:
+Create the subdirectory, then save the complete script below as
+`no_llm/main.py`. It exercises all three memory layers with no LLM and fails
+fast when the local extraction stack is incomplete.
 
 [source,bash]
 ----
-make neo4j-start
-uv run python examples/no_llm/main.py
+mkdir -p no_llm
 ----
+
+.Complete `no_llm/main.py`
+[%collapsible]
+====
+.Save as `no_llm/main.py`
+[source,python]
+----
+include::example$no_llm/main.py[]
+----
+====
+
+Run it from `agent-memory-tutorials/`:
+
+[source,bash]
+----
+# Keep the exported Aura connection values in this process environment.
+python no_llm/main.py
+----
+
+Confirm the example stores and retrieves messages, entities, and reasoning traces in the dedicated AuraDB instance. You can repeat after disabling outbound model-service access with all required models cached; keep access to Aura available. Missing local model files are a setup failure, not evidence that a hosted model fallback is required.
+
+// Preserve historical section links after the procedure was reorganized.
+anchor:_configuration[]
+anchor:_validation_rules[]
+anchor:_worked_example[]

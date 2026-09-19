@@ -1,0 +1,3 @@
+include::partial$python-aura-connection-file.adoc[]
+
+include::partial$python-aura-readiness-file.adoc[]

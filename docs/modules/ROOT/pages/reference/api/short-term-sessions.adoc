@@ -1,0 +1,198 @@
+= Sessions, summaries, and maintenance
+:page-product: agent-memory
+:page-pagination:
+:toclevels: 2
+
+Session listing, conversation summaries, message linking, and deferred-processing operations from xref:reference/api/short-term.adoc[ShortTermMemory API reference]. Signatures show types, keyword-only arguments (`*`), and defaults; they are reference declarations, not calls to execute directly.
+
+anchor:_session_operations[]
+anchor:_returns_3[]
+
+== Session operations (bolt)
+
+=== list_sessions
+
+List `SessionInfo` models with prefix, pagination, and ordering controls. There is no `user_id` parameter.
+
+// contract: memory/short_term.py:ShortTermMemory.list_sessions
+[source,python]
+----
+async def list_sessions(
+    *,
+    prefix: str | None=None,
+    limit: int=100,
+    offset: int=0,
+    order_by: Literal['created_at', 'updated_at', 'message_count']='updated_at',
+    order_dir: Literal['asc', 'desc']='desc',
+) -> list[SessionInfo]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `prefix` | Filter sessions by ID prefix (e.g., "lenny-podcast-" to match all podcast sessions)
+| `limit` | Maximum sessions to return
+| `offset` | Number of sessions to skip (for pagination)
+| `order_by` | Field to order by ('created_at', 'updated_at', or 'message_count')
+| `order_dir` | Sort direction ('asc' or 'desc')
+|===
+
+anchor:_delete_session[]
+
+=== clear_session
+
+Delete the matching conversation, its linked messages, and any traces, steps, and tool calls connected through its `:HAS_TRACE` relationships. This is the supported session-clearing name; `delete_session` does not exist.
+
+// contract: memory/short_term.py:ShortTermMemory.clear_session
+[source,python]
+----
+async def clear_session(session_id: str) -> None: ...
+----
+
+anchor:_conversation_summaries[]
+anchor:_returns_4[]
+
+== Conversation summaries (bolt)
+
+anchor:_generate_summary[]
+anchor:_get_summary[]
+
+=== get_conversation_summary
+
+Return a `ConversationSummary`. An explicit sync/async `summarizer(transcript)` takes precedence. Otherwise the store uses the configured LLMProvider when available, or builds a basic summary from messages. Legacy LLMConfig is not supplied as the store's default summarization provider by MemoryClient.
+
+// contract: memory/short_term.py:ShortTermMemory.get_conversation_summary
+[source,python]
+----
+async def get_conversation_summary(
+    session_id: str,
+    *,
+    max_tokens: int=500,
+    include_entities: bool=True,
+    summarizer: Callable[[str], str | Awaitable[str]] | None=None,
+) -> ConversationSummary: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `session_id` | Session to summarize
+| `max_tokens` | Approximate max length of summary (used as hint for summarizer)
+| `include_entities` | Whether to include key entities in the result
+| `summarizer` | Custom synchronous function or async function accepting a transcript and returning a summary string. If omitted, use the store's default LLMProvider when configured, otherwise a basic summary.
+|===
+
+There are no separate `generate_summary` or cached `get_summary` methods. Calling this operation generates a summary from the current conversation.
+
+anchor:_message_linking[]
+
+== Message linking and deferred processing (bolt)
+
+Messages are linked sequentially:
+
+[source,text]
+----
+(Conversation)-[:FIRST_MESSAGE]->(Message1)
+(Message1)-[:NEXT_MESSAGE]->(Message2)
+----
+
+=== migrate_message_links
+
+Migrate existing messages to use `:NEXT_MESSAGE` and `:FIRST_MESSAGE` relationships.
+
+// contract: memory/short_term.py:ShortTermMemory.migrate_message_links
+[source,python]
+----
+async def migrate_message_links() -> dict[str, int]: ...
+----
+
+=== generate_embeddings_batch
+
+Generate embeddings for messages that don't have them.
+
+// contract: memory/short_term.py:ShortTermMemory.generate_embeddings_batch
+[source,python]
+----
+async def generate_embeddings_batch(
+    session_id: str,
+    *,
+    batch_size: int=100,
+    on_progress: Callable[[int, int], None] | None=None,
+) -> int: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `session_id` | Session to process
+| `batch_size` | Messages to process per batch
+| `on_progress` | Progress callback (processed_count, total_count)
+|===
+
+=== extract_entities_from_session
+
+Extract entities and relations from all messages in a session.
+
+// contract: memory/short_term.py:ShortTermMemory.extract_entities_from_session
+[source,python]
+----
+async def extract_entities_from_session(
+    session_id: str,
+    *,
+    batch_size: int=50,
+    skip_existing: bool=True,
+    extract_relations: bool=True,
+    on_progress: Callable[[int, int], None] | None=None,
+) -> dict[str, int]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `session_id` | Session to process
+| `batch_size` | Messages to process per batch
+| `skip_existing` | Skip messages that already have entity links (`:MENTIONS` relationships)
+| `extract_relations` | Whether to also extract and store relations between entities
+| `on_progress` | Progress callback (processed_count, total_count)
+|===
+
+== Models
+
+=== SessionInfo
+
+Fields and defaults:
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `session_id` | `str` | `required` | Session identifier
+| `title` | `str \| None` | `None` | Session title
+| `created_at` | `datetime` | `required` | When the session was created
+| `updated_at` | `datetime \| None` | `None` | When the session was last updated
+| `message_count` | `int` | `0` | Number of messages in the session
+| `first_message_preview` | `str \| None` | `None` | Preview of the first message (truncated)
+| `last_message_preview` | `str \| None` | `None` | Preview of the last message (truncated)
+|===
+
+=== ConversationSummary
+
+Fields and defaults:
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `session_id` | `str` | `required` | Session identifier
+| `summary` | `str` | `required` | Generated summary text
+| `message_count` | `int` | `required` | Number of messages summarized
+| `time_range` | `tuple[datetime, datetime] \| None` | `None` | Time range of messages (first, last)
+| `key_entities` | `list[str]` | `[]` | Key entities mentioned in the conversation
+| `key_topics` | `list[str]` | `[]` | Key topics discussed
+| `generated_at` | `datetime` | `current UTC time` | When summary was generated
+|===
+
+== See also
+
+* xref:reference/api/short-term.adoc[ShortTermMemory API reference]
+* xref:how-to/messages.adoc[Store and search messages]
+* xref:reference/api/reasoning.adoc[ReasoningMemory API reference]
+* xref:reference/api/short-term-messages.adoc#_nams_and_shared_conversation_operations[NAMS and shared conversation operations]

@@ -1,0 +1,213 @@
+= Geospatial operations and NAMS behavior
+:page-product: agent-memory
+:page-pagination:
+:toclevels: 2
+
+Location search/geocoding, context assembly, and the NAMS wrapper differences for xref:reference/api/long-term.adoc[LongTermMemory API reference]. Signatures show types, keyword-only arguments (`*`), and defaults; they are reference declarations, not calls to execute directly.
+
+anchor:_geospatial_operations[]
+
+== Geospatial operations (bolt only)
+
+=== search_locations_near
+
+Find Location entities within a radius of a point.
+
+// contract: memory/long_term.py:LongTermMemory.search_locations_near
+[source,python]
+----
+async def search_locations_near(
+    latitude: float,
+    longitude: float,
+    *,
+    radius_km: float=10.0,
+    session_id: str | None=None,
+    limit: int=10,
+) -> list[Entity]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `latitude` | Latitude of the center point
+| `longitude` | Longitude of the center point
+| `radius_km` | Search radius in kilometers (default 10km)
+| `session_id` | Optional session ID to filter locations by conversation
+| `limit` | Maximum number of results
+|===
+
+=== search_locations_in_bounding_box
+
+Find Location entities within a bounding box.
+
+// contract: memory/long_term.py:LongTermMemory.search_locations_in_bounding_box
+[source,python]
+----
+async def search_locations_in_bounding_box(
+    min_lat: float,
+    min_lon: float,
+    max_lat: float,
+    max_lon: float,
+    *,
+    session_id: str | None=None,
+    limit: int=100,
+) -> list[Entity]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `min_lat` | Minimum latitude (south)
+| `min_lon` | Minimum longitude (west)
+| `max_lat` | Maximum latitude (north)
+| `max_lon` | Maximum longitude (east)
+| `session_id` | Optional session ID to filter locations by conversation
+| `limit` | Maximum number of results
+|===
+
+=== get_location_coordinates
+
+Get coordinates for a Location entity.
+
+// contract: memory/long_term.py:LongTermMemory.get_location_coordinates
+[source,python]
+----
+async def get_location_coordinates(entity_id: UUID | str) -> tuple[float, float] | None: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `entity_id` | Entity ID
+|===
+
+=== geocode_locations
+
+Batch geocode location entities without coordinates. Returns only `processed` and `geocoded` counts; without a configured geocoder both counts are zero.
+
+// contract: memory/long_term.py:LongTermMemory.geocode_locations
+[source,python]
+----
+async def geocode_locations(
+    *,
+    batch_size: int=50,
+    skip_existing: bool=True,
+    on_progress: Callable[[int, int], None] | None=None,
+) -> dict[str, int]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `batch_size` | Number of locations to process per batch
+| `skip_existing` | Skip locations that already have coordinates
+| `on_progress` | Progress callback (processed_count, total_count)
+|===
+
+Although `skip_existing` is accepted, the current query always selects locations without coordinates. Passing False does not refresh previously geocoded locations.
+
+
+== Context (bolt)
+
+=== get_context
+
+Return a formatted string of matching entities and preferences. Consumed kwargs are `include_entities=True`, `include_preferences=True`, and `max_items=10`; facts are not included by this formatter.
+
+// contract: memory/long_term.py:LongTermMemory.get_context
+[source,python]
+----
+async def get_context(query: str, **kwargs: Any) -> str: ...
+----
+
+
+anchor:_graph_operations_nams[]
+
+== NAMS behavior
+
+NAMS manages extraction and resolution on the server. These are the client wrapper differences, not service versions or pricing tiers.
+
+[cols="1,3",options="header"]
+|===
+| Operation | Hosted behavior
+| `add_entity` | Returns one `Entity`, not a deduplication tuple. Sends only name, type, and description. Bolt subtype, aliases, attributes, metadata, and provider-control kwargs are not sent.
+| `search_entities` | Sends query, limit, and a single type via `entity_type` (aliases `type` and `label`). Bolt `entity_types`, `subtypes`, and `threshold` are not sent. Search is workspace-wide.
+| `get_entity_by_name` | Searches up to 20 results and returns the first exact case-sensitive name match, or None.
+| `get_related_entities` | Returns identifying relationship dictionaries (`relType`, `targetId`, `targetName`, `targetType`), not full Entity models. Traversal kwargs are not sent.
+| `get_entity_relationships` | Adapts inline relationships into Relationship models. IDs and creation times are synthesized locally; they are not stable server relationship identities.
+| `get_context` | Returns an empty string. Use entity search and conversation context explicitly.
+| Preferences, facts, `add_relationship` | Raise `NotSupportedError`; no corresponding hosted public operation is provided by these wrappers.
+| Deduplication administration, local geocoding, extractor registration/linking/statistics | Bolt-only methods; not exposed by `NamsLongTermMemory`.
+|===
+
+[source,python]
+----
+# NAMS: retain the entity directly; no tuple unpacking.
+entity = await client.long_term.add_entity("Acme Corp", "ORGANIZATION")
+----
+
+=== wait_for_extraction
+
+Wait for asynchronous extraction. Pass a conversation ID for pipeline status and optionally `expected_names` or `predicate` for entity confirmation. Returns False on timeout; check the result. A query with `min_results=1` alone can match unrelated existing workspace entities. On bolt, this method is a no-op returning True.
+
+// contract: nams/long_term.py:NamsLongTermMemory.wait_for_extraction
+[source,python]
+----
+async def wait_for_extraction(
+    *,
+    query: str | None=None,
+    expected_names: list[str] | None=None,
+    min_results: int=1,
+    predicate: Callable[[list[Entity]], bool] | None=None,
+    timeout: float=30.0,
+    interval: float=1.0,
+    session_id: str | None=None,
+    **kwargs: Any,
+) -> bool: ...
+----
+
+=== expand_graph
+
+NAMS only. Return one-hop graph expansion as a dictionary with `nodes` and `edges`, excluding supplied `loaded_ids`.
+
+// contract: nams/long_term.py:NamsLongTermMemory.expand_graph
+[source,python]
+----
+async def expand_graph(node_id: str, *, loaded_ids: list[str] | None=None) -> dict[str, list[dict[str, Any]]]: ...
+----
+
+=== get_entity_provenance (NAMS)
+
+NAMS: return the entity reasoning provenance dictionary from the reasoning endpoint. Its server shape differs from bolt message/extractor provenance.
+
+// contract: nams/long_term.py:NamsLongTermMemory.get_entity_provenance
+[source,python]
+----
+async def get_entity_provenance(entity_id: UUID | str) -> dict[str, Any]: ...
+----
+
+=== set_entity_feedback
+
+NAMS only. `positive` maps to userScore 1.0 and confirmed True; `negative` maps to 0.0 and False; a numeric string maps to userScore. Explicit `user_score` and `confirmed` kwargs override this mapping. This does not store an arbitrary feedback comment.
+
+// contract: nams/long_term.py:NamsLongTermMemory.set_entity_feedback
+[source,python]
+----
+async def set_entity_feedback(entity_id: UUID | str, feedback: str, **kwargs: Any) -> None: ...
+----
+
+=== get_entity_history
+
+NAMS only. Return the endpoint's `mentions` array as dictionaries.
+
+// contract: nams/long_term.py:NamsLongTermMemory.get_entity_history
+[source,python]
+----
+async def get_entity_history(entity_id: UUID | str, **kwargs: Any) -> list[dict[str, Any]]: ...
+----
+
+
+== See also
+
+* xref:reference/api/long-term.adoc[LongTermMemory API reference]
+* xref:reference/configuration-operations.adoc#geocoding[Geocoding configuration]
+* xref:reference/backend-capabilities.adoc[Backend capabilities]

@@ -1,0 +1,91 @@
+= Understanding the three-tier context model
+:page-product: agent-memory
+:toclevels: 2
+
+The hosted TypeScript client (`@neo4j-labs/agent-memory` against NAMS)
+assembles a conversation's context as three tiers of increasing
+compression: recent messages, observations, and reflections. Every
+TypeScript how-to page that calls `getContext()` or wires the Vercel AI SDK,
+Mastra, or AWS Strands middleware assumes this model — this page explains
+what each tier is, where it comes from, and how the three fit together.
+
+NOTE: This is a hosted-service (NAMS) concept, verified against
+xref:reference/typescript-api.adoc[the TypeScript API reference]. These
+operations are hosted-native, with no equivalent in the TCK bridge
+protocol, so a client on `BridgeTransport` cannot use them; the
+integrations that consume them fall back to flat conversation history
+instead.
+
+== The three tiers
+
+* *Recent messages* — the raw, persisted turns of the conversation
+  (`Message[]`), returned uncompressed. This is the same data
+  `addMessage`/`getConversation` work with elsewhere in the client.
+* *Observations* — auto-generated summaries of a window of messages
+  (`getObservations(conversationId)`). An `Observation` may carry optional
+  `windowStart`/`windowEnd` timestamps identifying the message span it
+  summarizes.
+* *Reflections* — higher-level syntheses derived from observations
+  (`getReflections(conversationId)`), generated once the conversation's
+  accumulated context crosses a compression threshold. A reflection
+  summarizes a set of observations the way an observation summarizes a set
+  of messages — one more level of compression, one step further from the
+  original wording.
+
+Compression increases from top to bottom: messages are exact, observations
+compress spans of messages, and reflections compress spans of observations.
+An application reading only reflections gets the most condensed view of a
+long conversation; reading recent messages gets the most literal one.
+
+.Context assembly narrows from raw messages to synthesized reflections
+image::diagrams/context-tiers-funnel.svg["Three-stage funnel from recent messages (raw, persisted turns kept verbatim) to observations (auto-generated summaries of a window of messages) to reflections (higher-level syntheses derived from observations), with compression increasing left to right",width=100%,link=self]
+
+== How `getContext()` assembles them
+
+`client.shortTerm.getContext(conversationId)` returns all three tiers
+together as a `ConversationContext`:
+
+[source,typescript]
+----
+interface ConversationContext {
+  reflections: Reflection[];
+  observations: Observation[];
+  recentMessages: Message[];
+}
+----
+
+This is the shape every three-tier integration in the TypeScript SDK
+consumes — the Vercel AI SDK middleware
+(xref:how-to/typescript/vercel-ai.adoc[Vercel AI SDK]), the Strands
+`ConversationManager` (xref:how-to/typescript/strands.adoc[AWS Strands]),
+and the Mastra recipe (xref:how-to/typescript/mastra.adoc[Mastra]) all call
+`getContext()` (directly or through `getReflections()`/`getObservations()`)
+and fold reflections and observations into a single prepended context
+block, then replay recent messages as ordinary turns.
+
+If `getContext()` is unavailable — the client is on the bridge transport,
+or the hosted call fails — that middleware falls back to flat conversation
+history instead of failing the model call. See
+xref:how-to/typescript/troubleshooting.adoc[Troubleshooting] for what to do
+when that happens.
+
+== A different sense of "observation"
+
+The reasoning-memory layer also records "observations" as part of a tool
+call's thought/action/observation triple (see
+xref:explanation/memory-types.adoc[Understanding the three memory types]
+and the xref:glossary.adoc[glossary]'s Reasoning memory entry). That is an
+unrelated, older usage: a reasoning-step observation is what a tool
+returned during one recorded task execution, not a compressed summary of a
+conversation. The two senses are not interchangeable, and nothing here
+implies reasoning-memory observations feed the context-tier observations
+described above.
+
+== See also
+
+* xref:reference/typescript-api.adoc[TypeScript API reference]
+* xref:how-to/typescript/vercel-ai.adoc[Vercel AI SDK middleware]
+* xref:how-to/typescript/strands.adoc[AWS Strands integration]
+* xref:how-to/typescript/mastra.adoc[Mastra recipe]
+* xref:how-to/typescript/troubleshooting.adoc[TypeScript troubleshooting]
+* xref:glossary.adoc[Glossary]

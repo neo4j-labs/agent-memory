@@ -63,6 +63,17 @@ NO_ENV_EXAMPLE_OK = {
 #: keep it that way.
 NO_TEST_MODULE_OK: dict[str, str] = {}
 
+#: Directories under `typescript/examples/` that are not themselves examples,
+#: with why. These are support code for the real examples, so they have no
+#: README, package.json, index row or CI matrix entry — and must not be held to
+#: those rules. A genuine example missing any of them still fails.
+TS_NOT_AN_EXAMPLE = {
+    "shared": (
+        "tutorial helper modules imported by the vercel-ai and mcp examples "
+        "(tutorial-state/-cleanup/-mcp.ts); not a runnable example of its own"
+    ),
+}
+
 
 def _example_dirs() -> list[Path]:
     return sorted(
@@ -73,7 +84,11 @@ def _example_dirs() -> list[Path]:
 
 
 def _ts_example_dirs() -> list[Path]:
-    return sorted(p for p in TS_EXAMPLES_DIR.iterdir() if p.is_dir() and not p.name.startswith("."))
+    return sorted(
+        p
+        for p in TS_EXAMPLES_DIR.iterdir()
+        if p.is_dir() and not p.name.startswith(".") and p.name not in TS_NOT_AN_EXAMPLE
+    )
 
 
 def _top_level_scripts() -> list[Path]:
@@ -204,8 +219,13 @@ def test_ts_example_has_a_readme_with_labs_conventions(example: Path):
     assert readme.exists(), f"typescript/examples/{example.name}/ has no README.md"
     content = readme.read_text(encoding="utf-8")
     assert "Neo4j-Labs" in content, f"{example.name}/README.md is missing the Neo4j Labs badge"
-    assert re.search(r"[Vv]erified against", content), (
-        f"typescript/examples/{example.name}/README.md has no 'verified against' footer"
+    # A provenance footer: either a dated "verified against" note, or the
+    # "Compatibility scope" statement the TypeScript gallery standardised on —
+    # it names what the example was built against without claiming a run that
+    # nobody performed. One of the two must be present.
+    assert re.search(r"[Vv]erified against|[Cc]ompatibility scope", content), (
+        f"typescript/examples/{example.name}/README.md has no provenance footer "
+        "('Verified against …' or 'Compatibility scope: …')"
     )
 
 

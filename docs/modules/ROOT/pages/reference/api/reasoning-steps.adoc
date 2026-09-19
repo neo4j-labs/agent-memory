@@ -1,0 +1,234 @@
+= Step, tool-call, and streaming operations
+:page-product: agent-memory
+:page-pagination:
+:toclevels: 2
+
+Step and tool-call recording, message-linking, and the `StreamingTraceRecorder` context manager from xref:reference/api/reasoning.adoc[ReasoningMemory API reference]. Bolt only. Signatures show types, keyword-only arguments (`*`), and defaults; they are reference declarations, not calls to execute directly.
+
+anchor:_step_operations[]
+anchor:_parameters_2[]
+anchor:_tool_call_operations[]
+anchor:_parameters_3[]
+
+== Step and tool-call operations (bolt)
+
+=== add_step
+
+Add a reasoning step to a trace.
+
+// contract: memory/reasoning.py:ReasoningMemory.add_step
+[source,python]
+----
+async def add_step(
+    trace_id: UUID | str,
+    *,
+    thought: str | None=None,
+    action: str | None=None,
+    observation: str | None=None,
+    generate_embedding: bool=True,
+    metadata: dict[str, Any] | None=None,
+) -> ReasoningStep: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `trace_id` | Parent trace ID
+| `thought` | Agent's thought/reasoning
+| `action` | Action taken
+| `observation` | Observation from action
+| `generate_embedding` | Whether to generate step embedding
+| `metadata` | Optional metadata
+|===
+
+=== record_tool_call
+
+Record a tool call using a `ToolCallStatus`, not a `success` boolean. `duration_ms` is an integer duration; result is optional.
+
+// contract: memory/reasoning.py:ReasoningMemory.record_tool_call
+[source,python]
+----
+async def record_tool_call(
+    step_id: UUID,
+    tool_name: str,
+    arguments: dict[str, Any],
+    *,
+    result: Any | None=None,
+    status: ToolCallStatus=ToolCallStatus.SUCCESS,
+    duration_ms: int | None=None,
+    error: str | None=None,
+    auto_observation: bool=False,
+    message_id: UUID | str | None=None,
+    touched_entities: list[EntityRef] | None=None,
+) -> ToolCall: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `step_id` | Parent reasoning step ID
+| `tool_name` | Name of the tool
+| `arguments` | Tool arguments
+| `result` | Tool result
+| `status` | Call status
+| `duration_ms` | Duration in milliseconds
+| `error` | Error message if failed
+| `auto_observation` | If True, automatically set the step's observation field from the tool result. Useful for ReAct-style agents where the observation is the tool's output.
+| `message_id` | Optional message ID that triggered this tool call. Creates a `:TRIGGERED_BY` relationship from ToolCall to Message.
+| `touched_entities` | Optional list of `EntityRef` describing entities this tool call touched. Each ref is materialized as a `(:ReasoningStep)-[:TOUCHED]->(:Entity)` edge so audit queries can reach the entity in one hop instead of three. See `how-to/audit-reasoning.adoc`.
+|===
+
+anchor:_get_steps[]
+anchor:_get_tool_calls[]
+There are no public `get_steps` or `get_tool_calls` methods. Read `trace.steps` after `get_trace_with_steps(trace_id)`, and read each step's `tool_calls`.
+
+Statuses are `pending`, `success`, `failure`, `error`, `timeout`, and `cancelled`. Import `ToolCallStatus` from `neo4j_agent_memory.core.memory` (also re-exported by `memory.reasoning`).
+
+=== on_tool_call_recorded
+
+Register an async callback that receives `(tool_call, HookContext)` after a call is recorded. Hooks are awaited in registration order; hook errors are logged and do not fail the memory write. The returned hook enables decorator usage. Use `HookContext.add_touched_edge(EntityRef(...))` to attach explicit provenance.
+
+// contract: memory/reasoning.py:ReasoningMemory.on_tool_call_recorded
+[source,python]
+----
+def on_tool_call_recorded(hook: ToolCallHook) -> ToolCallHook: ...
+----
+
+
+anchor:_message_linking[]
+
+== Context and message links (bolt)
+
+=== get_context
+
+Return formatted similar traces. Consumed kwargs are `max_traces=3` and `include_successful_only=True`; no session scoping is applied.
+
+// contract: memory/reasoning.py:ReasoningMemory.get_context
+[source,python]
+----
+async def get_context(query: str, **kwargs: Any) -> str: ...
+----
+
+=== link_trace_to_message
+
+Create an `:INITIATED_BY` relationship from the trace to the triggering Message. This operation is a no-op on NAMS.
+
+// contract: memory/reasoning.py:ReasoningMemory.link_trace_to_message
+[source,python]
+----
+async def link_trace_to_message(trace_id: UUID | str, message_id: UUID | str) -> None: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `trace_id` | The reasoning trace ID
+| `message_id` | The message ID that initiated this trace
+|===
+
+
+== StreamingTraceRecorder (bolt)
+
+Import `StreamingTraceRecorder` from `neo4j_agent_memory.memory.reasoning`. Its async context manager creates a trace, records incremental steps/tool calls, and completes the trace on exit.
+// contract: memory/reasoning.py:StreamingTraceRecorder.__init__
+[source,python]
+----
+def StreamingTraceRecorder(
+    reasoning_memory: ReasoningMemory,
+    session_id: str,
+    task: str,
+    *,
+    generate_task_embedding: bool=True,
+    generate_step_embeddings: bool=False,
+): ...
+----
+
+=== start_step
+
+Start a new reasoning step.
+
+// contract: memory/reasoning.py:StreamingTraceRecorder.start_step
+[source,python]
+----
+async def start_step(*, thought: str | None=None, action: str | None=None) -> ReasoningStep: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `thought` | The agent's reasoning/thought
+| `action` | The action being taken
+|===
+
+=== record_tool_call
+
+Record a tool call with optional automatic timing.
+
+// contract: memory/reasoning.py:StreamingTraceRecorder.record_tool_call
+[source,python]
+----
+async def record_tool_call(
+    tool_name: str,
+    arguments: dict[str, Any],
+    *,
+    result: Any=None,
+    status: ToolCallStatus=ToolCallStatus.SUCCESS,
+    duration_ms: int | None=None,
+    error: str | None=None,
+    auto_observation: bool=False,
+) -> ToolCall: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `tool_name` | Name of the tool
+| `arguments` | Tool arguments
+| `result` | Tool result
+| `status` | Call status
+| `duration_ms` | Duration in milliseconds (if not provided, calculated from step start)
+| `error` | Error message if failed
+| `auto_observation` | If True, set the step's observation from the result
+|===
+
+=== add_observation
+
+Add an observation to the current step.
+
+// contract: memory/reasoning.py:StreamingTraceRecorder.add_observation
+[source,python]
+----
+async def add_observation(observation: str) -> None: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `observation` | The observation text
+|===
+
+=== set_outcome
+
+Set the outcome for the trace (will be applied on context exit).
+
+// contract: memory/reasoning.py:StreamingTraceRecorder.set_outcome
+[source,python]
+----
+def set_outcome(outcome: str, success: bool=True) -> None: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `outcome` | The outcome description
+| `success` | Whether the task succeeded
+|===
+
+Its `trace_id` and `step_id` properties expose the current IDs.
+
+
+== See also
+
+* xref:reference/api/reasoning.adoc[ReasoningMemory API reference]
+* xref:reference/api/reasoning-traces.adoc[Trace operations]
+* xref:how-to/audit-reasoning.adoc[Audit reasoning with `:TOUCHED` edges]

@@ -1,0 +1,161 @@
+= Backend capabilities and data scope
+:page-product: agent-memory
+:toclevels: 2
+
+This reference describes the SDK implementations in this source tree. Check the installed SDK's API reference before using a method introduced after its release. NAMS is a continuously shipped service; `/v1` identifies its REST API, not an SDK release.
+
+== Backend and language
+
+Each section below covers one data type. Within it, one description-list term per operation names the backend/language and its description gives that backend's behavior for that operation. This avoids wide tables, so nothing scrolls horizontally on a phone-width column.
+
+=== Conversations and messages
+
+[horizontal]
+Python with Bolt:: Session-oriented writes and conversation readback
+Python with NAMS:: Create a conversation and use its returned ID
+TypeScript with NAMS REST:: Create a conversation and use its returned ID
+
+=== Entities and relationships
+
+Entity writes/search::
++
+[horizontal]
+Python with Bolt::: `add_entity` returns `(Entity, DeduplicationResult)`; client-side configuration
+Python with NAMS::: `add_entity` returns `Entity`; server-managed extraction/deduplication
+TypeScript with NAMS REST::: `longTerm.addEntity` / `searchEntities`; server-managed processing
+
+Client-created relationships::
++
+[horizontal]
+Python with Bolt::: Supported with `add_relationship()`, passing source, target, relationship_type, and attributes
+Python with NAMS::: Unsupported; inspect relationships produced by supported service processing
+TypeScript with NAMS REST::: Direct relationship-write methods are unsupported on REST
+
+Geospatial search and graph adoption::
++
+[horizontal]
+Python with Bolt::: Supported Bolt-specific operations
+Python with NAMS::: Not exposed as equivalent SDK operations
+TypeScript with NAMS REST::: Not exposed as equivalent REST operations
+
+=== Preferences and facts
+
+[horizontal]
+Python with Bolt:: Supported; see the long-term API for user-scoped preference reads
+Python with NAMS:: Unsupported; methods raise `NotSupportedError`
+TypeScript with NAMS REST:: Unsupported on REST; bridge compatibility methods are not hosted APIs
+
+=== Reasoning
+
+[horizontal]
+Python with Bolt:: Traces, steps, and tool calls
+Python with NAMS:: Python accessors adapt supported service records; check each accessor's contract
+TypeScript with NAMS REST:: Use `recordStep` and `getTraceByConversation`; legacy trace lifecycle calls are not REST operations
+
+=== Extraction
+
+Extraction configuration and local models::
++
+[horizontal]
+Python with Bolt::: Client-side pipeline, providers and schema settings
+Python with NAMS::: Server-managed; Bolt pipeline options do not configure the service
+TypeScript with NAMS REST::: Server-managed
+
+Extraction readiness::
++
+[horizontal]
+Python with Bolt::: The `long_term` accessor's `wait_for_extraction` is a compatibility no-op; the `short_term` accessor has no `get_extraction_status`
+Python with NAMS::: Conversation status, and a bounded `wait_for_extraction` call on `long_term`
+TypeScript with NAMS REST::: Check the selected SDK's `waitForExtraction` availability
+
+=== Custom Cypher and platform accessors
+
+Custom Cypher::
++
+[horizontal]
+Python with Bolt::: Read queries through `client.query.cypher`; direct database access permits writes
+Python with NAMS::: Read-only service queries; not a workaround for unsupported writes
+TypeScript with NAMS REST::: Read-only service queries where exposed by the SDK
+
+User registry, buffered writer, consolidation::
++
+[horizontal]
+Python with Bolt::: Python `users`, `buffered`, and `consolidation` accessors
+Python with NAMS::: Not portable Bolt features
+TypeScript with NAMS REST::: Not equivalent REST subclients
+
+=== Ontologies and agent skills
+
+[horizontal]
+Python with Bolt:: Not hosted service features on Bolt; use Bolt schema configuration as appropriate
+Python with NAMS:: Ontologies through the supported accessor; skills use REST/MCP, not invented SDK methods
+TypeScript with NAMS REST:: Ontology accessor where present in the selected artifact; skills use REST/MCP
+
+The TypeScript test bridge is a development/conformance transport. Its operation names and successful test doubles do not establish a hosted REST feature. An integration adapter also cannot make an unsupported backend operation available.
+
+For exact parameters, result shapes, defaults and exceptions, see xref:reference/api/memory-client.adoc[Python API], xref:reference/typescript-api.adoc[TypeScript API], and xref:reference/rest-api.adoc[REST API].
+
+[#hosted-cleanup]
+== Hosted cleanup and retained resources
+
+The selected NAMS contract provides conversation and entity deletion. It has
+no verified public DELETE route for reasoning steps, tool calls, skill runs or
+skills. Conversation deletion is not proof that these records or extracted
+entities were removed. Closing an SDK client deletes no service data.
+
+The maintained hosted tutorials retain returned IDs and verify supported
+deletion through exact readback. Derived or explicitly added entities are
+deleted only when creation and complete source/neighbor evidence establish
+exclusive ownership; shared, merged or uncertain entities remain recorded.
+A resource-disposition report distinguishes verified absence from retention.
+
+Skills generation operates over the selected workspace. Its lesson requires
+a newly provisioned empty workspace and an identified owner/operator with a
+verified disposal procedure or explicitly agreed retention before seeding.
+A workspace data key does not grant workspace administration. No step/skill
+DELETE route, entity-delete substitution, or write-through-Cypher cleanup is
+assumed. See xref:tutorials/nams-quickstart.adoc[the hosted conversation lesson]
+and xref:tutorials/skills-quickstart.adoc[the Skills workflow] for their exact
+commands and remaining resource classes.
+
+[#scope]
+== Identity and retrieval scope
+
+[cols="2,4",options="header"]
+|===
+|Identifier or option |Meaning and limit
+|NAMS workspace
+|The service tenancy boundary. Selected by a workspace-bound key or the deployment's supported workspace header. Separate from a conversation user identifier. See xref:reference/authentication.adoc[authentication].
+|Conversation/session ID
+|Selects a conversation for operations that implement that filter. The application must authorize access to the ID; knowing an ID is not authentication.
+|Python `user_identifier`
+|Accepted on particular writes and user-specific accessors. It is not a universal parameter and does not automatically filter entity, preference or trace searches.
+|TypeScript conversation `userId`
+|Conversation ownership metadata and an explicit list/filter input where supported. Reusing it does not resume a conversation or automatically retrieve all earlier conversations.
+|Python `memory.multi_tenant`
+|Requires user identifiers on particular implemented write paths. It is not database access control and does not add filters to every query.
+|TypeScript `namespace`
+|Currently unused by the implementation; provides no isolation.
+|===
+
+[IMPORTANT]
+====
+Bolt's `short_term.search_messages` accepts a `session_id` argument but does not apply it in its Cypher search — do not treat that argument as an isolation guarantee.
+
+`get_context` can likewise combine search results from wider scopes and is not an authorization boundary. For isolation, use a deliberately scoped read such as `get_conversation`, or separate authorized databases, and review each retrieval path. If a later SDK version adds the filter, verify it against the version you install.
+====
+
+`long_term.get_preferences_for(user_identifier)` follows a specific user's preference relationship on Bolt. In contrast, `search_preferences` is a semantic search and is not automatically limited to that user. `get_session_traces` selects a session; similarity search over traces has a different scope. Entity knowledge can be shared within the selected database/workspace.
+
+[#mcp]
+== MCP surfaces
+
+The Python self-hosted server's core profile registers six tools. Its extended profile registers 16 tools with Bolt and 20 with NAMS, including four NAMS-specific tools. Registration does not mean every underlying operation works on every backend: core preference/fact tools can still raise `NotSupportedError` with NAMS. See xref:reference/mcp-tools.adoc[self-hosted tool applicability].
+
+The separately hosted NAMS MCP server has its own scope-dependent tool surface. Use `tools/list` for the authenticated principal and consult xref:reference/nams-mcp.adoc[the hosted reference]; a self-hosted registration count does not describe that service.
+
+== Conformance and limits
+
+Bronze, Silver, Gold and Platinum are client TCK conformance labels, not NAMS pricing or access tiers. See xref:reference/nams-limits.adoc[service limits] for request constraints and xref:explanation/backends.adoc[backend tradeoffs] for choosing a deployment.
+
+Preference associations can share a node: Bolt's embedding-based duplicate lookup is global within a category. An existing preference can be linked to multiple users; superseding it affects those links. The scoped example disables embedding deduplication and uses explicit revision IDs.

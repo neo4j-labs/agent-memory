@@ -1,0 +1,7 @@
+/* Preserve the shared theme while making tutorial keyboard focus visible. */
+body.code-nocollapse .doc .listingblock .code-inset button.btn-copy:focus-visible,
+body.code-nocollapse .doc pre:focus-visible,
+body.code-nocollapse .doc summary:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 4px;
+}

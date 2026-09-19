@@ -95,3 +95,9 @@ plans/
 agent-memory-info.adoc
 docs/modules/ROOT/pages/agent-memory-info.adoc
 .superpowers/
+
+# Private hosted tutorial ledgers, reviews and downloaded artifacts
+.tutorial-state/
+
+# Optional editable diagram export toolchain
+docs/diagrams/node_modules/

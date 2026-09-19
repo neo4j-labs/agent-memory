@@ -1,5 +1,4 @@
-= How to: integrate with LangChain JS
-:toc: left
+= Integrate with LangChain JS
 :source-highlighter: rouge
 
 The `@neo4j-labs/agent-memory/integrations/langchain` subpath exposes
@@ -25,6 +24,14 @@ A runnable example lives at
 link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/langchain[`typescript/examples/langchain`]
 — a two-turn `createAgent()` agent with no checkpointer, plus a mocked
 test that runs without an API key.
+
+Prerequisites: a LangChain JS agent, Node.js 22+ and NAMS test-workspace credentials.
+
+== Procedure
+
+. Build/install the source example using its README and select a conversation id.
+. Convert the adapter's plain messages/documents to the framework classes below.
+. Wire context retrieval and message persistence into the agent middleware, then add the entity lookup tool.
 
 == Bridging the adapters to `@langchain/core`
 
@@ -97,7 +104,7 @@ const namsMemory = createMiddleware({
   afterAgent: async (state) => {
     for (const message of state.messages) {
       const stored = fromLangChainMessage(message);
-      if (stored) await history.addMessage(stored);     // de-duplicate by message id
+      if (stored) await history.addMessage(stored);     // append a stored message; this adapter does not deduplicate ids
     }
   },
 });
@@ -155,8 +162,15 @@ if (!ready) console.warn("extraction has not caught up yet");
 
 == Version compatibility
 
-The adapters carry no LangChain dependency, so they cannot break on a
-LangChain release — but they also gain nothing from one. The bridge
-functions above are verified against `langchain` 1.5 and
-`@langchain/core` 1.2. If you hit drift, please file an issue with the
-LangChain JS version you are on.
+The adapters do not import LangChain, but changes to LangChain's expected
+message/document shapes can still require application glue changes. The
+current-source example declares LangChain 1.x and checks its bridge functions
+against installed typings. That is separate from npm release or live-service
+verification. Include the installed LangChain version when reporting drift.
+
+== Verify the integration
+
+In `typescript/examples/langchain/`, run `npm run lint` and `npm test`. The offline
+suite verifies prior-turn context, persisted user/assistant messages and entity
+lookup through the supported API. A separate live run is needed to verify
+extraction results; shared workspace entities are not a private profile.

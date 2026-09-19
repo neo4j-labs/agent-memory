@@ -1,656 +1,201 @@
-= Add Conversation Memory to a Chatbot
+= Add persistent conversation context to a chatbot
 :page-product: agent-memory
+:page-role: code-nocollapse
 :page-pagination:
-:toclevels: 3
+:toclevels: 2
 :sectanchors:
-:icons: font
-:source-highlighter: highlight.js
-:page-ad-icon: mortarboard
-:page-ad-title: Context Graphs: Agent Memory with Neo4j
-:page-ad-description: Build an AI agent that records its reasoning into Neo4j and query the trace to understand what it did and why.
-:page-ad-link: https://graphacademy.neo4j.com/courses/genai-context-graphs/?ref=docs-ad-genai-context-graphs
-:page-ad-underline-role: button
-:page-ad-underline: Enroll now
 
-Build a chatbot that remembers users, learns preferences, and provides personalized responses across sessions.
+We will store a shopper's first conversation, stop the process, and answer a new question in a second process using the earlier conversation, an explicit budget preference, and a fictional product. The program passes that retrieved context to a chat model and records the product lookup as a trace.
 
-[.lead]
-In this tutorial, we'll build a complete shopping assistant chatbot that uses the context graph to remember customer preferences, track conversation history, and provide personalized product recommendations that improve over time.
+This lesson uses `neo4j-agent-memory` 0.6.0 from PyPI, the complete programs on this page, and a dedicated Neo4j AuraDB instance over Bolt. Offline contract tests exercise their assembly and control flow; provider and database success still need to be observed in your environment.
 
-== What You'll Learn
+anchor:_prerequisites[]
 
-* How to persist conversation history across sessions
-* How to automatically learn and store user preferences
-* How to use the context graph to personalize responses
-* How to integrate memory with an LLM for intelligent responses
+== Before you begin
 
-== Prerequisites
+* Python 3.10 or newer and a POSIX shell such as Bash or Zsh.
+* An OpenAI API key with access to `text-embedding-3-small`.
+* A Neo4j Aura account with capacity for a dedicated AuraDB Free instance.
 
-* Completed xref:tutorials/first-agent-memory.adoc[Build Your First Memory-Enabled Agent] tutorial
-* OpenAI API key
-* Neo4j running (Docker or Aura)
+The embedding calls send the supplied text to OpenAI. This exercise uses fictional data. Neo4j Agent Memory is an experimental Neo4j Labs project; see xref:reference/backend-capabilities.adoc[backend capabilities] before adapting the example to NAMS.
 
-== Time Required
+You also need an OpenAI chat-model ID available to your account. This lesson sends retrieved conversation text and preferences to that model. The budget is explicitly seeded; automatic preference learning is outside this exercise.
 
-Approximately 45 minutes.
+anchor:_step_1_project_setup[]
+anchor:_step_1_install_dependencies[]
 
-== What We're Building
+== 1. Install the lesson dependencies
 
-A shopping assistant that:
-
-1. Remembers who you are across sessions
-2. Learns your brand preferences, sizes, and style
-3. Uses past purchases to inform recommendations
-4. Gets smarter with every interaction
-
-== Step 1: Project Setup
-
-Create a new project:
+include::partial$python-tutorial-setup.adoc[]
 
 [source,bash]
 ----
-mkdir shopping-assistant
-cd shopping-assistant
-python -m venv venv
-source venv/bin/activate
-
-pip install neo4j-agent-memory[all] openai python-dotenv
+python -m pip install 'neo4j-agent-memory[openai]==0.6.0'
+python -c "from importlib.metadata import version; import neo4j_agent_memory; assert version('neo4j-agent-memory') == '0.6.0'; print('SDK 0.6.0 import verified')"
 ----
 
-Create `.env`:
+Expected: `SDK 0.6.0 import verified`. Keep `agent-memory-tutorials` as your working directory for every command below.
 
-[source,bash]
-----
-NEO4J_URI=bolt://localhost:7687
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=password123
-OPENAI_API_KEY=your-openai-api-key
-----
+=== Create and check the local files
 
-== Step 2: Create the Memory-Enabled Assistant
+Create each file below in `~/agent-memory-tutorials`. All complete sources follow this manifest. On a first visit every file is new; when returning, reuse unchanged helpers and compare their contents before replacing them.
 
-Create `assistant.py`:
+[cols="2,4,2",options="header"]
+|===
+|File |Purpose |Returning reader
+|`aura_connection.py` |Read explicit Aura credentials; no database fallback. |Reuse unchanged
+|`wait_for_tutorial_neo4j.py` |Probe the selected database and close the driver. |Reuse unchanged
+|`core_memory_settings.py` |Construct the explicit Bolt and OpenAI embedding settings. |Reuse unchanged
+|`conversation_memory.py` |Seed the first conversation, then answer using its stored context. This is the lesson entry point. |New for this lesson; retain it with unfinished state
+|===
 
+include::partial$aura-tutorial-files.adoc[]
+
+.Save as `core_memory_settings.py`
 [source,python]
 ----
-# assistant.py
-import asyncio
-import json
-import os
-from datetime import datetime
-from dotenv import load_dotenv
-from openai import AsyncOpenAI
-from neo4j_agent_memory import MemoryClient, MemorySettings
-from neo4j_agent_memory.extraction import GLiNEREntityExtractor
-
-load_dotenv()
-
-# Initialize clients
-openai_client = AsyncOpenAI()
-memory_client = None
-extractor = None
-
-
-async def initialize():
-    """Initialize memory client and extractor."""
-    global memory_client, extractor
-
-    settings = MemorySettings(
-        neo4j={"uri": os.getenv("NEO4J_URI", "bolt://localhost:7687"), "username": os.getenv("NEO4J_USER", "neo4j"), "password": os.getenv("NEO4J_PASSWORD", "password123")}
-    )
-
-    memory_client = MemoryClient(settings)
-    await memory_client.connect()
-    extractor = GLiNEREntityExtractor.for_schema("ecommerce")
-
-    print("✓ Memory system initialized!")
-
-
-async def get_or_create_user(name: str) -> str:
-    """Get existing user or create new one."""
-    # Search for existing user
-    users = await memory_client.long_term.search_entities(
-        query=name,
-        entity_types=["CUSTOMER"],
-        limit=1,
-    )
-
-    if users and users[0].name.lower() == name.lower():
-        print(f"✓ Welcome back, {name}!")
-        return users[0].id
-
-    # Create new user
-    user, _ = await memory_client.long_term.add_entity(
-        name=name,
-        entity_type="CUSTOMER",
-        attributes={
-            "created_at": datetime.now().isoformat(),
-        },
-    )
-    print(f"✓ Nice to meet you, {name}!")
-    return user.id
-
-
-async def build_context(user_id: str, session_id: str, query: str) -> str:
-    """Build personalized context for the LLM."""
-
-    # Get recent messages
-    conversation = await memory_client.short_term.get_conversation(session_id=session_id)
-    recent_messages = conversation.messages[-5:] if conversation.messages else []
-
-    # Get preferences
-    prefs = await memory_client.long_term.search_preferences(query=query)
-
-    # Get relevant entities
-    entities = await memory_client.long_term.search_entities(query=query, limit=10)
-
-    parts = []
-
-    # Add preferences
-    if prefs:
-        parts.append("## Customer Preferences")
-        for pref in prefs:
-            parts.append(f"- {pref.category}: {pref.preference}")
-
-    # Add recent conversation
-    if recent_messages:
-        parts.append("\n## Recent Conversation")
-        for msg in recent_messages:
-            parts.append(f"- [{msg.role}]: {msg.content[:100]}...")
-
-    # Add relevant entities (products, brands)
-    if entities:
-        parts.append("\n## Relevant Information")
-        for entity in entities[:5]:
-            if entity.description:
-                parts.append(f"- {entity.name}: {entity.description[:100]}")
-            else:
-                parts.append(f"- {entity.name} ({entity.type})")
-
-    return "\n".join(parts) if parts else "No prior context available."
-
-
-async def extract_and_store_preferences(
-    user_id: str,
-    message: str,
-) -> list[tuple[str, str]]:
-    """Extract preferences from message and store them."""
-
-    # Simple preference patterns (in production, use LLM)
-    preferences_found = []
-
-    message_lower = message.lower()
-
-    # Brand preferences
-    brands = ["nike", "adidas", "puma", "asics", "new balance", "reebok"]
-    for brand in brands:
-        if brand in message_lower and ("like" in message_lower or "prefer" in message_lower or "love" in message_lower):
-            pref = f"Likes {brand.title()} products"
-            await memory_client.long_term.add_preference(
-                preference=pref,
-                category="brand",
-                confidence=0.85,
-            )
-            preferences_found.append(("brand", pref))
-
-    # Size mentions
-    import re
-    size_match = re.search(r"size (\d+\.?\d*)", message_lower)
-    if size_match:
-        size = size_match.group(1)
-        pref = f"Shoe size is {size}"
-        await memory_client.long_term.add_preference(
-            preference=pref,
-            category="size",
-            confidence=1.0,
-        )
-        preferences_found.append(("size", pref))
-
-    # Budget mentions
-    budget_match = re.search(r"\$(\d+)", message)
-    if budget_match:
-        budget = budget_match.group(1)
-        pref = f"Budget around ${budget}"
-        await memory_client.long_term.add_preference(
-            preference=pref,
-            category="budget",
-            confidence=0.9,
-        )
-        preferences_found.append(("budget", pref))
-
-    return preferences_found
-
-
-async def chat(
-    user_id: str,
-    session_id: str,
-    user_message: str,
-) -> str:
-    """Process user message and generate response."""
-
-    # Store user message
-    await memory_client.short_term.add_message(
-        session_id=session_id,
-        role="user",
-        content=user_message,
-        metadata={"user_id": user_id},
-    )
-
-    # Extract entities from message
-    extraction = await extractor.extract(user_message)
-    for entity in extraction.entities:
-        _, _ = await memory_client.long_term.add_entity(
-            name=entity.name,
-            entity_type=entity.type,
-        )
-
-    # Extract and store preferences
-    new_prefs = await extract_and_store_preferences(user_id, user_message)
-    if new_prefs:
-        print(f"  📝 Learned: {', '.join([p[1] for p in new_prefs])}")
-
-    # Build personalized context
-    context = await build_context(user_id, session_id, user_message)
-
-    # Generate response using OpenAI
-    system_prompt = f"""You are a helpful shopping assistant for an online shoe store.
-
-Use the following customer context to personalize your responses:
-
-{context}
-
-Guidelines:
-- Reference the customer's preferences when making recommendations
-- Remember details from the conversation
-- Be helpful and friendly
-- If you learn something new about the customer, acknowledge it
-- Keep responses concise but personalized
-"""
-
-    response = await openai_client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_message},
-        ],
-        temperature=0.7,
-        max_tokens=500,
-    )
-
-    assistant_message = response.choices[0].message.content
-
-    # Store assistant response
-    await memory_client.short_term.add_message(
-        session_id=session_id,
-        role="assistant",
-        content=assistant_message,
-        metadata={"user_id": user_id},
-    )
-
-    return assistant_message
-
-
-async def show_memory_stats(user_id: str):
-    """Show what the system has learned about the user."""
-
-    print("\n" + "="*50)
-    print("📊 What I Remember About You")
-    print("="*50)
-
-    # Get preferences
-    prefs = await memory_client.long_term.search_preferences(query="")
-    if prefs:
-        print("\n🏷️ Preferences:")
-        for pref in prefs:
-            print(f"  • {pref.category}: {pref.preference}")
-
-    # Get entities mentioned
-    entities = await memory_client.long_term.search_entities(
-        query="",
-        limit=10,
-    )
-    if entities:
-        print("\n📦 Products/Brands You've Mentioned:")
-        for entity in entities:
-            if entity.type in ["PRODUCT", "BRAND", "ORGANIZATION"]:
-                print(f"  • {entity.name}")
-
-    print("="*50 + "\n")
-
-
-async def main():
-    """Main chat loop."""
-
-    await initialize()
-
-    # Get user name
-    print("\n" + "="*50)
-    print("🛍️  Welcome to the Shopping Assistant!")
-    print("="*50)
-
-    name = input("\nWhat's your name? ").strip()
-    if not name:
-        name = "Guest"
-
-    user_id = await get_or_create_user(name)
-    session_id = f"chat-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-
-    print(f"\n💬 Chat started (Session: {session_id})")
-    print("   Type 'quit' to exit, 'memory' to see what I remember\n")
-
-    while True:
-        try:
-            user_input = input(f"{name}: ").strip()
-        except (KeyboardInterrupt, EOFError):
-            break
-
-        if not user_input:
-            continue
-
-        if user_input.lower() == "quit":
-            break
-
-        if user_input.lower() == "memory":
-            await show_memory_stats(user_id)
-            continue
-
-        # Get response
-        response = await chat(user_id, session_id, user_input)
-        print(f"\n🤖 Assistant: {response}\n")
-
-    print("\n👋 Goodbye! Your preferences have been saved for next time.")
-    await memory_client.close()
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+include::example$core_memory_settings.py[]
 ----
 
-== Step 3: Test the Assistant
-
-Run the assistant:
-
-[source,bash]
-----
-python assistant.py
-----
-
-Have a conversation like this:
-
-[source]
-----
-🛍️  Welcome to the Shopping Assistant!
-==================================================
-
-What's your name? John
-
-✓ Nice to meet you, John!
-
-💬 Chat started (Session: chat-20240115-143022)
-   Type 'quit' to exit, 'memory' to see what I remember
-
-John: Hi! I'm looking for running shoes for marathon training.
-
-🤖 Assistant: Hi John! Great to hear you're training for a marathon!
-I'd be happy to help you find the perfect running shoes.
-
-What's your typical running distance and pace? Also, do you have any
-brand preferences or a budget in mind?
-
-John: I really like Nike products and my budget is around $150.
-
-  📝 Learned: Likes Nike products, Budget around $150
-
-🤖 Assistant: Perfect! Since you like Nike and have a $150 budget,
-I'd recommend looking at the Nike Pegasus 40 ($130) or the Nike
-Air Zoom Tempo ($140). Both are excellent for marathon training...
-
-John: My size is 10. What about the Pegasus?
-
-  📝 Learned: Shoe size is 10
-
-🤖 Assistant: Great, size 10! The Nike Pegasus 40 is a fantastic choice
-for marathon training at your budget...
-
-John: memory
-
-==================================================
-📊 What I Remember About You
-==================================================
-
-🏷️ Preferences:
-  • brand: Likes Nike products
-  • budget: Budget around $150
-  • size: Shoe size is 10
-
-📦 Products/Brands You've Mentioned:
-  • Nike
-  • Nike Pegasus 40
-
-==================================================
-----
-
-== Step 4: Test Persistence Across Sessions
-
-Exit and restart the assistant:
-
-[source,bash]
-----
-# Exit with 'quit', then restart
-python assistant.py
-----
-
-[source]
-----
-What's your name? John
-
-✓ Welcome back, John!
-
-John: What shoes did we discuss last time?
-
-🤖 Assistant: Welcome back, John! Last time we discussed the Nike Pegasus 40
-which fits well with your preferences - you mentioned you like Nike products,
-have a budget around $150, and wear size 10. Would you like to continue
-exploring that option or look at something different?
-----
-
-The assistant remembers John from the previous session!
-
-== Step 5: Add Product Knowledge
-
-Create `seed_products.py` to add some product data:
-
+.Save as `conversation_memory.py`
 [source,python]
 ----
-# seed_products.py
-import asyncio
-import os
-from dotenv import load_dotenv
-from neo4j_agent_memory import MemoryClient, MemorySettings
-
-load_dotenv()
-
-PRODUCTS = [
-    {
-        "name": "Nike Pegasus 40",
-        "type": "PRODUCT",
-        "description": "Versatile daily trainer with responsive cushioning. Great for marathon training.",
-        "properties": {"brand": "Nike", "price": 130, "category": "Running"}
-    },
-    {
-        "name": "Nike Air Zoom Tempo",
-        "type": "PRODUCT",
-        "description": "Speed-focused trainer with carbon fiber plate for tempo runs.",
-        "properties": {"brand": "Nike", "price": 140, "category": "Running"}
-    },
-    {
-        "name": "Adidas Ultraboost 23",
-        "type": "PRODUCT",
-        "description": "Premium cushioned running shoe with Boost midsole technology.",
-        "properties": {"brand": "Adidas", "price": 190, "category": "Running"}
-    },
-    {
-        "name": "Asics Gel-Nimbus 25",
-        "type": "PRODUCT",
-        "description": "Max cushioning shoe for long-distance comfort.",
-        "properties": {"brand": "Asics", "price": 160, "category": "Running"}
-    },
-    {
-        "name": "New Balance Fresh Foam 1080v13",
-        "type": "PRODUCT",
-        "description": "Plush cushioning with Fresh Foam X technology for smooth rides.",
-        "properties": {"brand": "New Balance", "price": 165, "category": "Running"}
-    },
-]
-
-
-async def main():
-    settings = MemorySettings(
-        neo4j={"uri": os.getenv("NEO4J_URI", "bolt://localhost:7687"), "username": os.getenv("NEO4J_USER", "neo4j"), "password": os.getenv("NEO4J_PASSWORD", "password123")}
-    )
-
-    client = MemoryClient(settings)
-    await client.connect()
-
-    print("Seeding product data...")
-
-    for product in PRODUCTS:
-        entity, _ = await client.long_term.add_entity(
-            name=product["name"],
-            entity_type=product["type"],
-            description=product["description"],
-            attributes=product["properties"],
-        )
-        print(f"  ✓ Added: {entity.name}")
-
-    await client.close()
-    print("\n✓ Product data seeded!")
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+include::example$conversation_memory.py[]
 ----
 
-Run it:
+include::partial$python-tutorial-import-check.adoc[tag=intro]
 
 [source,bash]
 ----
-python seed_products.py
+python -m py_compile aura_connection.py wait_for_tutorial_neo4j.py core_memory_settings.py conversation_memory.py
+python -c "import aura_connection, wait_for_tutorial_neo4j, core_memory_settings, conversation_memory; assert all(callable(f) for f in [aura_connection.aura_config, wait_for_tutorial_neo4j.wait_until_ready, core_memory_settings.settings, conversation_memory.main]); print('Lesson imports verified')"
+python conversation_memory.py --help
 ----
 
-Now the assistant can make more informed recommendations based on the actual product catalog.
+:cli-help-suffix: {sp}and the command help
+include::partial$python-tutorial-import-check.adoc[tag=expected]
 
-== Step 6: Add Reasoning Traces
+:cli-help-suffix!:
 
-Let's track the assistant's decision-making process. Update the `chat` function:
+anchor:_step_2_set_up_neo4j[]
 
-[source,python]
+== 2. Create and connect to the Aura database
+
+include::partial$aura-tutorial-setup.adoc[]
+
+anchor:_step_3_configure_environment[]
+
+== 3. Configure the provider and inspect the shared settings
+
+include::partial$python-openai-model-selection.adoc[]
+
+[source,bash]
 ----
-async def chat(
-    user_id: str,
-    session_id: str,
-    user_message: str,
-) -> str:
-    """Process user message and generate response with reasoning trace."""
-
-    # Start reasoning trace
-    trace = await memory_client.reasoning.start_trace(
-        session_id=session_id,
-        task=f"Respond to: {user_message[:50]}...",
-    )
-
-    try:
-        # Store user message
-        await memory_client.short_term.add_message(
-            session_id=session_id,
-            role="user",
-            content=user_message,
-        )
-
-        # Record step: Extract entities
-        step1 = await memory_client.reasoning.add_step(
-            trace_id=trace.id,
-            thought="Extracting entities from user message",
-        )
-
-        extraction = await extractor.extract(user_message)
-
-        await memory_client.reasoning.record_tool_call(
-            step_id=step1.id,
-            tool_name="entity_extraction",
-            arguments={"text": user_message[:100]},
-            result={"entities": [e.name for e in extraction.entities]},
-            status="success",
-        )
-
-        # Record step: Get context
-        step2 = await memory_client.reasoning.add_step(
-            trace_id=trace.id,
-            thought="Retrieving personalized context",
-        )
-
-        context = await build_context(user_id, session_id, user_message)
-
-        await memory_client.reasoning.record_tool_call(
-            step_id=step2.id,
-            tool_name="get_context",
-            arguments={"user_id": user_id},
-            result={"context_length": len(context)},
-            status="success",
-        )
-
-        # Record step: Generate response
-        step3 = await memory_client.reasoning.add_step(
-            trace_id=trace.id,
-            thought="Generating personalized response",
-        )
-
-        # ... rest of LLM call ...
-
-        # Complete trace
-        await memory_client.reasoning.complete_trace(
-            trace_id=trace.id,
-            outcome=f"Generated response ({len(assistant_message)} chars)",
-            success=True,
-        )
-
-        return assistant_message
-
-    except Exception as e:
-        await memory_client.reasoning.complete_trace(
-            trace_id=trace.id,
-            outcome=f"Failed: {str(e)}",
-            success=False,
-        )
-        raise
+export OPENAI_API_KEY="replace-with-your-key"
+export OPENAI_MODEL="replace-with-your-accessible-chat-model-id"
+python -c "import os; assert os.environ['OPENAI_API_KEY'].strip(); assert os.environ['OPENAI_MODEL'].strip() and not os.environ['OPENAI_MODEL'].startswith('replace-with-'); print('Provider variables present')"
 ----
 
-== What You've Built
+Expected: `Provider variables present`. This checks configuration presence; the requests in the program verify access. Set `OPENAI_MODEL` to a chat model available to your account. Do not put the API key in the program.
 
-You now have a complete chatbot that:
+The `core_memory_settings.py` file copied above is imported by the lesson program.
 
-1. **Persists across sessions** - Users are recognized and their history is maintained
-2. **Learns preferences** - Automatically extracts and stores user preferences
-3. **Builds context** - Uses the context graph for personalized responses
-4. **Tracks reasoning** - Records decision-making for debugging and improvement
-5. **Integrates with LLMs** - Uses OpenAI for natural language understanding
+The helper uses the exported Aura connection, explicitly selects the Bolt backend, disables automatic extraction and enrichment, and selects the embedding adapter. The complete program imports this helper from the tutorial folder.
 
-== Extending the Assistant
+anchor:_step_2_create_the_memory_enabled_assistant[]
 
-Ideas for enhancement:
+== 4. Read the complete chatbot program
 
-* **Add product recommendations** based on preferences
-* **Track purchase history** and use for future recommendations
-* **Implement multi-turn clarification** when preferences are unclear
-* **Add sentiment analysis** to detect satisfaction
+Read `conversation_memory.py` from step 1: `main()` opens the public `MemoryClient`; `seed()` calls message/entity/preference APIs; `resume()` uses `get_conversation()` and `get_preferences_for()` to build a model request. The product query and `reasoning` calls record an application action. The command parser and exact-result assertions are tutorial scaffolding. Each `await` waits for an operation, and `async with` closes the client even if the model raises an error.
 
-== Next Steps
+The program uses two known session IDs belonging to the tutorial user. It loads the first session explicitly before answering in the second. It does not search all users' messages to identify a shopper. The stored trace contains an application action and its tool result, not private model reasoning.
 
-* xref:tutorials/knowledge-graph.adoc[Build a Knowledge Graph from Documents] - Extract knowledge from documents
-* xref:how-to/integrations/pydantic-ai.adoc[Use with PydanticAI] - Build robust agents
+anchor:_step_3_test_the_assistant[]
 
-== See Also
+== 5. Store the first conversation and explicit preference
 
-* xref:explanation/memory-types.adoc[Understanding Memory Types]
-* xref:how-to/preferences.adoc[Manage User Preferences]
-* xref:how-to/reasoning-traces.adoc[Record Reasoning Traces]
+[source,bash]
+----
+python conversation_memory.py seed
+----
+
+Expected: `Stored: first conversation, explicit shopper preference, fictional product`. The process exits and closes its database connection.
+
+anchor:_step_4_test_persistence_across_sessions[]
+
+== 6. Answer a new question after restart
+
+[source,bash]
+----
+python conversation_memory.py resume
+----
+
+Expected milestones:
+
+. `Retrieved: 2 prior messages and 1 preferences`.
+. `Verified: new response and product-lookup trace read back`.
+. A model answer to “What would you recommend for the trip I mentioned?”
+
+Inspect the answer for the seeded wide-fit city-walking requirement, the USD 60 budget, and the fictional Trail Starter product priced at USD 45. The checks prove that the request contained retrieved context and that the resulting answer and tool record were stored, not that the wording is ideal; see xref:explanation/memory-types.adoc[] for that distinction.
+
+A model failure completes the trace with `success=False` and raises the error. Fix provider access before retrying. The program does not label a failed request as a successful answer.
+
+anchor:_step_6_add_reasoning_traces[]
+
+== 7. Verify the linked tool record
+
+In the Aura console, open *Query*, select the lesson instance and database, and connect with the credentials exported in step 2. Run:
+
+[source,cypher]
+----
+MATCH (trace:ReasoningTrace {session_id: 'docs-shopping-return'})-[:HAS_STEP]->(step:ReasoningStep)-[:USES_TOOL]->(call:ToolCall)
+RETURN trace.success, step.action, call.tool_name
+----
+
+Expected: a successful trace, the action to read the tutorial product, and the `lookup_product` tool call. If you ran a failed attempt too, inspect each trace separately.
+
+anchor:_what_youve_built[]
+
+== What we built
+
+The second process read persisted context, included it in a real model request, and stored its response with a trace of the product lookup. Retrieval and authorization remain separate responsibilities: an application must authorize the session IDs and user identifier it passes to these APIs. See xref:how-to/multi-tenancy.adoc[multi-tenancy] before extending this single-user exercise.
+
+include::partial$aura-tutorial-resume.adoc[]
+
+Inspect the two session IDs in Aura Query and the trace check from this page first. `resume` makes another model request and writes a new turn/trace; run it only when you intend that additional operation. It is not a read-only reconnect command.
+
+[source,cypher]
+----
+MATCH (conversation:Conversation)-[:HAS_MESSAGE]->(message:Message)
+WHERE conversation.session_id IN ['docs-shopping-first', 'docs-shopping-return']
+RETURN conversation.session_id, message.id, message.role, message.content
+ORDER BY conversation.session_id, message.timestamp
+----
+
+Expected after the seed phase: the two original messages in `docs-shopping-first`. After a successful answer, `docs-shopping-return` also contains the new question and response. If it has only the question, inspect the failed trace before intentionally retrying `resume`.
+
+anchor:_clean_up[]
+
+== Clean up
+
+include::partial$aura-tutorial-cleanup.adoc[]
+
+anchor:_troubleshooting[]
+
+== If a check fails
+
+include::partial$python-tutorial-check-failed.adoc[]
+
+anchor:_see_also[]
+
+== Next steps
+
+* xref:reference/api/memory-client.adoc[Python API reference]
+* xref:reference/backend-capabilities.adoc#scope[Identity and retrieval scope]
+
+// Retain section URLs from the earlier fragmented lesson.
+anchor:_what_youll_learn[]
+anchor:_time_required[]
+anchor:_what_were_building[]
+anchor:_step_5_add_product_knowledge[]
+anchor:_extending_the_assistant[]

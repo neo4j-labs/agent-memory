@@ -1,0 +1,74 @@
+= Neo4j and NAMS connection settings
+:page-product: agent-memory
+:page-pagination:
+:toclevels: 2
+
+Backend connection configuration for xref:reference/configuration.adoc[Configuration reference]: the bolt `Neo4jConfig` and the hosted `NamsConfig`. See xref:reference/environment-variables.adoc[Environment variables] for the `NAM_GROUP__FIELD` mapping.
+
+anchor:neo4j[]
+
+anchor:_neo4j_configuration[]
+anchor:_python_configuration[]
+anchor:_environment_variables[]
+anchor:_parameters[]
+
+== Neo4j connection
+
+Bolt only. Standalone `Neo4jConfig` requires a password; the implicit MemorySettings factory supplies an empty string. Supply valid credentials before connecting. URI schemes and connection permissions are determined by your Neo4j deployment.
+
+// settings-fields: Neo4jConfig:neo4j:python
+[cols="2,2,2,1,3,4",options="header"]
+|===
+| Field | Type / values | Default | Constraints | Env var | Description
+| `uri` | `str` | `'bolt://localhost:7687'` | — | `NAM_NEO4J__URI` | Neo4j connection URI
+| `username` | `str` | `'neo4j'` | — | `NAM_NEO4J__USERNAME` | Neo4j username
+| `password` | `SecretStr` | `required` | — | `NAM_NEO4J__PASSWORD` | Neo4j password
+| `database` | `str` | `'neo4j'` | — | `NAM_NEO4J__DATABASE` | Neo4j database name
+| `max_connection_pool_size` | `int` | `50` | ge 1 | `NAM_NEO4J__MAX_CONNECTION_POOL_SIZE` | Maximum connection pool size
+| `connection_timeout` | `float` | `30.0` | gt 0 | `NAM_NEO4J__CONNECTION_TIMEOUT` | Connection timeout in seconds
+| `max_transaction_retry_time` | `float` | `30.0` | gt 0 | `NAM_NEO4J__MAX_TRANSACTION_RETRY_TIME` | Maximum transaction retry time in seconds
+| `max_connection_lifetime` | `int` | `300` | gt 0 | `NAM_NEO4J__MAX_CONNECTION_LIFETIME` | Maximum lifetime of a pooled connection in seconds. Connections older than this are proactively closed and replaced. Should be shorter than the server's idle timeout (e.g., Neo4j Aura).
+| `liveness_check_timeout` | `int` | `60` | gt 0 | `NAM_NEO4J__LIVENESS_CHECK_TIMEOUT` | Seconds a connection can be idle before the driver checks if it is still alive. Prevents use of stale connections.
+| `keep_alive` | `bool` | `True` | — | `NAM_NEO4J__KEEP_ALIVE` | Enable TCP keep-alive on connections to prevent idle drops.
+|===
+
+anchor:nams[]
+
+anchor:_python_configuration_2[]
+anchor:_environment_variables_2[]
+anchor:_parameters_2[]
+
+== NAMS connection
+
+NAMS only. This config controls HTTP transport, not server extraction settings. Pin NamsSettings to avoid accidental backend selection. The `transport_mode="bridge"` option is intended for conformance/reference implementations.
+
+[source,python]
+----
+from neo4j_agent_memory import NamsSettings
+
+settings = NamsSettings(nams={"timeout": 60.0, "retry_backoff_seconds": 0.5})
+----
+
+The example takes its API key from the environment; see xref:how-to/use-nams.adoc[Use NAMS].
+
+// settings-fields: NamsConfig:nams:python
+[cols="2,2,2,1,3,4",options="header"]
+|===
+| Field | Type / values | Default | Constraints | Env var | Description
+| `endpoint` | `str` | `'https://memory.neo4jlabs.com/v1'` | — | `NAM_NAMS__ENDPOINT` | Base URL. Auto transport uses REST for a URL containing /v followed by digits; otherwise it uses the conformance bridge.
+| `api_key` | `SecretStr \| None` | `None` | — | `NAM_NAMS__API_KEY` | NAMS API key (format 'nams_...'). When constructed via MemorySettings, an unset value may be populated from MEMORY_API_KEY.
+| `workspace_id` | `str \| None` | `None` | — | `NAM_NAMS__WORKSPACE_ID` | Sent as X-Workspace-Id when set. Use the workspace authorized by your credentials; the workspace is the tenancy boundary.
+| `timeout` | `float` | `30.0` | gt 0 | `NAM_NAMS__TIMEOUT` | HTTP request timeout in seconds.
+| `max_retries` | `int` | `3` | ge 0 | `NAM_NAMS__MAX_RETRIES` | Max retry attempts for 429 (after Retry-After), 5xx, and network errors.
+| `retry_backoff_seconds` | `float` | `0.5` | gt 0 | `NAM_NAMS__RETRY_BACKOFF_SECONDS` | Base exponential backoff between retries (0.5 → 0.5, 1.0, 2.0...).
+| `headers` | `dict[str, str]` | `{}` | — | `NAM_NAMS__HEADERS` | Extra HTTP headers added to every request (e.g. tracing headers).
+| `validate_on_connect` | `bool` | `True` | — | `NAM_NAMS__VALIDATE_ON_CONNECT` | Make an authenticated connection probe when connecting. Disabling it defers failures until the first request.
+| `transport_mode` | `Literal['auto', 'rest', 'bridge']` | `'auto'` | — | `NAM_NAMS__TRANSPORT_MODE` | Wire-protocol override. 'auto' (default) infers from endpoint shape.
+|===
+
+
+== See also
+
+* xref:reference/configuration.adoc[Configuration reference]
+* xref:reference/environment-variables.adoc[Environment variables reference]
+* xref:how-to/use-nams.adoc[Connect a Python application to NAMS]

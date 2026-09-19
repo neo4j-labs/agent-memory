@@ -1,710 +1,103 @@
-= Manage User Preferences
+= Store and revise a user preference
 :page-product: agent-memory
 :page-pagination:
-:toclevels: 3
+:toclevels: 2
 :sectanchors:
-:icons: font
-:source-highlighter: highlight.js
 
-How to store, retrieve, and use user preferences to personalize agent interactions using the context graph.
+include::partial$backend-bolt-only.adoc[]
 
-[NOTE]
-====
-The basics (add a preference, search by category) port cleanly to the
-**TypeScript SDK against NAMS**. The advanced bits (per-user scoping via
-`user_identifier=`, time-travel via `supersede_preference`, bi-temporal
-`as_of` queries) are **Python+Bolt only** — see
-xref:how-to/multi-tenancy.adoc#typescript-counterpart[TypeScript multi-tenancy counterpart].
-====
+To retain an explicit user preference and its revision history, attach it to the user identifier, optionally scope it to an entity, and supersede the old record after creating a replacement.
 
-== TypeScript equivalents at a glance
+.Illustrative preference graph using User and Entity labels
+image::diagrams/preference-aware-context-graph.svg["Illustrative preference graph; the recipe uses User and Entity labels",width=100%,link=self]
 
-[cols="2,2,2", options="header"]
-|===
-|Operation |Python (Bolt) |TypeScript (NAMS)
+The illustration is conceptual. This recipe's physical path is `(User)-[:HAS_PREFERENCE]->(Preference)-[:APPLIES_TO]->(Entity)`.
 
-|Add a preference
-|`client.long_term.add_preference(category, preference)`
-|`memory.longTerm.addPreference(category, preference, { context })`
+For the rationale, see xref:explanation/memory-types.adoc[Understanding the three memory types].
 
-|Search preferences
-|`client.long_term.search_preferences(query, category=, limit=)`
-|`memory.longTerm.searchPreferences(query, { category, limit })`
+anchor:_prerequisites[]
 
-|Per-user-scoped preferences
-|`add_preference(..., user_identifier=)`
-|_Not directly. Use `createConversation({ userId })` + scope by conversation. See xref:how-to/multi-tenancy.adoc#typescript-counterpart[TS multi-tenancy]._
+== 1. Prepare the Bolt client
 
-|Supersede a preference
-|`supersede_preference(old_id, new_id)`
-|_Not exposed. Add a new preference; rely on recency in retrieval._
+Use a dedicated AuraDB instance from xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the first memory tutorial's Aura setup], with exported `NEO4J_URI`, `NEO4J_USERNAME`, and `NEO4J_PASSWORD`. Set `OPENAI_API_KEY` for the selected embedding provider. Prepare the example files below and install the provider extra:
 
-|Time-travel (`as_of=`)
-|`get_preferences_for(identifier, as_of=)`
-|_Not exposed on NAMS. Use `client.query.cypher(...)` if you really need it._
+include::partial$python-tutorial-setup.adoc[]
 
-|`applies_to=[EntityRef(...)]`
-|`add_preference(..., applies_to=[...])`
-|_Not exposed. Embed the relation in the preference text or in `context`._
-|===
-
-== Overview
-
-Preferences are structured knowledge about user likes, dislikes, and behavioral patterns stored in the context graph. They enable agents to provide personalized responses without asking the same questions repeatedly.
-
-image::diagrams/preference-aware-context-graph.png[Preference-aware context graph: Customer node connected via HAS_PREFERENCE relationships to Brand, Shipping, and Style preference nodes,width=600,align=left]
-
-== Prerequisites
-
-* Neo4j database running
-* `neo4j-agent-memory` installed
-* MemoryClient configured
-
-== Store Preferences
-
-=== Basic Preference Storage
-
-Store explicit preferences stated by users:
-
-[tabs]
-======
-Python (Bolt)::
-+
-[source,python]
+[source,bash]
 ----
-from neo4j_agent_memory import MemoryClient, MemorySettings
-
-settings = MemorySettings(
-    neo4j={"uri": "bolt://localhost:7687", "username": "neo4j", "password": "password"}
-)
-
-async with MemoryClient(settings) as client:
-    # Store a preference from customer conversation
-    preference = await client.long_term.add_preference(
-        category="brand",
-        preference="Prefers Nike brand for running shoes",
-    )
-
-print(f"Stored preference: {preference.id}")
+python -m pip install 'neo4j-agent-memory[openai]==0.6.0'
 ----
 
-TypeScript (NAMS)::
-+
-[source,typescript]
-----
-import { MemoryClient } from "@neo4j-labs/agent-memory";
+include::partial$python-core-recipe-intro.adoc[]
 
-const memory = new MemoryClient();
+include::partial$python-core-recipe-files.adoc[]
 
-// Store a preference. `context` is optional metadata explaining the source.
-const preference = await memory.longTerm.addPreference(
-  "brand",
-  "Prefers Nike brand for running shoes",
-  { context: "Stated in conversation conv-2026-05-22" },
-);
+== 2. Apply the task function
 
-console.log(`Stored preference: ${preference.id}`);
-----
-======
+Store a preference for a user, then supersede it with a revised value while keeping both records in history. The recipe disables embedding-based preference deduplication for these independent user revisions. The current duplicate lookup can reuse a preference node across users; superseding a shared node can therefore affect every linked user's active view. `generate_embedding=False` avoids that lookup here, at the cost of omitting vectors for semantic preference search.
 
-=== Categorized Preferences
-
-Organize preferences by category for efficient retrieval:
-
-.Ecommerce Retail Preferences
-[source,python]
-----
-# Store various customer preferences
-preferences = [
-    {
-        "preference": "Prefers Nike and Adidas brands",
-        "category": "brand",
-        "confidence": 0.95,
-    },
-    {
-        "preference": "Shoe size is 9 US",
-        "category": "size",
-        "confidence": 1.0,  # Explicitly stated
-    },
-    {
-        "preference": "Prefers next-day delivery even at extra cost",
-        "category": "shipping",
-        "confidence": 0.90,
-    },
-    {
-        "preference": "Likes minimalist, neutral color designs",
-        "category": "style",
-        "confidence": 0.85,
-    },
-    {
-        "preference": "Shops primarily via mobile app",
-        "category": "channel",
-        "confidence": 0.88,
-    },
-    {
-        "preference": "Prefers to pay with Apple Pay",
-        "category": "payment",
-        "confidence": 0.92,
-    },
-]
-
-for pref in preferences:
-    await client.long_term.add_preference(
-        category=pref["category"],
-        preference=pref["preference"],
-        confidence=pref.get("confidence", 0.8),
-    )
-----
-
-.Financial Services Preferences
-[source,python]
-----
-# Store client investment preferences
-preferences = [
-    {
-        "preference": "Prefers ESG-focused investments",
-        "category": "investment_style",
-        "confidence": 0.95,
-    },
-    {
-        "preference": "Risk tolerance is moderate-growth",
-        "category": "risk_profile",
-        "confidence": 1.0,
-    },
-    {
-        "preference": "Investment horizon is 10+ years for retirement",
-        "category": "time_horizon",
-        "confidence": 0.90,
-    },
-    {
-        "preference": "Wants to avoid tobacco and weapons companies",
-        "category": "exclusions",
-        "confidence": 1.0,
-    },
-    {
-        "preference": "Prefers quarterly rebalancing reviews",
-        "category": "communication",
-        "confidence": 0.85,
-    },
-    {
-        "preference": "Interested in tax-loss harvesting opportunities",
-        "category": "tax_strategy",
-        "confidence": 0.88,
-    },
-]
-
-for pref in preferences:
-    await client.long_term.add_preference(
-        category=pref["category"],
-        preference=pref["preference"],
-        confidence=pref.get("confidence", 0.8),
-    )
-----
-
-=== Preference with Source Tracking
-
-Track where preferences came from:
+The function below is included from the complete maintained program, which already supplies imports, client setup, unique IDs, and `asyncio.run`. Run the file in step 3; this extract is not a separate top-level script.
 
 [source,python]
 ----
-# Preference explicitly stated by customer
-await client.long_term.add_preference(
-    category="health",
-    preference="Allergic to latex - avoid latex products",
-    confidence=1.0,
-    metadata={
-        "source": "explicit_statement",
-        "session_id": "support-session-001",
-        "stated_at": "2024-01-15T10:30:00Z",
-    },
-)
-
-# Preference inferred from behavior
-await client.long_term.add_preference(
-    category="shopping_behavior",
-    preference="Tends to purchase during evening hours (6-10 PM)",
-    confidence=0.75,  # Lower confidence for inferred
-    metadata={
-        "source": "behavioral_inference",
-        "data_points": 15,
-        "analysis_date": "2024-01-15",
-    },
-)
+include::example$core_memory_recipes.py[tag=preferences]
 ----
 
-== Retrieve Preferences
+== 3. Run and verify
 
-=== Get All User Preferences
-
-[source,python]
+[source,bash]
 ----
-# Get all preferences
-preferences = await client.long_term.search_preferences(
-    query="",
-)
-
-print(f"Found {len(preferences)} preferences:")
-for pref in preferences:
-    print(f"  [{pref.category}] {pref.preference}")
-    print(f"    Confidence: {pref.confidence:.0%}")
+python core_memory_recipes.py preferences
 ----
 
-=== Filter by Category
-
-[source,python]
-----
-# Get brand preferences
-brand_prefs = await client.long_term.search_preferences(
-    query="brand",
-)
-
-# Get investment-related preferences
-investment_prefs = await client.long_term.search_preferences(
-    query="investment risk time horizon",
-)
-----
-
-=== Search Preferences Semantically
-
-Find relevant preferences using semantic search:
-
-[source,python]
-----
-# Find preferences related to a query
-preferences = await client.long_term.search_preferences(
-    query="shipping delivery speed",
-    limit=5,
-)
-
-for pref in preferences:
-    print(f"[{pref.score:.2f}] {pref.preference}")
-----
-
-== Use Preferences in Agent Context
-
-=== Build Preference-Aware Prompts
-
-Inject preferences into agent system prompts:
-
-[source,python]
-----
-async def build_personalized_prompt(user_id: str, base_prompt: str) -> str:
-    """Build a prompt that includes user preferences."""
-
-    # Get relevant preferences
-    preferences = await client.long_term.search_preferences(
-        query="",
-        limit=10,
-    )
-
-    if not preferences:
-        return base_prompt
-
-    # Format preferences for prompt
-    pref_section = "## User Preferences\n"
-    pref_section += "Use these preferences to personalize your responses:\n"
-
-    for pref in preferences:
-        pref_section += f"- {pref.category}: {pref.preference}\n"
-
-    return f"{base_prompt}\n\n{pref_section}"
-
-# Usage
-system_prompt = await build_personalized_prompt(
-    user_id="CUST-12345",
-    base_prompt="You are a helpful shopping assistant.",
-)
-----
-
-=== Context-Specific Preference Selection
-
-Select preferences relevant to the current task:
-
-.Product Recommendation Context
-[source,python]
-----
-async def get_recommendation_context(user_id: str, product_category: str) -> dict:
-    """Get preferences relevant for product recommendations."""
-
-    # Get category-specific preferences
-    preferences = await client.long_term.search_preferences(
-        query="brand style size price range",
-    )
-
-    # Also search for category-specific preferences
-    category_prefs = await client.long_term.search_preferences(
-        query=f"preferences for {product_category}",
-        limit=5,
-    )
-
-    return {
-        "general_preferences": preferences,
-        "category_specific": category_prefs,
-    }
-
-# Usage for shoe recommendations
-context = await get_recommendation_context("CUST-12345", "running shoes")
-----
-
-.Investment Advice Context
-[source,python]
-----
-async def get_investment_context(client_id: str) -> dict:
-    """Get preferences relevant for investment advice."""
-
-    # Core investment preferences
-    investment_prefs = await client.long_term.search_preferences(
-        query="risk profile investment style time horizon exclusions",
-    )
-
-    # Tax-related preferences
-    tax_prefs = await client.long_term.search_preferences(
-        query="tax strategy",
-    )
-
-    # Communication preferences
-    comm_prefs = await client.long_term.search_preferences(
-        query="communication",
-    )
-
-    return {
-        "investment": investment_prefs,
-        "tax": tax_prefs,
-        "communication": comm_prefs,
-    }
-----
-
-=== Combined Context with Preferences
-
-Get full context graph data including preferences:
-
-[source,python]
-----
-# Get comprehensive context including preferences
-context = await client.get_context(
-    query="recommend running shoes",
-    user_id="CUST-12345",
-    include_short_term=True,    # Recent conversation
-    include_long_term=True,     # Entities and preferences
-    include_reasoning=True,     # Past recommendations
-    preference_categories=["brand", "style", "size"],
-)
-
-# Format for agent
-prompt_context = f"""
-## Recent Conversation
-{format_messages(context.messages)}
-
-## Customer Preferences
-{format_preferences(context.preferences)}
-
-## Previously Recommended Products
-{format_entities(context.entities, type="PRODUCT")}
-
-## Past Successful Recommendations
-{format_reasoning_traces(context.reasoning_traces)}
-"""
-----
-
-== Update and Manage Preferences
-
-=== Update Preference
-
-[source,python]
-----
-# Update when preference changes
-await client.long_term.update_preference(
-    preference_id=preference.id,
-    preference="Now prefers Asics brand for running (switched from Nike)",
-    confidence=0.90,
-    metadata={
-        "updated_reason": "customer_stated_change",
-        "previous_value": "Nike",
-        "updated_at": datetime.now().isoformat(),
-    },
-)
-----
-
-=== Decay Confidence Over Time
-
-Reduce confidence for stale preferences:
-
-[source,python]
-----
-from datetime import datetime, timedelta
-
-async def decay_stale_preferences(user_id: str, decay_after_days: int = 90):
-    """Reduce confidence for preferences not recently confirmed."""
-
-    preferences = await client.long_term.search_preferences(query="")
-    cutoff = datetime.now() - timedelta(days=decay_after_days)
-
-    for pref in preferences:
-        last_confirmed = pref.metadata.get("last_confirmed")
-        if last_confirmed and datetime.fromisoformat(last_confirmed) < cutoff:
-            # Decay confidence by 10%
-            new_confidence = max(0.5, pref.confidence * 0.9)
-
-            await client.long_term.update_preference(
-                preference_id=pref.id,
-                confidence=new_confidence,
-                metadata={
-                    **pref.metadata,
-                    "decayed_at": datetime.now().isoformat(),
-                },
-            )
-----
-
-=== Delete Preference
-
-[source,python]
-----
-# Delete outdated preference
-await client.long_term.delete_preference(preference_id=preference.id)
-
-# Delete all preferences in a category
-await client.long_term.delete_preferences(
-    category="deprecated_category",
-)
-----
-
-== Automatic Preference Learning
-
-=== Extract Preferences from Conversations
-
-Use LLM to identify preferences in conversations:
-
-[source,python]
-----
-async def extract_preferences_from_message(
-    message: str,
-    user_id: str,
-    llm_client,
-) -> list[dict]:
-    """Extract preferences from a message using LLM."""
-
-    prompt = """
-    Analyze this customer message and extract any stated or implied preferences.
-    Return a JSON array of preferences with category, preference text, and confidence.
-
-    Categories to look for:
-    - brand: Brand preferences
-    - style: Style/design preferences
-    - price_range: Budget preferences
-    - shipping: Delivery preferences
-    - communication: How they like to be contacted
-    - size: Size preferences
-
-    Message: {message}
-
-    Return only valid JSON array, no explanation.
-    """
-
-    response = await llm_client.complete(prompt.format(message=message))
-    preferences = json.loads(response)
-
-    # Store extracted preferences
-    for pref in preferences:
-        await client.long_term.add_preference(
-            category=pref["category"],
-            preference=pref["preference"],
-            confidence=pref.get("confidence", 0.7),
-            metadata={"source": "conversation_extraction"},
-        )
-
-    return preferences
-
-# Usage
-message = "I really love the Nike Pegasus line, but I need something in size 10. Also, I hate waiting for shipping - I always pay for next-day."
-
-preferences = await extract_preferences_from_message(
-    message=message,
-    user_id="CUST-12345",
-    llm_client=openai_client,
-)
-# Extracts:
-# - brand: "Prefers Nike Pegasus line"
-# - size: "Shoe size is 10"
-# - shipping: "Prefers next-day delivery"
-----
-
-=== Learn from Behavior Patterns
-
-Infer preferences from purchase history:
-
-[source,python]
-----
-async def infer_preferences_from_history(user_id: str):
-    """Infer preferences from purchase and browsing history."""
-
-    # Get recent purchases from context graph
-    purchases = await client.graph.execute_read(
-        """
-        MATCH (c:Customer {id: $user_id})-[:PURCHASED]->(p:Product)
-              -[:IN_CATEGORY]->(cat:Category)
-        MATCH (p)-[:MADE_BY]->(brand:Brand)
-        WHERE c.purchase_date > datetime() - duration('P90D')
-        RETURN brand.name as brand, cat.name as category, count(*) as count
-        ORDER BY count DESC
-        """,
-        parameters={"user_id": user_id},
-    )
-
-    # Identify top brands
-    if purchases:
-        top_brand = purchases[0]["brand"]
-        brand_count = purchases[0]["count"]
-        total_purchases = sum(p["count"] for p in purchases)
-
-        if brand_count / total_purchases > 0.5:  # >50% from one brand
-            await client.long_term.add_preference(
-                category="brand",
-                preference=f"Shows strong preference for {top_brand} brand",
-                confidence=min(0.9, brand_count / total_purchases),
-                metadata={
-                    "source": "purchase_history",
-                    "data_points": total_purchases,
-                },
-            )
-----
-
-== Preference-Based Recommendations
-
-=== Filter Products by Preferences
-
-[source,python]
-----
-async def get_preference_filtered_products(
-    user_id: str,
-    category: str,
-    limit: int = 10,
-) -> list:
-    """Get products matching user preferences."""
-
-    # Get relevant preferences
-    brand_prefs = await client.long_term.search_preferences(
-        query="brand",
-    )
-    style_prefs = await client.long_term.search_preferences(
-        query="style",
-    )
-
-    # Extract preferred brands
-    preferred_brands = []
-    for pref in brand_prefs:
-        # Parse brand names from preference text
-        # (In production, store structured data)
-        if "Nike" in pref.preference:
-            preferred_brands.append("Nike")
-        if "Adidas" in pref.preference:
-            preferred_brands.append("Adidas")
-
-    # Query products with preference boost
-    query = """
-    MATCH (p:Product)-[:IN_CATEGORY]->(c:Category {name: $category})
-    MATCH (p)-[:MADE_BY]->(b:Brand)
-    WITH p, b,
-         CASE WHEN b.name IN $preferred_brands THEN 1.5 ELSE 1.0 END as brand_boost
-    RETURN p, b, brand_boost
-    ORDER BY p.rating * brand_boost DESC
-    LIMIT $limit
-    """
-
-    return await client.graph.execute_read(
-        query,
-        parameters={
-            "category": category,
-            "preferred_brands": preferred_brands,
-            "limit": limit,
-        },
-    )
-----
-
-== Best Practices
-
-=== 1. Use Clear Categories
-
-Define a consistent preference taxonomy:
-
-[source,python]
-----
-# Good: Clear, specific categories
-PREFERENCE_CATEGORIES = {
-    "brand": "Brand preferences",
-    "size": "Size and fit preferences",
-    "style": "Style and design preferences",
-    "price_range": "Budget and price sensitivity",
-    "shipping": "Delivery preferences",
-    "payment": "Payment method preferences",
-    "communication": "Contact and notification preferences",
-    "dietary": "Food/dietary restrictions",
-    "accessibility": "Accessibility needs",
-}
-----
-
-=== 2. Track Confidence Levels
-
-Distinguish between certain and uncertain preferences:
-
-[source,python]
-----
-# Explicit statement = high confidence
-confidence = 1.0 if source == "explicit_statement" else 0.8
-
-# Behavioral inference = medium confidence
-confidence = 0.7 if source == "purchase_history" else 0.6
-
-# Single data point = lower confidence
-confidence = 0.5 if data_points < 3 else min(0.9, 0.5 + data_points * 0.1)
-----
-
-=== 3. Respect Privacy and Consent
-
-Only store preferences users expect:
-
-[source,python]
-----
-# Store preference with consent tracking
-await client.long_term.add_preference(
-    category=category,
-    preference=preference_text,
-    metadata={
-        "consent_type": "implicit",  # or "explicit"
-        "consent_date": datetime.now().isoformat(),
-        "data_retention_days": 365,
-    },
-)
-
-# Honor deletion requests
-async def delete_user_preferences(user_id: str):
-    """GDPR-compliant preference deletion."""
-    await client.long_term.delete_preferences()
-----
-
-=== 4. Validate Preferences Periodically
-
-Confirm preferences remain accurate:
-
-[source,python]
-----
-async def should_confirm_preference(pref) -> bool:
-    """Check if preference needs confirmation."""
-    last_confirmed = pref.metadata.get("last_confirmed")
-    if not last_confirmed:
-        return True
-
-    days_since = (datetime.now() - datetime.fromisoformat(last_confirmed)).days
-
-    # Confirm more frequently for low-confidence preferences
-    if pref.confidence < 0.7:
-        return days_since > 30
-    else:
-        return days_since > 90
-----
-
-== See Also
-
-* xref:how-to/entities.adoc[Work with Entities]
-* xref:how-to/messages.adoc[Store and Search Messages]
-* xref:explanation/memory-types.adoc[Understanding Memory Types]
-* xref:reference/api/long-term.adoc[LongTermMemory API Reference]
+Expected: `budget: Spend at most USD 80` and `Verified: current preference and retained history; user=...`. The assertions prove that only the replacement is active and both records remain in the history view.
+
+The command retains its example records for inspection. Remove the disposable tutorial database using that tutorial's cleanup command when finished. Do not substitute an unrestricted delete query against an existing database.
+
+anchor:_retrieve_preferences[]
+
+== Retrieve preferences for an authorized user
+
+`get_preferences_for(user_identifier, applies_to=...)` follows the explicit user association. `active_only=False` includes superseded records; `as_of` filters validity intervals. Validate the caller before selecting the identifier. `get_preferences_by_category` and `search_preferences` are broader queries without the same user-scoped contract.
+
+The returned `Preference` model has `category`, `preference`, `context`, `confidence`, and inherited memory fields. It has no `value` or `source_message_id` argument. Use `context` and metadata to record application evidence; do not present that metadata as a graph provenance edge.
+
+anchor:_automatic_preference_learning[]
+
+== Use preferences in an application
+
+The task above records explicit statements. Inferring preferences from behavior requires your own extraction and validation policy; there is no `extract_preferences` convenience method on `long_term`, nor does this task automatically learn a user's budget. For a complete application that includes saved preferences in its model request, use xref:tutorials/conversation-memory.adoc[the conversation tutorial].
+
+There are no `update_preference` or `delete_preference` wrappers. Supersession preserves history; a different mutation or deletion requires an application-owned Bolt graph operation. See xref:reference/api/long-term.adoc[the API reference] and xref:how-to/privacy-and-audit.adoc[privacy and audit tasks].
+
+// Historical section links resolve to the maintained task and reference pointers.
+anchor:_typescript_equivalents_at_a_glance[]
+
+include::partial$python-typescript-equivalents.adoc[]
+
+anchor:_overview[]
+anchor:_store_preferences[]
+anchor:_basic_preference_storage[]
+anchor:_categorized_preferences[]
+anchor:_preference_with_source_tracking[]
+anchor:_get_all_user_preferences[]
+anchor:_filter_by_category[]
+anchor:_search_preferences_semantically[]
+anchor:_use_preferences_in_agent_context[]
+anchor:_build_preference_aware_prompts[]
+anchor:_context_specific_preference_selection[]
+anchor:_combined_context_with_preferences[]
+anchor:_update_and_manage_preferences[]
+anchor:_update_preference[]
+anchor:_decay_confidence_over_time[]
+anchor:_delete_preference[]
+anchor:_extract_preferences_from_conversations[]
+anchor:_learn_from_behavior_patterns[]
+anchor:_preference_based_recommendations[]
+anchor:_filter_products_by_preferences[]
+anchor:_best_practices[]
+anchor:_1_use_clear_categories[]
+anchor:_2_track_confidence_levels[]
+anchor:_3_respect_privacy_and_consent[]
+anchor:_4_validate_preferences_periodically[]
+anchor:_see_also[]

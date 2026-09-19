@@ -1,0 +1,146 @@
+= Streaming extraction
+:page-product: agent-memory
+:page-pagination:
+:toclevels: 2
+
+Chunk long documents and combine extraction results, from xref:reference/extractors.adoc[Extractor classes reference]. Import `StreamingExtractor` from `neo4j_agent_memory.extraction`.
+
+== StreamingExtractor
+
+Chunk long documents and combine extraction results. Import from `neo4j_agent_memory.extraction`. `DEFAULT_CHUNK_SIZE` is 4000 characters and `DEFAULT_OVERLAP` is 200, unless token-based chunking is selected.
+
+// contract: extraction/streaming.py:StreamingExtractor.__init__
+[source,python]
+----
+def StreamingExtractor(
+    extractor: EntityExtractor,
+    *,
+    chunk_size: int=DEFAULT_CHUNK_SIZE,
+    overlap: int=DEFAULT_OVERLAP,
+    chunk_by_tokens: bool=False,
+    split_on_sentences: bool=True,
+): ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `extractor` | Base extractor to use for each chunk
+| `chunk_size` | Size of each chunk (chars or tokens)
+| `overlap` | Overlap between chunks (chars or tokens)
+| `chunk_by_tokens` | If True, chunk by tokens instead of characters
+| `split_on_sentences` | Try to split on sentence boundaries
+|===
+
+=== chunk_document
+
+Chunk a document according to settings.
+
+// contract: extraction/streaming.py:StreamingExtractor.chunk_document
+[source,python]
+----
+def chunk_document(text: str) -> list[ChunkInfo]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `text` | Text to chunk
+|===
+
+=== extract_streaming
+
+Stream extraction results chunk by chunk.
+
+// contract: extraction/streaming.py:StreamingExtractor.extract_streaming
+[source,python]
+----
+async def extract_streaming(
+    text: str,
+    *,
+    entity_types: list[str] | None=None,
+    extract_relations: bool=True,
+    on_chunk_complete: Callable[[StreamingChunkResult], None] | None=None,
+) -> AsyncIterator[StreamingChunkResult]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `text` | Text to extract from
+| `entity_types` | Optional list of entity types to extract
+| `extract_relations` | Whether to extract relations
+| `on_chunk_complete` | Optional callback for each completed chunk Yields: StreamingChunkResult for each chunk
+|===
+
+=== extract
+
+Extract from a long document with automatic chunking.
+
+// contract: extraction/streaming.py:StreamingExtractor.extract
+[source,python]
+----
+async def extract(
+    text: str,
+    *,
+    entity_types: list[str] | None=None,
+    extract_relations: bool=True,
+    deduplicate: bool=True,
+    on_progress: Callable[[int, int], None] | None=None,
+) -> StreamingExtractionResult: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `text` | Text to extract from
+| `entity_types` | Optional list of entity types to extract
+| `extract_relations` | Whether to extract relations
+| `deduplicate` | Whether to deduplicate entities across chunks
+| `on_progress` | Optional progress callback (completed_chunks, total_chunks)
+|===
+
+=== extract_to_result
+
+Extract and return standard ExtractionResult.
+
+// contract: extraction/streaming.py:StreamingExtractor.extract_to_result
+[source,python]
+----
+async def extract_to_result(
+    text: str,
+    *,
+    entity_types: list[str] | None=None,
+    extract_relations: bool=True,
+    deduplicate: bool=True,
+    on_progress: Callable[[int, int], None] | None=None,
+) -> ExtractionResult: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `text` | Text to extract from
+| `entity_types` | Optional list of entity types to extract
+| `extract_relations` | Whether to extract relations
+| `deduplicate` | Whether to deduplicate entities
+| `on_progress` | Optional progress callback
+|===
+
+[source,python]
+----
+from neo4j_agent_memory.extraction import StreamingExtractor
+
+streamer = StreamingExtractor(extractor, chunk_size=4000, overlap=200)
+async for chunk_result in streamer.extract_streaming(long_document):
+    print(chunk_result.chunk.index, chunk_result.entity_count)
+# extract returns StreamingExtractionResult; extract_to_result returns ExtractionResult.
+result = await streamer.extract_to_result(long_document, deduplicate=True)
+----
+
+
+== See also
+
+* xref:reference/extractors.adoc[Extractor classes reference]
+* xref:how-to/entity-extraction-batch.adoc[Batch & Streaming]
+* xref:how-to/batch-processing.adoc[Batch processing]

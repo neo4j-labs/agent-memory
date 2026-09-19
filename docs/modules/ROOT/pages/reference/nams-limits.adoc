@@ -1,7 +1,12 @@
-= NAMS Limits & Behavior
+= NAMS limits and behavior
 :page-product: agent-memory
 :toclevels: 2
 :icons: font
+
+[NOTE]
+====
+This page describes the service contract used by this checkout. The SDK source alone does not verify a deployed service, dashboard, quota or authentication configuration. Check the authenticated service response and current workspace settings when following operational instructions.
+====
 
 Operational limits, quotas, and runtime behavior for the hosted NAMS backend. These describe what to expect as a client — not internal service metrics. For the wire contract see xref:reference/rest-api.adoc[NAMS REST API]; for setup see xref:how-to/use-nams.adoc[Use NAMS].
 
@@ -20,9 +25,9 @@ These are SDK-side defaults you can override; they are not server limits.
 
 | `timeout` | `30s` | Per-request HTTP timeout.
 | `max_retries` | `3` | Retries on network errors, 5xx, and 429.
-| `retry_backoff` | `0.5s` | Base for exponential backoff. `Retry-After` is honored on 429.
+| `retry_backoff_seconds` | `0.5s` | Base for exponential backoff. `Retry-After` is honored on 429.
 | `validate_on_connect` | `true` | Sends a probe (with `X-Workspace-Id` when set) so misconfiguration fails fast.
-| `transport_mode` | `auto` | `rest` for `/v{n}` endpoints, `bridge` otherwise.
+| `transport_mode` | `auto` | `rest` for `/v\{n}` endpoints, `bridge` otherwise.
 |===
 
 == Rate limits
@@ -69,7 +74,7 @@ field appears on some workspace responses but is currently unused.)
 == Runtime behavior
 
 Extraction is **asynchronous** on NAMS::
-When you add messages, entity/relationship extraction runs server-side. Writes are accepted immediately (`202 Accepted`); extracted entities become queryable a short time later. Poll `GET /v1/conversations/{id}/extraction-status`, or call `long_term.wait_for_extraction(...)` from the SDK, before asserting on extracted results. (On bolt, extraction is synchronous and `wait_for_extraction` is a no-op returning `True`.)
+When you add messages, entity/relationship extraction runs server-side. Writes are accepted immediately (`202 Accepted`); extracted entities become queryable a short time later. Poll `GET /v1/conversations/\{id}/extraction-status`, or call `long_term.wait_for_extraction(...)` from the SDK, before asserting on extracted results. (On bolt, extraction is synchronous and `wait_for_extraction` is a no-op returning `True`.)
 
 Read-only Cypher::
 `client.query.cypher(...)` runs against the workspace graph in Neo4j READ access mode. Write statements are rejected server-side (`400`). This is available to any authenticated workspace — it is not gated behind a tier.

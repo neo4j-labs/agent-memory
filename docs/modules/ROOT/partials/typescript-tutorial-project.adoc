@@ -1,0 +1,46 @@
+include::partial$typescript-tutorial-checkout.adoc[]
+
+Enter the shared lesson project. On its first use, install its locked
+dependencies; subsequent lessons reuse them. Create the tutorial environment
+file only if it does not already exist:
+
+[source,bash]
+----
+cd "$AGENT_MEMORY_TUTORIAL_ROOT/typescript/examples/vercel-ai"
+if [ ! -d node_modules ]; then npm ci; fi
+if [ ! -e .env ]; then
+  (umask 077; set -C; cat .env.tutorial.example > .env)
+fi
+chmod 600 .env
+npm run lint
+----
+
+Expected: typechecking finishes without errors. It does not authenticate or
+write to NAMS. Edit the private `.env` with the keys required by this lesson;
+keep it out of version control. An existing `.env` is preserved: add missing
+tutorial settings without replacing its other values.
+For the two model lessons, set `OPENAI_MODEL=gpt-4o-mini` and supply
+`OPENAI_API_KEY`; an existing demo configuration may select a different model.
+
+If an earlier install was interrupted, or the lockfile changed, run `npm ci`
+again from this project directory, then `npm run lint`. The directory check
+above only avoids an unnecessary reinstall; it does not prove the dependencies
+are complete. `npm ci` replaces `node_modules` from the lockfile and preserves
+your `.env` and `.tutorial-state/` files.
+
+Keep a private note of the selected NAMS workspace name/ID and its key owner.
+The optional `MEMORY_WORKSPACE_ID` is a selector, not proof of ownership. A
+workspace-scoped key may not need it. Keep the same endpoint, key and selector
+for the run's authenticated verification and cleanup; do not print the key or
+use a different workspace to work around a failed check.
+
+The tutorial template uses `gpt-4o-mini` for model lessons. `DEMO_USER_ID`,
+newest-conversation reuse and the `gpt-5-mini` default in `.env.example` belong
+to the separate `npm start` demo. These lessons create or explicitly resume
+their own conversations instead.
+
+All remaining commands run in `typescript/examples/vercel-ai/`.
+`--env-file-if-exists=.env` loads that file; exported shell variables take
+precedence, so keep them consistent with the selected workspace. The project
+sets ESM and supplies the compiler configuration; no global TypeScript install
+is needed.

@@ -1,4 +1,4 @@
-= Configure an Embedding Provider
+= Configure an embedding provider
 :page-product: agent-memory
 :page-pagination:
 :toclevels: 3
@@ -6,51 +6,43 @@
 :icons: font
 :source-highlighter: highlight.js
 
-The complete reference for wiring an embedding provider into `MemorySettings.embedding`.
+include::partial$backend-bolt-only.adoc[]
+
+Configure a client-side embedding provider through `MemorySettings.embedding` and verify that its output matches the graph indexes.
 
 [.lead]
-For the big-picture choice between providers see xref:how-to/bring-your-own-model.adoc[Bring Your Own Model]. Embedding adapters share the `EmbeddingProvider` Protocol; the same wiring patterns apply across cloud APIs and local models.
+For the big-picture choice between providers see xref:how-to/bring-your-own-model.adoc[Bring your own model]. Embedding adapters share the `EmbeddingProvider` Protocol; the same wiring patterns apply across cloud APIs and local models.
 
 [NOTE]
 ====
 This page configures *client-side* embedding on the **bolt** backend. On
 **NAMS**, embedding runs server-side — the workspace's embedding model and
-vector dimension are fixed when the database is provisioned (currently Amazon
-Titan Text v2 at 1024 dimensions by default, or OpenAI `text-embedding-3-small`
-at 1536 where configured). `MemorySettings.embedding` is therefore ignored on
+vector dimension are service/workspace configuration. Read those values from
+your service configuration instead of inferring them from this SDK. `MemorySettings.embedding` is therefore ignored on
 NAMS. See xref:explanation/backends.adoc[Bolt vs NAMS].
 ====
 
-== Set via a provider string
+== Prerequisites
 
-[source,python]
-----
-from neo4j_agent_memory import MemorySettings
+* Install the extras for each selected provider and configure its credentials. Quote package extras in shell commands, for example `pip install 'neo4j-agent-memory[openai]==0.6.0'`.
+* Use a dedicated AuraDB instance and export `NEO4J_URI`, `NEO4J_USERNAME`, and `NEO4J_PASSWORD` as shown in xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the Aura connection setup]. These examples use the `bolt` backend; `NEO4J_DATABASE` defaults to `neo4j` when omitted.
+* Model identifiers below illustrate adapter routing. Confirm the chosen model is available to your account before making a live request; successful provider construction does not verify model access.
+* Run snippets containing `await` in an async function. The `provider`, `messages`, and connected `client` in later fragments come from your application's setup.
 
-settings = MemorySettings(
-    neo4j={"password": "p"},
-    embedding="openai/text-embedding-3-small",
-)
-----
+== Procedure
 
-The factory looks up the model in `neo4j_agent_memory.llm.defaults.EMBEDDING_DIMENSIONS` to populate `dimensions` automatically. For unknown models, pass an explicit instance with `dimensions=N` (see below).
+. Choose a provider string or an explicit adapter from the options below.
+. Configure both the LLM and embedding provider; changing one does not configure the other.
+. Run the verification at the end before applying the configuration to an existing graph.
 
-== Set via an explicit Provider instance
+== Set the embedding provider
 
-[source,python]
-----
-from neo4j_agent_memory import MemorySettings
-from neo4j_agent_memory.llm.adapters.openai import OpenAIEmbeddingProvider
+anchor:_set_via_a_provider_string[]anchor:_set_via_an_explicit_provider_instance[]
 
-settings = MemorySettings(
-    neo4j={"password": "p"},
-    embedding=OpenAIEmbeddingProvider(
-        "openai/text-embedding-3-large",
-        dimensions=1024,    # request smaller output (OpenAI dimension reduction)
-        batch_size=200,
-    ),
-)
-----
+`MemorySettings.embedding` accepts a provider string or an explicit Provider instance. xref:how-to/bring-your-own-model.adoc#_three_ways_to_wire_a_provider[Bring your own model — Three ways to wire a provider] is the canonical walkthrough with runnable code for both (pattern C, framework pass-through, applies to `llm=` only); the deltas specific to the embedding field are below.
+
+* **Provider string** (recommended for most users) — `embedding="openai/text-embedding-3-small"` resolves via `from_provider(model, kind="embedding")`. The factory looks up the model in `neo4j_agent_memory.llm.defaults.EMBEDDING_DIMENSIONS` to populate `dimensions` automatically. For unknown models, pass an explicit instance with `dimensions=N` (see below).
+* **Explicit Provider instance** — construct the adapter directly for kwargs the string form can't express, for example `OpenAIEmbeddingProvider("openai/text-embedding-3-large", dimensions=1024, batch_size=200)` to request OpenAI's dimension reduction and a larger embedding batch size.
 
 == Use local sentence-transformers
 
@@ -58,15 +50,22 @@ No API key needed; embeddings stay on your machine.
 
 [source,python]
 ----
+import os
 from neo4j_agent_memory import MemorySettings
 
 settings = MemorySettings(
-    neo4j={"password": "p"},
+    backend="bolt",
+    neo4j={
+        "uri": os.environ["NEO4J_URI"],
+        "username": os.environ["NEO4J_USERNAME"],
+        "password": os.environ["NEO4J_PASSWORD"],
+        "database": os.getenv("NEO4J_DATABASE", "neo4j"),
+    },
     embedding="BAAI/bge-small-en-v1.5",      # 384 dims
 )
 ----
 
-Install: `pip install neo4j-agent-memory[sentence-transformers]`. First call downloads the model (~50-500 MB depending on choice). Subsequent calls hit the local cache.
+Install: `pip install 'neo4j-agent-memory[sentence-transformers]==0.6.0'`. First call downloads the model (~50-500 MB depending on choice). Subsequent calls hit the local cache.
 
 Tune the device:
 
@@ -100,17 +99,24 @@ embedder = OpenAIEmbeddingProvider("openai/my-unreleased-model")
 embedder = OpenAIEmbeddingProvider("openai/my-unreleased-model", dimensions=2048)
 ----
 
-Sentence-transformers is the one exception: when the model is not in the defaults table, the adapter introspects `model.get_sentence_embedding_dimension()` on first `embed()` call, at the cost of a one-time model-download delay.
+The current `SentenceTransformersProvider` also requires `dimensions=` for an unknown model and raises at construction if it is omitted. It does not infer unknown dimensions on the first embedding call. Verify the declared dimension against an actual vector.
 
 == Use AWS Bedrock embeddings
 
 [source,python]
 ----
+import os
 from neo4j_agent_memory import MemorySettings
 from neo4j_agent_memory.llm.adapters.bedrock import BedrockEmbeddingProvider
 
 settings = MemorySettings(
-    neo4j={"password": "p"},
+    backend="bolt",
+    neo4j={
+        "uri": os.environ["NEO4J_URI"],
+        "username": os.environ["NEO4J_USERNAME"],
+        "password": os.environ["NEO4J_PASSWORD"],
+        "database": os.getenv("NEO4J_DATABASE", "neo4j"),
+    },
     embedding=BedrockEmbeddingProvider(
         "bedrock/amazon.titan-embed-text-v2:0",
         aws_region="us-east-1",
@@ -125,11 +131,18 @@ The adapter delegates to the existing `BedrockEmbedder` and reads the standard b
 
 [source,python]
 ----
+import os
 from neo4j_agent_memory import MemorySettings
 from neo4j_agent_memory.llm.adapters.vertex_ai import VertexAIEmbeddingProvider
 
 settings = MemorySettings(
-    neo4j={"password": "p"},
+    backend="bolt",
+    neo4j={
+        "uri": os.environ["NEO4J_URI"],
+        "username": os.environ["NEO4J_USERNAME"],
+        "password": os.environ["NEO4J_PASSWORD"],
+        "database": os.getenv("NEO4J_DATABASE", "neo4j"),
+    },
     embedding=VertexAIEmbeddingProvider(
         "vertex_ai/gemini-embedding-001",
         project_id="my-gcp-project",
@@ -139,23 +152,23 @@ settings = MemorySettings(
 )
 ----
 
-`gemini-embedding-001` is the current Vertex AI embedding model; `text-embedding-004`
-and the `textembedding-gecko*` family were retired by Google and now raise an error
-naming the replacement.
-The underlying `VertexAIEmbedder` truncates to 768 dimensions by default (the model
-emits 3072 natively) so that vector indexes created against the previous default keep
-working -- pass `dimensions=` here to match whatever you configure there. See
-xref:how-to/integrations/google-cloud.adoc#vertex-ai-embedding-models[the Vertex AI
-model table] for the trade-off.
+The underlying `VertexAIEmbedder` supports `gemini-embedding-001` and defaults
+to 768 output dimensions. The current `VertexAIEmbeddingProvider` does not
+forward its `dimensions` argument as `output_dimensionality` to that embedder.
+Keep this wrapper at 768 dimensions and verify the output length. Setting the
+wrapper to 1536 or 3072 can advertise a dimension different from what it returns.
+For other dimensions, use an application-owned `EmbeddingProvider` that actually
+produces the declared shape; this page does not supply a wrapper fix.
 
-Vertex AI as a *chat* provider routes through LiteLLM (no native LLM adapter). Embeddings are native because the existing Vertex AI embedder predates the Protocol and is well-tested.
+Vertex AI chat calls route through LiteLLM; this native adapter covers embeddings.
+See xref:how-to/integrations/google-cloud.adoc#vertex-ai-embedding-models[the Vertex AI model table] for the underlying embedder configuration.
 
 == Configure via the MCP CLI
 
 [source,bash]
 ----
 neo4j-agent-memory mcp serve \
-  --password mypw \
+  --backend bolt --uri "$NEO4J_URI" --user "$NEO4J_USERNAME" \
   --embedding BAAI/bge-small-en-v1.5 \
   --embedding-dimensions 384      # override for unknown models
 ----
@@ -165,7 +178,7 @@ Or env var:
 [source,bash]
 ----
 export NAM_EMBEDDING=BAAI/bge-small-en-v1.5
-neo4j-agent-memory mcp serve --password mypw
+neo4j-agent-memory mcp serve --backend bolt --uri "$NEO4J_URI" --user "$NEO4J_USERNAME"
 ----
 
 == Verify dimensions at runtime
@@ -179,17 +192,18 @@ assert embedder.dimensions == 384
 
 # The vector should match
 vector = await embedder.embed_one("test sentence")
-assert len(vector) == 384
+assert len(vector) == embedder.dimensions
+print("Verified vector dimensions:", len(vector))
 ----
 
 == Migrate between embedding models
 
-`MemoryClient.connect()` raises `EmbeddingDimensionMismatchError` if you change embedding model and existing vector indexes have a different size. The error lists every offending index and points at the migration runbook.
+`MemoryClient.connect()` raises `EmbeddingDimensionMismatchError` if existing managed vector indexes have a different size. It does not detect a same-dimension model change or verify every stored vector. The error lists every offending index and points at the migration runbook.
 
-See xref:how-to/migrate-embedding-model.adoc[Migrate Embedding Model] for the three remediation options (rebuild, revert, re-embed in place).
+See xref:how-to/migrate-embedding-model.adoc[Migrate to a new embedding model] for the three remediation options (rebuild, revert, re-embed in place).
 
-== Related
+== See also
 
-* xref:how-to/bring-your-own-model.adoc[Bring Your Own Model] — overview.
-* xref:how-to/migrate-embedding-model.adoc[Migrate Embedding Model] — when changing dimensions.
+* xref:how-to/bring-your-own-model.adoc[Bring your own model] — overview.
+* xref:how-to/migrate-embedding-model.adoc[Migrate to a new embedding model] — when changing dimensions.
 * xref:reference/configuration.adoc[Configuration Reference].

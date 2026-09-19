@@ -1,263 +1,128 @@
-= Multi-Tenant Memory
+= Associate memory with users and select scoped reads
 :page-product: agent-memory
 :toclevels: 2
 
-How to scope conversations, traces, and preferences to a user identity
-in production. The SDK makes user identity a first-class concept — a
-`:User` node and per-user scoping logic you no longer have to roll
-yourself.
+include::partial$backend-both.adoc[]
 
-[NOTE]
-====
-**Two scoping models, one per backend.** The Python SDK against Bolt
-exposes a rich multi-tenancy surface — first-class `:User` nodes
-(`client.users.upsert_user(...)`), a universal `user_identifier=` kwarg
-on writes, and bi-temporal preference supersedence. NAMS (used by both
-Python and TypeScript over HTTP) exposes a simpler model:
-conversation-level user scoping via `userId` on `createConversation`.
-This page covers the Bolt-side primitives in detail; the TypeScript /
-NAMS counterpart is xref:how-to/multi-tenancy.adoc#typescript-counterpart[at the bottom].
-====
+To associate Bolt conversation writes and preferences with a user, pass the identifier only to supported operations and use an explicitly scoped read. This guide does not establish user authentication or database access control.
 
-== Goal
+// Retain former section URLs at the current related topic.
+== Prerequisites
 
-image::diagrams/multi-tenant-scoping.png[Multi-tenant scoping: two User nodes each owning separate Conversations and Preferences in a shared Neo4j instance,width=540,align=left]
+anchor:_steps[]
 
-Two users sharing a Neo4j instance, with reads and writes scoped per
-user and zero application-level Cypher:
+* A connected Python `MemoryClient` using Bolt and a database intended for this application.
+* An application-authenticated user identifier. Do not accept another user's identifier directly from an untrusted request.
+* The current xref:reference/backend-capabilities.adoc#scope[scope limitations], especially the ignored `session_id` filter in Bolt semantic message search. Use separate authorized databases where independent tenant isolation is required.
 
-[source,python]
-----
-async with MemoryClient(settings) as client:
-    await client.users.upsert_user(identifier="sara@omg.com", attributes={"role": "manager"})
-    await client.users.upsert_user(identifier="liam@omg.com", attributes={"role": "consultant"})
+// Retain former section URLs at the current related topic.
+== 1. Associate supported writes with a user
 
-    # Sara's conversation, scoped via user_identifier=
-    await client.short_term.add_message(
-        "sara-2026-05-01", "user", "Find me a healthcare team",
-        user_identifier="sara@omg.com",
-    )
+anchor:_1_upsert_the_user[]anchor:_2_pass_user_identifier_on_writes[]anchor:_what_ports_cleanly[]
 
-    # Liam's conversation, scoped separately via user_identifier=
-    await client.short_term.add_message(
-        "liam-2026-05-01", "user", "Find me a fintech team",
-        user_identifier="liam@omg.com",
-    )
+.Two `:User` nodes, each with its own conversation, messages, and preferences in one shared Neo4j instance
+image::diagrams/multi-tenant-scoping.svg["Two :User nodes, each linked by a HAS_CONVERSATION relationship to its own Conversation, with that user's messages and preferences shown alongside, all held in one shared Neo4j instance. A caption notes that user_identifier= scopes only the operations that accept it",width=100%,link=self]
 
-    # Sara's preference, attached to her :User node
-    await client.long_term.add_preference(
-        "consultants",
-        "Senior on healthcare clients",
-        user_identifier="sara@omg.com",
-        applies_to=[EntityRef(name="Healthcare", type="Industry")],
-    )
-
-    # Read back: bootstrap query collapses to one call
-    prefs = await client.long_term.get_preferences_for("sara@omg.com")
-----
-
-== Steps
-
-=== 1. Upsert the user
-
-Idempotent — safe to call on every request or session start:
+The following fragments run inside `async with MemoryClient(settings) as client:`. They use synthetic identities and do not require a model call for the demonstrated writes.
 
 [source,python]
 ----
-user = await client.users.upsert_user(
-    identifier="sara@omg.com",
-    attributes={"role": "manager", "team": "consulting"},
-)
-----
+await client.users.upsert_user(identifier="sara-demo")
+await client.users.upsert_user(identifier="liam-demo")
 
-Identifiers are typically email addresses, but anything stable works.
-The library enforces a unique constraint on `User.identifier` at the
-database level.
-
-=== 2. Pass `user_identifier=` on writes
-
-`user_identifier` is an optional kwarg on the short-term,
-long-term, and reasoning memory APIs.  When
-`MemorySettings.memory.multi_tenant=True` is set, the library
-enforces that every write includes a `user_identifier`; omitting it
-raises a `ValueError` at the call site.
-
-[source,python]
-----
-# Short-term: scope conversations per user
 await client.short_term.add_message(
-    "sara-2026-05-01", "user", "Find me a healthcare team",
-    user_identifier="sara@omg.com",
+    "sara-demo-session", "user", "Please use concise answers.",
+    user_identifier="sara-demo",
+    extract_entities=False,
+    generate_embedding=False,
 )
-
-# Long-term: scope preferences per user
-await client.long_term.add_preference(
-    "consultants",
-    "Senior on healthcare",
-    user_identifier="sara@omg.com",
-    applies_to=[EntityRef(name="Healthcare", type="Industry")],
-)
-
-# Reasoning: scope traces per user
-trace = await client.reasoning.start_trace(
-    "sara-2026-05-01", "consultant search",
-    user_identifier="sara@omg.com",
+pref = await client.long_term.add_preference(
+    "communication", "Use concise answers",
+    user_identifier="sara-demo",
+    generate_embedding=False,
 )
 ----
 
-=== 3. Read back with `get_preferences_for`
+`user_identifier` is accepted by particular message, preference and trace write methods. It is not accepted by every API; for example, Bolt `add_entity` does not take this argument. `memory.multi_tenant=True` requires it on specific write paths but does not make all reads user-scoped.
+
+// Retain former section URLs at the current related topic.
+== 2. Read preferences through the user relationship
+
+anchor:_3_read_back_with_get_preferences_for[]
 
 [source,python]
 ----
-# All active preferences for Sara
-prefs = await client.long_term.get_preferences_for("sara@omg.com")
-
-# Only preferences scoped to Healthcare
-prefs = await client.long_term.get_preferences_for(
-    "sara@omg.com",
-    applies_to=EntityRef(name="Healthcare", type="Industry"),
-)
-
-# Include superseded preferences (history)
-prefs = await client.long_term.get_preferences_for(
-    "sara@omg.com", active_only=False
-)
+sara_preferences = await client.long_term.get_preferences_for("sara-demo")
+liam_preferences = await client.long_term.get_preferences_for("liam-demo")
+assert any(item.id == pref.id for item in sara_preferences)
+assert all(item.id != pref.id for item in liam_preferences)
+print("The new preference belongs to sara-demo.")
 ----
 
-=== 4. Supersede preferences over time
+These writes disable embedding-based preference deduplication so the fixture creates a distinct preference. Default duplicate lookup can reuse a global preference node and link multiple users to it; superseding that shared node affects all linked users. Review ownership before revising existing data.
 
-When a user changes their mind, `supersede_preference` writes
-`(:Preference)-[:SUPERSEDED_BY]->(:Preference)` and sets `valid_until`
-on the old preference so time-travel queries return the right
-snapshot:
+`get_preferences_for` selects preferences connected to the requested user. `search_preferences` instead performs semantic search and does not automatically use that user. Entity search and trace similarity search also have their own scopes.
+
+// Retain former section URLs at the current related topic.
+== 3. Read the intended conversation
+
+anchor:_bridging_the_two_patterns[]
 
 [source,python]
 ----
-old = await client.long_term.add_preference(
-    "consultants", "Junior", user_identifier="sara@omg.com"
-)
-new = await client.long_term.add_preference(
-    "consultants", "Senior", user_identifier="sara@omg.com"
-)
-await client.long_term.supersede_preference(old.id, new.id)
-
-# Active only — returns just the new preference
-active = await client.long_term.get_preferences_for("sara@omg.com")
-
-# Time-travel — what did Sara prefer at that instant?
-from datetime import datetime, timedelta
-
-snapshot = await client.long_term.get_preferences_for(
-    "sara@omg.com",
-    as_of=datetime.utcnow() - timedelta(days=1),
-    active_only=False,
-)
+conversation = await client.short_term.get_conversation("sara-demo-session")
+assert conversation is not None
+assert any(message.content == "Please use concise answers." for message in conversation.messages)
+print("Read the intended conversation.")
 ----
 
-== Schema
+Authorize the session before this call. Do not replace it with `search_messages(session_id=...)` and infer equivalent isolation: the current Bolt search does not apply that filter. Combined `get_context` is also not a tenancy boundary.
 
-A multi-tenant graph contains:
+// Retain former section URLs at the current related topic.
+== 4. Supersede a preference explicitly
 
-* `(:User {id, identifier, attributes_json, created_at})` — one per user, identifier-unique.
-* `(:User)-[:HAS_PREFERENCE]->(:Preference)` — written by `add_preference(user_identifier=...)`.
-* `(:Preference)-[:APPLIES_TO]->(:Entity)` — written by `add_preference(applies_to=[...])`.
-* `(:Preference)-[:SUPERSEDED_BY]->(:Preference)` — written by `supersede_preference`.
-* `Preference.valid_from` and `Preference.valid_until` — bi-temporal interval.
+anchor:_4_supersede_preferences_over_time[]
 
-== Roadmap
+[source,python]
+----
+replacement = await client.long_term.add_preference(
+    "communication", "Use detailed answers",
+    user_identifier="sara-demo",
+    generate_embedding=False,
+)
+await client.long_term.supersede_preference(pref.id, replacement.id)
+active = await client.long_term.get_preferences_for("sara-demo")
+assert any(item.id == replacement.id for item in active)
+assert all(item.id != pref.id for item in active)
+print("Only the replacement is active.")
+----
 
-The SDK's multi-tenancy surface covers user-scoped conversations,
-traces, and preferences, including the multi-tenant guardrails
-described above.
-Any remaining roadmap work is additive and does not change the
-recommended scoping model documented on this page.
+For `applies_to`, historical `as_of` reads, validity fields and constraints, see xref:reference/api/long-term.adoc[the long-term reference].
 
 [#typescript-counterpart]
+// Retain former section URLs at the current related topic.
 == TypeScript counterpart (NAMS)
 
-The TypeScript SDK targets the hosted NAMS service exclusively, which
-doesn't expose `client.users` or the universal `user_identifier=`
-primitive. Instead, user identity is carried on the `Conversation` node:
-create the conversation with a `userId`, and every message added to it
-inherits that scope.
+anchor:_goal[]anchor:_schema[]anchor:_roadmap[]
+
+NAMS separates workspaces through authentication. Within one workspace, explicitly create and retain a conversation ID; `userId` alone does not resume it or authorize the caller.
 
 [source,typescript]
 ----
 import { MemoryClient } from "@neo4j-labs/agent-memory";
 
-const memory = new MemoryClient();
-
-// Sara's conversation — userId tags every message added to this conv
-const saraConv = await memory.shortTerm.createConversation({
-  userId: "sara@omg.com",
-  metadata: { role: "manager", team: "consulting" },
-});
-
-await memory.shortTerm.addMessage(
-  saraConv.id, "user", "Find me a healthcare team",
-);
-
-// Liam's conversation — separate scope, same backend
-const liamConv = await memory.shortTerm.createConversation({
-  userId: "liam@omg.com",
-  metadata: { role: "consultant" },
-});
-
-await memory.shortTerm.addMessage(
-  liamConv.id, "user", "Find me a fintech team",
-);
-
-// List one user's conversations
-const sarasConvs = await memory.shortTerm.listConversations({
-  userId: "sara@omg.com",
-});
+const memory = new MemoryClient(); // MEMORY_API_KEY selects the workspace
+const conversation = await memory.shortTerm.createConversation({ userId: "sara-demo" });
+await memory.shortTerm.addMessage(conversation.id, "user", "Please use concise answers.");
+const saved = await memory.shortTerm.getConversation(conversation.id);
+console.log(saved);
 ----
 
-=== What ports cleanly
+NAMS does not expose the Bolt preference API. Use xref:tutorials/conversation-memory-typescript.adoc[the conversation recall lesson] for persisting and reusing an ID across processes, and xref:reference/authentication.adoc[authentication] for workspace selection.
 
-[cols="2,3", options="header"]
-|===
-|Python (Bolt) |TypeScript (NAMS)
+// Retain former section URLs at the current related topic.
+== Verification
 
-|`client.users.upsert_user(identifier, attributes)`
-|No direct equivalent. Attach user metadata via `createConversation({ userId, metadata: {...} })`.
+anchor:_see_also[]
 
-|`client.short_term.add_message(..., user_identifier=)`
-|`memory.shortTerm.addMessage(conversationId, role, content)` — scoping is on the conversation, not the message.
-
-|`client.long_term.add_preference(..., user_identifier=)`
-|`memory.longTerm.addPreference(category, preference)` — preferences are workspace-wide on NAMS, not per-user. To per-user-scope, attach the preference to a user-scoped entity instead.
-
-|`client.long_term.get_preferences_for(identifier, applies_to=, as_of=)`
-|`memory.longTerm.searchPreferences(query, { category })` — no built-in `as_of` time-travel; query Cypher with `client.query.cypher(...)` if you need it.
-
-|`client.reasoning.start_trace(..., user_identifier=)`
-|`memory.reasoning.startTrace(sessionId, task)` — pass `sessionId = conversationId` from the user-scoped conversation to inherit the scope.
-
-|`supersede_preference(old, new)` with bi-temporal `valid_until`
-|Not available on NAMS. Best workaround: write a new preference and rely on recency in retrieval, or use the Bolt backend if temporal preferences are required.
-|===
-
-=== Bridging the two patterns
-
-If you have a mixed Python (Bolt) + TypeScript (NAMS) deployment, the
-two SDKs read each other's entities (entities are shared) but not each
-other's user-scoped preferences (Bolt stores them on `:User` nodes,
-NAMS doesn't have `:User` nodes). For systems that need cross-language
-per-user preferences, either:
-
-* Run both SDKs against the same Bolt-backed Neo4j (the TS SDK is
-  NAMS-only, so this means proxying TS → NAMS-on-your-own-Neo4j is not
-  currently supported); or
-* Store per-user data as entities with a deterministic naming convention
-  (e.g. `Preference:sara@omg.com:food-italian`) that both SDKs can write
-  and read.
-
-See xref:explanation/multi-agent-sharing.adoc[Cross-Agent Memory Sharing] for the broader cross-language architecture.
-
-== See Also
-
-* xref:how-to/preferences.adoc[Manage Preferences]
-* xref:how-to/audit-reasoning.adoc[Audit Reasoning with TOUCHED Edges]
-* xref:reference/typescript-api.adoc[TypeScript SDK API Reference]
-* xref:explanation/backends.adoc[Bolt vs NAMS]
+In a test database/workspace, use two identities and confirm each explicitly scoped read returns only its intended fixture. Test authorization separately. For any claimed semantic-search filtering, use overlapping vectors and highly ranked foreign-session rows, with and without metadata filters; unrelated text alone can hide a missing filter. See xref:reference/backend-capabilities.adoc[capabilities and limitations] before extending this pattern to other operations.

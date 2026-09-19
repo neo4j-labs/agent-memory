@@ -1,195 +1,93 @@
-= How-To Guides
+= How-to guides
 :page-product: agent-memory
-:page-pagination:
 :toclevels: 2
-:page-ad-icon: mortarboard
-:page-ad-title: Context Graphs: Agent Memory with Neo4j
-:page-ad-description: Build an AI agent that records its reasoning into Neo4j and query the trace to understand what it did and why.
-:page-ad-link: https://graphacademy.neo4j.com/courses/genai-context-graphs/?ref=docs-ad-genai-context-graphs
-:page-ad-underline-role: button
-:page-ad-underline: Enroll now
 
-Practical guides for accomplishing specific tasks with neo4j-agent-memory.
+Choose the task you need to complete. Check its backend and prerequisites before running commands. For a first guided exercise, start with xref:tutorials/index.adoc[a tutorial]; for signatures and defaults, use xref:reference/index.adoc[reference].
 
-[.lead]
-How-to guides are *task-oriented*. They take you through the steps required to solve a real-world problem. They assume you already know the basics and focus on building your **context graph**—the personalized knowledge structure that makes your agents intelligent.
+These guides are grouped the way the sidebar groups them, so a section heading here matches the sidebar category it belongs to.
 
-== Deployment & Backend
+// Retain former section URLs at the current related topic.
+== Pluggable providers
 
-Decide how to run agent memory: hosted service or self-hosted Neo4j.
+anchor:_deployment_backend[]anchor:_multi_agent_patterns[]anchor:_enterprise_use_cases[]
 
-[cols="1,2", options="header"]
-|===
-| Guide | What You'll Accomplish
+* xref:how-to/bring-your-own-model.adoc[Bring your own model] -- Wire a custom LLM or embedding provider into `MemoryClient` without waiting on a built-in integration.
+* xref:how-to/configure-llm-provider.adoc[Configure an LLM provider] -- Point extraction and reasoning at OpenAI, Anthropic, Vertex AI, Bedrock, or another supported provider.
+* xref:how-to/configure-embedding-provider.adoc[Configure an embedding provider] -- Choose and configure the embedder used for entity resolution and semantic search.
+* xref:how-to/migrate-to-providers.adoc[Migrate to pluggable providers] -- Move an existing client from the legacy hard-coded provider setup to the pluggable provider API.
+* xref:how-to/migrate-embedding-model.adoc[Migrate to a new embedding model] -- Re-embed stored memory after switching embedding models or dimensions.
 
-| xref:how-to/use-nams.adoc[Use NAMS (Hosted Service)]
-| Run agent memory with zero infrastructure. Get an API key, point `MemoryClient` at the hosted endpoint, and skip operating Neo4j entirely.
+== Hosted backend
 
-| xref:how-to/migrate-to-nams.adoc[Migrate from Bolt to NAMS]
-| Port an existing self-hosted deployment to the hosted service. Includes the full `NotSupportedError` reference for bolt-only methods.
+* xref:how-to/use-nams.adoc[Connect a Python application to NAMS] -- Authenticate and issue reads and writes against the hosted Neo4j Agent Memory Service.
+* xref:how-to/migrate-to-nams.adoc[Migrate a Python application to NAMS] -- Move a self-hosted Bolt deployment to the hosted backend with minimal code changes.
+* xref:how-to/use-ontologies.adoc[Activate and verify a workspace ontology] -- Turn on a domain ontology for a NAMS workspace and confirm it applies to new entities.
+* xref:how-to/team-memory-in-your-editor.adoc[Share team memory with an editor] -- Connect an editor's MCP client to a shared NAMS workspace for team-wide memory.
 
-| xref:how-to/multi-tenancy.adoc[Multi-Tenant Memory]
-| Use `user_identifier=` to scope writes and reads per end-user. Required for SaaS-style deployments where one backend serves many users.
-|===
+== Core operations
 
-== Multi-Agent Patterns
+* xref:how-to/messages.adoc[Store, retrieve, and summarize messages] -- Add conversation turns to short-term memory and read them back in order.
+* xref:how-to/entities.adoc[Store entities, relationships, and facts] -- Create POLE+O entities, link them with typed relationships, and record facts.
+* xref:how-to/preferences.adoc[Store and revise a user preference] -- Record a preference, then update or supersede it as the user's stated preference changes.
+* xref:how-to/deduplication.adoc[Merge a reviewed entity pair] -- Review a flagged `SAME_AS` duplicate pair and confirm or reject the merge.
 
-When two or more agents share a memory graph — whether across languages, frameworks, or services.
+== Entity extraction
 
-[cols="1,2", options="header"]
-|===
-| Guide | What You'll Accomplish
+* xref:how-to/entity-extraction.adoc[Extract and inspect entity candidates] -- Run the extraction pipeline over text and inspect the entities it finds.
+* xref:how-to/entity-extraction-schemas.adoc[Apply a custom entity extraction schema] -- Swap in a domain-specific GLiNER schema instead of the default POLE+O types.
+* xref:how-to/entity-extraction-batch.adoc[Account for batch and chunk extraction results] -- Reconcile entities extracted across batches or streamed document chunks.
 
-| xref:explanation/multi-agent-sharing.adoc[Cross-Agent Memory Sharing] _(concept)_
-| Understand the conversation-vs-entity namespace split, how Python and TypeScript agents share the same graph, and the typical multi-agent architecture.
+== Reasoning and audit
 
-| xref:how-to/multi-tenancy.adoc[Scope by `user_identifier`]
-| The per-user scoping primitive that keeps tenants isolated on a shared backend.
+* xref:how-to/reasoning-traces.adoc[Record and verify a failed tool call] -- Start a reasoning trace, record a tool call outcome, and verify what was captured.
+* xref:how-to/audit-reasoning.adoc[Audit reasoning with `:TOUCHED` edges] -- Query which entities a reasoning step touched using the `:TOUCHED` audit relationship.
 
-| xref:how-to/audit-reasoning.adoc[Audit Cross-Agent Reasoning]
-| Query `:TOUCHED` edges to answer "which agent affected which entity, and when?" One-hop traversal across the shared graph.
+== Operational features
 
-| xref:how-to/create-context-graph-mcp.adoc[Wire MCP into Multi-Agent Stacks]
-| Expose the memory surface as MCP tools so any MCP-aware agent (Claude Desktop, Cursor, custom dispatchers) shares the same graph.
-|===
+* xref:how-to/multi-tenancy.adoc[Associate memory with users and select scoped reads] -- Scope conversations, entities, and preferences to individual users in a multi-tenant deployment.
+* xref:how-to/buffered-writes.adoc[Buffered (fire-and-forget) writes] -- Decouple the response path from Neo4j round-trips with a bounded write queue.
+* xref:how-to/consolidation.adoc[Memory consolidation] -- Run dry-runnable hygiene jobs that dedupe entities, summarize traces, and archive old conversations.
+* xref:how-to/adopt-existing-graph.adoc[Adopt an existing domain graph] -- Attach the memory library's schema to nodes from a pre-existing Neo4j graph.
+* xref:how-to/privacy-and-audit.adoc[Privacy and audit] -- Encrypt sensitive memory fields at rest and audit who accessed what.
+* xref:how-to/evaluation.adoc[Evaluate memory quality] -- Run labelled regression cases against retrieval, audit, and preference quality.
+* xref:how-to/running-without-an-llm.adoc[Run without an LLM] -- Use local extractors and embedders so the client runs fully offline, with no API keys.
+* xref:how-to/batch-processing.adoc[Process documents in batch] -- Extract and store entities from a corpus of documents in one pass.
 
-== Core Context Graph Operations
+// Retain former section URLs at the current related topic.
+== Framework integrations
 
-Build and query your context graph—the foundation for personalized agent interactions.
+anchor:_core_context_graph_operations[]anchor:_entity_extraction_knowledge_building[]anchor:_agent_framework_integrations[]
 
-[cols="1,2", options="header"]
-|===
-| Guide | What You'll Accomplish
+See also xref:how-to/integrations/index.adoc[the integration chooser].
 
-| xref:how-to/messages.adoc[Store and Search Messages]
-| Add messages to conversations, search by semantic similarity, manage sessions, build conversation context.
+* xref:how-to/integrations/index.adoc[Agent framework integrations] -- Compare the available framework integrations and pick the one that fits your agent.
+* xref:how-to/integrations/langchain.adoc[Use with LangChain] -- Wire `neo4j-agent-memory` into a LangChain agent as memory and a retriever.
+* xref:how-to/integrations/llamaindex.adoc[Use with LlamaIndex] -- Use the package as a LlamaIndex memory backend.
+* xref:how-to/integrations/pydantic-ai.adoc[Use with PydanticAI] -- Inject memory as a PydanticAI dependency and expose memory tools to the agent.
+* xref:how-to/integrations/crewai.adoc[Use with CrewAI] -- Share memory across a CrewAI crew of agents.
+* xref:how-to/integrations/openai-agents.adoc[Use with the OpenAI Agents SDK] -- Add memory and memory tools to an agent built with the OpenAI Agents SDK.
+* xref:how-to/integrations/google-cloud.adoc[Use Vertex AI embeddings with Neo4j] -- Configure the Vertex AI embedder and size vector indexes for its output dimensions.
+* xref:how-to/integrations/google-adk.adoc[Use with Google ADK] -- Wire `Neo4jMemoryService` into a Google ADK `Runner` for agent memory.
+* xref:how-to/integrations/aws-strands.adoc[Use with Strands agents] -- Use the session manager and memory store tools with AWS Strands Agents.
+* xref:how-to/integrations/aws-bedrock-embeddings.adoc[Use Amazon Bedrock embeddings] -- Configure the Bedrock embedder as the client's embedding provider.
+* xref:how-to/integrations/aws-hybrid-memory.adoc[Route memory searches with the hybrid provider] -- Route AgentCore memory searches between built-in and Neo4j-backed memory.
+* xref:how-to/integrations/microsoft-agent.adoc[Use with Microsoft Agent Framework] -- Wire memory into a Microsoft Agent Framework `ChatAgent`, with optional GDS tools.
+* xref:how-to/create-context-graph-mcp.adoc[Add an MCP server to a context graph project] -- Add the memory MCP server to an existing context-graph project.
 
-| xref:how-to/entities.adoc[Work with Entities]
-| Create, update, and query entities in your context graph. Link entities to messages. Build relationship networks.
+// Retain former section URLs at the current related topic.
+== TypeScript
 
-| xref:how-to/preferences.adoc[Manage User Preferences]
-| Store and retrieve user preferences. Personalize agent responses. Learn from user behavior.
+anchor:_typescript_sdk_neo4j_labsagent_memory[]anchor:_how_to_guide_philosophy[]
 
-| xref:how-to/reasoning-traces.adoc[Record Reasoning Traces]
-| Capture agent reasoning steps and tool calls. Learn from past successes. Improve agent decisions over time.
-|===
-
-== Entity Extraction & Knowledge Building
-
-Automatically extract entities and relationships to populate your context graph from conversations and documents.
-
-[cols="1,2", options="header"]
-|===
-| Guide | What You'll Accomplish
-
-| xref:how-to/adopt-existing-graph.adoc[Adopt an Existing Domain Graph]
-| Layer agent memory on top of a graph that already exists in production. Attach the `:Entity` super-label and library-managed properties idempotently with `client.schema.adopt_existing_graph()`.
-
-| xref:how-to/entity-extraction.adoc[Configure Entity Extraction]
-| Set up spaCy, GLiNER, or LLM extractors. Create custom domain schemas for financial services, ecommerce, or any industry. Build multi-stage pipelines.
-
-| xref:how-to/running-without-an-llm.adoc[Run Without an LLM]
-| Use spaCy/GLiNER-only extraction with `llm=None`. Run in air-gapped environments or without an OpenAI key.
-
-| xref:how-to/batch-processing.adoc[Process Documents in Batch]
-| Extract entities from large document collections efficiently. Handle streaming for long documents. Import product catalogs or financial reports.
-
-| xref:how-to/deduplication.adoc[Handle Duplicate Entities]
-| Configure automatic deduplication. Review and merge flagged duplicates. Maintain a clean context graph.
-
-| Enable Location Geocoding _(coming soon)_
-| Add coordinates to location entities. Query locations by proximity. Build location-aware context.
-
-| Enrich Entities with External Data _(coming soon)_
-| Add Wikipedia descriptions and images to entities automatically. Enhance your context graph with external knowledge.
-|===
-
-== Agent Framework Integrations
-
-Connect neo4j-agent-memory to popular agent frameworks for persistent, shared context graphs.
-
-[cols="1,2", options="header"]
-|===
-| Guide | What You'll Accomplish
-
-| xref:how-to/integrations/pydantic-ai.adoc[Use with PydanticAI]
-| Integrate memory as a PydanticAI dependency. Create memory-enabled tools. Build shopping assistants and financial advisors.
-
-| xref:how-to/integrations/langchain.adoc[Use with LangChain]
-| Implement custom chat message history. Create context graph tools. Add callbacks for reasoning traces.
-
-| xref:how-to/integrations/llamaindex.adoc[Use with LlamaIndex]
-| Build context-aware retrievers combining documents and graph knowledge. Create RAG applications with persistent memory.
-
-| xref:how-to/integrations/crewai.adoc[Use with CrewAI]
-| Share context graphs across multiple agents. Build collaborative multi-agent systems with persistent shared memory.
-
-| xref:how-to/create-context-graph-mcp.adoc[Add MCP Server to create-context-graph Projects]
-| Connect Claude Desktop to scaffolded projects. Query domain-specific knowledge graphs through natural conversation.
-|===
-
-== TypeScript SDK (`@neo4j-labs/agent-memory`)
-
-The TypeScript SDK targets the hosted NAMS service. It runs on Node 22+, Bun, Deno, Cloudflare Workers, and Vercel Edge.
-Every guide below has a runnable counterpart in https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples[`typescript/examples/`].
-
-[cols="1,2", options="header"]
-|===
-| Guide | What You'll Accomplish
-
-| xref:how-to/typescript/authenticate.adoc[Authenticate]
-| API key handling, OAuth refresh, scope management for the TypeScript SDK.
-
-| xref:how-to/typescript/edge-runtime.adoc[Deploy to Edge Runtimes]
-| Run agent memory on Cloudflare Workers or Vercel Edge — the `fetch`-only transport works everywhere.
-
-| xref:how-to/typescript/vercel-ai.adoc[Vercel AI SDK Middleware]
-| Three-tier context injection + automatic persistence as a `LanguageModelV1Middleware`.
-
-| xref:how-to/typescript/nextjs-memory-chat.adoc[Next.js Memory Chat]
-| The flagship full-stack demo: a Next.js 16 App Router assistant with a live entity-graph rail, an extraction-status badge, and a reasoning-trace drawer.
-
-| xref:how-to/typescript/mcp.adoc[MCP Tools]
-| Wire the standard 12-tool memory surface into Claude Desktop, Cursor, or any MCP-aware client.
-
-| xref:how-to/typescript/langchain.adoc[LangChain JS]
-| `Neo4jChatMessageHistory` and `Neo4jEntityRetriever` duck-typed against LangChain JS.
-
-| xref:how-to/typescript/mastra.adoc[Mastra]
-| `Neo4jMastraMemory` provider for the Mastra agent framework.
-
-| xref:how-to/typescript/strands.adoc[AWS Strands Agents (JS)]
-| Session storage + conversation manager + reasoning hooks for the Strands JS SDK.
-
-| xref:how-to/typescript/observability.adoc[Observability]
-| Request/response logging, request-id correlation, OpenTelemetry-compatible event stream.
-
-| xref:how-to/typescript/handle-errors.adoc[Handle Errors]
-| The TS exception hierarchy, retry policy, and request-id propagation.
-
-| xref:how-to/typescript/troubleshooting.adoc[Troubleshooting]
-| Common failure modes and how to diagnose them.
-|===
-
-== Enterprise Use Cases
-
-These guides include examples for common enterprise scenarios:
-
-* **Financial Services**: Client profiles, portfolio analysis, compliance tracking, advisory recommendations
-* **Ecommerce Retail**: Customer preferences, product recommendations, purchase history, personalized shopping
-
-== How-To Guide Philosophy
-
-Each guide follows a consistent structure:
-
-1. *Goal*: What you'll accomplish (one sentence)
-2. *Prerequisites*: What you need before starting
-3. *Steps*: Numbered, actionable instructions
-4. *Verification*: How to confirm it worked
-5. *See Also*: Related guides and reference material
-
-If you're new to neo4j-agent-memory, start with the xref:tutorials/index.adoc[Tutorials] first.
-
-For understanding the concepts behind these operations, see the xref:explanation/index.adoc[Explanation] section.
-
-For complete API details and configuration options, see the xref:reference/index.adoc[Reference] section.
+* xref:how-to/typescript/integrations-overview.adoc[TypeScript framework integrations] -- Compare the TypeScript SDK's framework integrations and pick the one that fits your app.
+* xref:how-to/typescript/edge-runtime.adoc[Deploy to edge runtimes] -- Run the TypeScript client in edge runtimes such as Vercel Edge Functions and Cloudflare Workers.
+* xref:how-to/typescript/vercel-ai.adoc[Integrate with the Vercel AI SDK] -- Add memory to a Vercel AI SDK application's chat loop.
+* xref:how-to/typescript/nextjs-memory-chat.adoc[Build a Next.js chat app with a memory rail] -- Build a Next.js chat UI backed by NAMS memory, with a live memory sidebar.
+* xref:how-to/typescript/mcp.adoc[Use the MCP tools] -- Call the hosted MCP server's tools from a TypeScript MCP client.
+* xref:how-to/typescript/langchain.adoc[Integrate with LangChain JS] -- Wire the TypeScript client into a LangChain JS agent as memory.
+* xref:how-to/typescript/mastra.adoc[Store Mastra threads in NAMS] -- Persist Mastra conversation threads in the hosted memory backend.
+* xref:how-to/typescript/strands.adoc[Integrate with AWS Strands Agents] -- Use the TypeScript client with AWS Strands Agents.
+* xref:how-to/typescript/observability.adoc[Enable request logging] -- Turn on request and response logging for the TypeScript client.
+* xref:how-to/typescript/authenticate.adoc[Authenticate a TypeScript client] -- Configure API key authentication for the TypeScript SDK against NAMS.
+* xref:how-to/typescript/handle-errors.adoc[Handle TypeScript REST errors] -- Catch and handle the typed error classes the TypeScript client's REST calls raise.
+* xref:how-to/typescript/troubleshooting.adoc[Troubleshooting] -- Diagnose common connection, authentication, and build issues with the TypeScript SDK.

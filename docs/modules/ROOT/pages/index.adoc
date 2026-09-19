@@ -13,375 +13,107 @@
 :page-ad-underline-role: button
 :page-ad-underline: Enroll now
 
-icon:flask[] *Neo4j Labs* · icon:database[] Graph-native memory for AI agents
+icon:flask[] *Neo4j Labs* · Graph memory for AI agents
 
-[.lead]
-Your agents forget everything. *Fix that.*
+Store conversations, entities, and application-recorded reasoning in Neo4j. Python and TypeScript clients can share a NAMS workspace; the Python SDK also connects directly to a Neo4j database through Bolt.
 
-Graph-native memory for single- and multi-agent systems. Three memory layers — conversations, entities, reasoning — in one graph. Available as a *hosted service* (zero infra, just an API key) or run against your own Neo4j. Python + TypeScript SDKs that interoperate.
+include::partial$labs-disclaimer.adoc[]
 
-[NOTE]
-====
-*Experimental · Community Supported*
-====
+// Retain former section URLs at the current related topic.
+== Choose your starting path
 
-== Pick your install
+anchor:_pick_your_install[]anchor:_quick_start[]
 
-[cols="1,3", options="header"]
+[cols="1,2,3",options="header"]
 |===
-|Path |Get started in ~30 seconds
-
-|*Hosted service (recommended for new projects)* +
-Sign up at link:https://memory.neo4jlabs.com[memory.neo4jlabs.com], get an API key, install one of the SDKs. No Neo4j to run.
-a|
-[source,bash]
-----
-# Python
-pip install neo4j-agent-memory
-export MEMORY_API_KEY=nams_...
-
-# TypeScript
-npm install @neo4j-labs/agent-memory
-export MEMORY_API_KEY=nams_...
-----
-
-See xref:tutorials/nams-quickstart.adoc[NAMS Quickstart (Python)] or xref:tutorials/hosted-quickstart-typescript.adoc[Hosted Quickstart (TypeScript)].
-
-|*Self-hosted Neo4j* +
-Bring your own Neo4j (Aura, Docker, Desktop). Full schema control, write-Cypher access, geospatial features.
-a|
-[source,bash]
-----
-pip install neo4j-agent-memory
-# Point at bolt://your-neo4j:7687
-----
-
-See xref:tutorials/first-agent-memory.adoc[Build Your First Memory-Enabled Agent].
+|Language |Backend |Start here
+|Python
+|NAMS hosted workspace
+|xref:tutorials/nams-quickstart.adoc[Store and retrieve hosted memory]
+|TypeScript
+|NAMS hosted workspace
+|xref:tutorials/hosted-quickstart-typescript.adoc[Use the hosted TypeScript SDK]
+|Python
+|Your Neo4j database through Bolt
+|xref:tutorials/first-agent-memory.adoc[Build your first memory context]
 |===
 
-xref:tutorials/first-agent-memory.adoc[Get Started] · xref:sdks/python.adoc[Python SDK] · xref:sdks/typescript.adoc[TypeScript SDK] · link:https://github.com/neo4j-labs/agent-memory[GitHub] · link:https://pypi.org/project/neo4j-agent-memory/[PyPI] · link:https://www.npmjs.com/package/@neo4j-labs/agent-memory[npm]
-
-== Three Memory Types, One Graph
-
-Most agent memory systems give you a flat context window or a simple vector store.
-Neo4j Agent Memory gives your agent three distinct memory layers — all connected in a single knowledge graph.
-
-image::diagrams/the-three-layer-memory-architecture.png[Three memory types: short-term, long-term, and reasoning, all backed by Neo4j,width=360,align=left]
-
-[cols="1,2,2", options="header"]
-|===
-|Memory Type |What It Stores |Key Features
-
-|icon:comments[] *Short-Term*
-|Conversations & experiences
-|Semantic message search, session scoping, metadata filters, LLM-powered summaries
-
-|icon:brain[] *Long-Term*
-|Facts, entities & preferences
-|POLE+O entity classification, entity deduplication, temporal fact validity, geospatial queries
-
-|icon:random[] *Reasoning*
-|Tool usage & reasoning traces
-|Trace similarity search, tool call statistics, message-linked traces, streaming trace recording
-|===
+NAMS is the recommended starting point when you want a managed workspace. Choose Bolt when you need client-side extraction configuration, preferences, facts, custom write Cypher or other database-specific operations. Review xref:reference/backend-capabilities.adoc[backend capabilities and data scope] before moving an example between them.
 
 [source,python]
 ----
-async with MemoryClient(settings) as memory:
-    # Short-term: store conversations
-    await memory.short_term.add_message(session_id, "user", "Find Italian restaurants near me")
-
-    # Long-term: build a knowledge graph
-    await memory.long_term.add_entity("La Trattoria", "ORGANIZATION", subtype="COMPANY")
-
-    # Reasoning: record how the agent solved problems
-    trace = await memory.reasoning.start_trace(session_id, task="Restaurant search")
-    await memory.reasoning.record_tool_call(step.id, "search_api", {"query": "Italian"}, results)
-    await memory.reasoning.complete_trace(trace.id, outcome="Recommended La Trattoria", success=True)
-
-    # Get unified context for LLM prompts
-    context = await memory.get_context("restaurant recommendation", session_id=session_id)
+async with MemoryClient(settings) as client:
+    await client.short_term.add_message("session-1", "user", "Hi!")
+    entity, _ = await client.long_term.add_entity("Acme Corp", "ORGANIZATION")
+    context = await client.get_context("what does the user need?")
 ----
+Abridged; see xref:tutorials/first-agent-memory.adoc[Build your first memory context] for the full program.
 
-== Multi-Agent Ready
+xref:getting-started.adoc[Setup and learning paths] · xref:sdks/python.adoc[Python SDK] · xref:sdks/typescript.adoc[TypeScript SDK] · https://github.com/neo4j-labs/agent-memory[GitHub]
 
-Multiple agents — even in different languages — can read and write the same memory graph. Conversations stay private per session; entities, preferences, and facts are shared.
+[#_three_memory_types_one_graph]
+// Retain former section URLs at the current related topic.
+== Three memory types, one graph
 
-[cols="1,2", options="header"]
+anchor:_framework_integrations[]anchor:_python_neo4j_agent_memory[]
+
+.Library memory layers and backend boundaries
+image::diagrams/the-three-layer-memory-architecture.svg["Conversations, entities and reasoning records connected through the selected memory backend",width=100%,link=self]
+
+[cols="1,2,3",options="header"]
 |===
-|Capability |How it works
-
-|icon:users[] *Shared knowledge graph*
-|Every agent in the system reads the same `Entity`, `Preference`, and `Fact` nodes. When Agent A learns something new, Agent B sees it on the next query — no manual sync.
-
-|icon:lock[] *Per-session isolation*
-|`session_id` (or `user_identifier=` for multi-tenant) keeps each agent's conversations and reasoning traces separate. One agent never reads another's chat history by accident.
-
-|icon:exchange[] *Cross-language by design*
-|A Python agent (PydanticAI, LangChain, CrewAI, Google ADK, AWS Strands) and a TypeScript agent (Vercel AI SDK, LangChain JS, Mastra, MCP) on the same NAMS endpoint share memory transparently. Both SDKs implement the same xref:reference/rest-api.adoc[NAMS REST contract].
-
-|icon:shield[] *Multi-tenant scoping*
-|Pass `user_identifier=` on any operation to scope writes and reads per end-user. One backend, many tenants — see xref:how-to/multi-tenancy.adoc[Multi-tenant memory].
-|===
-
-See xref:explanation/multi-agent-sharing.adoc[Cross-Agent Memory Sharing] for the conceptual model and xref:tutorials/nams-quickstart.adoc[NAMS Quickstart] for the deployment shape.
-
-== What Makes This Different
-
-[cols="1,3", options="header"]
-|===
-|Capability |Why It Matters
-
-|icon:sitemap[] *Graph-Native, Not Bolted On*
-|Built on Neo4j from the ground up. Entities, messages, traces, and preferences are all *nodes and relationships* — not rows in a table or chunks in a vector store. Query across memory types with a single traversal.
-
-|icon:search[] *Vector + Graph + Spatial in One*
-|Semantic similarity search, graph traversal, and geospatial queries all in *one database*. No separate vector DB, no Redis, no Postgres. Find entities by meaning, by relationship, or by location.
-
-|icon:cogs[] *Multi-Stage Entity Extraction*
-|Combine *spaCy, GLiNER2, GLiREL, and LLM extractors* in a configurable pipeline. 8 domain schemas (podcast, news, medical, legal...). Streaming extraction for 100K+ token documents.
-
-|icon:layers[] *Three Memory Layers, Connected*
-|Short-term conversations inform long-term entity extraction. Reasoning traces link back to triggering messages. The agent understands *what happened, what it knows, and how it solved things*.
-
-|icon:globe[] *Wikipedia Enrichment & Geocoding*
-|Entities are automatically enriched with *Wikipedia descriptions, images, and Wikidata IDs*. Location entities get coordinates for geospatial queries. All in the background.
-
-|icon:plug[] *Framework Agnostic*
-|Python: *LangChain, PydanticAI, LlamaIndex, CrewAI, OpenAI Agents, AWS Strands, Google ADK, Microsoft Agent Framework, AgentCore*. TypeScript: *Vercel AI SDK, LangChain JS, Mastra, AWS Strands, MCP tools*. Or use the client directly.
-
-|icon:cloud[] *Hosted or Self-Hosted*
-|Use the link:https://memory.neo4jlabs.com[NAMS hosted service] for zero-infra deployments, or run the same SDK against your own Neo4j (Aura, Desktop, Docker) when you need write-Cypher, geospatial, or air-gapped operation. See xref:explanation/backends.adoc[Bolt vs NAMS].
+|Memory layer |Stored information |How applications use it
+|Short-term
+|Conversation messages and metadata
+|Read a selected conversation or search messages; review the operation's scope before combining results into a prompt
+|Long-term
+|Entities and graph relationships; preferences and facts on Bolt
+|Retrieve relevant entities and, where supported, explicitly manage structured preferences and facts
+|Reasoning
+|Application-supplied traces, steps and tool calls
+|Inspect recorded actions and results; this does not expose a model's hidden reasoning
 |===
 
-== Demos
+See xref:explanation/memory-types.adoc[memory types] for the conceptual model and xref:reference/index.adoc[reference] for exact APIs. Persistence stores data; retrieval and a model call must be wired into the application for that data to influence a later answer.
 
-=== icon:podcast[] Lenny's Podcast Memory Explorer _(Flagship)_
+[#_multi_agent_ready]
+// Retain former section URLs at the current related topic.
+== Sharing memory between agents
 
-A podcast corpus transformed into a searchable knowledge graph with a full-stack AI chat agent, interactive graph visualization, geospatial map view, and Wikipedia-enriched entity cards. The real transcript corpus is not shipped with the repository — `make load-sample` runs against synthetic fixtures.
+anchor:_podcast_lennys_podcast_memory_explorer_flagship[]anchor:_newspaper_full_stack_chat_agent[]anchor:_typescript_neo4j_labsagent_memory[]anchor:_architecture[]anchor:_requirements[]
 
-[cols="^1,^1,^1", options="header"]
-|===
-|Episodes in the full corpus |Agent tools |Memory types
-|299 |28 |3
-|===
+Several agents can use the same workspace or database. Shared entities can connect their work, while conversation IDs identify individual conversations rather than enforce access control — see xref:reference/backend-capabilities.adoc#scope[identity and retrieval scope] for exactly what each identifier does and does not guarantee. See xref:how-to/multi-tenancy.adoc[associate users and select scoped reads] and xref:explanation/multi-agent-sharing.adoc[sharing tradeoffs].
 
-* Interactive graph visualization (Neo4j NVL)
-* Geospatial map with marker clusters & heatmaps
-* Wikipedia-enriched entity cards with images
-* SSE streaming with tool call visualization
-* Automatic preference learning from conversation
-* FastAPI + PydanticAI + Next.js + Chakra UI
+[#_what_makes_this_different]
+// Retain former section URLs at the current related topic.
+== Graph and extraction capabilities
 
-https://lennys-memory.vercel.app[Try Live Demo] | https://github.com/neo4j-labs/agent-memory/tree/main/examples/lennys-memory[View on GitHub]
+anchor:_entity_extraction_pipeline[]
 
-=== icon:newspaper[] Full-Stack Chat Agent
+* Connect conversation messages to entities and recorded actions in a graph.
+* Combine semantic retrieval with graph queries supported by the chosen backend.
+* Configure local or remote extraction/embedding providers on Bolt; NAMS manages its processing pipeline.
+* Add geocoding or enrichment on Bolt when explicitly enabled and configured. See xref:how-to/entities.adoc[entity tasks].
+* Integrate with supported agent frameworks through xref:how-to/integrations/index.adoc[Python integrations] or xref:how-to/typescript/integrations-overview.adoc[TypeScript integrations].
 
-A news research assistant that uses all three memory types with an interactive memory graph visualization. Double-click nodes to expand neighbors and explore the knowledge graph.
+Choose batch sizes and extraction limits for your model and workload; no universal large-document cutoff or throughput guarantee applies.
 
-* Memory graph visualization with expansion
-* Conversation-scoped graph filtering
-* Dual Neo4j databases (memory + news)
+// Retain former section URLs at the current related topic.
+== Find the documentation you need
 
-https://github.com/neo4j-labs/agent-memory/tree/main/examples/full-stack-chat-agent[View on GitHub]
+anchor:_documentation[]
 
-=== icon:flask[] Domain Schema Examples
+* xref:tutorials/index.adoc[Tutorials] — learn through a complete example.
+* xref:how-to/index.adoc[How-to guides] — complete a specific task.
+* xref:reference/index.adoc[Reference] — look up API contracts, settings and limits.
+* xref:explanation/index.adoc[Concepts] — understand architecture and tradeoffs.
+* xref:faq.adoc[FAQ] and xref:glossary.adoc[glossary].
 
-8 specialized extraction schemas for different domains. See how GLiNER2 domain schemas improve entity extraction accuracy with type descriptions and confidence tuning.
+// Retain former section URLs at the current related topic.
+== Community and examples
 
-_Schemas: Podcast · News · Scientific · Business · Medical · Legal · Entertainment · POLE+O_
+anchor:_demos[]anchor:_flask_domain_schema_examples[]anchor:_quick_links[]
 
-https://github.com/neo4j-labs/agent-memory/tree/main/examples/domain-schemas[View on GitHub]
+Run the Python lessons with the published `neo4j-agent-memory==0.6.0` package and the complete programs shown on each tutorial page. The xref:sdks/python.adoc[Python SDK guide] links the setup paths. Explore https://github.com/neo4j-labs/agent-memory/tree/main/examples[larger Python applications] and https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples[TypeScript source examples] using their own dependency and build instructions.
 
-== Quick Start
-
-[source,bash]
-----
-pip install neo4j-agent-memory[openai]
-----
-
-[source,python]
-----
-import asyncio
-from pydantic import SecretStr
-from neo4j_agent_memory import MemoryClient, MemorySettings
-
-async def main():
-    settings = MemorySettings(
-        neo4j={"uri": "bolt://localhost:7687", "password": SecretStr("password")}
-    )
-
-    async with MemoryClient(settings) as memory:
-        # Store a conversation
-        await memory.short_term.add_message("user-123", "user", "I love Italian food!")
-
-        # Build knowledge automatically
-        await memory.long_term.add_preference("food", "Loves Italian cuisine", confidence=0.9)
-
-        # Get combined context for your LLM
-        context = await memory.get_context("restaurant recommendation", session_id="user-123")
-        print(context)
-
-asyncio.run(main())
-----
-
-== Entity Extraction Pipeline
-
-image::diagrams/extraction-pipeline.png[Multi-stage extraction pipeline: spaCy → GLiNER2 → GLiREL → LLM → Knowledge Graph,width=360,align=left]
-
-Combine extractors in a configurable pipeline. 5 merge strategies. 8 domain schemas. Streaming extraction for 100K+ token documents.
-
-[cols="1,2,1", options="header"]
-|===
-|Stage |Purpose |Best for
-
-|icon:bolt[] spaCy
-|Fast rule-based & statistical NER
-|High throughput, no API cost
-
-|icon:crosshairs[] GLiNER2
-|Zero-shot NER with domain schemas
-|Accuracy without LLM cost
-
-|icon:link[] GLiREL
-|Relation extraction between entities
-|Graph edge extraction
-
-|icon:magic[] LLM fallback
-|High-accuracy extraction via API
-|Complex or ambiguous text
-|===
-
-== Framework Integrations
-
-=== Python (`neo4j-agent-memory`)
-
-[cols="1,2,1"]
-|===
-|Framework |Integration |Guide
-
-|*LangChain*
-|Memory & retriever
-|xref:how-to/integrations/langchain.adoc[LangChain guide]
-
-|*PydanticAI*
-|Deps & trace recording
-|xref:how-to/integrations/pydantic-ai.adoc[PydanticAI guide]
-
-|*LlamaIndex*
-|Memory nodes
-|xref:how-to/integrations/llamaindex.adoc[LlamaIndex guide]
-
-|*CrewAI*
-|Crew memory
-|xref:how-to/integrations/crewai.adoc[CrewAI guide]
-
-|*OpenAI Agents*
-|Session memory
-|xref:how-to/integrations/openai-agents.adoc[OpenAI Agents guide]
-
-|*AWS Strands*
-|Agent tools
-|xref:how-to/integrations/aws-strands.adoc[Strands guide]
-
-|*Google ADK*
-|MemoryService
-|xref:how-to/integrations/google-cloud.adoc[Google Cloud guide]
-
-|*Microsoft Agent Framework*
-|ContextProvider + GDS
-|xref:how-to/integrations/microsoft-agent.adoc[Microsoft Agent guide]
-
-|*AWS AgentCore*
-|HybridMemoryProvider
-|xref:how-to/integrations/aws-hybrid-memory.adoc[AgentCore guide]
-|===
-
-=== TypeScript (`@neo4j-labs/agent-memory`)
-
-[cols="1,2,1"]
-|===
-|Framework |Integration |Guide
-
-|*Vercel AI SDK*
-|Middleware (3-tier context injection + auto-persist)
-|xref:how-to/typescript/vercel-ai.adoc[Vercel AI guide]
-
-|*LangChain JS*
-|`Neo4jChatMessageHistory`, `Neo4jEntityRetriever`
-|xref:how-to/typescript/langchain.adoc[LangChain JS guide]
-
-|*Mastra*
-|`Neo4jMastraMemory` provider
-|xref:how-to/typescript/mastra.adoc[Mastra guide]
-
-|*AWS Strands (JS)*
-|Session storage + conversation manager
-|xref:how-to/typescript/strands.adoc[Strands guide]
-
-|*MCP tools*
-|12 standard tools + dispatcher (Node, Bun, Deno, Workers, Edge)
-|xref:how-to/typescript/mcp.adoc[MCP guide]
-|===
-
-== Architecture
-
-image::diagrams/architecture-overview.png[Architecture overview: MemoryClient with three memory layers backed by Neo4j,width=360,align=left]
-
-== Documentation
-
-[cols="1,2,2"]
-|===
-|Section |Purpose |Start here
-
-|icon:graduation-cap[] xref:tutorials/index.adoc[Tutorials]
-|Learn by building complete examples
-|xref:tutorials/first-agent-memory.adoc[Build your first memory-enabled agent]
-
-|icon:wrench[] xref:how-to/index.adoc[How-To Guides]
-|Practical recipes for common tasks
-|xref:how-to/entity-extraction.adoc[Configure entity extraction]
-
-|icon:book[] xref:reference/index.adoc[Reference]
-|Technical specifications and API docs
-|xref:reference/configuration.adoc[Configuration reference]
-
-|icon:lightbulb[] xref:explanation/index.adoc[Explanation]
-|Concepts and architecture
-|xref:explanation/memory-types.adoc[Understanding memory types]
-|===
-
-=== Quick Links
-
-[cols="1,2"]
-|===
-|Guide |Description
-
-|xref:tutorials/first-agent-memory.adoc[Build Your First Agent]
-|Installation, setup, and your first memory-enabled agent
-
-|xref:explanation/memory-types.adoc[Understanding Memory Types]
-|Deep dive into short-term, long-term, and reasoning memory
-
-|xref:how-to/entity-extraction.adoc[Configure Entity Extraction]
-|Domain schemas, multi-stage pipelines, and custom extractors
-
-|xref:reference/configuration.adoc[Configuration Reference]
-|Complete configuration options and environment variables
-
-|xref:how-to/integrations/pydantic-ai.adoc[Framework Integrations]
-|Using with PydanticAI, LangChain, LlamaIndex, and CrewAI
-|===
-
-== Requirements
-
-[cols="1,2", options="header"]
-|===
-|If you use… |You need…
-
-|*NAMS (hosted)*
-|Python 3.10+ *or* Node.js 20+. An API key from link:https://memory.neo4jlabs.com[memory.neo4jlabs.com]. _No Neo4j to run._
-
-|*Self-hosted (Bolt)*
-|Python 3.10+. Neo4j 5.20+ (Aura, Desktop, or Docker — APOC plugin recommended). Optional OpenAI/Anthropic/Bedrock/Vertex key for client-side embeddings and LLM extraction.
-|===
+Ask questions in the https://community.neo4j.com[community forum], report reproducible problems through https://github.com/neo4j-labs/agent-memory/issues[GitHub issues], and see https://github.com/neo4j-labs/agent-memory/blob/main/CONTRIBUTING.md[contributing] for development and documentation workflows.

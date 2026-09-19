@@ -1,15 +1,18 @@
-= LLM Provider API
+= LLM provider API reference
 :page-product: agent-memory
 :page-pagination:
-:toclevels: 3
-:sectanchors:
-:icons: font
-:source-highlighter: highlight.js
+:toclevels: 2
 
 Reference for the `neo4j_agent_memory.llm` Protocols, types, factory, and exception hierarchy.
 
 [.lead]
+These protocols describe client capabilities; their TCK tiers are not NAMS service versions or access tiers.
+
 Every adapter in `neo4j_agent_memory.llm.adapters` implements one or more of the Protocols below. Adapter constructors are documented separately at xref:reference/api/adapters.adoc[Adapters]. The factory is documented at xref:reference/api/factory.adoc[Factory].
+
+== Overview
+
+The module exposes three Protocols (`LLMProvider`, `StructuredExtractor`, `EmbeddingProvider`), the Pydantic types they use, an exception hierarchy, the `from_provider` factory, and the `schema_aligned_extract` helper. The sections below cover each in the order they appear in `neo4j_agent_memory.llm`'s public exports.
 
 == Module
 
@@ -72,7 +75,7 @@ Implementations MUST:
 * Translate SDK-specific errors to `ProviderError` subclasses.
 * Honor `temperature=0.0` as deterministic where the provider supports it.
 
-The `model` attribute is the canonical `"provider/model"` identifier. Adapters that accept bare names normalise to include the prefix.
+The protocol requires the canonical `"provider/model"` identifier in the `model` attribute. Adapters that accept bare names normalise to include the prefix.
 
 === `StructuredExtractor`
 
@@ -209,7 +212,7 @@ Generic structured-output path. Builds a system message containing the schema, p
 
 == Tolerant JSON parser
 
-`schema_aligned_extract` strips markdown fences, smart quotes, trailing commas, and finds the largest balanced `{...}` block. Truncated JSON (mid-string cutoff) surfaces as `json.JSONDecodeError` — the correct outcome, since it must trigger a retry.
+`schema_aligned_extract` strips markdown fences, smart quotes, trailing commas, and finds the largest balanced `\{...}` block. Truncated JSON (mid-string cutoff) surfaces as `json.JSONDecodeError` — the correct outcome, since it must trigger a retry.
 
 == Default model dimensions
 
@@ -218,9 +221,11 @@ Generic structured-output path. Builds a system message containing the schema, p
 * `EMBEDDING_DIMENSIONS: dict[str, int]` — known model → dimensions.
 * `lookup_embedding_dimensions(model: str) -> int | None` — tolerant lookup with and without provider prefix.
 
-For models not in the table, embedding adapters require an explicit `dimensions=N` constructor argument.
+For models not in the table, pass an explicit `dimensions=N` constructor argument.
 
-== Related
+anchor:_related[]
+
+== See also
 
 * xref:reference/api/adapters.adoc[Adapters Reference] — constructor signatures for every adapter.
 * xref:reference/api/factory.adoc[Factory Reference] — `from_provider` details.

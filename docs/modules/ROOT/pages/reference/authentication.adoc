@@ -1,7 +1,12 @@
-= Authentication & API Keys
+= Authentication and API keys
 :page-product: agent-memory
 :toclevels: 2
 :icons: font
+
+[NOTE]
+====
+This page describes the service contract used by this checkout. The SDK source alone does not verify a deployed service, dashboard, quota or authentication configuration. Check the authenticated service response and current workspace settings when following operational instructions.
+====
 
 How the hosted NAMS backend authenticates requests, where API keys come from, and how to handle them safely. This page is language-neutral; for SDK-specific setup see xref:how-to/use-nams.adoc[Use NAMS] (Python) and xref:how-to/typescript/authenticate.adoc[Authentication] (TypeScript).
 
@@ -80,9 +85,9 @@ Keys are created and managed from the dashboard at link:https://memory.neo4jlabs
 
 | Create | `POST /v1/auth/api-keys` — body `{label, category, workspaceId?}`. Returns the raw key once; also stored encrypted-at-rest so it can be revealed later.
 | List | `GET /v1/auth/api-keys`
-| Reveal | `GET /v1/auth/api-keys/{id}/reveal` — owner-only (non-owners get `404`; revoked or pre-encryption keys get `410`).
-| Rotate | `POST /v1/auth/api-keys/{id}/rotate` — mints a new key and revokes the old one.
-| Revoke | `DELETE /v1/auth/api-keys/{id}` — added to a blocklist for 30 days; effective on the next request.
+| Reveal | `GET /v1/auth/api-keys/\{id}/reveal` — owner-only (non-owners get `404`; revoked or pre-encryption keys get `410`).
+| Rotate | `POST /v1/auth/api-keys/\{id}/rotate` — mints a new key and revokes the old one.
+| Revoke | `DELETE /v1/auth/api-keys/\{id}` — added to a blocklist for 30 days; effective on the next request.
 |===
 
 Key management requires a **user token or an admin key**, so a leaked workspace
@@ -120,7 +125,7 @@ with `category: "workspace"` directly. See xref:reference/rest-api.adoc[REST API
 
 == Handling keys safely
 
-* **Never commit a key.** Keep `nams_…` values in environment variables or a secrets manager; commit only `nams_xxxx` placeholders in examples and `.env.example` files.
-* **Scope per environment.** Use separate keys (and workspaces) for dev, staging, and production so one leak is contained.
-* **Rotate on exposure.** If a key leaks, `rotate` (or `revoke` + create); revocation is effectively immediate via the blocklist.
-* **Prefer short-lived tokens for browser contexts.** Use the Auth0 JWT exchange for dashboard/user sessions rather than embedding a long-lived API key in a client.
+* `nams_…` values are the credential; the service stores them encrypted-at-rest but transmits and displays them as plaintext, so examples and `.env.example` files in this repository use `nams_xxxx` placeholders, never a real key.
+* A workspace key is bound to one workspace (see "Key categories" above); using a separate key per environment (dev/staging/production) confines a single leak to one workspace instead of the whole account.
+* Rotation (`POST /v1/auth/api-keys/\{id}/rotate`) mints a replacement and revokes the original; revocation alone (`DELETE /v1/auth/api-keys/\{id}`) also works. Both take effect via the 30-day blocklist described under "Key lifecycle" above.
+* The Auth0 JWT exchange issues a short-lived (≈1h) token for dashboard/browser sessions; a `nams_…` API key carries the longer ~90-day static-key window noted under "Key format & the wire" above, so it is the higher-exposure credential to embed in a browser context.

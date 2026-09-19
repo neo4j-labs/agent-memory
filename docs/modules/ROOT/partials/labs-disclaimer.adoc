@@ -1,0 +1,6 @@
+[IMPORTANT]
+====
+*Neo4j Labs project*
+
+This project is part of Neo4j Labs and is actively maintained, but not officially supported. There are no SLAs or guarantees around backwards compatibility and deprecation. For questions and support, please use the https://community.neo4j.com[Neo4j Community Forum].
+====

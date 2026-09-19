@@ -1,617 +1,110 @@
-= Store and Search Messages
+= Store, retrieve, and summarize messages
 :page-product: agent-memory
 :page-pagination:
-:toclevels: 3
+:toclevels: 2
 :sectanchors:
-:icons: font
-:source-highlighter: highlight.js
 
-How to store conversation messages and retrieve them using semantic search.
+include::partial$backend-both.adoc[]
 
-image::diagrams/message-chain.png[Message chain: Conversation linked to Messages via FIRST_MESSAGE and NEXT_MESSAGE, with MENTIONS edges to entities,width=600,align=left]
+To retain an ordered conversation and retrieve it later, write messages with a known session ID, read that conversation, and compare stored message IDs. Use semantic search separately when you want ranked candidates.
 
-[NOTE]
+.A conversation with linked messages in chronological order
+image::diagrams/message-chain.svg["A conversation with linked messages in chronological order",width=100%,link=self]
+
+For the rationale, see xref:explanation/memory-types.adoc[Understanding the three memory types].
+
+anchor:_prerequisites[]
+
+== 1. Prepare the Bolt client
+
+Use a dedicated AuraDB instance from xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the first memory tutorial's Aura setup], with exported `NEO4J_URI`, `NEO4J_USERNAME`, and `NEO4J_PASSWORD`. Set `OPENAI_API_KEY` for the selected embedding provider. Prepare the example files below and install the provider extra:
+
+include::partial$python-tutorial-setup.adoc[]
+
+[source,bash]
+----
+python -m pip install 'neo4j-agent-memory[openai]==0.6.0'
+----
+
+include::partial$python-core-recipe-intro.adoc[]
+
+include::partial$python-core-recipe-files.adoc[]
+
+== 2. Apply the task function
+
+The batch supplies explicit roles and searchable metadata. `get_conversation(session).messages` performs the session-specific readback. The custom summarizer demonstrates the callable contract; replace its fixed demonstration text with a summarizer that processes the supplied transcript.
+
+The function below is included from the complete maintained program, which already supplies imports, client setup, unique IDs, and `asyncio.run`. Run the file in step 3; this extract is not a separate top-level script.
+
+[source,python]
+----
+include::example$core_memory_recipes.py[tag=messages]
+----
+
+== 3. Run and verify
+
+[source,bash]
+----
+python core_memory_recipes.py messages
+----
+
+Expected: the summary text, up to five search candidates with similarity values, and `Verified: ordered message IDs and summary count; session=...`. The ID assertion checks order and persistence. Search scores/order can vary and are not the storage assertion.
+
+The command retains its example records for inspection. Remove the disposable tutorial database using that tutorial's cleanup command when finished. Do not substitute an unrestricted delete query against an existing database.
+
+anchor:_filter_by_session[]
+
+== Retrieve only the intended conversation
+
+[WARNING]
 ====
-This page's prose and the deeper examples (custom summaries,
-metadata-filtered search, time-range search, batch import) target the
-**Python SDK against a Bolt-connected Neo4j**. The canonical operations
-(add message, search, list sessions, get conversation, delete) port
-cleanly to the **TypeScript SDK against NAMS** — `[tabs]` blocks below
-show both. For TypeScript-specific patterns (Vercel AI middleware,
-edge runtime) see xref:how-to/index.adoc[the TypeScript SDK section of the how-to index]
-and xref:reference/typescript-api.adoc[the TypeScript API reference].
+`short_term.search_messages` accepts a `session_id` keyword, but on the current Bolt implementation the underlying Cypher (`SEARCH_MESSAGES_BY_EMBEDDING`) never filters on it, so results can cross sessions. Do not use it to enforce user isolation. Authorize the caller's session ID yourself before passing it to `get_conversation`. The example's semantic search is explicitly database-wide and runs only on the disposable example data.
 ====
 
-== TypeScript equivalents at a glance
+`get_conversation` accepts `limit` and `since`; `limit=None` currently fetches at most 1,000 messages, then applies the timestamp filter in Python. For larger histories, specify the intended bound or implement a scoped Cypher pagination query. See xref:reference/api/short-term.adoc[exact message contracts].
 
-[cols="2,2,2", options="header"]
+anchor:_manage_sessions[]
+
+== Choose the related operation
+
+[cols="2,4",options="header"]
 |===
-|Operation |Python (Bolt) |TypeScript (NAMS)
-
-|Add a message
-|`client.short_term.add_message(session_id, role, content)`
-|`memory.shortTerm.addMessage(conversationId, role, content)`
-
-|Search messages
-|`client.short_term.search_messages(query, limit=)`
-|`memory.shortTerm.searchMessages(query, { limit })`
-
-|List sessions/conversations
-|`client.short_term.list_sessions()`
-|`memory.shortTerm.listConversations({ userId })`
-
-|Get a conversation
-|`client.short_term.get_conversation(session_id)`
-|`memory.shortTerm.getConversation(conversationId)`
-
-|Delete a session/conversation
-|`client.short_term.delete_session(session_id)`
-|`memory.shortTerm.clearSession(conversationId)` _or_ `deleteConversation(id)`
-
-|Three-tier context (recent + observations + reflections)
-|`client.get_context(query, session_id=)`
-|`memory.shortTerm.getContext(conversationId)`
-
-|Bulk-load messages
-|`client.short_term.add_messages_batch(messages, session_id)`
-|`memory.shortTerm.bulkAddMessages(conversationId, messages)`
-
-|Metadata-filtered search
-|`client.short_term.search_messages(query, metadata_filter={...})`
-|_Not built-in. Use `client.query.cypher(...)` against NAMS Cypher endpoint, or fetch + filter in JS._
-
-|Time-range search (`after=`)
-|`client.short_term.search_messages(query, after=ts)`
-|_Not built-in. Filter client-side on `message.timestamp` from `getConversation()` result._
-
-|Auto-summarize
-|`client.short_term.summarize_session(session_id)`
-|_Not exposed. NAMS surfaces inline observations and reflections via `getObservations()` / `getReflections()` — see "Generate summaries" below._
+|Task |Supported approach
+|Bulk import |`add_messages_batch`; inspect returned IDs and progress callbacks. `bulk_add_messages` is a separate backend-dependent compatibility method.
+|Discover a user's conversations |`list_conversations(user_identifier=...)`; this is association filtering, not caller authorization.
+|Discover session identifiers |`list_sessions(prefix=..., limit=..., offset=...)`; a naming prefix is not access control.
+|Generate a summary |`get_conversation_summary`; an explicit callable overrides the configured provider. There is no `generate_summary`/`get_summary` pair.
+|Build a model request |Read the selected conversation and `get_preferences_for(user_identifier)` explicitly; see xref:tutorials/conversation-memory.adoc[the complete chatbot].
+|Remove a session |`clear_session(session_id)` affects linked data; inspect its reference contract before deletion. There is no `delete_session` wrapper.
 |===
 
-== Prerequisites
-
-* Neo4j database running with vector index support (Neo4j 5.13+)
-* `neo4j-agent-memory` installed
-* Embedding service configured (OpenAI, Sentence Transformers, etc.)
-
-== Store Messages
-
-=== Basic Message Storage
-
-Store a single message with automatic embedding generation:
-
-[tabs]
-======
-Python (Bolt)::
-+
-[source,python]
-----
-from neo4j_agent_memory import MemoryClient, MemorySettings
-
-settings = MemorySettings(
-    neo4j={"uri": "bolt://localhost:7687", "password": "password"},
-)
-
-client = MemoryClient(settings)
-
-# Store a customer service message
-message = await client.short_term.add_message(
-    session_id="support-session-001",
-    role="user",
-    content="I'd like to return the Nike Air Max shoes I ordered last week. Order #12345.",
-)
-
-print(f"Stored message: {message.id}")
-----
-
-TypeScript (NAMS)::
-+
-[source,typescript]
-----
-import { MemoryClient } from "@neo4j-labs/agent-memory";
-
-// Reads MEMORY_API_KEY from env; targets NAMS by default.
-const memory = new MemoryClient();
-
-// Create a conversation up front (NAMS pattern).
-const conv = await memory.shortTerm.createConversation({
-  userId: "support-user-001",
-});
-
-const message = await memory.shortTerm.addMessage(
-  conv.id,
-  "user",
-  "I'd like to return the Nike Air Max shoes I ordered last week. Order #12345.",
-);
-
-console.log(`Stored message: ${message.id}`);
-----
-======
-
-=== Store with Metadata
-
-Add custom metadata to messages for filtering and context:
-
-.Financial Services Example
-[source,python]
-----
-# Store an advisory conversation message
-message = await client.short_term.add_message(
-    session_id="advisory-call-2024-01-15",
-    role="user",
-    content="I want to increase my exposure to technology stocks, maybe 20% of the portfolio.",
-    metadata={
-        "client_id": "CL-78901",
-        "advisor_id": "ADV-456",
-        "account_type": "investment",
-        "risk_profile": "moderate-growth",
-        "compliance_recorded": True,
-    },
-)
-----
-
-.Ecommerce Retail Example
-[source,python]
-----
-# Store a shopping assistant message
-message = await client.short_term.add_message(
-    session_id="shopping-assistant-001",
-    role="assistant",
-    content="Based on your previous purchases, I recommend the new Nike ZoomX running shoes. They're similar to the Air Max you loved but with better cushioning for long runs.",
-    metadata={
-        "customer_id": "CUST-12345",
-        "channel": "mobile_app",
-        "page_context": "product_discovery",
-        "recommended_products": ["SKU-NKE-ZMX-001", "SKU-NKE-ZMX-002"],
-    },
-)
-----
-
-=== Batch Message Loading
-
-Load multiple messages at once, such as importing conversation history:
-
-[source,python]
-----
-# Import historical support tickets
-messages = [
-    {
-        "role": "user",
-        "content": "My order hasn't arrived yet. It's been 10 days.",
-        "timestamp": "2024-01-10T09:00:00Z",
-        "metadata": {"ticket_id": "TKT-001", "priority": "high"}
-    },
-    {
-        "role": "assistant",
-        "content": "I apologize for the delay. Let me check the shipping status for you.",
-        "timestamp": "2024-01-10T09:01:00Z",
-        "metadata": {"ticket_id": "TKT-001", "agent_id": "AGT-123"}
-    },
-    {
-        "role": "assistant",
-        "content": "Your order was delayed due to weather. It's now out for delivery.",
-        "timestamp": "2024-01-10T09:03:00Z",
-        "metadata": {"ticket_id": "TKT-001", "resolution": "shipping_update"}
-    },
-]
-
-await client.short_term.add_messages_batch(
-    messages=messages,
-    session_id="historical-import-001",
-)
-----
-
-== Search Messages
-
-=== Semantic Search
-
-Find messages by meaning, not just keywords:
-
-[tabs]
-======
-Python (Bolt)::
-+
-[source,python]
-----
-# Find discussions about portfolio allocation
-results = await client.short_term.search_messages(
-    query="client wants to adjust investment allocation",
-    limit=10,
-)
-
-for msg in results:
-    print(f"[{msg.role}] {msg.content[:100]}...")
-    print(f"  Session: {msg.session_id}, Score: {msg.score:.3f}")
-----
-
-TypeScript (NAMS)::
-+
-[source,typescript]
-----
-// Find discussions about portfolio allocation
-const results = await memory.shortTerm.searchMessages(
-  "client wants to adjust investment allocation",
-  { limit: 10 },
-);
-
-for (const msg of results) {
-  console.log(`[${msg.role}] ${msg.content.slice(0, 100)}...`);
-  console.log(`  Conversation: ${msg.conversationId}`);
-}
-----
-======
-
-=== Filter by Session
-
-Search within a specific conversation:
-
-[source,python]
-----
-# Search within a specific advisory call
-results = await client.short_term.search_messages(
-    query="risk tolerance",
-    session_id="advisory-call-2024-01-15",
-    limit=5,
-)
-----
-
-=== Filter by Metadata
-
-Combine semantic search with metadata filters:
-
-.Find high-priority support messages about returns
-[source,python]
-----
-results = await client.short_term.search_messages(
-    query="product return refund",
-    metadata_filter={
-        "priority": "high",
-        "channel": "phone",
-    },
-    limit=20,
-)
-----
-
-.Find compliance-relevant advisory discussions
-[source,python]
-----
-results = await client.short_term.search_messages(
-    query="concentrated position single stock",
-    metadata_filter={
-        "risk_profile": ["aggressive", "moderate-growth"],
-        "compliance_recorded": True,
-    },
-    limit=50,
-)
-----
-
-=== Time-Based Filtering
-
-Search messages within a time range:
-
-[source,python]
-----
-from datetime import datetime, timedelta
-
-# Find recent messages about shipping issues
-one_week_ago = datetime.now() - timedelta(days=7)
-
-results = await client.short_term.search_messages(
-    query="shipping delay delivery problem",
-    after=one_week_ago,
-    limit=50,
-)
-----
-
-== Manage Sessions
-
-=== List Sessions
-
-Get all conversation sessions:
-
-[source,python]
-----
-sessions = await client.short_term.list_sessions(
-    limit=20,
-    metadata_filter={"channel": "mobile_app"},
-)
-
-for session in sessions:
-    print(f"Session: {session.id}")
-    print(f"  Messages: {session.message_count}")
-    print(f"  Started: {session.created_at}")
-    print(f"  Last activity: {session.last_message_at}")
-----
-
-=== Get Session Messages
-
-Retrieve all messages in a session:
-
-[tabs]
-======
-Python (Bolt)::
-+
-[source,python]
-----
-# Get full conversation history
-conversation = await client.short_term.get_conversation(
-    session_id="support-session-001",
-)
-messages = conversation.messages
-
-for msg in messages:
-    print(f"[{msg.timestamp}] {msg.role}: {msg.content}")
-----
-
-TypeScript (NAMS)::
-+
-[source,typescript]
-----
-// Get full conversation history
-const conversation = await memory.shortTerm.getConversation(conv.id);
-
-for (const msg of conversation.messages) {
-  console.log(`[${msg.timestamp}] ${msg.role}: ${msg.content}`);
-}
-----
-======
-
-=== Delete Sessions
-
-Remove a session and all its messages:
-
-[source,python]
-----
-# Delete completed support session
-await client.short_term.delete_session(
-    session_id="support-session-001",
-)
-----
-
-== Generate Summaries
-
-Create summaries of long conversations for efficient context:
-
-=== Auto-Summarize Session
-
-[source,python]
-----
-# Generate summary of advisory call
-summary = await client.short_term.summarize_session(
-    session_id="advisory-call-2024-01-15",
-)
-
-print(f"Summary: {summary.content}")
-print(f"Key topics: {summary.topics}")
-print(f"Action items: {summary.action_items}")
-----
-
-=== Custom Summary Prompt
-
-Provide domain-specific summarization instructions:
-
-.Financial Services Summary
-[source,python]
-----
-summary = await client.short_term.summarize_session(
-    session_id="advisory-call-2024-01-15",
-    prompt="""
-    Summarize this financial advisory conversation. Include:
-    1. Client's stated investment goals
-    2. Risk tolerance discussed
-    3. Specific securities or sectors mentioned
-    4. Any compliance-relevant statements
-    5. Agreed next steps
-    """,
-)
-----
-
-.Ecommerce Support Summary
-[source,python]
-----
-summary = await client.short_term.summarize_session(
-    session_id="support-session-001",
-    prompt="""
-    Summarize this customer support interaction. Include:
-    1. Customer's issue or request
-    2. Products mentioned (with SKUs if available)
-    3. Resolution provided
-    4. Customer satisfaction indicators
-    5. Any follow-up actions needed
-    """,
-)
-----
-
-== Build Conversation Context
-
-Combine message history with other memory types for rich context:
-
-=== Get Combined Context
-
-[tabs]
-======
-Python (Bolt)::
-+
-[source,python]
-----
-# Get comprehensive context for agent response
-context = await client.get_context(
-    query="What running shoes should I recommend?",
-    session_id="shopping-assistant-001",
-    include_short_term=True,   # Recent messages
-    include_long_term=True,    # Customer preferences and entities
-    include_reasoning=True,    # Past successful recommendations
-    short_term_limit=10,
-    long_term_limit=5,
-)
-
-print("Recent conversation:")
-for msg in context.messages:
-    print(f"  [{msg.role}]: {msg.content[:80]}...")
-
-print("\nCustomer preferences:")
-for pref in context.preferences:
-    print(f"  {pref.category}: {pref.preference}")
-
-print("\nRelevant entities:")
-for entity in context.entities:
-    print(f"  {entity.name} ({entity.type})")
-----
-
-TypeScript (NAMS)::
-+
-[source,typescript]
-----
-// NAMS returns a structured three-tier window: reflections, observations,
-// recentMessages. Entities and preferences are fetched separately.
-const context = await memory.shortTerm.getContext(conv.id);
-
-console.log("Reflections (higher-level summaries):");
-for (const r of context.reflections) {
-  console.log(`  ${r.content}`);
-}
-
-console.log("\nObservations (inline notes):");
-for (const o of context.observations) {
-  console.log(`  ${o.content}`);
-}
-
-console.log("\nRecent messages:");
-for (const msg of context.recentMessages) {
-  console.log(`  [${msg.role}]: ${msg.content.slice(0, 80)}...`);
-}
-
-// Fetch entities and preferences separately if needed
-const entities = await memory.longTerm.searchEntities(
-  "running shoes",
-  { limit: 5 },
-);
-----
-======
-
-=== Format for LLM
-
-Format context for inclusion in LLM prompts:
-
-[source,python]
-----
-def format_context_for_prompt(context):
-    parts = []
-
-    # Add conversation history
-    if context.messages:
-        parts.append("## Recent Conversation")
-        for msg in context.messages[-5:]:  # Last 5 messages
-            parts.append(f"**{msg.role}**: {msg.content}")
-
-    # Add preferences
-    if context.preferences:
-        parts.append("\n## Customer Preferences")
-        for pref in context.preferences:
-            parts.append(f"- {pref.category}: {pref.preference}")
-
-    # Add relevant entities
-    if context.entities:
-        parts.append("\n## Relevant Information")
-        for entity in context.entities:
-            if entity.description:
-                parts.append(f"- **{entity.name}**: {entity.description}")
-
-    return "\n".join(parts)
-
-# Use in agent prompt
-context = await client.get_context(query=user_message, session_id=session_id)
-system_prompt = f"""You are a helpful shopping assistant.
-
-{format_context_for_prompt(context)}
-
-Use the above context to provide personalized recommendations.
-"""
-----
-
-== Best Practices
-
-=== 1. Use Meaningful Session IDs
-
-Structure session IDs for easy filtering and debugging:
-
-[source,python]
-----
-# Good: Descriptive and filterable
-session_id = f"support-{customer_id}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-session_id = f"advisory-{advisor_id}-{client_id}-{date}"
-
-# Avoid: Generic UUIDs with no context
-session_id = str(uuid.uuid4())  # Hard to debug
-----
-
-=== 2. Include Searchable Metadata
-
-Add metadata that supports your search patterns:
-
-[source,python]
-----
-# Metadata enables powerful filtering
-metadata = {
-    "customer_id": customer_id,
-    "channel": "web",           # Filter by channel
-    "intent": "product_return", # Filter by intent
-    "sentiment": "negative",    # Filter by sentiment
-    "language": "en",           # Filter by language
-    "agent_id": agent_id,       # Filter by agent
-}
-----
-
-=== 3. Summarize Long Sessions
-
-Generate summaries to avoid context window limits:
-
-[source,python]
-----
-# Check if session is getting long
-conversation = await client.short_term.get_conversation(session_id)
-messages = conversation.messages
-
-if len(messages) > 20:
-    # Generate summary of older messages
-    summary = await client.short_term.summarize_session(
-        session_id=session_id,
-        message_limit=15,  # Summarize first 15 messages
-    )
-
-    # Use summary + recent messages for context
-    recent_messages = messages[-5:]
-----
-
-=== 4. Archive Completed Sessions
-
-Move completed conversations to long-term storage:
-
-[source,python]
-----
-# After support ticket resolved
-summary = await client.short_term.summarize_session(session_id)
-
-# Store summary as an entity for long-term reference
-entity, dedup_result = await client.long_term.add_entity(
-    name=f"Support Case {ticket_id}",
-    entity_type="EVENT",
-    attributes={
-        "summary": summary.content,
-        "customer_id": customer_id,
-        "resolution": resolution_type,
-        "resolved_at": datetime.now().isoformat(),
-    },
-)
-
-# Optionally delete the detailed messages
-await client.short_term.delete_session(session_id)
-----
-
-== See Also
-
-* xref:how-to/entities.adoc[Work with Entities]
-* xref:how-to/preferences.adoc[Manage User Preferences]
-* xref:explanation/memory-types.adoc[Understanding Memory Types]
-* xref:reference/api/short-term.adoc[ShortTermMemory API Reference]
+Metadata filters apply according to the selected search method's contract. They do not turn a shared database into an authorization boundary. `get_context` can include global semantic matches; see xref:reference/backend-capabilities.adoc#scope[data scope].
+
+// Historical section links resolve to the maintained task and reference pointers.
+anchor:_typescript_equivalents_at_a_glance[]
+
+include::partial$python-typescript-equivalents.adoc[]
+
+anchor:_store_messages[]
+anchor:_basic_message_storage[]
+anchor:_store_with_metadata[]
+anchor:_batch_message_loading[]
+anchor:_search_messages[]
+anchor:_semantic_search[]
+anchor:_filter_by_metadata[]
+anchor:_time_based_filtering[]
+anchor:_list_sessions[]
+anchor:_get_session_messages[]
+anchor:_delete_sessions[]
+anchor:_generate_summaries[]
+anchor:_auto_summarize_session[]
+anchor:_custom_summary_prompt[]
+anchor:_build_conversation_context[]
+anchor:_get_combined_context[]
+anchor:_format_for_llm[]
+anchor:_best_practices[]
+anchor:_1_use_meaningful_session_ids[]
+anchor:_2_include_searchable_metadata[]
+anchor:_3_summarize_long_sessions[]
+anchor:_4_archive_completed_sessions[]
+anchor:_see_also[]

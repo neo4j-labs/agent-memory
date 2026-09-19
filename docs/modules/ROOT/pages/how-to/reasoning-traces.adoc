@@ -1,708 +1,98 @@
-= Record and Query Reasoning Traces
+= Record and verify a failed tool call
 :page-product: agent-memory
 :page-pagination:
-:toclevels: 3
+:toclevels: 2
 :sectanchors:
-:icons: font
-:source-highlighter: highlight.js
 
-How to record agent reasoning traces and use them to improve future decisions through the context graph.
+include::partial$backend-bolt-only.adoc[]
 
-[NOTE]
-====
-The core trace operations (start, add step, record tool call, complete)
-port cleanly to the **TypeScript SDK against NAMS** — see the cheat-sheet
-below and the `[tabs]` blocks on the canonical examples. The
-`:TOUCHED` audit-edge pattern is **Python+Bolt only**; the NAMS
-equivalent is `memory.reasoning.getEntityProvenance(entityId)` which
-returns the same "which steps touched this entity" answer from a
-different schema.
-====
+To diagnose an unsuccessful tool action, create a trace, add the action as a step, record its error with `ToolCallStatus`, and complete the trace with a structured outcome. Read back the step and tool call to verify that the failure was retained.
 
-== TypeScript equivalents at a glance
+.A reasoning trace linked to a message and ordered steps with tool calls and touched entities
+image::diagrams/reasoning-trace-graph.svg["Trace links to a message and ordered steps with tool calls and touched entities",width=100%,link=self]
 
-[cols="2,2,2", options="header"]
-|===
-|Operation |Python (Bolt) |TypeScript (NAMS)
+For the rationale, see xref:explanation/memory-types.adoc[Understanding the three memory types].
 
-|Start a trace
-|`client.reasoning.start_trace(session_id, task, metadata=)`
-|`memory.reasoning.startTrace(sessionId, task)`
+anchor:_prerequisites[]
 
-|Add a step (thought / action)
-|`client.reasoning.add_step(trace_id, thought=, action=)`
-|`memory.reasoning.addStep(traceId, { thought, action, observation })`
+== 1. Prepare the Bolt client
 
-|Record a tool call
-|`client.reasoning.record_tool_call(step_id, tool_name, arguments=, result=, status=, duration_ms=)`
-|`memory.reasoning.recordToolCall(stepId, toolName, args, { result, status, durationMs, error })`
+Use a dedicated AuraDB instance from xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the first memory tutorial's Aura setup], with exported `NEO4J_URI`, `NEO4J_USERNAME`, and `NEO4J_PASSWORD`. Set `OPENAI_API_KEY` for the selected embedding provider. Prepare the example files below and install the provider extra:
 
-|Complete a trace
-|`client.reasoning.complete_trace(trace_id, outcome=, success=, summary=)`
-|`memory.reasoning.completeTrace(traceId, { outcome, success })`
+include::partial$python-tutorial-setup.adoc[]
 
-|Get trace with steps
-|`client.reasoning.get_trace_with_steps(trace_id)`
-|`memory.reasoning.getTraceWithSteps(traceId)`
-
-|Find similar past traces
-|`client.reasoning.get_similar_traces(task, success_only=, limit=)`
-|`memory.reasoning.getSimilarTraces(task, { successOnly, limit })`
-
-|Tool usage stats
-|`client.reasoning.get_tool_stats(tool_name=)`
-|`memory.reasoning.getToolStats(toolName)`
-
-|Audit "which steps touched entity X"
-|`MATCH (e:Entity)<-[:TOUCHED]-(s)<-[:HAS_STEP]-(t)` Cypher; or `client.long_term.get_entity_provenance(id)`
-|`memory.reasoning.getEntityProvenance(entityId)` _(NAMS only)_
-
-|Custom trace metadata
-|`start_trace(..., metadata={...})`
-|_Not exposed directly. Attach via the conversation/session level instead._
-|===
-
-== Overview
-
-Reasoning traces capture the step-by-step thought process of agents, including tool calls, decisions, and outcomes. Stored in the context graph, traces enable agents to learn from past experiences and improve over time.
-
-image::diagrams/reasoning-trace-graph.png[Reasoning trace graph: Message triggers a ReasoningTrace with Steps, each Step using ToolCalls that TOUCH entities,width=540,align=left]
-
-== Prerequisites
-
-* Neo4j database running
-* `neo4j-agent-memory` installed
-* MemoryClient configured
-
-== Record Reasoning Traces
-
-=== Start a Trace
-
-Begin recording when an agent task starts:
-
-[tabs]
-======
-Python (Bolt)::
-+
-[source,python]
+[source,bash]
 ----
-from neo4j_agent_memory import MemoryClient, MemorySettings
-
-settings = MemorySettings(
-    neo4j={"uri": "bolt://localhost:7687", "user": "neo4j", "password": "password"}
-)
-
-async with MemoryClient(settings) as client:
-    # Start a new reasoning trace
-    trace = await client.reasoning.start_trace(
-        session_id="shopping-session-001",
-        task="Find running shoes matching customer preferences",
-        metadata={
-            "agent_version": "2.1.0",
-            "model": "gpt-4o",
-            "trigger": "user_request",
-        },
-    )
-
-print(f"Started trace: {trace.id}")
+python -m pip install 'neo4j-agent-memory[openai]==0.6.0'
 ----
 
-TypeScript (NAMS)::
-+
-[source,typescript]
-----
-import { MemoryClient } from "@neo4j-labs/agent-memory";
+include::partial$python-core-recipe-intro.adoc[]
 
-const memory = new MemoryClient();
+include::partial$python-core-recipe-files.adoc[]
 
-// sessionId is typically the conversation id from createConversation
-const trace = await memory.reasoning.startTrace(
-  "shopping-session-001",
-  "Find running shoes matching customer preferences",
-);
+== 2. Apply the task function
 
-console.log(`Started trace: ${trace.id}`);
-----
-======
+Start a trace, record a step and its tool call, then complete the trace with a structured outcome. The deliberately unavailable product gives a reproducible failure path. The trace stores application actions, tool arguments, errors, and outcomes. It does not require or expose a model's private reasoning.
 
-=== Record Reasoning Steps
+On success, the pattern is the same: call `record_tool_call` with the default `status=ToolCallStatus.SUCCESS` and the tool's actual `result`, then finish with `complete_trace(trace.id, outcome=TraceOutcome(success=True, summary=...))`. The xref:tutorials/conversation-memory.adoc[chatbot tutorial] runs that successful path end-to-end; this recipe isolates the failure path because it is the branch application code most often gets wrong.
 
-Capture each step of the agent's reasoning:
+The function below is included from the complete maintained program, which already supplies imports, client setup, unique IDs, and `asyncio.run`. Run the file in step 3; this extract is not a separate top-level script.
 
 [source,python]
 ----
-# Step 1: Search for products
-step1 = await client.reasoning.add_step(
-    trace_id=trace.id,
-    thought="Searching product catalog for running shoes",
-    action="Customer asked for running shoes, starting with catalog search",
-)
-
-# Step 2: Get preferences
-step2 = await client.reasoning.add_step(
-    trace_id=trace.id,
-    thought="Retrieved customer preferences for brand and style",
-    action="Need to personalize results based on stored preferences",
-)
-
-# Step 3: Filter and rank
-step3 = await client.reasoning.add_step(
-    trace_id=trace.id,
-    thought="Filtered products by Nike brand preference, ranked by rating",
-    action="Customer prefers Nike, so boosting those results",
-)
+include::example$core_memory_recipes.py[tag=reasoning]
 ----
 
-=== Record Tool Calls
+== 3. Run and verify
 
-Track tools used during reasoning:
-
-[source,python]
+[source,bash]
 ----
-# Record tool call for product search
-tool_call = await client.reasoning.record_tool_call(
-    step_id=step1.id,
-    tool_name="search_products",
-    arguments={
-        "query": "running shoes",
-        "category": "footwear",
-        "limit": 20,
-    },
-    result={
-        "products_found": 20,
-        "top_brands": ["Nike", "Adidas", "Asics"],
-    },
-    duration_ms=145,
-    status="success",
-)
-
-# Record preference retrieval
-await client.reasoning.record_tool_call(
-    step_id=step2.id,
-    tool_name="get_user_preferences",
-    arguments={"user_id": "CUST-12345", "categories": ["brand", "style"]},
-    result={
-        "preferences": [
-            {"category": "brand", "value": "Nike"},
-            {"category": "style", "value": "minimalist"},
-        ]
-    },
-    duration_ms=32,
-    status="success",
-)
+python core_memory_recipes.py reasoning
 ----
 
-=== Complete the Trace
+Expected: `Verified: failed tool call and completed failure trace; trace=...`. The program confirms `success=False` and the persisted tool-call status `error`; an expected tool failure is the successful verification outcome for this task.
 
-Mark trace as complete with outcome:
+The command retains its example records for inspection. Remove the disposable tutorial database using that tutorial's cleanup command when finished. Do not substitute an unrestricted delete query against an existing database.
 
-[source,python]
-----
-# Successful completion
-await client.reasoning.complete_trace(
-    trace_id=trace.id,
-    outcome="Recommended 3 Nike running shoes matching customer preferences",
-    success=True,
-)
+anchor:_complete_the_trace[]
 
-# Or record failure
-await client.reasoning.complete_trace(
-    trace_id=trace.id,
-    outcome="No products found matching criteria - inventory empty for running_shoes",
-    success=False,
-)
-----
+== Complete every started trace
 
-== Query Past Traces
+Always pair a started trace with a matching `complete_trace` call, whichever way the tool action goes. In real tool code, wrap the actual operation in `try`/`except`, record the appropriate `ToolCallStatus`, and call `complete_trace` on success and failure paths. `record_tool_call` accepts `status`, `error`, and integer `duration_ms`; it has no `success` keyword. `complete_trace` accepts an outcome string or `TraceOutcome`; it has no `error` keyword.
 
-=== Find Similar Traces
+The xref:tutorials/conversation-memory.adoc[chatbot tutorial] provides a complete success path and completion after a failed model request. Optional `triggered_by_message_id` creates an `INITIATED_BY` link. Use `touched_entities`/`EntityRef` for explicit action provenance, and async hooks for follow-up writes.
 
-Find traces similar to current task for learning:
+anchor:_query_past_traces[]
 
-[source,python]
-----
-# Find traces for similar product recommendations
-similar_traces = await client.reasoning.get_similar_traces(
-    task="Recommend running shoes for marathon training",
-    limit=5,
-    success_only=True,  # Only successful traces
-)
+== Inspect recorded outcomes
 
-for trace in similar_traces:
-    print(f"Task: {trace.task}")
-    print(f"  Outcome: {trace.outcome}")
-    print(f"  Similarity: {trace.similarity:.2f}")
-    print(f"  Steps: {trace.step_count}")
-----
+Use `get_trace_with_steps(trace_id)` and inspect `trace.steps` and `step.tool_calls`. Use `get_session_traces` for a known session, `list_traces` for supported filters, and `get_similar_traces` for ranked candidates. There are no `get_steps`, `get_tool_calls`, `get_traces`, `search_traces`, or `delete_trace` wrappers.
 
-=== Learn from Past Successes
+Similarity is stored in trace metadata; `search_steps` returns result wrappers with step and parent-task information. A similar successful trace is evidence for the application to assess, not proof that a new action will succeed. For evaluation and pruning, follow xref:how-to/evaluation.adoc[memory evaluation] and xref:how-to/audit-reasoning.adoc[reasoning audit tasks]. Exact filters and hooks are in xref:reference/api/reasoning.adoc[the reasoning reference].
 
-Use past traces to inform current reasoning:
+// Historical section links resolve to the maintained task and reference pointers.
+anchor:_typescript_equivalents_at_a_glance[]
 
-.Ecommerce Product Recommendation
-[source,python]
-----
-async def get_recommendation_strategy(query: str, user_id: str) -> dict:
-    """Learn from past successful recommendations."""
+include::partial$python-typescript-equivalents.adoc[]
 
-    # Find similar successful traces
-    traces = await client.reasoning.get_similar_traces(
-        task=f"Recommend products: {query}",
-        user_id=user_id,
-        limit=3,
-        success_only=True,
-    )
-
-    strategies = []
-    for trace in traces:
-        # Get the steps that led to success
-        steps = await client.reasoning.get_trace_steps(trace.id)
-
-        strategies.append({
-            "task": trace.task,
-            "steps": [s.description for s in steps],
-            "tools_used": [t.tool_name for s in steps for t in s.tool_calls],
-            "result": trace.result,
-        })
-
-    return {
-        "similar_tasks": len(traces),
-        "successful_strategies": strategies,
-    }
-
-# Use in agent prompt
-strategy = await get_recommendation_strategy(
-    query="comfortable running shoes",
-    user_id="CUST-12345",
-)
-
-system_prompt = f"""
-You are a product recommendation agent.
-
-Based on past successful recommendations for similar queries:
-{json.dumps(strategy['successful_strategies'], indent=2)}
-
-Use similar approaches for the current request.
-"""
-----
-
-.Financial Advisory Decision
-[source,python]
-----
-async def get_advisory_precedents(topic: str, client_id: str) -> list:
-    """Find past advisory decisions on similar topics."""
-
-    traces = await client.reasoning.get_similar_traces(
-        task=f"Advisory consultation: {topic}",
-        user_id=client_id,
-        limit=5,
-        success_only=True,
-    )
-
-    precedents = []
-    for trace in traces:
-        steps = await client.reasoning.get_trace_steps(trace.id)
-
-        precedents.append({
-            "topic": trace.task,
-            "recommendation": trace.result.get("recommendation"),
-            "rationale": [s.reasoning for s in steps],
-            "client_response": trace.result.get("client_response"),
-        })
-
-    return precedents
-
-# Use for similar advisory scenarios
-precedents = await get_advisory_precedents(
-    topic="portfolio rebalancing for moderate-growth profile",
-    client_id="CL-78901",
-)
-----
-
-=== Analyze Tool Usage
-
-Understand which tools are most effective:
-
-[source,python]
-----
-# Get tool statistics
-stats = await client.reasoning.get_tool_statistics(
-    user_id="CUST-12345",
-    time_range_days=30,
-)
-
-print("Tool Usage Statistics:")
-for tool_name, tool_stats in stats.items():
-    print(f"\n{tool_name}:")
-    print(f"  Total calls: {tool_stats['total_calls']}")
-    print(f"  Success rate: {tool_stats['success_rate']:.1%}")
-    print(f"  Avg duration: {tool_stats['avg_duration_ms']:.0f}ms")
-    print(f"  Used in successful traces: {tool_stats['success_correlation']:.1%}")
-----
-
-=== Filter Traces by Criteria
-
-[source,python]
-----
-# Get recent traces for a user
-recent_traces = await client.reasoning.get_traces(
-    user_id="CUST-12345",
-    limit=20,
-    after=datetime.now() - timedelta(days=7),
-)
-
-# Get traces by outcome
-failed_traces = await client.reasoning.get_traces(
-    user_id="CUST-12345",
-    outcome="failure",
-    limit=10,
-)
-
-# Get traces with specific tool usage
-search_traces = await client.reasoning.get_traces(
-    tools_used=["search_products", "get_preferences"],
-    success_only=True,
-    limit=10,
-)
-----
-
-== Integrate with Agent Frameworks
-
-=== PydanticAI Integration
-
-Automatically record traces with PydanticAI:
-
-[source,python]
-----
-from pydantic_ai import Agent, RunContext
-from dataclasses import dataclass
-
-@dataclass
-class AgentDeps:
-    memory_client: MemoryClient
-    user_id: str
-    current_trace_id: str | None = None
-
-agent = Agent(
-    "openai:gpt-4o",
-    deps_type=AgentDeps,
-)
-
-@agent.tool
-async def search_products(
-    ctx: RunContext[AgentDeps],
-    query: str,
-    category: str,
-) -> str:
-    """Search for products."""
-
-    # Record the tool call in the trace
-    if ctx.deps.current_trace_id:
-        # Get current step (you'd track this in deps)
-        await ctx.deps.memory_client.reasoning.record_tool_call(
-            step_id=ctx.deps.current_step_id,
-            tool_name="search_products",
-            arguments={"query": query, "category": category},
-            result={"status": "searching"},
-            status="success",
-        )
-
-    # Actual tool implementation
-    products = await do_product_search(query, category)
-    return json.dumps(products)
-
-async def run_with_tracing(user_query: str, user_id: str):
-    """Run agent with automatic tracing."""
-
-    # Start trace
-    trace = await memory_client.reasoning.start_trace(
-        session_id=f"session-{user_id}",
-        task=user_query,
-    )
-
-    deps = AgentDeps(
-        memory_client=memory_client,
-        user_id=user_id,
-        current_trace_id=trace.id,
-    )
-
-    try:
-        result = await agent.run(user_query, deps=deps)
-
-        # Complete trace on success
-        await memory_client.reasoning.complete_trace(
-            trace_id=trace.id,
-            outcome=f"Successfully processed: {result.data}",
-            success=True,
-        )
-
-        return result
-
-    except Exception as e:
-        # Record failure
-        await memory_client.reasoning.complete_trace(
-            trace_id=trace.id,
-            outcome=str(e),
-            success=False,
-        )
-        raise
-----
-
-=== LangChain Integration
-
-[source,python]
-----
-from langchain.callbacks.base import BaseCallbackHandler
-
-class ReasoningTraceCallback(BaseCallbackHandler):
-    """LangChain callback for reasoning traces."""
-
-    def __init__(self, memory_client: MemoryClient, user_id: str):
-        self.memory_client = memory_client
-        self.user_id = user_id
-        self.trace_id = None
-        self.current_step_id = None
-
-    async def on_chain_start(self, serialized, inputs, **kwargs):
-        """Start trace when chain begins."""
-        self.trace = await self.memory_client.reasoning.start_trace(
-            session_id=f"session-{self.user_id}",
-            task=str(inputs),
-        )
-        self.trace_id = self.trace.id
-
-    async def on_tool_start(self, serialized, input_str, **kwargs):
-        """Record when a tool is called."""
-        tool_name = serialized.get("name", "unknown")
-
-        step = await self.memory_client.reasoning.add_step(
-            trace_id=self.trace_id,
-            thought=f"Calling {tool_name}",
-        )
-        self.current_step_id = step.id
-
-    async def on_tool_end(self, output, **kwargs):
-        """Record tool result."""
-        await self.memory_client.reasoning.record_tool_call(
-            step_id=self.current_step_id,
-            tool_name=kwargs.get("name", "unknown"),
-            arguments=kwargs.get("input", {}),
-            result={"output": str(output)[:500]},
-            status="success",
-        )
-
-    async def on_chain_end(self, outputs, **kwargs):
-        """Complete trace when chain finishes."""
-        await self.memory_client.reasoning.complete_trace(
-            trace_id=self.trace_id,
-            outcome="Chain completed successfully",
-            success=True,
-        )
-
-# Usage
-callback = ReasoningTraceCallback(memory_client, user_id)
-chain.invoke(input, callbacks=[callback])
-----
-
-== Use Traces for Agent Improvement
-
-=== Self-Reflection Pattern
-
-Agent reviews its past performance:
-
-[source,python]
-----
-async def generate_self_reflection(user_id: str, days: int = 7) -> str:
-    """Generate insights from recent reasoning traces."""
-
-    # Get recent traces
-    traces = await client.reasoning.get_traces(
-        user_id=user_id,
-        after=datetime.now() - timedelta(days=days),
-        limit=50,
-    )
-
-    # Analyze patterns
-    success_count = sum(1 for t in traces if t.outcome == "success")
-    failure_count = sum(1 for t in traces if t.outcome == "failure")
-
-    # Get common failure reasons
-    failures = [t for t in traces if t.outcome == "failure"]
-    failure_reasons = [t.error for t in failures if t.error]
-
-    # Get most effective tool combinations
-    successful_traces = [t for t in traces if t.outcome == "success"]
-    tool_patterns = []
-    for trace in successful_traces[:10]:
-        steps = await client.reasoning.get_trace_steps(trace.id)
-        tools = [t.tool_name for s in steps for t in s.tool_calls]
-        tool_patterns.append(tools)
-
-    reflection = f"""
-    ## Performance Summary (Last {days} Days)
-
-    - Total tasks: {len(traces)}
-    - Success rate: {success_count / len(traces):.1%}
-
-    ### Common Failure Patterns
-    {chr(10).join(f'- {r}' for r in set(failure_reasons)[:5])}
-
-    ### Successful Tool Combinations
-    {chr(10).join(f'- {" → ".join(p)}' for p in tool_patterns[:5])}
-
-    ### Recommendations
-    - Focus on improving: {failure_reasons[0] if failure_reasons else 'N/A'}
-    - Most reliable approach: {' → '.join(tool_patterns[0]) if tool_patterns else 'N/A'}
-    """
-
-    return reflection
-----
-
-=== A/B Testing Strategies
-
-Compare different reasoning approaches:
-
-[source,python]
-----
-async def compare_strategies(
-    task_pattern: str,
-    strategy_a: str,
-    strategy_b: str,
-) -> dict:
-    """Compare success rates of different strategies."""
-
-    # Get traces for each strategy
-    traces_a = await client.reasoning.get_traces(
-        metadata_filter={"strategy": strategy_a},
-        limit=100,
-    )
-
-    traces_b = await client.reasoning.get_traces(
-        metadata_filter={"strategy": strategy_b},
-        limit=100,
-    )
-
-    # Calculate metrics
-    success_rate_a = sum(1 for t in traces_a if t.outcome == "success") / len(traces_a)
-    success_rate_b = sum(1 for t in traces_b if t.outcome == "success") / len(traces_b)
-
-    avg_steps_a = sum(t.step_count for t in traces_a) / len(traces_a)
-    avg_steps_b = sum(t.step_count for t in traces_b) / len(traces_b)
-
-    return {
-        "strategy_a": {
-            "name": strategy_a,
-            "success_rate": success_rate_a,
-            "avg_steps": avg_steps_a,
-            "sample_size": len(traces_a),
-        },
-        "strategy_b": {
-            "name": strategy_b,
-            "success_rate": success_rate_b,
-            "avg_steps": avg_steps_b,
-            "sample_size": len(traces_b),
-        },
-        "winner": strategy_a if success_rate_a > success_rate_b else strategy_b,
-    }
-----
-
-== Best Practices
-
-=== 1. Record Sufficient Detail
-
-Include enough context for future learning:
-
-[source,python]
-----
-# Good: Detailed step with reasoning
-await client.reasoning.add_step(
-    trace_id=trace.id,
-    thought="Filtered 20 products down to 5 matching Nike brand preference",
-    observation="Customer has strong Nike preference (confidence: 0.95). Filtering to boost relevance.",
-    metadata={
-        "input_count": 20,
-        "output_count": 5,
-        "filter_criteria": ["brand=Nike"],
-    },
-)
-
-# Avoid: Vague step
-await client.reasoning.add_step(
-    trace_id=trace.id,
-    thought="Filtered products",
-)
-----
-
-=== 2. Always Complete Traces
-
-Ensure traces are marked complete even on errors:
-
-[source,python]
-----
-trace = await client.reasoning.start_trace(session_id=session_id, task=task)
-
-try:
-    result = await execute_task()
-    await client.reasoning.complete_trace(
-        trace_id=trace.id,
-        outcome=f"Task completed: {result}",
-        success=True,
-    )
-except Exception as e:
-    await client.reasoning.complete_trace(
-        trace_id=trace.id,
-        outcome=str(e),
-        success=False,
-    )
-    raise
-finally:
-    # Ensure trace is never left incomplete
-    pass
-----
-
-=== 3. Use Structured Outcomes
-
-Standardize outcome categories:
-
-[source,python]
-----
-OUTCOME_TYPES = {
-    "success": "Task completed successfully",
-    "partial_success": "Task completed with limitations",
-    "failure": "Task failed",
-    "timeout": "Task exceeded time limit",
-    "cancelled": "Task cancelled by user",
-    "error": "Unexpected error occurred",
-}
-
-await client.reasoning.complete_trace(
-    trace_id=trace.id,
-    outcome="Partial success: completed product_search and preference_matching, skipped inventory_check due to inventory_service_unavailable",
-    success=True,
-)
-----
-
-=== 4. Prune Old Traces
-
-Remove old traces to manage storage:
-
-[source,python]
-----
-# Delete traces older than 90 days
-await client.reasoning.delete_traces(
-    before=datetime.now() - timedelta(days=90),
-)
-
-# Keep successful traces longer
-await client.reasoning.delete_traces(
-    before=datetime.now() - timedelta(days=30),
-    outcome="failure",  # Only delete failures
-)
-----
-
-== See Also
-
-* xref:how-to/messages.adoc[Store and Search Messages]
-* xref:explanation/memory-types.adoc[Understanding Memory Types]
-* xref:how-to/integrations/pydantic-ai.adoc[Use with PydanticAI]
-* xref:reference/api/reasoning.adoc[ReasoningMemory API Reference]
+anchor:_overview[]
+anchor:_record_reasoning_traces[]
+anchor:_start_a_trace[]
+anchor:_record_reasoning_steps[]
+anchor:_record_tool_calls[]
+anchor:_find_similar_traces[]
+anchor:_learn_from_past_successes[]
+anchor:_analyze_tool_usage[]
+anchor:_filter_traces_by_criteria[]
+anchor:_integrate_with_agent_frameworks[]
+anchor:_pydanticai_integration[]
+anchor:_langchain_integration[]
+anchor:_use_traces_for_agent_improvement[]
+anchor:_self_reflection_pattern[]
+anchor:_ab_testing_strategies[]
+anchor:_best_practices[]
+anchor:_1_record_sufficient_detail[]
+anchor:_2_always_complete_traces[]
+anchor:_3_use_structured_outcomes[]
+anchor:_4_prune_old_traces[]
+anchor:_see_also[]

@@ -1,192 +1,132 @@
-= Hosted-Service Quickstart
-:description: Five-minute quickstart for the hosted Neo4j Agent Memory Service.
+= Store and read back hosted memory with TypeScript
+:page-role: code-nocollapse
+:ts-program: src/tutorials/hosted-quickstart.ts
+:ts-seed: seed
+:ts-next-state: hosted-quickstart-2.json
+:description: Store and read back a conversation using the hosted REST service and TypeScript SDK.
+:source-highlighter: rouge
 
-This tutorial walks you from zero to a working agent against the hosted
-service at link:https://memory.neo4jlabs.com/[memory.neo4jlabs.com], using
-whichever language client fits your stack.
+We will create a conversation, store a message, retrieve its context, and verify
+the same record in a fresh process. This path needs a NAMS key and no model API
+key.
 
-== Prerequisites
+anchor:_prerequisites[]
+anchor:_step_2_install_a_client[]
 
-* An API key (`nams_*`) from the link:https://memory.neo4jlabs.com/dashboard[NAMS dashboard].
-  Static keys expire after 90 days.
-* A bash shell with `curl` for the warm-up checks.
+== Step 1: Build the SDK and install the lesson project
 
-== Step 1 — Sanity-check the service
+You need a workspace-scoped `MEMORY_API_KEY` for a dedicated test workspace on
+link:https://memory.neo4jlabs.com/[NAMS]. This lesson does not call a model, so `OPENAI_API_KEY` is not required.
+
+include::partial$typescript-tutorial-project.adoc[]
+
+anchor:_step_3_create_a_conversation_and_add_messages[]
+anchor:_step_5_reasoning_provenance[]
+
+== Step 2: Inspect the complete program
+
+Open `src/tutorials/hosted-quickstart.ts`:
+
+[source,typescript]
+----
+import { TutorialRun, isTutorialEntryPoint } from "../../../shared/tutorial-state.js";
+import { runTutorialCommand } from "../../../shared/tutorial-cleanup.js";
+
+export async function hostedQuickstart(run: TutorialRun) {
+  const conversation = await run.createConversation();
+  console.log(`CONVERSATION_ID=${conversation.id}`);
+  await run.addMessage("user", `I am planning the fictional ${run.name} project.`);
+  const stored = await run.verify();
+  const context = await run.client.shortTerm.getContext(conversation.id);
+  console.log(`Stored messages verified: ${stored.messages}`);
+  console.log(`Recent context messages: ${context.recentMessages.length}`);
+  console.log(`Keep run state: ${run.path}`);
+  return conversation.id;
+}
+
+if (isTutorialEntryPoint(import.meta.url)) {
+  runTutorialCommand("hosted-quickstart", process.argv.slice(2), "seed", ["seed"],
+    (_mode, run) => hostedQuickstart(run)).catch(error => { console.error(error); process.exitCode = 1; });
+}
+----
+
+The maintained state and cleanup helpers are in `typescript/examples/shared/`.
+Keep the private `.tutorial-state/` directory with this checkout. Each run binds
+its saved IDs to the endpoint, workspace selector and credential; a changed
+identity stops authenticated use of those IDs; local `inspect` remains available. Reseeding an existing state is refused.
+
+include::partial$typescript-tutorial-api.adoc[]
+
+anchor:_step_1_sanity_check_the_service[]
+
+anchor:_step_3_run_the_storage_check[]
+
+== Step 3: Store and inspect one message
 
 [source,bash]
 ----
-curl -H "Authorization: Bearer $MEMORY_API_KEY" \
-  https://memory.neo4jlabs.com/v1/conversations
+npx tsx --env-file-if-exists=.env src/tutorials/hosted-quickstart.ts seed .tutorial-state/hosted-quickstart.json
 ----
 
-If you see a JSON `{"conversations": [...]}` response, your token is valid.
+Expect `Stored messages verified: 1` and a `Recent context messages:` count.
+The separate message readback checks the returned ID and fictional project
+content; a context count alone would not prove those contents. The run
+prints its actual IDs; search ranking and model output are not part of this
+storage check. A successful write does not mean asynchronous extraction has
+finished.
 
-== Step 2 — Install a client
+This introductory path creates no reasoning steps. Their supported API and
+current cleanup limits are described in
+xref:reference/typescript-api.adoc[the TypeScript API reference].
 
-[tabs]
-======
-TypeScript::
-+
+== Verify in a fresh process
+
+Run these commands from the same directory, using the state created above:
+
 [source,bash]
 ----
-npm install @neo4j-labs/agent-memory
+npx tsx src/tutorials/hosted-quickstart.ts inspect .tutorial-state/hosted-quickstart.json
+npx tsx --env-file-if-exists=.env src/tutorials/hosted-quickstart.ts verify .tutorial-state/hosted-quickstart.json
 ----
 
-Python::
-+
+`inspect` shows local saved IDs and operation status without loading `.env`
+or contacting NAMS. `verify` opens another authenticated client and reads the
+recorded conversation and exact message IDs, roles and content digests. Expect
+`Verified stored messages:` with the conversation ID and message count.
+Verification makes no model calls and creates no records. It establishes
+persistence across client processes; it does not imply that the hosted service
+restarted.
+
+anchor:_clean_up_the_conversation[]
+
+== Clean up and inspect the disposition
+
+From the same lesson directory, clean up this run using its saved state:
+
 [source,bash]
 ----
-uv add neo4j-agent-memory-client
-# or: pip install neo4j-agent-memory-client
+npx tsx --env-file-if-exists=.env src/tutorials/hosted-quickstart.ts cleanup .tutorial-state/hosted-quickstart.json
+npx tsx src/tutorials/hosted-quickstart.ts inspect .tutorial-state/hosted-quickstart.json
 ----
 
-Go::
-+
-[source,bash]
-----
-go get github.com/neo4j-labs/agent-memory-tck/clients/go
-----
+The cleanup command waits for the recorded messages' extraction to finish,
+checks the entities derived from those messages and any explicitly created
+entities, and deletes only records with proven exclusive ownership. It verifies
+deleted records are absent. Shared, merged or uncertain records remain listed;
+inspect their disposition instead of treating partial cleanup as a complete
+reset. A timeout or failed readback stops cleanup and preserves the state.
 
-C#::
-+
-[source,bash]
-----
-dotnet add package Neo4j.AgentMemory
-----
+Keep the state until every resource has a verified disposition. Closing the
+client alone does not delete data. Do not remove the state file to bypass an
+unfinished run or bulk-delete workspace entities.
 
-R::
-+
-[source,r]
-----
-install.packages("neo4j.memory")
-# or: devtools::install_github("neo4j-labs/agent-memory-tck", subdir = "clients/rlang/neo4j.memory")
-----
-======
+anchor:_step_4_inspect_the_entity_graph[]
 
-== Step 3 — Create a conversation and add messages
-
-[tabs]
-======
-TypeScript::
-+
-[source,ts]
-----
-import { MemoryClient } from "@neo4j-labs/agent-memory";
-
-const client = new MemoryClient({
-  endpoint: "https://memory.neo4jlabs.com/v1",
-  apiKey: process.env.MEMORY_API_KEY!,
-});
-await client.connect();
-
-const conv = await client.shortTerm.createConversation({ userId: "alice" });
-await client.shortTerm.addMessage(conv.id, "user", "John works at Acme.");
-const ctx = await client.shortTerm.getContext(conv.id);
-console.log(ctx);
-----
-
-Python::
-+
-[source,python]
-----
-import asyncio
-from neo4j_agent_memory_client import MemoryClient
-
-async def main():
-    async with MemoryClient(
-        endpoint="https://memory.neo4jlabs.com/v1",
-        api_key=os.environ["MEMORY_API_KEY"],
-    ) as client:
-        conv = await client.short_term.create_conversation(user_id="alice")
-        await client.short_term.add_message(conv.id, "user", "John works at Acme.")
-        ctx = await client.short_term.get_context(conv.id)
-        print(ctx)
-
-asyncio.run(main())
-----
-
-Go::
-+
-[source,go]
-----
-client, _ := memory.New(
-    memory.WithEndpoint("https://memory.neo4jlabs.com/v1"),
-    memory.WithAPIKey(os.Getenv("MEMORY_API_KEY")),
-)
-ctx := context.Background()
-
-conv, _ := client.ShortTerm.CreateConversation(ctx, memory.CreateConversationParams{
-    UserID: "alice",
-})
-_, _ = client.ShortTerm.AddMessage(ctx, conv.ID, memory.RoleUser, "John works at Acme.")
-context, _ := client.ShortTerm.GetContext(ctx, conv.ID)
-fmt.Println(context)
-----
-
-C#::
-+
-[source,csharp]
-----
-using var client = new MemoryClient(new MemoryClientOptions {
-    Endpoint = "https://memory.neo4jlabs.com/v1",
-    ApiKey = Environment.GetEnvironmentVariable("MEMORY_API_KEY"),
-});
-await client.ConnectAsync();
-
-var conv = await client.ShortTerm.CreateConversationAsync("alice");
-await client.ShortTerm.AddMessageAsync(conv.Id, MessageRole.User, "John works at Acme.");
-var ctx = await client.ShortTerm.GetContextAsync(conv.Id);
-----
-
-R::
-+
-[source,r]
-----
-library(neo4j.memory)
-
-client <- MemoryClient$new(
-  endpoint = "https://memory.neo4jlabs.com/v1",
-  api_key = Sys.getenv("MEMORY_API_KEY")
-)
-client$connect()
-
-conv <- client$short_term$create_conversation(user_id = "alice")
-client$short_term$add_message(conv$id, "user", "John works at Acme.")
-ctx <- client$short_term$get_context(conv$id)
-----
-======
-
-== Step 4 — Inspect the entity graph
-
-The service automatically extracts entities (`John`, `Acme`) from the message
-content. Pull the full graph view with one call:
-
-[source,ts]
-----
-const graph = await client.longTerm.getEntityGraph();
-console.log(graph.nodes, graph.edges);
-----
-
-== Step 5 — Reasoning provenance
-
-Record reasoning steps under a conversation, then ask why an entity exists:
-
-[source,ts]
-----
-await client.reasoning.recordStep({
-  conversationId: conv.id,
-  reasoning: "User mentioned John works at Acme.",
-  actionTaken: "extract_entities",
-  result: "John (person), Acme (organization)",
-});
-
-const provenance = await client.reasoning.getEntityProvenance(entityId);
-console.log(provenance.steps);
-----
+include::partial$typescript-tutorial-lifecycle.adoc[]
 
 == Next steps
 
-* link:authenticate.html[How-To: Authenticate] — API key rotation, OAuth, scopes.
-* link:../reference/rest-api.html[Reference: REST API endpoints].
-* link:../reference/mcp-tools.html[Reference: MCP Tools] — wire the same
-  surface into Claude Desktop / Cursor / Windsurf.
+* xref:tutorials/first-agent-memory-typescript.adoc[Use stored context in a model call].
+* xref:tutorials/knowledge-graph-typescript.adoc[Ingest documents and inspect extracted entities].
+* xref:how-to/typescript/authenticate.adoc[Authenticate and rotate credentials].
+* xref:reference/rest-api.adoc[Hosted REST API reference].

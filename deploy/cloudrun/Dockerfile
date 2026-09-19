@@ -2,14 +2,17 @@
 # Cloud Run deployment image
 #
 # Build:
-#   docker build -t neo4j-memory-mcp .
+#   docker build -f deploy/cloudrun/Dockerfile -t neo4j-memory-mcp .
 #
 # Run locally:
 #   docker run -p 8080:8080 \
 #     -e NEO4J_URI=bolt://host.docker.internal:7687 \
 #     -e NEO4J_USER=neo4j \
 #     -e NEO4J_PASSWORD=password \
+#     -e GOOGLE_CLOUD_PROJECT=your-test-project \
 #     neo4j-memory-mcp
+#   Local embedding calls also require readable Application Default Credentials;
+#   see deploy/cloudrun/README.md for the read-only credential mount.
 
 FROM python:3.11-slim
 
@@ -22,7 +25,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first for better caching
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md README-pypi.md ./
 COPY src/ ./src/
 
 # Install the package with MCP and Google dependencies
@@ -38,6 +41,9 @@ EXPOSE 8080
 # Set environment variables
 ENV PORT=8080
 ENV PYTHONUNBUFFERED=1
+# This example uses Vertex AI embeddings via Application Default Credentials.
+# Disable the default extraction pipeline so no implicit OpenAI LLM is needed.
+ENV NAM_EXTRACTION__EXTRACTOR_TYPE=none
 
 # Run the MCP server via the installed CLI entry point.
 #
@@ -46,4 +52,7 @@ ENV PYTHONUNBUFFERED=1
 # POST/GET /mcp/ — not the /sse + /messages pair the retired HTTP+SSE transport
 # used. Update client URLs if you are migrating from an older image.
 CMD ["neo4j-agent-memory", "mcp", "serve", \
-     "--transport", "http", "--host", "0.0.0.0", "--port", "8080"]
+     "--transport", "http", "--host", "0.0.0.0", "--port", "8080", \
+     "--backend", "bolt", \
+     "--embedding", "vertex_ai/gemini-embedding-001", \
+     "--embedding-dimensions", "768", "--no-auto-preferences"]

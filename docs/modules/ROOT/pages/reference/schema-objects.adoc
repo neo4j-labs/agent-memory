@@ -1,13 +1,12 @@
-= Schema Objects Reference
+= Schema objects reference
 :page-product: agent-memory
 :toclevels: 2
 
-Complete inventory of the constraints, regular indexes, vector indexes,
-and point indexes that `neo4j-agent-memory` creates on first connection.
+Inventory of the constraints, regular indexes, vector indexes, and point indexes that the bolt backend attempts to create on connection. NAMS manages its schema on the service; `client.schema` is not supported there.
 Use this page to answer "what schema changes will this library make to
 my Neo4j database?" before deploying.
 
-All schema objects are created by `SchemaManager.setup_all()`, which
+Schema creation is performed by `neo4j_agent_memory.graph.schema.SchemaManager.setup_all()`, which
 runs as part of `MemoryClient.connect()`. Existing constraints/indexes
 with the same name are skipped; the operation is idempotent.
 
@@ -18,7 +17,7 @@ file for the complete current inventory used in deployments.
 
 == Unique constraints
 
-[cols="1,1,1,3"]
+[cols="3,2,2,3"]
 |===
 | Name | Label | Property | Purpose
 
@@ -40,7 +39,7 @@ file for the complete current inventory used in deployments.
 
 Lookup indexes for common filter / equality queries.
 
-[cols="1,1,1,3"]
+[cols="3,2,2,3"]
 |===
 | Name | Label | Property | Purpose
 
@@ -65,11 +64,11 @@ Lookup indexes for common filter / equality queries.
 Created with the embedding dimensions configured at construction time
 (`SchemaManager(client, vector_dimensions=...)`). Default is 1536.
 
-NOTE: Vector indexes require Neo4j 5.11+. On older databases the library
-silently skips creation — semantic search via these indexes won't
-work, but the rest of the library functions normally.
+Vector-index creation exceptions are currently suppressed, including failures unrelated to server version. A successful connection therefore does not prove every index exists or is online. Point-index creation also suppresses errors. Inspect `SHOW INDEXES` when validating deployment permissions and semantic/geospatial query behavior.
 
-[cols="1,1,1,3"]
+After setup, MemoryClient validates the dimensions of existing managed vector indexes against the configured embedder. Mismatches raise EmbeddingDimensionMismatchError; unrelated index names are not checked. Changing a model requires the migration workflow, not just changing this setting.
+
+[cols="3,2,2,3"]
 |===
 | Name | Label | Property | Purpose
 
@@ -85,7 +84,7 @@ work, but the rest of the library functions normally.
 
 Created for geospatial queries on Location entities.
 
-[cols="1,1,1,3"]
+[cols="3,2,2,3"]
 |===
 | Name | Label | Property | Purpose
 
@@ -97,8 +96,7 @@ Created for geospatial queries on Location entities.
 `SchemaManager.drop_all()` removes every constraint and index whose name
 starts with one of `conversation_`, `message_`, `entity_`,
 `preference_`, `fact_`, `reasoning_`, `trace_`, `tool_`, `task_`,
-`step_`, `user_`, `consolidation_`, or `memory_read_`. It does not
-delete data — only schema definitions.
+`step_`, `user_`, `consolidation_`, or `memory_read_`. It does not delete data, but its prefix matching can also remove application-owned schema objects using those prefixes. Inspect the current inventory before deliberately calling it.
 
 [source,python]
 ----
@@ -106,7 +104,8 @@ async with MemoryClient(settings) as client:
     await client.schema.drop_all()
 ----
 
-== See Also
+== See also
 
-* xref:reference/configuration.adoc[Configuration Reference] — how to override `vector_dimensions` and other schema-related options.
+* xref:reference/configuration.adoc[Configuration Reference] — provider dimensions and other configuration options.
+* xref:how-to/migrate-embedding-model.adoc[Migrate embedding models] — recreate indexes and re-embed stored data.
 * xref:explanation/graph-architecture.adoc[Graph Architecture] — the relationships these constraints/indexes support.

@@ -1,0 +1,340 @@
+= Deduplication and provenance
+:page-product: agent-memory
+:page-pagination:
+:toclevels: 2
+
+Ingest-time deduplication and extraction-provenance operations from xref:reference/api/long-term.adoc[LongTermMemory API reference]. Both are bolt-only. Signatures show types, keyword-only arguments (`*`), and defaults; they are reference declarations, not calls to execute directly.
+
+anchor:_deduplication_operations[]
+
+== Deduplication (bolt only)
+
+Ingestion deduplication uses `DeduplicationConfig` from `neo4j_agent_memory.memory.long_term`. There is no top-level `DeduplicationStrategy` or `NAM_DEDUPLICATION` settings group. See xref:reference/configuration-advanced.adoc#deduplication[Deduplication configuration].
+
+=== find_potential_duplicates
+
+Find entities that are flagged as potential duplicates.
+
+// contract: memory/long_term.py:LongTermMemory.find_potential_duplicates
+[source,python]
+----
+async def find_potential_duplicates(*, limit: int=100) -> list[tuple[Entity, Entity, float]]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `limit` | Maximum number of duplicate pairs to return
+|===
+
+=== merge_duplicate_entities
+
+Merge two entities, keeping the target and marking source as merged. The source's name is added to the target's `aliases`, and the Bolt query copies the source's edges of these types onto the target: inbound `:MENTIONS` (from `Message`), `:RELATED_TO` in both directions, `:SAME_AS`, outbound `:EXTRACTED_FROM` and `:EXTRACTED_BY` provenance, inbound `:APPLIES_TO` (from `Preference`), and inbound `:TOUCHED` (from `ReasoningStep`). Edges are copied, not moved: the merged-away source keeps its own edges — so the merge stays reversible and auditable — and is marked with `merged_into`/`merged_at` to exclude it from later deduplication scans. A copied edge keeps the source edge's `id` and gains a `migrated_from` property; nothing looks a `:RELATED_TO` edge up by id, so the shared id is not ambiguous. Relationship types outside this list are not transferred automatically; review any custom links separately.
+
+// contract: memory/long_term.py:LongTermMemory.merge_duplicate_entities
+[source,python]
+----
+async def merge_duplicate_entities(source_id: UUID, target_id: UUID) -> tuple[Entity, Entity] | None: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `source_id` | ID of entity to merge from (will be marked as merged)
+| `target_id` | ID of entity to merge into (will be kept)
+|===
+
+=== review_duplicate
+
+Review a potential duplicate pair.
+
+// contract: memory/long_term.py:LongTermMemory.review_duplicate
+[source,python]
+----
+async def review_duplicate(
+    source_id: UUID,
+    target_id: UUID,
+    *,
+    confirm: bool,
+) -> bool: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `source_id` | ID of first entity
+| `target_id` | ID of second entity
+| `confirm` | True to confirm as duplicate (merge), False to reject
+|===
+
+=== get_same_as_cluster
+
+Get all entities in the same `:SAME_AS` cluster as the given entity.
+
+// contract: memory/long_term.py:LongTermMemory.get_same_as_cluster
+[source,python]
+----
+async def get_same_as_cluster(entity_id: UUID) -> list[Entity]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `entity_id` | Entity ID to find cluster for
+|===
+
+=== get_deduplication_stats
+
+Get statistics about entity deduplication.
+
+// contract: memory/long_term.py:LongTermMemory.get_deduplication_stats
+[source,python]
+----
+async def get_deduplication_stats() -> DeduplicationStats: ...
+----
+
+`DeduplicationResult.action` is `none`, `merged`, or `flagged`; an ordinary new entity uses `none`. Thresholds are inclusive. The flag, auto-merge, and fuzzy thresholds must be between 0 and 1, and auto-merge must be at least the flag threshold.
+
+=== DeduplicationConfig
+
+Fields and defaults:
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `enabled` | `bool` | `True` |
+| `auto_merge_threshold` | `float` | `0.95` |
+| `flag_threshold` | `float` | `0.85` |
+| `use_fuzzy_matching` | `bool` | `True` |
+| `fuzzy_threshold` | `float` | `0.9` |
+| `max_candidates` | `int` | `10` |
+| `match_same_type_only` | `bool` | `True` |
+|===
+
+=== DeduplicationResult
+
+Fields and defaults:
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `is_duplicate` | `bool` | `False` |
+| `action` | `str` | `'none'` |
+| `matched_entity_id` | `UUID \| None` | `None` |
+| `matched_entity_name` | `str \| None` | `None` |
+| `similarity_score` | `float` | `0.0` |
+| `match_type` | `str \| None` | `None` |
+|===
+
+=== DuplicateCandidate
+
+Fields and defaults:
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `entity_id` | `UUID` | `required` |
+| `entity_name` | `str` | `required` |
+| `canonical_name` | `str \| None` | `required` |
+| `entity_type` | `str` | `required` |
+| `similarity_score` | `float` | `required` |
+| `fuzzy_score` | `float \| None` | `None` |
+| `relationship_status` | `str` | `'pending'` |
+|===
+
+=== DeduplicationStats
+
+Fields and defaults:
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `total_entities` | `int` | `0` |
+| `merged_entities` | `int` | `0` |
+| `same_as_relationships` | `int` | `0` |
+| `pending_reviews` | `int` | `0` |
+|===
+
+
+anchor:_provenance_operations[]
+
+== Provenance and extraction records (bolt)
+
+=== register_extractor
+
+Register an extractor for provenance tracking.
+
+// contract: memory/long_term.py:LongTermMemory.register_extractor
+[source,python]
+----
+async def register_extractor(
+    name: str,
+    *,
+    version: str | None=None,
+    config: dict[str, Any] | None=None,
+) -> dict[str, Any]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `name` | Unique extractor name (e.g., "GLiNEREntityExtractor", "SpacyNER")
+| `version` | Optional version string
+| `config` | Optional configuration dict (will be JSON serialized)
+|===
+
+=== link_entity_to_message
+
+Link an entity to its source message (`:EXTRACTED_FROM` relationship).
+
+// contract: memory/long_term.py:LongTermMemory.link_entity_to_message
+[source,python]
+----
+async def link_entity_to_message(
+    entity: Entity | UUID,
+    message_id: UUID | str,
+    *,
+    confidence: float=1.0,
+    start_pos: int | None=None,
+    end_pos: int | None=None,
+    context: str | None=None,
+) -> bool: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `entity` | Entity or entity ID
+| `message_id` | ID of the source message
+| `confidence` | Extraction confidence score
+| `start_pos` | Start character position in the message
+| `end_pos` | End character position in the message
+| `context` | Surrounding text context
+|===
+
+=== link_entity_to_extractor
+
+Link an entity to its extractor (`:EXTRACTED_BY` relationship).
+
+// contract: memory/long_term.py:LongTermMemory.link_entity_to_extractor
+[source,python]
+----
+async def link_entity_to_extractor(
+    entity: Entity | UUID,
+    extractor_name: str,
+    *,
+    confidence: float=1.0,
+    extraction_time_ms: float | None=None,
+) -> bool: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `entity` | Entity or entity ID
+| `extractor_name` | Name of the extractor
+| `confidence` | Extraction confidence score
+| `extraction_time_ms` | Time taken for extraction in milliseconds
+|===
+
+=== get_entity_provenance
+
+Get provenance information for an entity.
+
+// contract: memory/long_term.py:LongTermMemory.get_entity_provenance
+[source,python]
+----
+async def get_entity_provenance(entity_id: Entity | UUID | str) -> dict[str, Any]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `entity_id` | Entity, entity UUID, or entity id string. (`str` is accepted to match `LongTermProtocol.get_entity_provenance`; an `Entity` is also accepted for convenience.)
+|===
+
+=== get_entities_from_message
+
+Get all entities extracted from a message.
+
+// contract: memory/long_term.py:LongTermMemory.get_entities_from_message
+[source,python]
+----
+async def get_entities_from_message(message_id: UUID | str) -> list[tuple[Entity, dict[str, Any]]]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `message_id` | ID of the source message
+|===
+
+=== get_entities_by_extractor
+
+Get all entities extracted by a specific extractor.
+
+// contract: memory/long_term.py:LongTermMemory.get_entities_by_extractor
+[source,python]
+----
+async def get_entities_by_extractor(extractor_name: str, *, limit: int=100) -> list[tuple[Entity, dict[str, Any]]]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `extractor_name` | Name of the extractor
+| `limit` | Maximum number of entities to return
+|===
+
+=== list_extractors
+
+List all registered extractors with entity counts.
+
+// contract: memory/long_term.py:LongTermMemory.list_extractors
+[source,python]
+----
+async def list_extractors() -> list[dict[str, Any]]: ...
+----
+
+=== get_extraction_stats
+
+Get overall extraction statistics.
+
+// contract: memory/long_term.py:LongTermMemory.get_extraction_stats
+[source,python]
+----
+async def get_extraction_stats() -> dict[str, Any]: ...
+----
+
+=== get_extractor_stats
+
+Get per-extractor statistics.
+
+// contract: memory/long_term.py:LongTermMemory.get_extractor_stats
+[source,python]
+----
+async def get_extractor_stats() -> list[dict[str, Any]]: ...
+----
+
+=== delete_entity_provenance
+
+Delete all provenance links for an entity.
+
+// contract: memory/long_term.py:LongTermMemory.delete_entity_provenance
+[source,python]
+----
+async def delete_entity_provenance(entity: Entity | UUID) -> int: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `entity` | Entity or entity ID
+|===
+
+
+== See also
+
+* xref:reference/api/long-term.adoc[LongTermMemory API reference]
+* xref:how-to/deduplication.adoc[Handle duplicate entities]
+* xref:explanation/resolution-deduplication.adoc[Entity resolution and deduplication]

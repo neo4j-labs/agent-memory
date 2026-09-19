@@ -1,0 +1,315 @@
+= Built-in extractor classes
+:page-product: agent-memory
+:page-pagination:
+:toclevels: 2
+
+The concrete single-stage extractors from xref:reference/extractors.adoc[Extractor classes reference]: statistical (spaCy), zero-shot (GLiNER2), and LLM-based. Import from `neo4j_agent_memory.extraction`.
+
+anchor:_constructor[]
+anchor:_parameters[]
+anchor:_default_type_mapping[]
+anchor:_example[]
+
+== SpacyEntityExtractor
+
+Statistical NER using a separately installed spaCy model. Import from `neo4j_agent_memory.extraction`. Install the matching extraction extra and model before running inference.
+
+// contract: extraction/spacy_extractor.py:SpacyEntityExtractor.__init__
+[source,python]
+----
+def SpacyEntityExtractor(
+    model: str='en_core_web_sm',
+    type_mapping: dict[str, str] | None=None,
+    subtype_mapping: dict[str, str] | None=None,
+    default_confidence: float=0.85,
+    context_window: int=50,
+): ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `model` | spaCy model name (e.g., "en_core_web_sm", "en_core_web_lg")
+| `type_mapping` | Custom mapping from spaCy labels to POLE+O types
+| `subtype_mapping` | Custom mapping from spaCy labels to subtypes
+| `default_confidence` | Default confidence score (spaCy doesn't provide per-entity scores)
+| `context_window` | Number of characters of context to include around entities
+|===
+
+The default mappings include PERSON → PERSON, ORG → ORGANIZATION, GPE/LOC → LOCATION, EVENT → EVENT, and PRODUCT/WORK_OF_ART → OBJECT. Subtype mappings are retained on results. Override the mapping explicitly for your domain.
+
+[source,python]
+----
+from neo4j_agent_memory.extraction import SpacyEntityExtractor
+
+extractor = SpacyEntityExtractor(model="en_core_web_sm")
+result = await extractor.extract("John works at Apple in California")
+----
+
+
+anchor:_constructor_2[]
+anchor:_parameters_2[]
+anchor:_factory_methods[]
+anchor:_example_2[]
+
+== GLiNEREntityExtractor
+
+Zero-shot entity extraction with labels or domain descriptions. The constructor accepts a DomainSchema object; use `for_schema(name)` for a built-in schema name. Models load lazily when inference is requested.
+
+// contract: extraction/gliner_extractor.py:GLiNEREntityExtractor.__init__
+[source,python]
+----
+def GLiNEREntityExtractor(
+    model: str=DEFAULT_GLINER2_MODEL,
+    entity_labels: list[str] | dict[str, str] | None=None,
+    threshold: float=0.5,
+    flat_ner: bool=True,
+    multi_label: bool=False,
+    device: str='cpu',
+    context_window: int=50,
+    label_mapping: dict[str, tuple[str, str | None]] | None=None,
+    schema: DomainSchema | None=None,
+): ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `model` | GLiNER model name from HuggingFace (default: gliner-community/gliner_medium-v2.5)
+| `entity_labels` | Entity labels (list) or labels with descriptions (dict). Descriptions improve extraction accuracy with GLiNER2.
+| `threshold` | Confidence threshold for including entities (0.0-1.0)
+| `flat_ner` | Use flat NER (no nested entities)
+| `multi_label` | Allow multiple labels per entity
+| `device` | Device to run on (cpu, cuda, mps)
+| `context_window` | Characters of context to include around entities
+| `label_mapping` | Custom mapping from GLiNER labels to (TYPE, SUBTYPE)
+| `schema` | Pre-defined DomainSchema to use (overrides entity_labels)
+|===
+
+=== extract
+
+Extract entities from text using GLiNER zero-shot NER.
+
+// contract: extraction/gliner_extractor.py:GLiNEREntityExtractor.extract
+[source,python]
+----
+async def extract(
+    text: str,
+    *,
+    entity_types: list[str] | None=None,
+    extract_relations: bool=True,
+    extract_preferences: bool=True,
+) -> ExtractionResult: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `text` | The text to extract from
+| `entity_types` | Optional list of POLE+O entity types to extract
+| `extract_relations` | Ignored (GLiNER doesn't extract relations)
+| `extract_preferences` | Ignored (GLiNER doesn't extract preferences)
+|===
+
+=== extract_batch
+
+Extract entities from multiple texts using GLiNER batch inference.
+
+// contract: extraction/gliner_extractor.py:GLiNEREntityExtractor.extract_batch
+[source,python]
+----
+async def extract_batch(
+    texts: list[str],
+    *,
+    entity_types: list[str] | None=None,
+    batch_size: int=32,
+    on_progress: Callable[[int, int], None] | None=None,
+) -> list[ExtractionResult]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `texts` | List of texts to extract from
+| `entity_types` | Optional list of POLE+O entity types to filter
+| `batch_size` | Number of texts to process in each batch (for memory management)
+| `on_progress` | Optional callback called after each batch. Receives (completed_count, total_count).
+|===
+
+=== for_schema
+
+Create extractor using a pre-defined domain schema.
+
+// contract: extraction/gliner_extractor.py:GLiNEREntityExtractor.for_schema
+[source,python]
+----
+def for_schema(
+    schema_name: str,
+    model: str=DEFAULT_GLINER2_MODEL,
+    threshold: float=0.5,
+    device: str='cpu',
+) -> GLiNEREntityExtractor: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `schema_name` | Name of the schema (poleo, podcast, news, scientific, business, entertainment, medical, legal)
+| `model` | GLiNER2 model to use
+| `threshold` | Confidence threshold
+| `device` | Device to run on
+|===
+
+=== for_poleo
+
+Create extractor optimized for POLE+O entity extraction.
+
+// contract: extraction/gliner_extractor.py:GLiNEREntityExtractor.for_poleo
+[source,python]
+----
+def for_poleo(
+    model: str=DEFAULT_GLINER2_MODEL,
+    threshold: float=0.5,
+    device: str='cpu',
+    use_descriptions: bool=True,
+) -> GLiNEREntityExtractor: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `model` | GLiNER2 model to use (default: gliner_medium-v2.5)
+| `threshold` | Confidence threshold
+| `device` | Device to run on
+| `use_descriptions` | Whether to use the poleo schema with descriptions (recommended for better accuracy)
+|===
+
+=== from_config
+
+Create extractor from configuration.
+
+// contract: extraction/gliner_extractor.py:GLiNEREntityExtractor.from_config
+[source,python]
+----
+def from_config(config: GLiNERConfig) -> GLiNEREntityExtractor: ...
+----
+
+=== update_labels
+
+Update entity labels for extraction.
+
+// contract: extraction/gliner_extractor.py:GLiNEREntityExtractor.update_labels
+[source,python]
+----
+def update_labels(labels: list[str]) -> None: ...
+----
+
+=== add_label_mapping
+
+Add a custom label mapping.
+
+// contract: extraction/gliner_extractor.py:GLiNEREntityExtractor.add_label_mapping
+[source,python]
+----
+def add_label_mapping(label: str, entity_type: str, subtype: str | None=None) -> None: ...
+----
+
+`DEFAULT_GLINER2_MODEL` is `gliner-community/gliner_medium-v2.5`. A named domain schema is a local label/description set; it is distinct from a persisted schema or hosted ontology.
+
+[source,python]
+----
+from neo4j_agent_memory.extraction import GLiNEREntityExtractor
+
+extractor = GLiNEREntityExtractor.for_schema("podcast", threshold=0.6)
+result = await extractor.extract("Marc Andreessen discusses AI on the show")
+----
+
+
+anchor:_constructor_3[]
+anchor:_parameters_3[]
+anchor:_example_3[]
+
+== LLMEntityExtractor
+
+LLM-based entity, relation, and preference extraction. Inject an LLMProvider or StructuredExtractor through `provider`; without one, the model/API-key path uses the provider factory. This class is not limited to OpenAI.
+
+// contract: extraction/llm_extractor.py:LLMEntityExtractor.__init__
+[source,python]
+----
+def LLMEntityExtractor(
+    provider: LLMProvider | StructuredExtractor | None=None,
+    *,
+    model: str | None=None,
+    api_key: str | None=None,
+    entity_types: list[str] | None=None,
+    subtypes: dict[str, list[str]] | None=None,
+    extraction_prompt: str | None=None,
+    temperature: float=0.0,
+    extract_relations: bool=True,
+    extract_preferences: bool=True,
+) -> None: ...
+----
+
+=== extract
+
+Extract entities, relations, and preferences from text.
+
+// contract: extraction/llm_extractor.py:LLMEntityExtractor.extract
+[source,python]
+----
+async def extract(
+    text: str,
+    *,
+    entity_types: list[str] | None=None,
+    extract_relations: bool | None=None,
+    extract_preferences: bool | None=None,
+) -> ExtractionResult: ...
+----
+
+=== for_poleo
+
+Create extractor configured for POLE+O model.
+
+// contract: extraction/llm_extractor.py:LLMEntityExtractor.for_poleo
+[source,python]
+----
+def for_poleo(
+    provider: LLMProvider | StructuredExtractor | None=None,
+    *,
+    model: str='openai/gpt-4o-mini',
+    api_key: str | None=None,
+) -> LLMEntityExtractor: ...
+----
+
+=== for_custom_types
+
+Create extractor for custom entity types.
+
+// contract: extraction/llm_extractor.py:LLMEntityExtractor.for_custom_types
+[source,python]
+----
+def for_custom_types(
+    entity_types: list[str],
+    provider: LLMProvider | StructuredExtractor | None=None,
+    *,
+    model: str='openai/gpt-4o-mini',
+    api_key: str | None=None,
+) -> LLMEntityExtractor: ...
+----
+
+[source,python]
+----
+from neo4j_agent_memory.extraction import LLMEntityExtractor
+from neo4j_agent_memory.llm import from_provider
+
+provider = from_provider("openai/gpt-4o-mini")
+extractor = LLMEntityExtractor(provider=provider)
+result = await extractor.extract("John Smith, CEO of Acme, spoke at the conference")
+----
+
+
+== See also
+
+* xref:reference/extractors.adoc[Extractor classes reference]
+* xref:reference/extractor-pipeline.adoc[Extraction pipeline]
+* xref:reference/schemas.adoc[Domain schemas reference]

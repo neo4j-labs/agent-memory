@@ -16,9 +16,8 @@
 
 ## Prerequisites
 
-- **Node.js 22 LTS or newer** (Node 18 reached end of life in April 2025). The
-  `npm test` script uses Node's built-in test runner and TypeScript type
-  stripping, which needs 22.6+.
+- **Node.js 22.13+ on the 22 release line, or Node.js 24**, for development and checks.
+  The locked lint/test toolchain sets this floor independently of the TypeScript memory SDK.
 - The backend from [`../backend`](../backend) running on port 8000.
 
 ## Quick start
@@ -131,15 +130,17 @@ src/
 
 ---
 
-_Verified against `next` 16.3.4, `react` 19.3.0, `@chakra-ui/react` 3.37.0,
-`react-force-graph-2d` 1.29.1, `eslint` 9.39.5, `typescript` 5.9.3 on Node
-25.0.0, 2026-09-10. `npm install`, `npm run lint`, `npm run typecheck`,
-`npm test` (7 tests) and `npm run build` all pass. The production build was
-served with `next start` and driven in headless Chromium against a stubbed
-backend: all three tabs render, the knowledge graph draws and re-centres on a
-node click, the preference form writes and the list refreshes, the colour-mode
-toggle flips `<html class>`, and switching shoppers starts a new session. The
-console is clean apart from the intermittent `next-themes` hydration notice
-described above. The chat turn itself needs a real backend and an
-`OPENAI_API_KEY`. `eslint` is held at 9 because `eslint-config-next@16.3.4`
-bundles an `eslint-plugin-react` that crashes under ESLint 10._
+**Historical verification report — 2026-09-10.** The following records a prior checkout/test report. Its development-version labels, passing counts, and release-availability statements are historical, not evidence of current package compatibility. See the [current source and artifact evidence](../../../DOCUMENTATION_REMEDIATION_STATUS.md) before selecting an SDK artifact.
+
+> _Verified against `next` 16.3.4, `react` 19.3.0, `@chakra-ui/react` 3.37.0,
+> `react-force-graph-2d` 1.29.1, `eslint` 9.39.5, `typescript` 5.9.3 on Node
+> 25.0.0, 2026-09-10. `npm install`, `npm run lint`, `npm run typecheck`,
+> `npm test` (7 tests) and `npm run build` all pass. The production build was
+> served with `next start` and driven in headless Chromium against a stubbed
+> backend: all three tabs render, the knowledge graph draws and re-centres on a
+> node click, the preference form writes and the list refreshes, the colour-mode
+> toggle flips `<html class>`, and switching shoppers starts a new session. The
+> console is clean apart from the intermittent `next-themes` hydration notice
+> described above. The chat turn itself needs a real backend and an
+> `OPENAI_API_KEY`. `eslint` is held at 9 because `eslint-config-next@16.3.4`
+> bundles an `eslint-plugin-react` that crashes under ESLint 10._

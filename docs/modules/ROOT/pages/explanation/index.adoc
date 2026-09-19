@@ -1,85 +1,31 @@
-= Explanation
+= Concepts
 :page-product: agent-memory
-:page-pagination:
 :toclevels: 2
 
-Understand the concepts, design decisions, and architecture behind neo4j-agent-memory.
+Understand memory models, architecture, and design tradeoffs. Use xref:how-to/index.adoc[how-to guides] for procedures and xref:reference/index.adoc[reference] for complete option lists.
 
-[.lead]
-Explanation is *understanding-oriented*. It clarifies and illuminates a topic. It's about helping you understand why things work the way they do.
+If you are new to the project, read the first three pages below in order: the three memory types, then why the graph, then the POLE+O model. That gives you the vocabulary the rest of the pages assume.
 
-== Core Concepts
+// Retain former section URLs at the current related topic.
+== Memory concepts
 
-[cols="1,2", options="header"]
-|===
-| Topic | What You'll Understand
+// Anchors below are from the pre-Diataxis docs/explanation/index.adoc (commit 94e4c32): _core_concepts,
+// _technical_deep_dives and _key_design_decisions were its `==` sections; _graph_native_memory,
+// _three_layer_architecture and _poleo_classification were `===` subsections under Key Design Decisions;
+// _explanation_philosophy and _further_reading were its closing `==` sections.
+anchor:_core_concepts[]anchor:_technical_deep_dives[]anchor:_key_design_decisions[]anchor:_graph_native_memory[]anchor:_three_layer_architecture[]anchor:_poleo_classification[]anchor:_explanation_philosophy[]anchor:_further_reading[]
 
-| xref:explanation/memory-types.adoc[The Three Memory Types]
-| Why agent memory is divided into short-term, long-term, and reasoning memory. How they work together.
-
-| xref:explanation/poleo-model.adoc[The POLE+O Data Model]
-| Why we use Person-Object-Location-Event-Organization for entity classification. Origins and benefits.
-
-| xref:explanation/graph-architecture.adoc[Why Neo4j?]
-| Why a graph database is ideal for agent memory. How the schema is designed.
-|===
-
-== Technical Deep Dives
-
-[cols="1,2", options="header"]
-|===
-| Topic | What You'll Understand
-
-| xref:explanation/extraction-pipeline.adoc[How Entity Extraction Works]
-| The multi-stage extraction pipeline. Trade-offs between speed and accuracy.
-
-| xref:explanation/resolution-deduplication.adoc[Entity Resolution Concepts]
-| How entities are matched and merged. Fuzzy matching, embeddings, and confidence thresholds.
-|===
-
-== Key Design Decisions
-
-=== Graph-Native Memory
-
-Traditional agent memory systems use flat key-value stores or vector databases. neo4j-agent-memory uses a *graph-native* approach:
-
-* *Relationships are first-class*: Entities connect to messages, other entities, and reasoning traces
-* *Traversal queries*: Find how entities relate across conversations
-* *Temporal patterns*: Track how knowledge evolves over time
-
-=== Three-Layer Architecture
-
-We separate memory into three distinct layers because they have different:
-
-* *Lifetimes*: Messages are ephemeral, entities persist, reasoning traces are archival
-* *Access patterns*: Recent messages vs. semantic search vs. tool usage stats
-* *Schemas*: Conversations have structure, entities have types, traces have steps
-
-=== POLE+O Classification
-
-The POLE+O model (Person, Object, Location, Event, Organization) comes from law enforcement and intelligence analysis. We adopted it because:
-
-* *Universal*: These five categories cover most real-world entities
-* *Hierarchical*: Subtypes allow fine-grained classification
-* *Relationships*: The model defines expected relationships between types
-
-== Explanation Philosophy
-
-Explanation documentation:
-
-* *Discusses*: The "why" behind design choices
-* *Contextualizes*: Connects to broader concepts and alternatives
-* *Reflective*: Can be read and pondered, not just executed
-* *Honest*: Acknowledges trade-offs and limitations
-
-For hands-on learning, see the xref:tutorials/index.adoc[Tutorials].
-
-For solving specific problems, see the xref:how-to/index.adoc[How-To Guides].
-
-For technical details and API documentation, see the xref:reference/index.adoc[Reference] section.
-
-== Further Reading
-
-* https://diataxis.fr/explanation/[Diataxis: Explanation] - The documentation framework we follow
-* https://neo4j.com/developer/graph-database/[Neo4j Graph Database Concepts]
-* https://en.wikipedia.org/wiki/POLE_model[Wikipedia: POLE Model]
+* xref:explanation/memory-types.adoc[Understanding the three memory types] -- Short-term, long-term, and reasoning memory, and why the library keeps them separate.
+* xref:explanation/graph-architecture.adoc[Why Neo4j? Graph memory architecture] -- Why a graph, rather than a vector store or relational database, backs agent memory here.
+* xref:explanation/poleo-model.adoc[The POLE+O data model] -- The Person/Object/Location/Event/Organization classification long-term memory uses for entities.
+* xref:explanation/backends.adoc[Bolt and NAMS backends] -- How the self-hosted Bolt backend and the hosted NAMS backend compare and where they diverge.
+* xref:explanation/extraction-pipeline.adoc[How entity extraction works] -- How the spaCy, GLiNER, and LLM extraction stages combine into one pipeline.
+* xref:explanation/resolution-deduplication.adoc[Entity resolution and deduplication] -- How entity resolution decides two mentions are the same entity, and when it flags instead of merges.
+* xref:explanation/structured-extraction.adoc[Structured extraction] -- How structured output from an LLM is validated and turned into entities and relationships.
+* xref:explanation/why-provider-protocol.adoc[Why the provider protocol?] -- Why LLM and embedding providers are a swappable protocol rather than hard-coded integrations.
+* xref:explanation/framework-comparison.adoc[Choosing an agent framework integration] -- How the framework integrations compare, to help you pick one for your agent.
+* xref:explanation/multi-agent-sharing.adoc[Cross-agent memory sharing] -- What happens, and what can go wrong, when multiple agents share the same memory graph.
+* xref:explanation/operational-primitives.adoc[Why the v0.2 operational primitives are opt-in] -- Why multi-tenancy, buffered writes, and consolidation ship opt-in rather than as defaults.
+* xref:explanation/context-tiers.adoc[Understanding the three-tier context model] -- How recent messages compress into observations, and observations into reflections, as context grows.
+* xref:explanation/ontologies.adoc[Ontologies] -- What a NAMS ontology is and how it constrains extraction for a workspace.
+* xref:explanation/skills.adoc[Agent Skills] -- What a NAMS Agent Skill is and how it differs from an ontology.

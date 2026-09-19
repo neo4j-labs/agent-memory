@@ -1,0 +1,58 @@
+{
+  "checks": [
+    {
+      "source": "docs/assets/diagrams/excalidraw/buffered-write-flow.excalidraw",
+      "source_sha256": "8ad67d8042f6e64fdd8a15b745a0bf6e52934fd8824e2f27f609ba430ed128d3",
+      "elements": 24,
+      "binding_check": "passed",
+      "native_export_visually_reviewed": true
+    },
+    {
+      "source": "docs/assets/diagrams/excalidraw/message-chain.excalidraw",
+      "source_sha256": "758eec8996f5745e9d010cc56bc2e26b45480c29b2b6e367f665fda0f3be838f",
+      "elements": 24,
+      "binding_check": "passed",
+      "native_export_visually_reviewed": true
+    },
+    {
+      "source": "docs/assets/diagrams/excalidraw/reasoning-trace-graph.excalidraw",
+      "source_sha256": "2f87a426335a08fc67f590055613911a5bd97e9383d0e28c9cbcd29ece995b14",
+      "elements": 33,
+      "binding_check": "passed",
+      "native_export_visually_reviewed": true
+    }
+  ],
+  "manifest_hash_updates": [
+    {
+      "source": "docs/assets/diagrams/excalidraw/buffered-write-flow.excalidraw",
+      "output": "docs/modules/ROOT/images/diagrams/buffered-write-flow.png",
+      "source_sha256": "8ad67d8042f6e64fdd8a15b745a0bf6e52934fd8824e2f27f609ba430ed128d3",
+      "output_sha256": "6d273b987c3d5dc73c2b7867c8bbc5aadd9da37b6ee49a4c1918978156cbda1a"
+    },
+    {
+      "source": "docs/assets/diagrams/excalidraw/message-chain.excalidraw",
+      "output": "docs/modules/ROOT/images/diagrams/message-chain.png",
+      "source_sha256": "758eec8996f5745e9d010cc56bc2e26b45480c29b2b6e367f665fda0f3be838f",
+      "output_sha256": "37b161fe597d219a07faf82d603078c74c54b7e7e981cf7144dbea841ed33039"
+    },
+    {
+      "source": "docs/assets/diagrams/excalidraw/reasoning-trace-graph.excalidraw",
+      "output": "docs/modules/ROOT/images/diagrams/reasoning-trace-graph.png",
+      "source_sha256": "2f87a426335a08fc67f590055613911a5bd97e9383d0e28c9cbcd29ece995b14",
+      "output_sha256": "aa8fe32569046353ad2eb406bae53eb5a6416c10c599988722f4d8b90f157d36"
+    },
+    {
+      "source": "docs/assets/diagrams/excalidraw/message-chain.excalidraw",
+      "output": "docs/modules/ROOT/images/diagrams/message-chain.svg",
+      "source_sha256": "758eec8996f5745e9d010cc56bc2e26b45480c29b2b6e367f665fda0f3be838f",
+      "output_sha256": "c70a6e621da29766946449aad2dda7007b78ef6ca3e7377b01f0e051ac5ba8fa"
+    },
+    {
+      "source": "docs/assets/diagrams/excalidraw/reasoning-trace-graph.excalidraw",
+      "output": "docs/modules/ROOT/images/diagrams/reasoning-trace-graph.svg",
+      "source_sha256": "2f87a426335a08fc67f590055613911a5bd97e9383d0e28c9cbcd29ece995b14",
+      "output_sha256": "98e6b6275d77f09679a16b14f8b22c7f78a0c8a0128765edfd821b01b4602ce7"
+    }
+  ],
+  "other_manifest_fields_preserved": true
+}

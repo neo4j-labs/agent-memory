@@ -1,231 +1,176 @@
-= Connect Claude Desktop to Your Knowledge Graph
+= Store and recall a message from Claude Desktop
 :page-product: agent-memory
+:page-role: code-nocollapse
 :page-pagination:
-:toclevels: 3
+:toclevels: 2
 :sectanchors:
-:icons: font
-:source-highlighter: highlight.js
 
-A step-by-step tutorial to connect Claude Desktop to a Neo4j knowledge graph using the MCP server.
+We will connect Claude Desktop on macOS to a local stdio MCP server backed by AuraDB, explicitly request a message-storage tool call, and verify that record in Aura before retrieving it. The server does not automatically capture all chat turns merely because it is connected.
 
-[.lead]
-In this tutorial, we'll set up the neo4j-agent-memory MCP server so that Claude Desktop can store conversations, extract entities, learn preferences, and query your knowledge graph -- all automatically.
+This lesson selects the core tool profile, a local embedding model, and disabled entity/preference extraction. The MCP process and embedding computation run on your Mac; the database runs in Aura. Hosting the MCP process remotely and selecting other profiles are separate how-to tasks.
 
-== What You'll Learn
+This lesson uses `neo4j-agent-memory` 0.6.0 from PyPI and the complete programs on this page in a POSIX shell. Create the local files shown below; the checks below verify the results in your environment.
 
-* How to install and start the MCP server
-* How to configure Claude Desktop to connect to it
-* How memory is captured automatically during conversations
-* How to verify entities and preferences in Neo4j Browser
+[[_what_youll_learn]]
+== Before you begin
 
-== Prerequisites
+anchor:_prerequisites[]anchor:_time_required[]
 
-* Python 3.10 or higher
-* Docker (for running Neo4j locally)
-* Claude Desktop installed
+* macOS with Claude Desktop installed and support for local MCP servers enabled.
+* Python 3.10 or newer and a POSIX shell.
+* A Neo4j Aura account for a dedicated lesson instance.
+* Space and network access for the initial sentence-transformer model download.
 
-== Time Required
+Claude Desktop's interface can vary by release. The verification target is the visible tool invocation and stored database record, not a particular icon or generated sentence.
 
-Approximately 15 minutes.
+[[_step_1_start_neo4j]]
+== 1. Install the server and connect to Aura
 
-== Step 1: Start Neo4j
+anchor:_step_2_install_neo4j_agent_memory[]
 
-Start a local Neo4j instance using Docker:
+include::partial$python-tutorial-setup.adoc[]
 
 [source,bash]
 ----
-docker run -d \
-  --name neo4j-memory \
-  -p 7474:7474 -p 7687:7687 \
-  -e NEO4J_AUTH=neo4j/test-password \
-  -e NEO4J_PLUGINS='["apoc"]' \
-  neo4j:5
+python -m pip install 'neo4j-agent-memory[mcp,sentence-transformers]==0.6.0'
+python -c "from importlib.metadata import version; import neo4j_agent_memory; assert version('neo4j-agent-memory') == '0.6.0'; print('SDK 0.6.0 import verified')"
 ----
 
-Wait for Neo4j to start (about 30 seconds), then verify at http://localhost:7474.
+Expected: `SDK 0.6.0 import verified`. Keep `agent-memory-tutorials` as your working directory for every command below.
 
-== Step 2: Install neo4j-agent-memory
+=== Create and check the local files
 
-Install the package with MCP support:
+Create each file below in `~/agent-memory-tutorials`. All complete sources follow this manifest. On a first visit every file is new; when returning, reuse unchanged helpers and compare their contents before replacing them.
 
-[source,bash]
-----
-pip install neo4j-agent-memory[mcp]
-----
+[cols="2,4,2",options="header"]
+|===
+|File |Purpose |Returning reader
+|`aura_connection.py` |Read explicit Aura credentials; no database fallback. |Reuse unchanged
+|`wait_for_tutorial_neo4j.py` |Probe the selected database and close the driver. |Reuse unchanged
+|`mcp_local_tutorial.py` |Prepare embeddings, validate Desktop configuration, or run the local MCP server. This is the lesson entry point. |New for this lesson; retain it with unfinished state
+|===
 
-Verify the installation:
+include::partial$aura-tutorial-files.adoc[]
 
-[source,bash]
-----
-neo4j-agent-memory mcp serve --help
-----
-
-You should see the available options for the MCP server.
-
-== Step 3: Configure Claude Desktop
-
-Open your Claude Desktop configuration file:
-
-* **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-* **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
-
-Add the neo4j-agent-memory server:
-
-[source,json]
-----
-{
-  "mcpServers": {
-    "neo4j-agent-memory": {
-      "command": "neo4j-agent-memory",
-      "args": ["mcp", "serve",
-               "--password", "test-password"],
-      "env": {}
-    }
-  }
-}
-----
-
-Restart Claude Desktop to pick up the configuration.
-
-TIP: If you installed with `uvx`, use `"command": "uvx"` and `"args": ["neo4j-agent-memory[mcp]", "mcp", "serve", "--password", "test-password"]` instead.
-
-== Step 4: Verify the Connection
-
-In Claude Desktop, start a new conversation and ask:
-
-> What do you remember about me?
-
-Claude should call the `memory_search` tool and report that no memories are stored yet. This confirms the MCP server is connected and working.
-
-== Step 5: Have a Memory-Aware Conversation
-
-Now have a natural conversation. The server automatically:
-
-1. **Stores messages** when Claude calls `memory_store_message`
-2. **Extracts entities** (people, organizations, locations) from message content
-3. **Detects preferences** from statements like "I love Italian food"
-4. **Builds a knowledge graph** linking entities with typed relationships
-
-Try a conversation like:
-
-> I'm a software engineer at Acme Corp. I work with Python and React.
-> I love Italian food, especially pasta. My favorite restaurant is Bella Italia on Main Street.
-> Next week I have a meeting with Sarah about the new authentication feature.
-
-== Step 6: Verify in Neo4j Browser
-
-Open http://localhost:7474 and run:
-
-[source,cypher]
-----
-MATCH (n) RETURN n LIMIT 50
-----
-
-You should see:
-
-* **Conversation** and **Message** nodes (your chat messages)
-* **Entity** nodes (Acme Corp, Bella Italia, Sarah, Main Street)
-* **Preference** nodes (Italian food, pasta)
-* **MENTIONS** relationships linking messages to entities
-
-To see just the entities:
-
-[source,cypher]
-----
-MATCH (e:Entity) RETURN e.name, e.type, e.description
-----
-
-== Step 7: Test Memory Recall
-
-In Claude Desktop, ask:
-
-> Where do I like to eat?
-
-Claude will call `memory_search` and find your stored preference for Italian food and Bella Italia.
-
-> Tell me about Sarah
-
-Claude will call `memory_get_entity` (if using extended profile) or `memory_search` to find the entity and any related context.
-
-== Running the Server Remotely
-
-Claude Desktop launches the server as a child process and talks to it over
-`stdio`, which is what every step above uses. If you want one server shared by
-several clients -- a team deployment, or a Cloud Run service -- start it on the
-Streamable HTTP transport instead:
-
-[source,bash]
-----
-neo4j-agent-memory mcp serve \
-  --transport http \
-  --host 0.0.0.0 \
-  --port 8080 \
-  --password test-password
-----
-
-The MCP endpoint is then `POST`/`GET` at `/mcp/` on that host and port, and
-clients connect to the URL rather than spawning a process.
-
-[NOTE]
-====
-Streamable HTTP is the network transport in the current MCP specification, and
-FastMCP 4 -- which this server is built on -- deprecated the older HTTP+SSE
-transport. `--transport sse` is still accepted so existing launch configurations
-keep starting, but it warns and serves Streamable HTTP. If you are migrating a
-config, change `sse` to `http` and point the client at `/mcp/` instead of
-`/sse`.
-====
-
-== Programmatic Server Usage
-
-You can also start the MCP server from Python code:
-
+.Save as `mcp_local_tutorial.py`
 [source,python]
 ----
-from neo4j_agent_memory import MemoryClient, MemorySettings
-
-settings = MemorySettings(
-    neo4j={"uri": "bolt://localhost:7687", "password": "test-password"}
-)
-
-# Use MemoryIntegration for simplified memory operations
-from neo4j_agent_memory import MemoryIntegration
-
-memory = MemoryIntegration(
-    neo4j_uri="bolt://localhost:7687",
-    neo4j_password="test-password",
-    session_strategy="per_day",
-)
+include::example$mcp_local_tutorial.py[]
 ----
 
-== Next Steps
+include::partial$python-tutorial-import-check.adoc[tag=intro]
 
-* xref:reference/mcp-tools.adoc[MCP Tools Reference] -- Complete documentation for all 16 tools
-* xref:how-to/create-context-graph-mcp.adoc[create-context-graph MCP Integration] -- Add MCP to scaffolded projects
-* xref:explanation/memory-types.adoc[Understanding Memory Types] -- How the three memory types work together
-
-== Tool Profiles
-
-By default, the server starts with the **extended** profile (16 tools). For simpler use cases or to reduce context overhead, use the **core** profile:
-
-[source,json]
+[source,bash]
 ----
-{
-  "mcpServers": {
-    "neo4j-agent-memory": {
-      "command": "neo4j-agent-memory",
-      "args": ["mcp", "serve",
-               "--password", "test-password",
-               "--profile", "core"]
-    }
-  }
-}
+python -m py_compile aura_connection.py wait_for_tutorial_neo4j.py mcp_local_tutorial.py
+python -c "import aura_connection, wait_for_tutorial_neo4j, mcp_local_tutorial; assert all(callable(f) for f in [aura_connection.aura_config, wait_for_tutorial_neo4j.wait_until_ready, mcp_local_tutorial.main]); print('Lesson imports verified')"
+python mcp_local_tutorial.py --help
 ----
 
-See the xref:reference/mcp-tools.adoc[MCP Tools Reference] for the complete list of tools in each profile.
+:cli-help-suffix: {sp}and the command help
+include::partial$python-tutorial-import-check.adoc[tag=expected]
 
-== Runnable example
+:cli-help-suffix!:
 
-link:https://github.com/neo4j-labs/agent-memory/tree/main/examples/claude-code-team-memory[`examples/claude-code-team-memory/`]
-turns this tutorial into a team setup: per-developer keys, a seeded shared
-workspace, and a `doctor.py` that validates every editor config offline.
+include::partial$aura-tutorial-setup.adoc[]
+
+The server program copied above uses the current virtual environment and the shared `aura_config()` helper for its explicit Bolt settings.
+
+[source,bash]
+----
+python mcp_local_tutorial.py --prepare
+----
+
+Expected: `Verified: local embedding model returned 384 dimensions`. This prepares the model before Claude Desktop starts the server, avoiding an unobserved first-start download.
+
+[[_step_3_configure_claude_desktop]]
+== 2. Configure the local stdio process
+
+anchor:_programmatic_server_usage[]
+
+Claude Desktop does not inherit the Aura variables exported in your terminal. Generate configuration containing absolute interpreter/script paths and an explicit `env` mapping for those Aura variables:
+
+[source,bash]
+----
+umask 077
+MCP_TUTORIAL_CONFIG=$(mktemp "${TMPDIR:-/tmp}/neo4j-docs-mcp.XXXXXX")
+python mcp_local_tutorial.py --config > "$MCP_TUTORIAL_CONFIG"
+python -c "import json, sys; config = json.load(open(sys.argv[1])); assert config['mcpServers']['neo4j-docs']['env']['NEO4J_URI'].startswith('neo4j+s://'); print('Aura MCP configuration verified')" "$MCP_TUTORIAL_CONFIG"
+printf 'Private MCP configuration: %s\n' "$MCP_TUTORIAL_CONFIG"
+----
+
+Expected: `Aura MCP configuration verified`, followed by the private temporary file's path. Open that path in your editor. The `neo4j-docs` entry contains absolute interpreter/script paths and `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`, and `NEO4J_DATABASE`. The generated JSON contains database credentials; keep it outside the tutorial folder and do not share it. Merge that one entry into `~/Library/Application Support/Claude/claude_desktop_config.json`, preserving any existing servers and keeping that file private too. Place `neo4j-docs` directly inside the existing top-level `mcpServers` object, beside other server entries. Keep this terminal open for cleanup. Validate the final destination file after saving the merge:
+
+[source,bash]
+----
+python mcp_local_tutorial.py --check-config "$HOME/Library/Application Support/Claude/claude_desktop_config.json"
+----
+
+Expected: `Verified: merged Desktop JSON, lesson paths and explicit Aura variables`. The check reads only the local file, rejects malformed/duplicate JSON keys, checks this interpreter/script and required child-process variables, and never prints credential values or modifies other entries. It does not verify the password, server startup, or model access. Fix a reported line/column or nesting error before continuing. Then completely quit and restart Claude Desktop; it launches the stdio process.
+
+[[_step_4_verify_the_connection]]
+== 3. Verify the tool connection
+
+In a new Claude Desktop conversation, inspect the tools provided by `neo4j-docs`. Confirm that `memory_store_message` and `memory_search` are available.
+
+Ask Claude: "Use the neo4j-docs memory_search tool to search for cedar-lantern-47. Show whether the tool found a stored result."
+
+Expected: a visible tool invocation and a result or an empty result. A chat response without a tool call does not verify the connection.
+
+If the server is absent, rerun the final JSON check, confirm the virtual environment and script still exist at the generated absolute paths, and inspect the local logs. The https://modelcontextprotocol.io/docs/develop/connect-local-servers#troubleshooting[official MCP Desktop troubleshooting guide] documents macOS logs under `~/Library/Logs/Claude`: `mcp.log` records connection failures and `mcp-server-neo4j-docs.log` contains this server's stderr. Open those files locally in your editor; logs can contain sensitive data, so do not paste their raw contents or the configuration into a support message. Record the error category and redact details first. These documented log locations are separate from a live verification of your installed Desktop release.
+
+A listed server with a failed tool invocation needs its server/Aura/provider error investigated. A successful search returning no records is an ordinary empty result at this point; it is not a startup failure. Do not test connection repair by repeatedly storing the passphrase.
+
+[[_step_5_have_a_memory_aware_conversation]]
+== 4. Store one exact message
+
+Ask Claude:
+
+[quote]
+Use neo4j-docs memory_store_message with session_id "claude-docs-tutorial", role "user", and content "The workshop passphrase is cedar-lantern-47." Report the returned storage result.
+
+Expected: a visible `memory_store_message` invocation with those arguments and a successful tool result. The supplied Bolt session ID organizes this exercise; it is not an authorization boundary. No extracted entity or preference is required for this lesson.
+
+[[_step_6_verify_in_neo4j_browser]]
+== 5. Verify the stored record
+
+In the Aura console, open *Query*, select this lesson's instance, connect with its credentials, and run:
+
+[source,cypher]
+----
+MATCH (conversation:Conversation {session_id: 'claude-docs-tutorial'})-[:HAS_MESSAGE]->(message:Message)
+WHERE message.content = 'The workshop passphrase is cedar-lantern-47.'
+RETURN message.id, message.content
+----
+
+Expected: at least one row with the exact passphrase message and its stored ID. Repeating the storage request may create another message, so inspect the result before retrying.
+
+[[_step_7_test_memory_recall]]
+== 6. Retrieve through the tool
+
+Start a fresh Claude Desktop conversation and ask:
+
+[quote]
+Use neo4j-docs memory_search for "workshop passphrase" with session_id "claude-docs-tutorial". Quote the stored passphrase only if the tool returns it.
+
+Expected: a visible search invocation whose result contains `cedar-lantern-47`. An answer inferred from earlier chat text is not proof of retrieval; compare the tool result with the database row from the preceding step.
+
+include::partial$aura-tutorial-resume.adoc[]
+
+Keep the existing Desktop server entry and run the final configuration check again. In Aura Query, inspect the exact message before asking for another `memory_search` call. Do not repeat `memory_store_message` just because you opened a new chat. If the private temporary configuration path was lost, locate and delete only that lesson-generated file during cleanup; do not delete other temporary files.
+
+[[_running_the_server_remotely]]
+== Cleanup and further tasks
+
+anchor:_next_steps[]anchor:_tool_profiles[]anchor:_runnable_example[]
+
+Remove the `neo4j-docs` entry from Claude Desktop's configuration and restart the app. Delete the generated credential-bearing file:
+
+[source,bash]
+----
+rm "$MCP_TUTORIAL_CONFIG"
+----
+
+include::partial$aura-tutorial-cleanup.adoc[]
+
+The remote transport, extended profile, and team setup belong in xref:how-to/create-context-graph-mcp.adoc[Create a context-graph MCP integration], xref:reference/mcp-tools.adoc[MCP tool reference], and xref:how-to/team-memory-in-your-editor.adoc[Team memory]. They are not additional branches required to finish this desktop lesson.

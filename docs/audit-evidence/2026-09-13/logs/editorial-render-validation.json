@@ -1,0 +1,109 @@
+{
+  "results": [
+    {
+      "name": "faq.adoc",
+      "oldSections": 74,
+      "missing": [],
+      "duplicate": [],
+      "missingFiles": [],
+      "badFragments": []
+    },
+    {
+      "name": "glossary.adoc",
+      "oldSections": 3,
+      "missing": [],
+      "duplicate": [],
+      "missingFiles": [],
+      "badFragments": []
+    },
+    {
+      "name": "explanation/multi-agent-sharing.adoc",
+      "oldSections": 10,
+      "missing": [],
+      "duplicate": [],
+      "missingFiles": [],
+      "badFragments": []
+    },
+    {
+      "name": "explanation/poleo-model.adoc",
+      "oldSections": 32,
+      "missing": [],
+      "duplicate": [],
+      "missingFiles": [],
+      "badFragments": []
+    },
+    {
+      "name": "explanation/ontologies.adoc",
+      "oldSections": 6,
+      "missing": [],
+      "duplicate": [],
+      "missingFiles": [],
+      "badFragments": []
+    },
+    {
+      "name": "explanation/why-provider-protocol.adoc",
+      "oldSections": 11,
+      "missing": [],
+      "duplicate": [],
+      "missingFiles": [],
+      "badFragments": []
+    },
+    {
+      "name": "explanation/resolution-deduplication.adoc",
+      "oldSections": 31,
+      "missing": [],
+      "duplicate": [],
+      "missingFiles": [],
+      "badFragments": []
+    },
+    {
+      "name": "explanation/memory-types.adoc",
+      "oldSections": 23,
+      "missing": [],
+      "duplicate": [],
+      "missingFiles": [],
+      "badFragments": []
+    },
+    {
+      "name": "explanation/framework-comparison.adoc",
+      "oldSections": 33,
+      "missing": [],
+      "duplicate": [],
+      "missingFiles": [],
+      "badFragments": []
+    },
+    {
+      "name": "explanation/graph-architecture.adoc",
+      "oldSections": 21,
+      "missing": [],
+      "duplicate": [],
+      "missingFiles": [],
+      "badFragments": []
+    },
+    {
+      "name": "explanation/extraction-pipeline.adoc",
+      "oldSections": 24,
+      "missing": [],
+      "duplicate": [],
+      "missingFiles": [],
+      "badFragments": []
+    },
+    {
+      "name": "explanation/structured-extraction.adoc",
+      "oldSections": 11,
+      "missing": [],
+      "duplicate": [],
+      "missingFiles": [],
+      "badFragments": []
+    },
+    {
+      "name": "explanation/skills.adoc",
+      "oldSections": 7,
+      "missing": [],
+      "duplicate": [],
+      "missingFiles": [],
+      "badFragments": []
+    }
+  ],
+  "messages": []
+}

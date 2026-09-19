@@ -2,8 +2,8 @@
 """Run neo4j-agent-memory with no LLM provider.
 
 This example shows how to use neo4j-agent-memory when you cannot (or do not
-want to) call an LLM — air-gapped deployments, cost-sensitive workloads, or
-deterministic test environments:
+want to) call an LLM. Local model inference still requires a network
+connection to the AuraDB instance used by this example:
 
 - ``llm=None`` on ``MemorySettings`` — no LLM client is ever constructed.
 - A local embedder (sentence-transformers) — no embeddings API is called.
@@ -17,16 +17,18 @@ entities the local pipeline extracted so a degraded install is obvious.
 
 Requirements:
 
-    pip install "neo4j-agent-memory[extraction,sentence-transformers]"
+    pip install "neo4j-agent-memory[extraction,sentence-transformers]==0.6.0"
     python -m spacy download en_core_web_sm
 
 Model weights (sentence-transformers ~90 MB, GLiNER ~500 MB) download once on
-first run; see the README's "Truly offline" section for warming the caches and
-running with ``HF_HUB_OFFLINE=1``.
+first run. Warm those caches before setting ``HF_HUB_OFFLINE=1``; keep the
+connection to Aura available.
 
-Copy ``examples/.env.example`` to ``examples/.env`` to change the Neo4j
-connection, or export ``NEO4J_URI`` / ``NEO4J_USERNAME`` / ``NEO4J_PASSWORD``.
-Defaults target the throwaway container that ``make neo4j-start`` launches.
+Export the dedicated Aura instance's ``NEO4J_URI``, ``NEO4J_USERNAME``, and
+``NEO4J_PASSWORD``; ``NEO4J_DATABASE`` defaults to ``neo4j``. These credentials
+have no fallback values. The optional private ``.env`` is loaded from the
+parent of this script's directory (``agent-memory-tutorials/`` when the file is
+saved as ``no_llm/main.py``). Run ``python no_llm/main.py`` from that parent.
 """
 
 from __future__ import annotations
@@ -62,7 +64,7 @@ ORDER BY name
 
 
 def load_env() -> None:
-    """Load ``examples/.env`` if present, so the documented setup step works."""
+    """Load a private .env beside the no_llm directory; exported values win."""
     env_file = Path(__file__).resolve().parent.parent / ".env"
     if not env_file.exists():
         return
@@ -121,9 +123,10 @@ def build_settings() -> MemorySettings:
         # run server-side — the opposite of what this example demonstrates.
         backend="bolt",
         neo4j=Neo4jConfig(
-            uri=os.getenv("NEO4J_URI", "bolt://localhost:7687"),
-            username=os.getenv("NEO4J_USERNAME", "neo4j"),
-            password=SecretStr(os.getenv("NEO4J_PASSWORD", "test-password")),
+            uri=os.environ["NEO4J_URI"],
+            username=os.environ["NEO4J_USERNAME"],
+            password=SecretStr(os.environ["NEO4J_PASSWORD"]),
+            database=os.getenv("NEO4J_DATABASE", "neo4j"),
         ),
         # Explicit opt-out: never construct an LLM client.
         llm=None,

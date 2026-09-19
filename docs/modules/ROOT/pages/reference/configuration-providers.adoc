@@ -1,0 +1,155 @@
+= Embedding, LLM, schema, extraction, and resolution settings
+:page-product: agent-memory
+:page-pagination:
+:toclevels: 2
+
+Provider and extraction-pipeline settings for xref:reference/configuration.adoc[Configuration reference]: `EmbeddingConfig`, `LLMConfig`, `SchemaConfig`, `ExtractionConfig`, and `ResolutionConfig`. Fields marked † are not automatically applied by MemoryClient; see xref:reference/configuration-operations.adoc#integration-limits[integration limits].
+
+anchor:embedding[]
+
+anchor:_embedding_providers[]
+anchor:_python_configuration_3[]
+anchor:_environment_variables_3[]
+
+== Embedding configuration
+
+Legacy field inventory. Provider strings and instances use their own adapter signatures, not these nested keys; see xref:reference/api/adapters.adoc[Adapters]. The enum also declares `anthropic`, `vertex_ai`, `bedrock`, and `custom`, but MemoryClient's legacy factory currently constructs only `openai` and `sentence_transformers`. For Vertex AI or Bedrock, use a supported provider instance/string or inject an embedder explicitly.
+
+When a legacy Vertex AI config is constructed, its validator changes an unset model to `gemini-embedding-001` and unset output dimensionality/dimensions to 768; retired IDs known to the SDK are rejected. This validation does not wire the config into the legacy MemoryClient factory. Index dimensions must match the actual embedder; see xref:how-to/migrate-embedding-model.adoc[Migrate embedding models].
+
+// settings-fields: EmbeddingConfig:embedding:python
+[cols="2,2,2,1,3,4",options="header"]
+|===
+| Field | Type / values | Default | Constraints | Env var | Description
+| `provider` | `openai / anthropic / sentence_transformers / vertex_ai / bedrock / custom` | `'openai'` | — | `NAM_EMBEDDING__PROVIDER` | Embedding provider to use
+| `model` | `str` | `'text-embedding-3-small'` | — | `NAM_EMBEDDING__MODEL` | Embedding model name
+| `dimensions` | `int` | `1536` | ge 1 | `NAM_EMBEDDING__DIMENSIONS` | Embedding dimensions
+| `api_key` | `SecretStr \| None` | `None` | — | `NAM_EMBEDDING__API_KEY` | API key for embedding provider
+| `batch_size` | `int` | `100` | ge 1 | `NAM_EMBEDDING__BATCH_SIZE` | Batch size for embeddings
+| `device` | `str` | `'cpu'` | — | `NAM_EMBEDDING__DEVICE` | Device for sentence transformers (cpu/cuda)
+| `project_id` | `str \| None` | `None` | — | `NAM_EMBEDDING__PROJECT_ID` | GCP project ID for Vertex AI
+| `location` | `str` | `'us-central1'` | — | `NAM_EMBEDDING__LOCATION` | GCP region for Vertex AI
+| `task_type` | `str` | `'RETRIEVAL_DOCUMENT'` | — | `NAM_EMBEDDING__TASK_TYPE` | Vertex AI task type (RETRIEVAL_QUERY, RETRIEVAL_DOCUMENT, etc.)
+| `output_dimensionality` | `int \| None` | `None` | ge 1 | `NAM_EMBEDDING__OUTPUT_DIMENSIONALITY` | Vertex AI output dimensionality. gemini-embedding-001 emits 3072 dimensions natively and can be truncated to 1536 or 768. Defaults to 768 for Vertex AI so existing vector indexes keep working; pass an explicit value to override.
+| `aws_region` | `str \| None` | `None` | — | `NAM_EMBEDDING__AWS_REGION` | AWS region for Bedrock
+| `aws_profile` | `str \| None` | `None` | — | `NAM_EMBEDDING__AWS_PROFILE` | AWS credentials profile name
+|===
+
+anchor:llm[]
+
+== LLM configuration
+
+Legacy LLM field inventory. The extraction factory forwards the selected provider/model/API key; it does not forward these legacy temperature/max_tokens fields. Use the extractor/provider APIs for their supported generation controls. `extraction.llm_model` is the fallback only when the factory receives no LLM config/provider.
+
+// settings-fields: LLMConfig:llm:python
+[cols="2,2,2,1,3,4",options="header"]
+|===
+| Field | Type / values | Default | Constraints | Env var | Description
+| `provider` | `openai / anthropic / custom` | `'openai'` | — | `NAM_LLM__PROVIDER` | LLM provider to use
+| `model` | `str` | `'gpt-4o-mini'` | — | `NAM_LLM__MODEL` | LLM model name
+| `api_key` | `SecretStr \| None` | `None` | — | `NAM_LLM__API_KEY` | API key for LLM provider
+| `temperature` | `float` | `0.0` | ge 0.0, le 2.0 | `NAM_LLM__TEMPERATURE` | LLM temperature †
+| `max_tokens` | `int` | `4096` | ge 1 | `NAM_LLM__MAX_TOKENS` | Maximum tokens for LLM †
+|===
+
+† Not automatically applied by MemoryClient; see xref:reference/configuration-operations.adoc#integration-limits[integration limits].
+
+anchor:schema[]
+
+== Graph schema configuration
+
+This is not a persisted EntitySchemaConfig or a NAMS ontology. The extraction factory uses `entity_types` for GLiNER labels and LLM type selection. Other declared fields are not automatically forwarded as storage validation or file loading. For custom schemas, load and use a supported extractor explicitly; see xref:reference/schemas.adoc[Domain schemas].
+
+// settings-fields: SchemaConfig:schema_config:python
+[cols="2,2,2,1,3,4",options="header"]
+|===
+| Field | Type / values | Default | Constraints | Env var | Description
+| `model` | `poleo / legacy / custom` | `'poleo'` | — | `NAM_SCHEMA_CONFIG__MODEL` | Schema model to use †
+| `entity_types` | `list[str] \| None` | `None` | — | `NAM_SCHEMA_CONFIG__ENTITY_TYPES` | Custom entity types (overrides model default when model=custom)
+| `enable_subtypes` | `bool` | `True` | — | `NAM_SCHEMA_CONFIG__ENABLE_SUBTYPES` | Whether to track entity subtypes †
+| `strict_types` | `bool` | `False` | — | `NAM_SCHEMA_CONFIG__STRICT_TYPES` | Whether to reject unknown entity types †
+| `custom_schema_path` | `str \| None` | `None` | — | `NAM_SCHEMA_CONFIG__CUSTOM_SCHEMA_PATH` | Accepted path field; not automatically loaded by MemoryClient. Load a schema explicitly and inject an extractor. †
+|===
+
+† Not automatically applied by MemoryClient; see xref:reference/configuration-operations.adoc#integration-limits[integration limits].
+
+anchor:extraction[]
+
+anchor:_extractor_types[]
+anchor:_merge_strategies[]
+anchor:_schema_configuration[]
+anchor:_python_configuration_4[]
+anchor:_environment_variables_4[]
+anchor:_schema_models[]
+
+== Extraction configuration
+
+Bolt extraction only. The default pipeline attempts spaCy, GLiNER, and LLM in order. The factory may skip unavailable stages and use NoOpExtractor if none can be constructed; test your configured stages and their output. GLiNER's default schema field is None; simple labels are used unless a named schema is supplied.
+
+`merge_strategy` accepts `union`, `intersection`, `confidence`, and `cascade`. Pipeline construction sets `stop_on_success` to the inverse of `fallback_on_empty`; with the default True, enabled stages can all run. FIRST_SUCCESS belongs only to the direct pipeline enum, not this settings enum. There are no batch or streaming chunk fields in ExtractionConfig: pass those to the corresponding extraction methods.
+
+[source,python]
+----
+from neo4j_agent_memory.config.settings import ExtractionConfig
+
+extraction = ExtractionConfig(
+    extractor_type="pipeline", enable_spacy=True, enable_gliner=True,
+    enable_llm_fallback=False, gliner_schema="podcast",
+    merge_strategy="confidence", gliner_threshold=0.6,
+)
+----
+
+// settings-fields: ExtractionConfig:extraction:python
+[cols="2,2,2,1,3,4",options="header"]
+|===
+| Field | Type / values | Default | Constraints | Env var | Description
+| `extractor_type` | `llm / gliner / spacy / pipeline / none` | `'pipeline'` | — | `NAM_EXTRACTION__EXTRACTOR_TYPE` | Type of entity extractor
+| `enable_spacy` | `bool` | `True` | — | `NAM_EXTRACTION__ENABLE_SPACY` | Enable spaCy in extraction pipeline
+| `enable_gliner` | `bool` | `True` | — | `NAM_EXTRACTION__ENABLE_GLINER` | Enable GLiNER in extraction pipeline
+| `enable_llm_fallback` | `bool` | `True` | — | `NAM_EXTRACTION__ENABLE_LLM_FALLBACK` | Enable LLM as fallback in pipeline
+| `merge_strategy` | `union / intersection / confidence / cascade` | `'confidence'` | — | `NAM_EXTRACTION__MERGE_STRATEGY` | Strategy for merging results from multiple extractors
+| `fallback_on_empty` | `bool` | `True` | — | `NAM_EXTRACTION__FALLBACK_ON_EMPTY` | Continue to next stage if current stage returns no results
+| `spacy_model` | `str` | `'en_core_web_sm'` | — | `NAM_EXTRACTION__SPACY_MODEL` | spaCy model name
+| `spacy_confidence` | `float` | `0.85` | ge 0.0, le 1.0 | `NAM_EXTRACTION__SPACY_CONFIDENCE` | Default confidence score for spaCy extractions
+| `gliner_model` | `str` | `'gliner-community/gliner_medium-v2.5'` | — | `NAM_EXTRACTION__GLINER_MODEL` | GLiNER model name (GLiNER2 v2.5 recommended for best accuracy)
+| `gliner_threshold` | `float` | `0.5` | ge 0.0, le 1.0 | `NAM_EXTRACTION__GLINER_THRESHOLD` | GLiNER confidence threshold
+| `gliner_device` | `str` | `'cpu'` | — | `NAM_EXTRACTION__GLINER_DEVICE` | Device for GLiNER model (cpu/cuda/mps)
+| `gliner_schema` | `str \| None` | `None` | — | `NAM_EXTRACTION__GLINER_SCHEMA` | Domain schema for GLiNER extraction (poleo, podcast, news, scientific, business, entertainment, medical, legal)
+| `llm_model` | `str` | `'gpt-4o-mini'` | — | `NAM_EXTRACTION__LLM_MODEL` | LLM model for extraction
+| `entity_types` | `list[str]` | `["PERSON", "ORGANIZATION", "LOCATION", "EVENT", "OBJECT"]` | — | `NAM_EXTRACTION__ENTITY_TYPES` | Entity types to extract (POLE+O by default)
+| `extract_relations` | `bool` | `True` | — | `NAM_EXTRACTION__EXTRACT_RELATIONS` | Whether to extract relations
+| `extract_preferences` | `bool` | `True` | — | `NAM_EXTRACTION__EXTRACT_PREFERENCES` | Whether to extract preferences
+| `confidence_threshold` | `float` | `0.5` | ge 0.0, le 1.0 | `NAM_EXTRACTION__CONFIDENCE_THRESHOLD` | Minimum confidence threshold for extracted entities †
+|===
+
+† Not automatically applied by MemoryClient; see xref:reference/configuration-operations.adoc#integration-limits[integration limits].
+
+anchor:resolution[]
+
+anchor:_python_configuration_5[]
+anchor:_environment_variables_5[]
+anchor:_resolver_strategies[]
+
+== Resolution configuration
+
+Bolt resolution factory: `none` disables resolution; `exact`, `fuzzy`, and `semantic` select one resolver; `composite` chains them. Fuzzy and semantic thresholds default to 0.85 and 0.8. The accepted `fuzzy_scorer` field is not forwarded by MemoryClient; construct/inject a resolver for that control. Ingestion deduplication is a separate mechanism; see xref:reference/configuration-advanced.adoc#deduplication[deduplication].
+
+// settings-fields: ResolutionConfig:resolution:python
+[cols="2,2,2,1,3,4",options="header"]
+|===
+| Field | Type / values | Default | Constraints | Env var | Description
+| `strategy` | `exact / fuzzy / semantic / composite / none` | `'composite'` | — | `NAM_RESOLUTION__STRATEGY` | Resolution strategy
+| `exact_threshold` | `float` | `1.0` | ge 0.0, le 1.0 | `NAM_RESOLUTION__EXACT_THRESHOLD` | Exact match threshold
+| `fuzzy_threshold` | `float` | `0.85` | ge 0.0, le 1.0 | `NAM_RESOLUTION__FUZZY_THRESHOLD` | Fuzzy match threshold
+| `semantic_threshold` | `float` | `0.8` | ge 0.0, le 1.0 | `NAM_RESOLUTION__SEMANTIC_THRESHOLD` | Semantic match threshold
+| `fuzzy_scorer` | `str` | `'token_sort_ratio'` | — | `NAM_RESOLUTION__FUZZY_SCORER` | Fuzzy matching scorer †
+|===
+
+† Not automatically applied by MemoryClient; see xref:reference/configuration-operations.adoc#integration-limits[integration limits].
+
+
+== See also
+
+* xref:reference/configuration.adoc[Configuration reference]
+* xref:reference/api/adapters.adoc[Adapters reference]
+* xref:reference/extractors.adoc[Extractor classes reference]

@@ -1,550 +1,123 @@
-= OpenAI Agents SDK Integration
+= Use with the OpenAI Agents SDK
 :page-product: agent-memory
 :page-pagination:
-:description: Integrate Neo4j Agent Memory with OpenAI's Agents SDK for persistent memory and knowledge management.
-:keywords: openai, agents, memory, neo4j, function calling
+:toclevels: 2
+:sectanchors:
 
-This guide explains how to use Neo4j Agent Memory with OpenAI's Agents SDK to build agents with persistent memory, entity knowledge, and reasoning trace recording.
+Run an actual `agents.Agent` through `Runner.run`, then save and verify its conversation and task trace using the Neo4j adapter. This page chooses the Agents SDK orchestration API; Chat Completions function-schema dictionaries are a separate interface.
 
-== Overview
+== 1. Prepare the selected environment
 
-The OpenAI integration provides:
+anchor:_overview[]
+anchor:_installation[]
 
-* **Conversation persistence**: Store and retrieve chat history in OpenAI message format
-* **Memory search**: Semantic search across messages, entities, and preferences
-* **Function tools**: Ready-to-use tools for memory operations
-* **Trace recording**: Capture agent reasoning for learning and debugging
+Use Python 3.10+ and a POSIX shell. The recipe uses xref:reference/configuration.adoc[`BoltSettings`] to select Neo4j explicitly and disables entity extraction so that message persistence can be checked independently. Use a dedicated AuraDB instance with vector-index support and no incompatible existing vectors. Follow xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the Aura connection setup] and copy its connection values into the exports below. These recipes use the published Python 0.6.0 package; provider access and database execution must be verified in your environment.
 
-== Installation
-
-Install with OpenAI support:
+include::partial$python-tutorial-setup.adoc[]
 
 [source,bash]
 ----
-pip install neo4j-agent-memory[openai-agents]
+python -m pip install 'neo4j-agent-memory[openai-agents]==0.6.0' openai-agents
+export NEO4J_URI='neo4j+s://<instance-id>.databases.neo4j.io'
+export NEO4J_USERNAME='neo4j'
+export NEO4J_PASSWORD='replace-with-your-Aura-password'
+export NEO4J_DATABASE='neo4j'
+export OPENAI_API_KEY='replace-with-your-provider-key'
+export OPENAI_MODEL='replace-with-an-available-model-id'
 ----
 
-== Pass-through your Agents model
+The OpenAI-backed recipes require access to `text-embedding-3-small`; it produces 1536-dimensional vectors in this configuration. Configure the selected chat model separately where required. Credentials are read from the environment, never printed by the programs.
 
-The OpenAI Agents SDK uses bare model strings (`"gpt-4o-mini"`, `"gpt-4o"`) or `AsyncOpenAI` clients. `llm_provider_from_openai_agents` accepts both:
+== 2. Read the complete recipe
 
-[source,python]
-----
-from neo4j_agent_memory import MemoryClient, MemorySettings
-from neo4j_agent_memory.integrations.openai_agents import (
-    llm_provider_from_openai_agents,
-)
-
-# Bare string (most common) — defaults to OpenAI provider.
-provider = llm_provider_from_openai_agents("gpt-4o-mini")
-
-settings = MemorySettings(
-    neo4j={"password": "p"},
-    llm=provider,
-    embedding="openai/text-embedding-3-small",
-)
-----
-
-Equivalent to `MemorySettings(llm="openai/gpt-4o-mini")` — the helper is for parity with the other integration packages' pass-through API. See xref:how-to/migrate-to-providers.adoc[Migrate to Pluggable Providers — Pattern 5].
-
-== Basic Usage
-
-=== Initialize Memory
-
-[source,python]
-----
-from neo4j_agent_memory import MemoryClient, MemorySettings, Neo4jConfig
-from neo4j_agent_memory.integrations.openai_agents import Neo4jOpenAIMemory
-
-settings = MemorySettings(
-    neo4j=Neo4jConfig(
-        uri="bolt://localhost:7687",
-        username="neo4j",
-        password="password",
-    )
-)
-
-async with MemoryClient(settings) as client:
-    memory = Neo4jOpenAIMemory(
-        memory_client=client,
-        session_id="user-123",
-        user_id="user-456",  # Optional
-    )
-
-    # Get context for system prompt
-    context = await memory.get_context("user question")
-
-    # Save messages
-    await memory.save_message("user", "Hello!")
-    await memory.save_message("assistant", "Hi there!")
-
-    # Get conversation in OpenAI format
-    messages = await memory.get_conversation(limit=10)
-----
-
-=== Save and Retrieve Messages
-
-Messages are stored in OpenAI's message format:
-
-[source,python]
-----
-# Save user message
-await memory.save_message(
-    role="user",
-    content="What restaurants do you recommend?",
-)
-
-# Save assistant message with tool calls
-await memory.save_message(
-    role="assistant",
-    content="",
-    tool_calls=[{
-        "id": "call_123",
-        "type": "function",
-        "function": {
-            "name": "search_memory",
-            "arguments": '{"query": "food preferences"}',
-        },
-    }],
-)
-
-# Save tool response
-await memory.save_message(
-    role="tool",
-    content='{"results": [...]}',
-    tool_call_id="call_123",
-)
-
-# Retrieve conversation
-messages = await memory.get_conversation(limit=50)
-# Returns: [{"role": "user", "content": "..."}, ...]
-----
-
-== Memory Tools
-
-Create function calling tools for your agent:
-
-[source,python]
-----
-from neo4j_agent_memory.integrations.openai_agents import create_memory_tools
-
-# Create tools
-tools = create_memory_tools(memory)
-
-# Use with OpenAI client
-from openai import OpenAI
-
-client = OpenAI()
-response = client.chat.completions.create(
-    model="gpt-4",
-    messages=messages,
-    tools=tools,
-)
-----
-
-=== Available Tools
-
-==== search_memory
-
-Search conversation history, entities, and preferences:
-
-[source,json]
-----
-{
-  "name": "search_memory",
-  "parameters": {
-    "query": "food preferences",
-    "limit": 5
-  }
-}
-----
-
-==== save_preference
-
-Save a user preference:
-
-[source,json]
-----
-{
-  "name": "save_preference",
-  "parameters": {
-    "category": "food",
-    "preference": "Prefers vegetarian options"
-  }
-}
-----
-
-==== recall_preferences
-
-Retrieve preferences by query or category:
-
-[source,json]
-----
-{
-  "name": "recall_preferences",
-  "parameters": {
-    "query": "dietary",
-    "category": "food"
-  }
-}
-----
-
-==== search_entities
-
-Search the entity knowledge graph:
-
-[source,json]
-----
-{
-  "name": "search_entities",
-  "parameters": {
-    "query": "Italian restaurants",
-    "entity_types": ["ORGANIZATION"],
-    "limit": 5
-  }
-}
-----
-
-=== Execute Tools
-
-Use the helper function to execute tools:
-
-[source,python]
-----
-from neo4j_agent_memory.integrations.openai_agents.memory import execute_memory_tool
-import json
-
-# When agent makes a tool call
-tool_call = response.choices[0].message.tool_calls[0]
-function = tool_call.function
-
-# Execute the tool
-result = await execute_memory_tool(
-    memory=memory,
-    tool_name=function.name,
-    arguments=json.loads(function.arguments),
-)
-
-# Add result to conversation
-messages.append({
-    "role": "tool",
-    "content": result,
-    "tool_call_id": tool_call.id,
-})
-----
-
-== Reasoning Traces
-
-Record agent executions for learning and debugging:
-
-[source,python]
-----
-from neo4j_agent_memory.integrations.openai_agents import record_agent_trace
-
-# After agent completes a task
-trace = await record_agent_trace(
-    memory=memory,
-    messages=conversation_messages,
-    task="Help user find restaurant recommendations",
-    tool_calls=extracted_tool_calls,  # Optional
-    outcome="Provided 3 restaurant recommendations",
-    success=True,
-)
-----
-
-=== Find Similar Past Tasks
-
-Use past reasoning traces to inform future responses:
-
-[source,python]
-----
-from neo4j_agent_memory.integrations.openai_agents.tracing import (
-    get_similar_traces,
-    format_traces_for_prompt,
-)
-
-# Find similar past tasks
-similar_traces = await get_similar_traces(
-    memory=memory,
-    task="Find restaurant recommendations",
-    limit=3,
-)
-
-# Format for system prompt
-past_experience = format_traces_for_prompt(similar_traces)
-
-system_prompt = f"""You are a helpful assistant.
-
-{past_experience}
-
-Use past experience to improve your responses."""
-----
-
-== Complete Example
-
-Here's a complete example of an OpenAI agent with Neo4j memory:
-
-[source,python]
-----
-import asyncio
-import json
-from openai import OpenAI
-from neo4j_agent_memory import MemoryClient, MemorySettings, Neo4jConfig
-from neo4j_agent_memory.integrations.openai_agents import (
-    Neo4jOpenAIMemory,
-    create_memory_tools,
-    record_agent_trace,
-)
-from neo4j_agent_memory.integrations.openai_agents.memory import execute_memory_tool
-
-openai_client = OpenAI()
-
-async def main():
-    settings = MemorySettings(
-        neo4j=Neo4jConfig(
-            uri="bolt://localhost:7687",
-            username="neo4j",
-            password="password",
-        )
-    )
-
-    async with MemoryClient(settings) as client:
-        memory = Neo4jOpenAIMemory(
-            memory_client=client,
-            session_id="demo-session",
-        )
-
-        # Get context for system prompt
-        context = await memory.get_context("Help user")
-
-        # Create memory tools
-        tools = create_memory_tools(memory)
-
-        # Build messages
-        messages = [
-            {"role": "system", "content": f"You are a helpful assistant.\n\n{context}"},
-            {"role": "user", "content": "I love Italian food. Can you remember that?"},
-        ]
-
-        # Save user message
-        await memory.save_message("user", messages[-1]["content"])
-
-        # Call OpenAI
-        response = openai_client.chat.completions.create(
-            model="gpt-4",
-            messages=messages,
-            tools=tools,
-        )
-
-        assistant_message = response.choices[0].message
-
-        # Handle tool calls
-        if assistant_message.tool_calls:
-            messages.append(assistant_message.model_dump())
-
-            for tool_call in assistant_message.tool_calls:
-                result = await execute_memory_tool(
-                    memory=memory,
-                    tool_name=tool_call.function.name,
-                    arguments=json.loads(tool_call.function.arguments),
-                )
-                messages.append({
-                    "role": "tool",
-                    "content": result,
-                    "tool_call_id": tool_call.id,
-                })
-
-            # Get final response
-            response = openai_client.chat.completions.create(
-                model="gpt-4",
-                messages=messages,
-                tools=tools,
-            )
-            assistant_message = response.choices[0].message
-
-        # Save assistant response
-        await memory.save_message("assistant", assistant_message.content)
-
-        print(f"Assistant: {assistant_message.content}")
-
-        # Record the trace
-        await record_agent_trace(
-            memory=memory,
-            messages=messages,
-            task="Remember user food preference",
-            success=True,
-        )
-
-if __name__ == "__main__":
-    asyncio.run(main())
-----
-
-== Context Retrieval
-
-Get combined context from all memory types:
-
-[source,python]
-----
-# Get full context
-context = await memory.get_context(
-    query="user question",
-    include_short_term=True,   # Recent conversation
-    include_long_term=True,    # Entities and preferences
-    include_reasoning=True,    # Similar past tasks
-    max_items=10,
-)
-
-# Use in system prompt
-system_prompt = f"""You are a helpful assistant.
-
-## Relevant Context:
-{context}
-
-Use this context to provide personalized responses."""
-----
-
-== Search Operations
-
-Search across different memory types:
-
-[source,python]
-----
-# Search everything
-results = await memory.search(
-    query="Italian food",
-    include_messages=True,
-    include_entities=True,
-    include_preferences=True,
-    limit=10,
-)
-
-# Each result has type and content
-for r in results:
-    print(f"[{r['type']}] {r['content']}")
-----
-
-== Best Practices
-
-=== System Prompt Enhancement
-
-Always include memory context in your system prompt:
-
-[source,python]
-----
-context = await memory.get_context(user_query)
-similar_traces = await get_similar_traces(memory, task_description)
-past_experience = format_traces_for_prompt(similar_traces)
-
-system_prompt = f"""You are a helpful assistant.
-
-## User Context:
-{context}
-
-## Past Experience:
-{past_experience}
-
-Instructions:
-- Use context to personalize responses
-- Learn from past successful interactions
-- Save important user preferences for future reference
-"""
-----
-
-=== Message Persistence
-
-Save all messages for conversation continuity:
-
-[source,python]
-----
-# Save incoming user message
-await memory.save_message("user", user_input)
-
-# ... agent processing ...
-
-# Save outgoing assistant message
-await memory.save_message(
-    "assistant",
-    response.content,
-    tool_calls=response.tool_calls,  # Include if present
-)
-----
-
-=== Trace Recording
-
-Record traces after significant interactions:
-
-[source,python]
-----
-# Record successful task completion
-await record_agent_trace(
-    memory=memory,
-    messages=full_conversation,
-    task="Describe what the agent accomplished",
-    outcome="Brief summary of the result",
-    success=True,
-)
-
-# Record failures for learning
-await record_agent_trace(
-    memory=memory,
-    messages=full_conversation,
-    task="What the agent tried to do",
-    outcome="Why it failed",
-    success=False,
-)
-----
-
-== Troubleshooting
-
-=== ImportError: openai not found
-
-Install the OpenAI package:
+Create the subdirectory below, then save both complete files under the displayed names. Run commands from `agent-memory-tutorials/`; Python resolves `common` from the script's `integrations/` directory.
 
 [source,bash]
 ----
-pip install neo4j-agent-memory[openai-agents]
-# or
-pip install openai
+mkdir -p integrations
 ----
 
-=== Empty Context
 
-If `get_context()` returns empty:
+The script imports this shared helper from the same directory. It supplies explicit database settings, closes clients through the calling context manager, and fails when expected records are absent. Task traces record the observable outcome of the call; they do not expose hidden model reasoning.
 
-1. Verify embeddings are generated (`generate_embedding=True`)
-2. Check that data exists in Neo4j
-3. Try lowering the similarity threshold
+.Complete `integrations/common.py`
+[%collapsible]
+====
+.Save as `integrations/common.py`
+[source,python]
+----
+include::example$integrations/common.py[]
+----
+====
 
-=== Tool Calls Not Working
+.Complete `integrations/openai_agents_recipe.py`
+[%collapsible]
+====
+.Save as `integrations/openai_agents_recipe.py`
+[source,python]
+----
+include::example$integrations/openai_agents_recipe.py[]
+----
+====
 
-Ensure you're using a model that supports function calling (e.g., `gpt-4`, `gpt-3.5-turbo`).
+== 3. Run and verify persistence
 
-== API Reference
+anchor:_basic_usage[]
+anchor:_initialize_memory[]
+anchor:_save_and_retrieve_messages[]
+anchor:_search_memory[]
+anchor:_search_entities[]
+anchor:_reasoning_traces[]
+anchor:_find_similar_past_tasks[]
+anchor:_search_operations[]
+anchor:_system_prompt_enhancement[]
+anchor:_message_persistence[]
+anchor:_trace_recording[]
+anchor:_tool_calls_not_working[]
+anchor:_neo4jopenaimemory[]
+anchor:_functions[]
 
-=== Neo4jOpenAIMemory
+[source,bash]
+----
+python integrations/openai_agents_recipe.py
+----
 
-[cols="1,3"]
-|===
-| Method | Description
+Expected: stored-message and task-trace verification followed by a nonempty `final_output`. The user turn is saved before the agent runs. A provider failure records a failed outcome and propagates; a successful trace is written only after persistence checks.
 
-| `get_context(query)` | Get combined context from all memory types
-| `save_message(role, content)` | Save a conversation message
-| `get_conversation(limit)` | Get messages in OpenAI format
-| `search(query)` | Search across all memory types
-| `add_preference(category, preference)` | Add a user preference
-| `search_preferences(query)` | Search preferences
-| `clear_session()` | Clear session messages
-|===
+== Troubleshooting and cleanup
 
-=== Functions
+anchor:_troubleshooting[]
+anchor:_importerror_openai_not_found[]
+anchor:_empty_context[]
 
-[cols="1,3"]
-|===
-| Function | Description
+include::partial$python-integration-troubleshooting.adoc[tag=troubleshooting]
 
-| `create_memory_tools(memory)` | Create OpenAI function tools
-| `execute_memory_tool(memory, name, args)` | Execute a memory tool
-| `record_agent_trace(memory, messages, task)` | Record agent execution
-| `get_similar_traces(memory, task)` | Find similar past tasks
-| `format_traces_for_prompt(traces)` | Format traces for prompts
-|===
+== Adapt the integration
+
+anchor:_pass_through_your_agents_model[]
+anchor:_memory_tools[]
+anchor:_available_tools[]
+anchor:_save_preference[]
+anchor:_recall_preferences[]
+anchor:_execute_tools[]
+anchor:_complete_example[]
+anchor:_context_retrieval[]
+anchor:_best_practices[]
+anchor:_api_reference[]
+
+The repository's `[openai-agents]` extra installs the underlying `openai` client used by its adapter. The command above also installs the separate `openai-agents` distribution that supplies `agents.Agent` and `Runner`.
+
+`Neo4jOpenAIMemory` provides `get_context`, `save_message` and `get_conversation`. It is not an automatic Agents SDK session implementation: this recipe explicitly orchestrates those operations. `record_agent_trace` consumes normalized message dictionaries and actual tool-call records when supplied; it does not directly consume every SDK event type.
+
+`create_memory_tools(memory)` returns Chat Completions-style function-schema dictionaries. Do not pass those dictionaries directly as Agents SDK function tools. To expose memory operations to an Agents SDK agent, write `@function_tool` wrappers around the async adapter methods with explicit arguments and return types, then add those functions to `Agent(tools=...)`. Only register write tools the application intends the agent to use. `integrations/openai_agents_recipe.py` ships this factory alongside the recipe, wrapping the adapter's async `get_context` in exactly that pattern:
+
+[source,python]
+----
+include::example$integrations/openai_agents_recipe.py[tag=function_tool]
+----
+
+`integrations/openai_agents_recipe.py` wires this in: `main()` passes `tools=[make_recall_tool(memory)]` into `Agent(...)`, so the shipped recipe exercises the wrapper on every run, not just the surrounding get/save calls.
+
+For Chat Completions, dispatch returned tool calls with `execute_memory_tool(memory, tool_name, arguments)` and retain matched call IDs and responses in conversation history. Merely sending a schema to a model does not execute the function. Provider selection is covered by xref:how-to/migrate-to-providers.adoc[Configure providers]. Product search and payment operations remain application code.
+
+include::partial$python-integration-troubleshooting.adoc[tag=closing]

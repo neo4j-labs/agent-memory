@@ -1,4 +1,4 @@
-= Process Documents in Batch
+= Process documents in batch
 :page-product: agent-memory
 :page-pagination:
 :toclevels: 3
@@ -6,29 +6,34 @@
 :icons: font
 :source-highlighter: highlight.js
 
-include::partial$backend-both.adoc[]
+include::partial$backend-bolt-only.adoc[]
 
 How to efficiently process large document collections to build your context graph.
 
-== Overview
+== Goal
 
-Batch processing enables efficient extraction of entities and relationships from large document collections, populating your context graph at scale.
+Extract a collection of texts, inspect per-document failures, and store successful entities with source-message provenance. The storage procedure uses Bolt APIs. Local extraction can also run independently, but it does not configure extraction on the hosted service.
 
 == Prerequisites
 
-* `neo4j-agent-memory` installed
-* Extraction models configured (GLiNER, spaCy, or LLM)
-* Sufficient memory for batch sizes
+* Install `pip install 'neo4j-agent-memory[gliner]==0.6.0'` for the GLiNER examples and allow the configured model to download before an offline run.
+* Configure a connected client with `MemorySettings` and `async with MemoryClient(settings) as client:` as in xref:how-to/messages.adoc[Store, retrieve, and summarize messages]. Storage snippets below run inside that block.
+* Use a test database and synthetic documents first. Choose positive batch sizes and concurrency limits that fit available memory.
 
-== Basic Batch Extraction
+The first sections use `documents: list[str]`. The financial and catalog variations define their own inputs. Local GLiNER entity extraction does not guarantee relation extraction; persist relations only when the chosen pipeline actually returns them.
 
-=== Process Multiple Texts
+== 1. Extract and inspect a batch
+
+xref:how-to/entity-extraction-batch.adoc[Account for batch and chunk extraction results] covers `ExtractionPipeline.extract_batch` in full, with a maintained runnable program: progress tracking, per-item result access, and the distinction between a failed item and an empty successful result. Read that guide first if you have not already.
+
+The rest of this page assumes an `extractor` (a `GLiNEREntityExtractor`), a `pipeline` (an `ExtractionPipeline` wrapping it), a `documents: list[str]`, and the batch `result` from extracting them:
 
 [source,python]
 ----
-from neo4j_agent_memory.extraction import GLiNEREntityExtractor
+from neo4j_agent_memory.extraction import ExtractionPipeline, GLiNEREntityExtractor
 
-extractor = GLiNEREntityExtractor.for_schema("ecommerce")
+extractor = GLiNEREntityExtractor.for_schema("business")
+pipeline = ExtractionPipeline(stages=[extractor], fallback_on_error=False)
 
 # List of documents to process
 documents = [
@@ -39,7 +44,7 @@ documents = [
 ]
 
 # Batch extraction
-result = await extractor.extract_batch(
+result = await pipeline.extract_batch(
     texts=documents,
     batch_size=10,
     max_concurrency=5,
@@ -50,106 +55,89 @@ print(f"Total entities: {result.total_entities}")
 print(f"Total relations: {result.total_relations}")
 ----
 
-=== With Progress Tracking
+== 2. Choose chunked extraction for long documents
 
-[source,python]
-----
-def on_progress(completed: int, total: int):
-    percent = (completed / total) * 100
-    print(f"Progress: {completed}/{total} ({percent:.1f}%)")
-
-result = await extractor.extract_batch(
-    texts=documents,
-    batch_size=10,
-    max_concurrency=5,
-    on_progress=on_progress,
-)
-----
-
-=== Access Individual Results
-
-[source,python]
-----
-result = await extractor.extract_batch(texts=documents)
-
-for i, item_result in enumerate(result.items):
-    if item_result.success:
-        print(f"Doc {i}: {item_result.entity_count} entities")
-        for entity in item_result.entities:
-            print(f"  - {entity.name} ({entity.type})")
-    else:
-        print(f"Doc {i}: Failed - {item_result.error}")
-----
-
-== Streaming Extraction for Long Documents
-
-=== Process Large Documents in Chunks
+xref:how-to/entity-extraction-batch.adoc[Account for batch and chunk extraction results] also covers `StreamingExtractor` and chunk sizing. This page only adds the storage step: writing each chunk's entities as they arrive, instead of waiting for the combined deduplicated result, using the `deduplicate` keyword shown below.
 
 [source,python]
 ----
 from neo4j_agent_memory.extraction import StreamingExtractor
+from pathlib import Path
 
-# Wrap extractor for streaming
 streamer = StreamingExtractor(
     extractor=extractor,
     chunk_size=4000,    # Characters per chunk
     overlap=200,        # Overlap to avoid splitting entities
 )
 
-# Process a long document
-long_document = open("annual_report.txt").read()  # 100K+ characters
+long_document = Path("annual_report.txt").read_text(encoding="utf-8")
 
-# Stream results as they're extracted
+# Stream results as they're extracted, storing each chunk's entities immediately
 async for chunk_result in streamer.extract_streaming(long_document):
+    if not chunk_result.success:
+        print(f"Chunk {chunk_result.chunk.index} failed: {chunk_result.error}")
+        continue
     print(f"Chunk {chunk_result.chunk.index}: {chunk_result.entity_count} entities")
 
-    # Store entities as they come
-    for entity in chunk_result.entities:
+    for entity in chunk_result.result.entities:
         await client.long_term.add_entity(
             name=entity.name,
             entity_type=entity.type,
         )
 ----
 
-=== Get Complete Deduplicated Result
+To store the cross-chunk deduplicated result instead of storing per chunk, call `await streamer.extract(long_document, deduplicate=True)` and store from the returned `result.entities` once extraction completes.
+
+== 3. Store successful batch results
+
+The Bolt write merges entities by exact name and type. As of SDK 0.6.0,
+`add_entity` re-reads the matched node when that MERGE matches an existing
+entity, so the returned `Entity.id` already carries the persisted value;
+provenance and relationship writes can use it directly, with no separate
+readback required. A batch import can still run many writers against the
+same name/type pair concurrently, so define this application helper once for
+the remaining examples — it double-checks that exactly one node is stored
+before using its ID, which is cheap insurance against a concurrent write
+race, not a required workaround:
 
 [source,python]
 ----
-# Extract with automatic cross-chunk deduplication
-result = await streamer.extract(long_document, deduplicate=True)
+from uuid import UUID
 
-print(f"Total chunks: {result.stats.total_chunks}")
-print(f"Raw entities: {result.stats.raw_entity_count}")
-print(f"Unique entities: {result.stats.deduplicated_entities}")
 
-for entity in result.entities:
-    print(f"  {entity.name} ({entity.type})")
+async def store_entity(client, **kwargs):
+    entity, dedup_result = await client.long_term.add_entity(**kwargs)
+    rows = await client.query.cypher(
+        "MATCH (e:Entity {name: $name, type: $type}) RETURN e.id AS id",
+        {"name": entity.name, "type": entity.type},
+    )
+    if len(rows) != 1:
+        raise ValueError("Expected exactly one persisted entity for name and type")
+    return entity.model_copy(update={"id": UUID(rows[0]["id"])}), dedup_result
 ----
 
-== Store Batch Results in Context Graph
+This extra read guards against concurrent writers racing on the same
+name/type pair during a large batch import; it is not required to work
+around SDK ID handling on 0.6.0, and it is not an atomic upsert contract
+either way. It assumes library UUID entity IDs and no concurrent deletion.
+Inspect ambiguous matches instead of choosing a semantic nearest neighbor.
 
-=== Basic Storage
+=== Basic storage
 
 [source,python]
 ----
-from neo4j_agent_memory import MemoryClient, MemorySettings
-
-settings = MemorySettings(
-    neo4j={"uri": "bolt://localhost:7687", "password": "password"}
-)
-
-client = MemoryClient(settings)
-
+# Use the connected Bolt client from the prerequisites.
 # Extract batch
-result = await extractor.extract_batch(texts=documents)
+result = await pipeline.extract_batch(texts=documents)
 
 # Store all entities
-for item in result.items:
+for item in result.results:
     if not item.success:
         continue
 
-    for entity in item.entities:
-        await client.long_term.add_entity(
+    for entity in item.result.entities:
+        await store_entity(
+            client,
             name=entity.name,
             entity_type=entity.type,
             attributes={
@@ -159,53 +147,52 @@ for item in result.items:
         )
 ----
 
-=== With Deduplication
+=== With deduplication
 
 [source,python]
 ----
-from neo4j_agent_memory.memory import DeduplicationConfig
-
-dedup_config = DeduplicationConfig(
-    auto_merge_threshold=0.95,
-    flag_threshold=0.85,
-)
-
 stored_count = 0
 merged_count = 0
 
-for item in result.items:
+for item in result.results:
     if not item.success:
         continue
 
-    for entity in item.entities:
-        stored, dedup_result = await client.long_term.add_entity(
+    for entity in item.result.entities:
+        stored, dedup_result = await store_entity(
+            client,
             name=entity.name,
             entity_type=entity.type,
-            deduplication=dedup_config,
+            deduplicate=True,
         )
 
-        if dedup_result.action == "created":
+        if dedup_result.action == "none":
             stored_count += 1
         elif dedup_result.action == "merged":
             merged_count += 1
 
-print(f"New entities: {stored_count}")
+print(f"No deduplication match: {stored_count}")
 print(f"Merged with existing: {merged_count}")
 ----
 
-=== With Provenance Tracking
+`add_entity` accepts the per-call `deduplicate` boolean, not a
+`deduplication` configuration keyword. Its deduplication actions are `none`,
+`merged`, and `flagged`; `none` is not an insertion-count guarantee. For
+threshold configuration see xref:how-to/deduplication.adoc[Handle Duplicate Entities].
+
+=== With provenance tracking
 
 [source,python]
 ----
 # Register the extractor for provenance
 await client.long_term.register_extractor(
     name="GLiNEREntityExtractor",
-    version="1.0",
-    config={"schema": "ecommerce"},
+    config={"schema": "business"},
 )
 
 # Store with provenance
-for doc_index, item in enumerate(result.items):
+for item in result.results:
+    doc_index = item.index
     if not item.success:
         continue
 
@@ -215,22 +202,27 @@ for doc_index, item in enumerate(result.items):
         role="system",
         content=documents[doc_index],
         metadata={"doc_index": doc_index},
+        extraction_mode="skip",  # This batch already performed extraction.
     )
 
-    for entity in item.entities:
-        stored, _ = await client.long_term.add_entity(
+    for entity in item.result.entities:
+        stored, _ = await store_entity(
+            client,
             name=entity.name,
             entity_type=entity.type,
         )
 
         # Link to source document
-        await client.long_term.link_entity_to_message(
+        linked = await client.long_term.link_entity_to_message(
             entity=stored,
             message_id=message.id,
             confidence=entity.confidence,
-            start_pos=entity.start,
-            end_pos=entity.end,
+            start_pos=entity.start_pos,
+            end_pos=entity.end_pos,
         )
+
+        if not linked:
+            raise RuntimeError("Source provenance link was not persisted")
 
         # Link to extractor
         await client.long_term.link_entity_to_extractor(
@@ -240,7 +232,7 @@ for doc_index, item in enumerate(result.items):
         )
 ----
 
-== Financial Document Processing
+== Optional: Process financial documents
 
 Example for processing financial documents:
 
@@ -249,7 +241,10 @@ Example for processing financial documents:
 from neo4j_agent_memory.extraction import GLiNEREntityExtractor, ExtractionPipeline
 
 # Configure for financial domain
-extractor = GLiNEREntityExtractor.for_schema("financial")
+pipeline = ExtractionPipeline(
+    stages=[GLiNEREntityExtractor.for_schema("business")],
+    fallback_on_error=False,
+)
 
 async def process_financial_documents(documents: list[dict]):
     """Process financial documents and build context graph."""
@@ -258,14 +253,15 @@ async def process_financial_documents(documents: list[dict]):
     texts = [doc["content"] for doc in documents]
 
     # Batch extraction
-    result = await extractor.extract_batch(
+    result = await pipeline.extract_batch(
         texts=texts,
         batch_size=10,
         on_progress=lambda d, t: print(f"Extracting: {d}/{t}"),
     )
 
     # Store in context graph
-    for i, item in enumerate(result.items):
+    for item in result.results:
+        i = item.index
         if not item.success:
             print(f"Failed: {documents[i]['id']} - {item.error}")
             continue
@@ -273,7 +269,8 @@ async def process_financial_documents(documents: list[dict]):
         doc = documents[i]
 
         # Store document metadata as entity
-        doc_entity, _ = await client.long_term.add_entity(
+        doc_entity, _ = await store_entity(
+            client,
             name=doc.get("title", f"Document {doc['id']}"),
             entity_type="DOCUMENT",
             attributes={
@@ -283,43 +280,41 @@ async def process_financial_documents(documents: list[dict]):
             },
         )
 
+        # Keep exact names mapped to the IDs returned by storage.
+        stored_by_name = {}
+
         # Store extracted entities with relationships
-        for entity in item.entities:
-            stored, _ = await client.long_term.add_entity(
+        for entity in item.result.entities:
+            stored, _ = await store_entity(
+                client,
                 name=entity.name,
                 entity_type=entity.type,
             )
+
+            stored_by_name.setdefault(entity.name, []).append(stored.id)
 
             # Link entity to document
             await client.long_term.add_relationship(
                 source=stored.id,
                 target=doc_entity.id,
                 relationship_type="MENTIONED_IN",
-                attributes={
-                    "confidence": entity.confidence,
-                    "position": entity.start,
-                },
+                confidence=entity.confidence,
             )
 
         # Store relationships if extracted
-        for relation in item.relations:
-            # Find or create source/target entities
-            source = await client.long_term.search_entities(
-                query=relation.source,
-                limit=1,
-            )
-            target = await client.long_term.search_entities(
-                query=relation.target,
-                limit=1,
-            )
-
-            if source and target:
+        for relation in item.result.relations:
+            # Do not use semantic nearest-neighbor search to resolve write IDs.
+            source_ids = stored_by_name.get(relation.source, [])
+            target_ids = stored_by_name.get(relation.target, [])
+            if len(source_ids) == len(target_ids) == 1:
                 await client.long_term.add_relationship(
-                    source=source[0].id,
-                    target=target[0].id,
-                    relationship_type=relation.type,
-                    attributes={"source_doc": doc["id"]},
+                    source=source_ids[0],
+                    target=target_ids[0],
+                    relationship_type=relation.relation_type,
+                    confidence=relation.confidence,
                 )
+            else:
+                print(f"Review ambiguous or missing relation endpoints: {relation}")
 
     return result
 
@@ -346,9 +341,9 @@ documents = [
 result = await process_financial_documents(documents)
 ----
 
-== Ecommerce Catalog Import
+== Optional: Import an ecommerce catalog
 
-Example for importing product catalogs:
+Example for a one-time product catalog import. `sku` is an attribute, not a uniqueness constraint. Two distinct SKUs with the same product name and type can match the same entity, and re-running does not update every attribute. Define an explicit SKU-to-entity identity and update policy before using this as a recurring import.
 
 [source,python]
 ----
@@ -367,15 +362,19 @@ async def import_product_catalog(products: list[dict]):
         texts.append(text)
 
     # Extract additional entities from descriptions
-    extractor = GLiNEREntityExtractor.for_schema("ecommerce")
-    result = await extractor.extract_batch(
+    pipeline = ExtractionPipeline(
+        stages=[GLiNEREntityExtractor.for_schema("business")],
+        fallback_on_error=False,
+    )
+    result = await pipeline.extract_batch(
         texts=texts,
         batch_size=20,
     )
 
     for i, product in enumerate(products):
         # Store product as primary entity
-        product_entity, _ = await client.long_term.add_entity(
+        product_entity, _ = await store_entity(
+            client,
             name=product["name"],
             entity_type="PRODUCT",
             description=product.get("description"),
@@ -384,12 +383,13 @@ async def import_product_catalog(products: list[dict]):
                 "price": product.get("price"),
                 "rating": product.get("rating"),
             },
-            deduplicate=False,  # SKUs are unique
+            deduplicate=False,  # One-time import only; this does not enforce SKU uniqueness.
         )
 
         # Store brand as entity
         if product.get("brand"):
-            brand_entity, _ = await client.long_term.add_entity(
+            brand_entity, _ = await store_entity(
+                client,
                 name=product["brand"],
                 entity_type="BRAND",
             )
@@ -402,7 +402,8 @@ async def import_product_catalog(products: list[dict]):
 
         # Store category as entity
         if product.get("category"):
-            category_entity, _ = await client.long_term.add_entity(
+            category_entity, _ = await store_entity(
+                client,
                 name=product["category"],
                 entity_type="CATEGORY",
             )
@@ -414,10 +415,11 @@ async def import_product_catalog(products: list[dict]):
             )
 
         # Link extracted entities to product
-        if result.items[i].success:
-            for entity in result.items[i].entities:
+        if result.results[i].success:
+            for entity in result.results[i].result.entities:
                 if entity.type not in ["PRODUCT", "BRAND"]:  # Avoid duplicates
-                    linked, _ = await client.long_term.add_entity(
+                    linked, _ = await store_entity(
+                        client,
                         name=entity.name,
                         entity_type=entity.type,
                     )
@@ -447,66 +449,54 @@ products = [
 await import_product_catalog(products)
 ----
 
-== Performance Optimization
+== 4. Tune throughput and handle failures
 
-=== Tune Batch Size
+=== Tune batch size
 
 [source,python]
 ----
 # Smaller batches for memory-constrained environments
-result = await extractor.extract_batch(
+result = await pipeline.extract_batch(
     texts=documents,
     batch_size=5,  # Smaller batches
     max_concurrency=2,
 )
 
 # Larger batches for high-memory environments with GPU
-result = await extractor.extract_batch(
+result = await pipeline.extract_batch(
     texts=documents,
     batch_size=50,  # Larger batches
     max_concurrency=10,
 )
 ----
 
-=== Use Appropriate Extractor
+=== Choose an extractor for your data
+
+Measure extraction quality and throughput on labeled samples before choosing
+spaCy, GLiNER, or an LLM stage. The settings above are starting points, not
+hardware-specific performance guarantees. A GLiNER-only pipeline may return
+no relationships; add a relation-capable extractor when your goal requires them.
+
+=== Skip failures and continue
 
 [source,python]
 ----
-# High-volume, lower precision
-fast_extractor = SpacyEntityExtractor()  # Fastest
-
-# Balanced
-balanced_extractor = GLiNEREntityExtractor.for_schema("ecommerce")
-
-# High precision, slower
-accurate_pipeline = ExtractionPipeline(
-    stages=[
-        GLiNEREntityExtractor.for_schema("ecommerce"),
-        LLMEntityExtractor(model="gpt-4o-mini"),
-    ],
-)
-----
-
-=== Skip Failures and Continue
-
-[source,python]
-----
-result = await extractor.extract_batch(
+result = await pipeline.extract_batch(
     texts=documents,
     fail_fast=False,  # Continue on errors (default)
 )
 
 # Check for failures
-failed = [item for item in result.items if not item.success]
+failed = [item for item in result.results if not item.success]
 print(f"Failed: {len(failed)}/{result.total_items}")
 
 for item in failed:
     print(f"  Index {item.index}: {item.error}")
 ----
 
-== Best Practices
+== Optional: Prepare larger imports
 
-=== 1. Validate Before Processing
+=== 1. Validate before processing
 
 [source,python]
 ----
@@ -517,10 +507,10 @@ valid_docs = [
 ]
 
 print(f"Processing {len(valid_docs)} of {len(documents)} documents")
-result = await extractor.extract_batch(texts=[d["content"] for d in valid_docs])
+result = await pipeline.extract_batch(texts=[d["content"] for d in valid_docs])
 ----
 
-=== 2. Log Progress and Errors
+=== 2. Log progress and errors
 
 [source,python]
 ----
@@ -532,17 +522,17 @@ logger = logging.getLogger(__name__)
 def on_progress(completed, total):
     logger.info(f"Progress: {completed}/{total}")
 
-result = await extractor.extract_batch(
+result = await pipeline.extract_batch(
     texts=documents,
     on_progress=on_progress,
 )
 
-for item in result.items:
+for item in result.results:
     if not item.success:
         logger.error(f"Failed doc {item.index}: {item.error}")
 ----
 
-=== 3. Process in Manageable Chunks
+=== 3. Process in manageable chunks
 
 [source,python]
 ----
@@ -553,33 +543,67 @@ for i in range(0, len(all_documents), CHUNK_SIZE):
     chunk = all_documents[i:i + CHUNK_SIZE]
     print(f"Processing chunk {i//CHUNK_SIZE + 1}")
 
-    result = await extractor.extract_batch(texts=chunk)
+    result = await pipeline.extract_batch(texts=chunk)
 
-    # Store results before next chunk
-    await store_results(result)
+    # Apply the successful-item storage loop from step 3 before the next chunk.
+    print(result.successful_items, result.get_errors())
 ----
 
-=== 4. Use Appropriate Deduplication
+=== 4. Use appropriate deduplication
 
 [source,python]
 ----
 # For known-clean data, skip deduplication
-await client.long_term.add_entity(
+await store_entity(
+    client,
     name=entity.name,
     entity_type=entity.type,
-    deduplicate=False,  # Faster for trusted sources
+    deduplicate=False,  # Skips similarity deduplication; does not make imports idempotent.
 )
 
 # For user-generated content, enable deduplication
-await client.long_term.add_entity(
+await store_entity(
+    client,
     name=entity.name,
     entity_type=entity.type,
-    deduplication=dedup_config,
+    deduplicate=True,
 )
 ----
 
-== See Also
+== 5. Verify the import
+
+Check `result.failed_items` and `result.get_errors()` before declaring the
+batch complete. For the provenance example, query the session you imported:
+
+[source,cypher]
+----
+MATCH (c:Conversation {session_id: 'batch-import'})-[:HAS_MESSAGE]->(m:Message)
+OPTIONAL MATCH (e:Entity)-[:EXTRACTED_FROM]->(m)
+RETURN m.id, m.content, collect(DISTINCT e.name) AS entities
+ORDER BY m.content
+----
+
+Expect one source message for each successfully processed input, including
+inputs with zero extracted entities. These links use `EXTRACTED_FROM`; storing
+a source message with extraction skipped does not create `MENTIONS` links. Verify a labeled sample of entity names
+and relation endpoints. A successful extraction call or nonzero entity count
+does not establish extraction quality, persistence, or retry safety. Record
+source IDs and completed batches outside this example before adding retries.
+
+== See also
 
 * xref:how-to/entity-extraction.adoc[Configure Entity Extraction]
+* xref:how-to/entity-extraction-batch.adoc[Account for batch and chunk extraction results] — the `extract_batch`/`StreamingExtractor` API and its result bookkeeping in depth; this page covers ingesting and storing the documents that feed it.
 * xref:how-to/deduplication.adoc[Handle Duplicate Entities]
 * xref:reference/extractors.adoc[Extractor Classes Reference]
+
+// Preserve historical section links after the procedure was reorganized.
+anchor:_overview[]
+anchor:_basic_batch_extraction[]
+anchor:_streaming_extraction_for_long_documents[]
+anchor:_store_batch_results_in_context_graph[]
+anchor:_financial_document_processing[]
+anchor:_ecommerce_catalog_import[]
+anchor:_performance_optimization[]
+anchor:_use_appropriate_extractor[]
+anchor:_best_practices[]

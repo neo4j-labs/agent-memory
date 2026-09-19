@@ -1,0 +1,151 @@
+= Search, statistics, and NAMS lifecycle
+:page-product: agent-memory
+:page-pagination:
+:toclevels: 2
+
+Semantic search over traces/steps, tool-usage statistics, and the NAMS synthetic-trace lifecycle from xref:reference/api/reasoning.adoc[ReasoningMemory API reference]. Signatures show types, keyword-only arguments (`*`), and defaults; they are reference declarations, not calls to execute directly.
+
+anchor:_search_operations[]
+anchor:_returns_2[]
+
+== Search (bolt only)
+
+anchor:_search_traces[]
+anchor:_find_similar_traces[]
+
+=== get_similar_traces
+
+Search trace task embeddings. Returns ReasoningTrace models with `metadata["similarity"]`, not score tuples.
+
+// contract: memory/reasoning.py:ReasoningMemory.get_similar_traces
+[source,python]
+----
+async def get_similar_traces(
+    task: str,
+    *,
+    limit: int=5,
+    success_only: bool=True,
+    threshold: float=0.7,
+) -> list[ReasoningTrace]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `task` | Task description to match
+| `limit` | Maximum number of results
+| `success_only` | Only return successful traces
+| `threshold` | Minimum similarity threshold
+|===
+
+=== search_steps
+
+Search step embeddings. Returns `ReasoningStepWithContext` wrappers with `step`, `similarity`, and parent task/outcome fields. Generate step embeddings with `complete_trace(..., generate_step_embeddings=True)` before relying on step search.
+
+// contract: memory/reasoning.py:ReasoningMemory.search_steps
+[source,python]
+----
+async def search_steps(
+    query: str,
+    *,
+    limit: int=10,
+    success_only: bool=True,
+    threshold: float=0.7,
+) -> list[ReasoningStepWithContext]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `query` | Free-text query. Embedded via the configured embedder.
+| `limit` | Maximum number of results.
+| `success_only` | When `True`, only steps whose parent trace completed successfully are returned. Filtering on the trace level (not the step) because individual steps don't carry their own outcome.
+| `threshold` | Minimum cosine similarity, 0-1.
+|===
+
+Trace and step semantic searches are global: neither accepts a session filter. There are no `search_traces` or `find_similar_traces` methods.
+
+[source,python]
+----
+for trace in await client.reasoning.get_similar_traces("restaurant recommendations"):
+    print(trace.task, trace.metadata.get("similarity"), trace.outcome)
+for match in await client.reasoning.search_steps("find a nearby restaurant"):
+    print(match.similarity, match.step.thought, match.parent_task)
+----
+
+
+anchor:_statistics[]
+anchor:_returns_3[]
+
+== Statistics (bolt only)
+
+=== get_tool_stats
+
+Return a list of `ToolStats` models, optionally filtered by tool name. There is no session argument and the result is not a dictionary keyed by tool name.
+
+// contract: memory/reasoning.py:ReasoningMemory.get_tool_stats
+[source,python]
+----
+async def get_tool_stats(tool_name: str | None=None) -> list[ToolStats]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `tool_name` | Optional filter by specific tool name
+|===
+
+=== migrate_tool_stats
+
+Recalculate Tool aggregates from existing ToolCall nodes. Returns a dictionary with migration counts.
+
+// contract: memory/reasoning.py:ReasoningMemory.migrate_tool_stats
+[source,python]
+----
+async def migrate_tool_stats() -> dict[str, int]: ...
+----
+
+=== get_tool_usage_stats
+
+Deprecated compatibility operation returning a dictionary of tool name to minimal Tool models. Use `get_tool_stats` for aggregate counts and durations.
+
+// contract: memory/reasoning.py:ReasoningMemory.get_tool_usage_stats
+[source,python]
+----
+async def get_tool_usage_stats(tool_name: str | None=None) -> dict[str, Tool]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `tool_name` | Optional filter by tool name
+|===
+
+
+== NAMS lifecycle and operations
+
+NAMS exposes flat steps belonging to a conversation and tool calls belonging to a step. The Python wrapper holds a trace-ID-to-conversation mapping in this client instance; it does not create a server Trace record.
+
+[cols="1,3",options="header"]
+|===
+| Operation | Hosted behavior
+| `start_trace(session_id, task, **kwargs)` | Creates local trace metadata and a UUID; `metadata` is held locally. No request stores a trace, task, trigger link, or outcome.
+| `add_step(trace_id, **kwargs)` | Requires a trace started by this client instance. Sends `thought` as `reasoning`, `action` as `actionTaken`, and `observation` as `result` with the conversation ID. Empty thought/action become a single space.
+| `record_tool_call(step_id, tool_name, arguments, **kwargs)` | Sends status, result, and duration when supplied. Arguments and result are JSON strings in the request; bolt error/auto-observation/message/provenance kwargs are not sent.
+| `complete_trace(trace_id, **kwargs)` | Updates local outcome, success, and completion time; returns None. It does not persist completion to the service.
+| `get_trace(trace_id)` | Returns local trace metadata, or None when unknown to this client instance.
+| `get_trace_with_steps(trace_id)` | Requires the local mapping, then fetches all steps for that conversation. Two synthetic traces in the same conversation do not partition the server's steps.
+| `get_session_traces(session_id)` | Fetches the conversation's steps as one aggregate trace with a new local ID and task text `Aggregated session reasoning`.
+| `get_context` | Returns an empty string.
+| `link_trace_to_message` | No-op.
+| `search_steps`, `get_similar_traces`, `list_traces`, tool statistics | Raise `NotSupportedError`.
+|===
+
+Save conversation IDs for later retrieval. Synthetic trace IDs, task labels, and outcomes are not durable across client instances. For durable hosted reasoning data, consume the recorded conversation steps and tool calls. See xref:reference/rest-api.adoc[REST endpoint mappings].
+
+
+== See also
+
+* xref:reference/api/reasoning.adoc[ReasoningMemory API reference]
+* xref:reference/backend-capabilities.adoc[Backend capabilities]
+* xref:how-to/evaluation.adoc[Evaluate memory quality]

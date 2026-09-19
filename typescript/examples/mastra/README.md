@@ -11,8 +11,8 @@ graph instead of a Mastra store.
 > ⚠️ **Neo4j Labs Project**
 >
 > This project is part of Neo4j Labs and is actively maintained, but not
-> officially supported. There are no SLAs or guarantees around backwards
-> compatibility and deprecation. For questions and support, please use
+> officially supported. There are no SLAs, backward-compatibility guarantees,
+> or scheduled deprecation commitments. APIs may change without notice. For questions and support, please use
 > the [Neo4j Community Forum](https://community.neo4j.com).
 
 ## What it shows
@@ -25,14 +25,15 @@ graph instead of a Mastra store.
   context (reflections, observations, recent messages) over the very messages
   the agent just wrote, and `shortTerm.searchMessages` runs a semantic search
   scoped to the thread.
-- **Cross-thread recall — the reason to choose NAMS here.** A preference written
-  while planning the trip is resource-scoped, so a *second* thread for the same
-  `resourceId` recalls it even though that thread's own history is empty. A
-  thread-scoped store cannot do this.
+- **Explicit prior-thread selection.** The program reads messages from the first
+  thread and supplies them to a model call in a second thread. Reusing a
+  `resourceId` alone does not inject context or expose a preference store.
+
 - **Distinct thread ids per resource.** Both threads belong to one
   `resourceId`; `shortTerm.listConversations({ userId })` lists both.
-- **Idempotent re-runs.** `CLEANUP=1` deletes both threads through
-  `deleteThread` on the way out.
+- **Cleanup for the current run.** `CLEANUP=1` deletes that run's two threads
+  through `deleteThread`. Each run otherwise creates new conversations; entity
+  extraction and deduplication do not make the whole script idempotent.
 
 ## What the adapter covers — and what it does not
 
@@ -65,15 +66,33 @@ extraction, three-tier context and graph queries apply to it — that is what ac
 
 ## Prerequisites
 
-- Node.js 22+ (Node 20 is EOL)
+- Node.js 22+
 - A `MEMORY_API_KEY` from [memory.neo4jlabs.com](https://memory.neo4jlabs.com)
 - An `OPENAI_API_KEY`, or `MASTRA_MODEL` pointing at another provider
+
+## Build the shared SDK first
+
+This is a source-checkout example. Its `file:../..` dependency and shared
+`../tsconfig.base.json` require the repository layout. From the repository root:
+
+```bash
+cd typescript
+npm ci
+npm run build
+cd examples/mastra
+```
+
+Run the commands below from `typescript/examples/mastra/`. Build **before**
+installing this example; package exports point at `typescript/dist/` and npm does
+not build the local SDK on installation. For standalone copies, follow the
+[copy checklist](../README.md#copying-an-example) and verify the selected npm
+artifact supplies every API used here.
 
 ## Run it
 
 ```bash
 cp .env.example .env       # set MEMORY_API_KEY and OPENAI_API_KEY
-npm install
+npm ci
 npm start                  # add CLEANUP=1 to delete both threads afterwards
 ```
 
@@ -84,9 +103,9 @@ transport 401.
 ## Expected output
 
 ```
-thread 9f3c… for resource mastra-demo-user
+first thread created for the demo resource
 
-user> I'm planning a 7-day trip to Lisbon.
+user> I'm planning a 7-day trip to Lisbon. I prefer food and history trips.
 memory: replayed 0 stored message(s) into the turn
 agent> Lisbon is a great pick — start with flights and an Alfama food tour …
 
@@ -95,7 +114,7 @@ memory: replayed 2 stored message(s) into the turn
 agent> Book the Alfama food tour and a Belém history walk first …
 
 NAMS holds 4 messages for this thread:
-  [user] I'm planning a 7-day trip to Lisbon.
+  [user] I'm planning a 7-day trip to Lisbon. I prefer food and history trips.
   [assistant] Lisbon is a great pick — start with flights and an Alfama food tour
   [user] Given what I told you, what should I book first?
   [assistant] Book the Alfama food tour and a Belém history walk first …
@@ -103,15 +122,15 @@ getThreadById -> title "Lisbon trip planning"
 Three-tier context: 0 reflections, 1 observations, 4 recent messages
 Semantic search inside the thread matched 3 message(s)
 
-second thread 4a71… (same resource, distinct id)
-Preferences recalled in the new thread: 1
-  [travel] Prefers food and history trips
+second thread created (same resource, distinct id: true)
+Prior-thread messages explicitly selected: 4
 
 user> Remind me what kind of trip I said I like.
 agent> You said you like food and history trips …
-NAMS lists 2 thread(s) for mastra-demo-user
+NAMS lists 2 thread(s) for the demo resource
 
-Re-run with CLEANUP=1 to delete both threads on the way out.
+Both threads were kept. Re-run with CLEANUP=1 to delete them.
+CLEANUP=1 deletes only the threads created during that run.
 ```
 
 Exact wording varies with the model; the structure does not. Reflection and
@@ -131,7 +150,7 @@ graph, that assertion fails.
 
 ## Using this in your own app
 
-Copy `src/nams-threads.ts` — one type and two small functions, the whole bridge
+Copy `src/nams-threads.ts` — one type and one small function, the whole bridge
 between NAMS history and Mastra message input — then:
 
 ```ts
@@ -179,5 +198,4 @@ This is a Neo4j Labs project — community supported, no SLA. Ask questions on t
 
 ---
 
-_Verified against @neo4j-labs/agent-memory 0.4.1 (in-tree), @mastra/core 1.66.0,
-@mastra/memory 1.29.0, Node 22+ — 2026-09-10._
+_Compatibility scope: this example targets the current source checkout and its committed package/lock files. Offline tests validate the exercised contracts; they do not establish published-package availability, a live model result, or deployed NAMS behavior. Use the runtime floor above; record the actual package/runtime versions when verifying a release or deployment._

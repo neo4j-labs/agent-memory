@@ -1,457 +1,72 @@
-= Getting Started
+= Getting started
 :page-product: agent-memory
-:page-pagination:
-:toclevels: 3
-:sectanchors:
-:icons: font
-:source-highlighter: highlight.js
-:page-ad-icon: mortarboard
-:page-ad-title: Context Graphs: Agent Memory with Neo4j
-:page-ad-description: Build an AI agent that records its reasoning into Neo4j and query the trace to understand what it did and why.
-:page-ad-link: https://graphacademy.neo4j.com/courses/genai-context-graphs/?ref=docs-ad-genai-context-graphs
-:page-ad-underline-role: button
-:page-ad-underline: Enroll now
+:toclevels: 2
 
-This guide walks you through installing the Neo4j Agent Memory SDK, connecting to a backend, and performing your first memory operations.
+Choose a language and a backend before installing an example. Each linked tutorial supplies its complete dependency setup, files, run commands and expected results.
 
-[TIP]
-====
-*Two ways to run.* Pick the one that matches your goal:
-
-* **Hosted (NAMS)** — A managed REST service at link:https://memory.neo4jlabs.com[memory.neo4jlabs.com]. You provide an API key; Neo4j is operated for you. Fastest path to a working agent. Best for prototypes, demos, and multi-tenant SaaS deployments.
-* **Self-hosted (Bolt)** — Bring your own Neo4j (Aura, Desktop, or Docker). You get full schema control, write-Cypher access, geospatial features, and air-gapped operation. Best when you already operate Neo4j or need bolt-only features.
-
-The SDK surface is the same for both — `client.short_term`, `client.long_term`, `client.reasoning`. See xref:explanation/backends.adoc[Bolt vs NAMS] for the trade-offs and xref:how-to/migrate-to-nams.adoc[Migrate to NAMS] for porting between them.
-====
-
-== Path A: Hosted (NAMS) — fastest start
-
-If you don't already operate Neo4j, start here. There is nothing to install or run beyond the SDK and an API key.
-
-=== 1. Get an API key
-
-Sign up at link:https://memory.neo4jlabs.com[memory.neo4jlabs.com] and copy your `nams_...` key.
-
-=== 2. Install the SDK
-
-[tabs]
-======
-Python::
-+
-[source,bash]
-----
-pip install neo4j-agent-memory
-export MEMORY_API_KEY=nams_...
-----
-
-TypeScript::
-+
-[source,bash]
-----
-npm install @neo4j-labs/agent-memory
-export MEMORY_API_KEY=nams_...
-----
-======
-
-=== 3. First operations
-
-[tabs]
-======
-Python::
-+
-[source,python]
-----
-import asyncio, os
-from neo4j_agent_memory import MemoryClient
-
-async def main():
-    # Reads MEMORY_API_KEY from env; backend auto-selects NAMS.
-    async with MemoryClient() as memory:
-        await memory.short_term.add_message(
-            session_id="user-123", role="user",
-            content="I love Italian food!",
-        )
-        await memory.long_term.add_preference(
-            category="food", preference="Loves Italian cuisine",
-        )
-        ctx = await memory.get_context(
-            "restaurant recommendation", session_id="user-123",
-        )
-        print(ctx)
-
-asyncio.run(main())
-----
-
-TypeScript::
-+
-[source,typescript]
-----
-import { MemoryClient } from "@neo4j-labs/agent-memory";
-
-const memory = new MemoryClient();  // reads MEMORY_API_KEY
-
-const conv = await memory.shortTerm.createConversation({ userId: "alice" });
-await memory.shortTerm.addMessage(conv.id, "user", "I love Italian food!");
-
-await memory.longTerm.addPreference("food", {
-  preference: "Loves Italian cuisine",
-});
-
-const ctx = await memory.shortTerm.getContext(conv.id);
-console.log(ctx.recentMessages, ctx.observations, ctx.reflections);
-----
-======
-
-Then continue with xref:tutorials/nams-quickstart.adoc[NAMS Quickstart] (Python) or xref:tutorials/hosted-quickstart-typescript.adoc[Hosted Quickstart] (TypeScript).
-
-== Path B: Self-hosted Neo4j (Bolt)
-
-If you already run Neo4j or need bolt-only features (write-Cypher, geospatial, `adopt_existing_graph`), follow this path. _Python only — the TypeScript SDK is NAMS-only._
-
-=== Prerequisites
-
-* Python 3.10+
-* Neo4j 5.20+ (local or cloud)
-* Optional: OpenAI / Anthropic / Bedrock / Vertex key for embeddings and LLM extraction
-
-=== Basic install
-
-Install the core package with pip:
-
-[source,bash]
-----
-pip install neo4j-agent-memory
-----
-
-=== Install with extras
-
-Choose the extras that match your needs:
-
-[cols="1,2,1"]
-|===
-|Extra |Description |Command
-
-|`openai`
-|OpenAI embeddings and LLM extraction
-|`pip install neo4j-agent-memory[openai]`
-
-|`spacy`
-|spaCy NER extraction (local)
-|`pip install neo4j-agent-memory[spacy]`
-
-|`gliner`
-|GLiNER zero-shot NER (local)
-|`pip install neo4j-agent-memory[gliner]`
-
-|`extraction`
-|Full extraction pipeline (spaCy + GLiNER)
-|`pip install neo4j-agent-memory[extraction]`
-
-|`sentence-transformers`
-|Local embeddings with Sentence Transformers
-|`pip install neo4j-agent-memory[sentence-transformers]`
-
-|`cli`
-|Command-line interface for extraction and schemas
-|`pip install neo4j-agent-memory[cli]`
-
-|`opentelemetry`
-|OpenTelemetry tracing for observability
-|`pip install neo4j-agent-memory[opentelemetry]`
-
-|`opik`
-|Opik LLM-focused observability
-|`pip install neo4j-agent-memory[opik]`
-
-|`vertex-ai`
-|Google Vertex AI embeddings
-|`pip install neo4j-agent-memory[vertex-ai]`
-
-|`bedrock`
-|Amazon Bedrock embeddings (Titan, Cohere)
-|`pip install neo4j-agent-memory[bedrock]`
-
-|`aws`
-|AWS cloud provider bundle (Bedrock)
-|`pip install neo4j-agent-memory[aws]`
-
-|`strands`
-|AWS Strands Agents SDK integration
-|`pip install neo4j-agent-memory[strands]`
-
-|`all`
-|All features including local models
-|`pip install neo4j-agent-memory[all]`
-|===
-
-=== Download spaCy Model
-
-If using spaCy extraction, download a language model:
-
-[source,bash]
-----
-python -m spacy download en_core_web_sm
-----
-
-== Setting Up Neo4j
-
-=== Option 1: Docker (Recommended for Development)
-
-[source,bash]
-----
-docker run -d \
-  --name neo4j \
-  -p 7474:7474 -p 7687:7687 \
-  -e NEO4J_AUTH=neo4j/password \
-  -e NEO4J_PLUGINS='["apoc"]' \
-  neo4j:5.26-community
-----
-
-=== Option 2: Neo4j Desktop
-
-Download https://neo4j.com/download/[Neo4j Desktop] and create a new database.
-
-=== Option 3: Neo4j AuraDB (Cloud)
-
-Create a free instance at https://neo4j.com/cloud/aura/[Neo4j AuraDB].
-
-== Basic Usage
-
-=== Connecting to Neo4j
-
-[source,python]
-----
-import asyncio
-from neo4j_agent_memory import MemoryClient, MemorySettings
-from pydantic import SecretStr
-
-async def main():
-    # Configure connection
-    settings = MemorySettings(
-        neo4j={
-            "uri": "bolt://localhost:7687",
-            "username": "neo4j",
-            "password": SecretStr("password"),
-        }
-    )
-
-    # Connect using async context manager
-    async with MemoryClient(settings) as memory:
-        print(f"Connected: {memory.is_connected}")
-
-        # Your memory operations here
-        stats = await memory.get_stats()
-        print(f"Memory stats: {stats}")
-
-asyncio.run(main())
-----
-
-=== Storing Conversation Messages
-
-[source,python]
-----
-async with MemoryClient(settings) as memory:
-    # Add a user message
-    message = await memory.short_term.add_message(
-        session_id="session-123",
-        role="user",
-        content="What's the best pizza place in New York?"
-    )
-    print(f"Stored message: {message.id}")
-
-    # Add an assistant response
-    await memory.short_term.add_message(
-        session_id="session-123",
-        role="assistant",
-        content="I recommend Joe's Pizza in Greenwich Village!"
-    )
-
-    # Retrieve conversation history
-    conversation = await memory.short_term.get_conversation(
-        session_id="session-123"
-    )
-    for msg in conversation.messages:
-        print(f"{msg.role}: {msg.content}")
-----
-
-=== Working with Entities
-
-Entities are automatically extracted from messages when `extract_entities=True` (default):
-
-[source,python]
-----
-async with MemoryClient(settings) as memory:
-    # This message will have entities extracted automatically
-    await memory.short_term.add_message(
-        session_id="session-123",
-        role="user",
-        content="I work at Acme Corp in San Francisco with John Smith",
-        extract_entities=True  # Default is True
-    )
-
-    # Search for entities
-    entities = await memory.long_term.search_entities(
-        query="companies in San Francisco",
-        limit=5
-    )
-    for entity in entities:
-        print(f"{entity.name} ({entity.type}): {entity.confidence}")
-----
-
-=== Storing Preferences
-
-[source,python]
-----
-async with MemoryClient(settings) as memory:
-    # Add a user preference
-    pref = await memory.long_term.add_preference(
-        category="food",
-        preference="Prefers vegetarian options",
-        confidence=0.8,
-        metadata={"source": "user_profile"}
-    )
-
-    # Search preferences
-    prefs = await memory.long_term.search_preferences(
-        query="dietary restrictions",
-        limit=5
-    )
-----
-
-=== Getting Context for LLM Prompts
-
-[source,python]
-----
-async with MemoryClient(settings) as memory:
-    # Get combined context from all memory types
-    context = await memory.get_context(
-        query="restaurant recommendation",
-        session_id="session-123",
-    )
-
-    # Use context in your LLM prompt
-    prompt = f"""
-    Based on the following context:
-    {context}
-
-    Please recommend a restaurant.
-    """
-----
-
-=== Geocoding Locations (Optional)
-
-Enable geocoding to automatically add coordinates to LOCATION entities, enabling geospatial queries:
-
-[source,python]
-----
-from neo4j_agent_memory import (
-    MemoryClient,
-    MemorySettings,
-    GeocodingConfig,
-    GeocodingProvider,
-)
-
-settings = MemorySettings(
-    geocoding=GeocodingConfig(
-        enabled=True,
-        provider=GeocodingProvider.NOMINATIM,  # Free, or GOOGLE for higher accuracy
-    )
-)
-
-async with MemoryClient(settings) as memory:
-    # LOCATION entities are automatically geocoded
-    await memory.short_term.add_message(
-        session_id="session-123",
-        role="user",
-        content="I'm visiting the Eiffel Tower in Paris",
-    )
-
-    # Find locations near a point
-    nearby = await memory.long_term.search_locations_near(
-        latitude=48.8584,
-        longitude=2.2945,
-        radius_km=5.0,
-    )
-----
-
-See xref:reference/configuration.adoc#_geocoding_configuration[Geocoding Configuration] for more details.
-
-== Configuration with Environment Variables
-
-You can configure neo4j-agent-memory using environment variables with the `NAM_` prefix:
-
-[source,bash]
-----
-# Neo4j connection
-export NAM_NEO4J__URI=bolt://localhost:7687
-export NAM_NEO4J__USERNAME=neo4j
-export NAM_NEO4J__PASSWORD=your-password
-
-# OpenAI configuration
-export NAM_EMBEDDING__PROVIDER=openai
-export NAM_EMBEDDING__MODEL=text-embedding-3-small
-export OPENAI_API_KEY=sk-...
-
-# Extraction configuration
-export NAM_EXTRACTION__EXTRACTOR_TYPE=pipeline
-export NAM_EXTRACTION__ENABLE_SPACY=true
-export NAM_EXTRACTION__ENABLE_GLINER=true
-export NAM_EXTRACTION__ENABLE_LLM_FALLBACK=true
-----
-
-Then create the client without explicit configuration:
-
-[source,python]
-----
-from neo4j_agent_memory import MemoryClient, MemorySettings
-
-# Settings loaded from environment variables
-settings = MemorySettings()
-async with MemoryClient(settings) as memory:
-    # Your memory operations here
-    pass
-----
+include::partial$labs-disclaimer.adoc[]
 
 [NOTE]
 ====
-Other env vars in your `.env` (e.g. plain `NEO4J_URI=...`, `OPENAI_API_KEY=...` for unrelated tools) are silently ignored by `MemorySettings` -- only `NAM_*`-prefixed vars are loaded. If you see `extra_forbidden` errors, upgrade to the next `0.2.x` patch release and see xref:faq.adoc#extra-forbidden-from-env[the FAQ entry].
+Python examples use the published `neo4j-agent-memory==0.6.0` package and complete scripts shown on each page. TypeScript tutorials retain their source-build setup; Python and npm versions are independent. Follow xref:sdks/python.adoc[Python installation] or xref:sdks/typescript.adoc[TypeScript setup].
 ====
 
-== Error Handling
+// Retain former section URLs at the current related topic.
+== Hosted memory with NAMS
 
-[source,python]
-----
-from neo4j_agent_memory import (
-    MemoryClient,
-    MemorySettings,
-    ConnectionError,
-    NotConnectedError,
-    ExtractionError,
-)
+anchor:_path_a_hosted_nams_fastest_start[]anchor:_1_get_an_api_key[]anchor:_3_first_operations[]anchor:_working_with_entities[]anchor:_storing_preferences[]anchor:_getting_context_for_llm_prompts[]
 
-try:
-    async with MemoryClient(settings) as memory:
-        await memory.short_term.add_message(...)
-except ConnectionError as e:
-    print(f"Failed to connect to Neo4j: {e}")
-except ExtractionError as e:
-    print(f"Entity extraction failed: {e}")
-except NotConnectedError as e:
-    print(f"Client not connected: {e}")
-----
+Use a workspace-bound API key from https://memory.neo4jlabs.com[the NAMS dashboard] — sign up for a workspace, no local database to run. Keep the key on the server and select the intended workspace before writing memory. See xref:reference/authentication.adoc[authentication and key categories].
 
-== Next Steps
+* *Python:* xref:tutorials/nams-quickstart.adoc[store and retrieve hosted memory].
+* *TypeScript:* xref:tutorials/hosted-quickstart-typescript.adoc[connect to hosted memory]. The current TypeScript package requires Node.js 22 or later; check example-specific engine requirements too.
 
-* xref:explanation/memory-types.adoc[Learn about the three memory types]
-* xref:how-to/entity-extraction.adoc[Configure entity extraction]
-* xref:explanation/poleo-model.adoc[Understand the POLE+O data model]
-* xref:reference/configuration.adoc[Explore all configuration options]
+Store the conversation ID returned by the service when you want to resume it. A matching user identifier alone does not resume a conversation. Preferences, facts and client-created relationships are not hosted REST operations; see xref:reference/backend-capabilities.adoc[the capability reference].
 
-== Runnable examples
+// Retain former section URLs at the current related topic.
+[#_python_with_a_neo4j_database]
+== Python with Neo4j Aura
 
-* link:https://github.com/neo4j-labs/agent-memory/tree/main/examples/hello-memory[`examples/hello-memory/`] — the smallest round
-  trip. One PEP 723 file, so `uv run examples/hello-memory/main.py` needs no
-  checkout and no virtualenv.
-* link:https://github.com/neo4j-labs/agent-memory/tree/main/examples/basic_usage.py[`examples/basic_usage.py`] — the guided tour
-  across all three memory types.
-* link:https://github.com/neo4j-labs/agent-memory/tree/main/examples[`examples/`] — the full gallery, with a chooser table.
+anchor:_path_b_self_hosted_neo4j_bolt[]anchor:_install_with_extras[]anchor:_download_spacy_model[]anchor:_setting_up_neo4j[]anchor:_option_1_docker_recommended_for_development[]anchor:_option_2_neo4j_desktop[]anchor:_option_3_neo4j_auradb_cloud[]anchor:_connecting_to_neo4j[]anchor:_configuration_with_environment_variables[]
+
+Use a dedicated AuraDB instance with the `bolt` backend when you need client-side extraction, preferences, facts, geospatial queries or custom write Cypher — you provide and connect to the Neo4j instance yourself. Start with xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the Aura connection setup].
+
+* xref:tutorials/first-agent-memory.adoc[Build your first memory context] provides one complete setup path.
+* xref:tutorials/conversation-memory.adoc[Build a conversation application] continues into model use.
+* xref:tutorials/anthropic-and-local-embeddings.adoc[Use Anthropic and local embeddings] teaches a different provider setup in its own lesson.
+
+Provider dependencies are explicit extras. The Python `[all]` bundle does not include every local model package; install the extra named by the selected lesson rather than relying on packages already in your environment.
+
+// Retain former section URLs at the current related topic.
+== Configure and integrate
+
+anchor:_basic_install[]anchor:_basic_usage[]anchor:_storing_conversation_messages[]anchor:_geocoding_locations_optional[]anchor:_error_handling[]
+
+* xref:reference/configuration.adoc[Configuration] and xref:reference/environment-variables.adoc[environment variables] describe the actual settings, aliases and precedence.
+* xref:sdks/python.adoc[Python SDK] and xref:sdks/typescript.adoc[TypeScript SDK] describe installation and public entry points.
+* xref:how-to/integrations/index.adoc[Python framework integrations] and xref:how-to/typescript/integrations-overview.adoc[TypeScript integrations] help connect an existing agent.
+* xref:tutorials/mcp-server.adoc[Python MCP tutorial] and xref:tutorials/mcp-server-typescript.adoc[TypeScript MCP tutorial] expose memory through supported tools.
+
+// Retain former section URLs at the current related topic.
+anchor:_run_an_example_from_a_checkout[]
+
+anchor:_download_and_run_an_example[]
+
+== Copy and run an example
+
+anchor:_runnable_examples[]
+
+The Python tutorials show every required local file alongside the published package install. Create the lesson folder, copy each complete program or helper into its labelled filename, and run the displayed commands. No code download is required. Start with xref:tutorials/first-agent-memory.adoc[the Aura lesson] or xref:tutorials/nams-quickstart.adoc[the NAMS lesson]. TypeScript source examples require building the SDK before installing their local `file:` dependency; follow xref:sdks/typescript.adoc[the TypeScript setup].
+
+== Verify your first result
+
+Finish the selected tutorial's storage/readback check before adding a framework or changing providers. When extraction is asynchronous, wait for the documented readiness condition before inspecting entities. If a step fails, keep its full error output and use xref:faq.adoc[the FAQ] and the relevant SDK troubleshooting guide.
+
+// Retain former section URLs at the current related topic.
+== See also
+
+anchor:_2_install_the_sdk[]anchor:_prerequisites[]
+
+* xref:how-to/index.adoc[Complete another memory task].
+* xref:explanation/memory-types.adoc[Understand memory types].
+* xref:reference/backend-capabilities.adoc#scope[Review scope before sharing memory between users].

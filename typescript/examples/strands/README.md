@@ -13,8 +13,8 @@ transcript persistence, context injection and reasoning capture
 > ⚠️ **Neo4j Labs Project**
 >
 > This project is part of Neo4j Labs and is actively maintained, but not
-> officially supported. There are no SLAs or guarantees around backwards
-> compatibility and deprecation. For questions and support, please use
+> officially supported. There are no SLAs, backward-compatibility guarantees,
+> or scheduled deprecation commitments. APIs may change without notice. For questions and support, please use
 > the [Neo4j Community Forum](https://community.neo4j.com).
 
 ## `npm start` — session, context and reasoning (`src/index.ts`)
@@ -57,15 +57,33 @@ can be combined on one agent.
 
 ## Prerequisites
 
-- Node.js 22+ (Node 20 is EOL)
+- Node.js 22+
 - A `MEMORY_API_KEY` from [memory.neo4jlabs.com](https://memory.neo4jlabs.com)
 - An `OPENAI_API_KEY`, or `MODEL_PROVIDER=bedrock` with AWS credentials
+
+## Build the shared SDK first
+
+This is a source-checkout example. Its `file:../..` dependency and shared
+`../tsconfig.base.json` require the repository layout. From the repository root:
+
+```bash
+cd typescript
+npm ci
+npm run build
+cd examples/strands
+```
+
+Run the commands below from `typescript/examples/strands/`. Build **before**
+installing this example; package exports point at `typescript/dist/` and npm does
+not build the local SDK on installation. For standalone copies, follow the
+[copy checklist](../README.md#copying-an-example) and verify the selected npm
+artifact supplies every API used here.
 
 ## Run it
 
 ```bash
 cp .env.example .env       # set MEMORY_API_KEY and OPENAI_API_KEY
-npm install
+npm ci
 npm start                  # session + context + reasoning
 npm run start:memory-store # long-term recall via MemoryStore
 ```
@@ -177,6 +195,4 @@ This is a Neo4j Labs project — community supported, no SLA. Ask questions on t
 
 ---
 
-_Verified against @neo4j-labs/agent-memory 0.4.1 (in-tree; `Neo4jMemoryStore` and
-`waitForExtraction` are not on npm yet), @strands-agents/sdk 1.17.0, openai
-6.49.0, Node 22+ — 2026-09-10._
+_Compatibility scope: this example targets the current source checkout and its committed package/lock files. Offline tests validate the exercised contracts; they do not establish published-package availability, a live model result, or deployed NAMS behavior. Use the runtime floor above; record the actual package/runtime versions when verifying a release or deployment._

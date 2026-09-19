@@ -1,724 +1,122 @@
-= Microsoft Agent Framework Integration
-:description: Integrate Neo4j Agent Memory with Microsoft Agent Framework for persistent memory, graph-enhanced context, and GDS algorithms.
-:keywords: microsoft, agent-framework, memory, neo4j, graph, gds
+= Use with Microsoft Agent Framework
+:page-product: agent-memory
+:page-pagination:
+:toclevels: 2
+:sectanchors:
 
-This guide explains how to use Neo4j Agent Memory with Microsoft Agent Framework to build agents with persistent memory, graph-enhanced context retrieval, and Graph Data Science (GDS) algorithms for advanced recommendations.
+Give a Microsoft Agent Framework agent retrieved Neo4j context, persist its turns through the context-provider hook, and verify an explicitly recorded task trace. The selected example uses the current `Agent` API and `OpenAIChatClient`.
 
 [NOTE]
 ====
-This integration targets the Microsoft Agent Framework 1.x GA line (`>=1.13,<2`), verified against 1.18.0. Check the https://github.com/microsoft/agent-framework[Microsoft Agent Framework releases] for the latest version.
-
-Upgrading from the `1.0.0b260212` public preview? The GA line renamed the two provider base classes (`BaseContextProvider` -> `ContextProvider`, `BaseHistoryProvider` -> `HistoryProvider`), so the preview pin no longer imports. The library handles the rename internally; your own code only needs the dependency bump. The `before_run` / `after_run` hook signatures are unchanged.
+icon:flask[] *Preview.* The Microsoft Agent Framework integration tracks a framework that is itself pre-1.0; APIs on either side can change between releases. Pin both packages explicitly and re-check this page before upgrading a deployment.
 ====
 
-[TIP]
-====
-A runnable full-stack example lives in the repository at
-https://github.com/neo4j-labs/agent-memory/tree/main/examples/microsoft_agent_retail_assistant[examples/microsoft_agent_retail_assistant] — a FastAPI retail shopping assistant using `Neo4jMicrosoftMemory`, `create_memory_tools` and the GDS recommendation path over a Neo4j product graph.
-====
+== 1. Prepare the selected environment
 
-== Overview
+anchor:_overview[]
+anchor:_installation[]
 
-image::diagrams/tfl-explorer-full-stack-architecture.png[Full-stack architecture: Microsoft Agent Framework + Neo4j Agent Memory powering the TfL Explorer app,width=600,align=left]
+Use Python 3.10+ and a POSIX shell. The recipe uses xref:reference/configuration.adoc[`BoltSettings`] to select Neo4j explicitly and disables entity extraction so that message persistence can be checked independently. Use a dedicated AuraDB instance with vector-index support and no incompatible existing vectors. Follow xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the Aura connection setup] and copy its connection values into the exports below. These recipes use the published Python 0.6.0 package; provider access and database execution must be verified in your environment.
 
-image::diagrams/tfl-explorer-app-screenshot.png[TfL Explorer chat interface: the agent answers route planning questions using real-time Transport for London data and Neo4j spatial memory,width=540,align=left]
-
-The Microsoft Agent Framework integration provides:
-
-* **ContextProvider**: Automatic memory injection before agent invocation
-* **ChatMessageStore**: Persistent conversation history in Neo4j
-* **Memory tools**: Search, preferences, knowledge graph queries
-* **GDS integration**: PageRank, community detection, shortest path with graceful fallback
-* **Reasoning traces**: Capture agent execution patterns for learning
-
-== Installation
-
-Install with Microsoft Agent Framework support:
+include::partial$python-tutorial-setup.adoc[]
 
 [source,bash]
 ----
-pip install neo4j-agent-memory[microsoft-agent]
+python -m pip install 'neo4j-agent-memory[microsoft-agent,openai]==0.6.0' "agent-framework-openai>=1.13,<2"
+export NEO4J_URI='neo4j+s://<instance-id>.databases.neo4j.io'
+export NEO4J_USERNAME='neo4j'
+export NEO4J_PASSWORD='replace-with-your-Aura-password'
+export NEO4J_DATABASE='neo4j'
+export OPENAI_API_KEY='replace-with-your-provider-key'
+export OPENAI_MODEL='replace-with-an-available-model-id'
 ----
 
-This installs:
+The OpenAI-backed recipes require access to `text-embedding-3-small`; it produces 1536-dimensional vectors in this configuration. Configure the selected chat model separately where required. Credentials are read from the environment, never printed by the programs.
 
-* `agent-framework-core>=1.13,<2` — the distribution that ships the `agent_framework` package this integration imports
-* Required Neo4j dependencies
+The repository's `microsoft-agent` extra pins `agent-framework-core>=1.13,<2`. The program imports `OpenAIChatClient` from `agent_framework.openai`; an OpenAI key is appropriate for that client. An Azure client would require its own deployment, endpoint and credentials.
 
-Add the chat client you intend to use — the extra deliberately does not pull every provider:
+== 2. Read the complete integration
 
-[source,bash]
-----
-pip install agent-framework-azure-ai   # Azure OpenAI clients
-pip install agent-framework-openai     # OpenAI clients
-pip install agent-framework            # everything (the meta-package)
-----
+Save both complete files below in `agent-memory-tutorials/`. The program imports `aura_config` from the helper in the same directory.
 
-== Pass-through your Agent Framework client
+include::partial$python-aura-connection-file.adoc[]
 
-The Microsoft Agent Framework wraps Azure OpenAI and OpenAI clients. `llm_provider_from_microsoft_agent` introspects the client (reading `deployment_name` for Azure or `model` for OpenAI) and routes via `from_provider`:
 
-[source,python]
-----
-import os
-
-from agent_framework.azure import AzureOpenAIResponsesClient
-
-from neo4j_agent_memory import MemoryClient, MemorySettings
-from neo4j_agent_memory.integrations.microsoft_agent import (
-    llm_provider_from_microsoft_agent,
-)
-
-chat_client = AzureOpenAIResponsesClient(
-    deployment_name=os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5-mini"),
-    api_key="...",
-)
-
-settings = MemorySettings(
-    neo4j={"password": "p"},
-    llm=llm_provider_from_microsoft_agent(chat_client),
-    embedding="openai/text-embedding-3-small",
-)
-----
-
-See xref:how-to/migrate-to-providers.adoc[Migrate to Pluggable Providers — Pattern 5] for the pattern across other integrations.
-
-== Quick Start
-
-=== Using Neo4jContextProvider
-
-The `Neo4jContextProvider` automatically injects relevant memory context before each agent invocation:
-
-[source,python]
-----
-import os
-
-from agent_framework.azure import AzureOpenAIResponsesClient
-
-from neo4j_agent_memory import MemoryClient, MemorySettings
-from neo4j_agent_memory.integrations.microsoft_agent import Neo4jContextProvider
-
-settings = MemorySettings(
-    neo4j={"uri": "bolt://localhost:7687", "username": "neo4j", "password": "password"},
-    embedding={"provider": "openai", "api_key": "sk-..."},
-)
-
-async with MemoryClient(settings) as client:
-    # Create context provider
-    provider = Neo4jContextProvider(
-        memory_client=client,
-        session_id="user-123",
-        include_short_term=True,   # Recent conversation
-        include_long_term=True,    # Entities and preferences
-        include_reasoning=True,    # Similar past traces
-    )
-
-    # Create agent with memory
-    chat_client = AzureOpenAIResponsesClient(model=os.getenv("OPENAI_MODEL", "gpt-5-mini"))
-    agent = chat_client.as_agent(
-        name="assistant",
-        instructions="You are a helpful assistant.",
-        context_providers=[provider],
-    )
-
-    # Use the agent - context is automatically injected
-    response = await agent.run("What did we discuss earlier?")
-----
-
-=== Using Neo4jChatMessageStore
-
-Store conversation history with automatic entity extraction:
-
-[source,python]
-----
-from neo4j_agent_memory.integrations.microsoft_agent import Neo4jChatMessageStore
-
-async with MemoryClient(settings) as client:
-    store = Neo4jChatMessageStore(
-        memory_client=client,
-        session_id="user-123",
-        extract_entities=True,      # Extract entities from messages
-        generate_embeddings=True,   # Generate embeddings for search
-    )
-
-    # Add messages
-    await store.add_messages([
-        Message("user", ["I love Nike running shoes"]),
-        Message("assistant", ["Nike makes great running shoes!"]),
-    ])
-
-    # List messages
-    messages = await store.list_messages()
-
-    # Serialize for persistence
-    state = store.serialize()
-
-    # Deserialize later
-    new_store = Neo4jChatMessageStore.deserialize(state, memory_client=client)
-----
-
-=== Using Neo4jMicrosoftMemory (Unified Interface)
-
-For convenience, use the unified interface that combines both:
-
-[source,python]
-----
-from neo4j_agent_memory.integrations.microsoft_agent import Neo4jMicrosoftMemory
-
-async with MemoryClient(settings) as client:
-    memory = Neo4jMicrosoftMemory(
-        memory_client=client,
-        session_id="user-123",
-        user_id="user-456",  # Optional for personalization
-        include_short_term=True,
-        include_long_term=True,
-        include_reasoning=True,
-        max_context_items=15,
-        extract_entities=True,
-    )
-
-    # Use context provider with agent
-    agent = chat_client.as_agent(
-        name="assistant",
-        context_providers=[memory.context_provider],
-    )
-
-    # Direct memory operations
-    await memory.save_message("user", "Hello!")
-    context = await memory.get_context("user query")
-    results = await memory.search_memory("search term")
-----
-
-== Memory Tools
-
-Create callable function tools for agent memory operations. The framework auto-invokes these tools during agent execution — no manual dispatch needed:
-
-[source,python]
-----
-from neo4j_agent_memory.integrations.microsoft_agent import create_memory_tools
-
-# Create all memory tools bound to a memory instance
-tools = create_memory_tools(
-    memory,                        # Neo4jMicrosoftMemory instance (required)
-    include_gds_tools=True,        # Include GDS algorithm tools (default: True)
-)
-
-# Use with agent — framework auto-invokes tools
-agent = chat_client.as_agent(
-    name="assistant",
-    tools=tools,
-    context_providers=[memory.context_provider],
-)
-----
-
-=== Available Tools
-
-[cols="2,4"]
-|===
-| Tool | Description
-
-| `search_memory`
-| Search conversation history, entities, and preferences
-
-| `remember_preference`
-| Save a user preference (brand, style, budget, etc.)
-
-| `recall_preferences`
-| Retrieve preferences by category or search query
-
-| `search_knowledge`
-| Query the entity knowledge graph
-
-| `remember_fact`
-| Save a factual SPO triple (subject-predicate-object)
-
-| `find_similar_tasks`
-| Find similar past reasoning traces
-
-| `find_connection_path`
-| Find shortest path between two entities (GDS)
-
-| `find_similar_items`
-| Find similar entities using graph similarity (GDS)
-
-| `find_important_entities`
-| Get most important entities by PageRank (GDS)
-|===
-
-=== Tool Execution
-
-When using `create_memory_tools()`, tools are callable `FunctionTool` instances that the agent framework auto-invokes during `agent.run()`. No manual dispatch is needed — the framework calls the tool functions directly and feeds results back to the model.
-
-[NOTE]
+.Complete `microsoft_shopping_tutorial.py`
+[%collapsible]
 ====
-The legacy `execute_memory_tool()` function is deprecated. Use `create_memory_tools()` instead, which returns callable tools that the framework invokes automatically.
+.Save as `microsoft_shopping_tutorial.py`
+[source,python]
+----
+include::example$microsoft_shopping_tutorial.py[]
+----
 ====
 
-== GDS Integration
-
-Neo4j Graph Data Science algorithms enhance recommendations:
-
-[source,python]
-----
-from neo4j_agent_memory.integrations.microsoft_agent import (
-    GDSConfig,
-    GDSAlgorithm,
-    GDSIntegration,
-)
-
-# Configure GDS
-gds_config = GDSConfig(
-    enabled=True,
-    use_pagerank_for_ranking=True,     # Rank entities by importance
-    pagerank_weight=0.3,               # Weight for PageRank scores
-    use_community_grouping=True,       # Group related entities
-    expose_as_tools=[                  # Make available as agent tools
-        GDSAlgorithm.SHORTEST_PATH,
-        GDSAlgorithm.NODE_SIMILARITY,
-        GDSAlgorithm.PAGERANK,
-    ],
-    fallback_to_basic=True,            # Use Cypher if GDS unavailable
-    warn_on_fallback=True,             # Log warning when falling back
-)
-
-# Create memory with GDS
-memory = Neo4jMicrosoftMemory(
-    memory_client=client,
-    session_id="user-123",
-    gds_config=gds_config,
-)
-
-# Use GDS directly
-if memory.gds:
-    # Find path between entities
-    path = await memory.gds.find_shortest_path("Nike", "Running Shoes")
-
-    # Find similar entities
-    similar = await memory.gds.find_similar_entities("Nike Air Max", limit=5)
-
-    # Get important entities
-    important = await memory.gds.get_central_entities(limit=10)
-----
-
-=== GDS Fallback Behavior
-
-When GDS library is not installed:
-
-[cols="2,3"]
-|===
-| Algorithm | Fallback Behavior
-
-| PageRank
-| Uses degree centrality (relationship count)
-
-| Community Detection
-| Uses connected components via Cypher
-
-| Node Similarity
-| Uses Jaccard similarity on shared relationships
-
-| Shortest Path
-| Uses native Cypher `shortestPath()`
-|===
-
-== Reasoning Traces
-
-Capture agent execution patterns:
-
-[source,python]
-----
-from neo4j_agent_memory.integrations.microsoft_agent import (
-    record_agent_trace,
-    get_similar_traces,
-    format_traces_for_prompt,
-)
-
-# Record agent execution
-await record_agent_trace(
-    memory=memory,
-    messages=[
-        {"role": "user", "content": "Find running shoes under $150"},
-        {"role": "assistant", "content": "Recommended Nike Pegasus 40 ($130)"},
-    ],
-    task="Find running shoes under $150",
-    tool_calls=[
-        {"name": "search_products", "arguments": {"query": "running shoes"}, "result": "..."},
-        {"name": "recall_preferences", "arguments": {"category": "brand"}, "result": "Nike"},
-    ],
-    outcome="success",
-    success=True,
-)
-
-# Find similar past tasks
-traces = await get_similar_traces(
-    memory=memory,
-    task="Find shoes matching preferences",
-    limit=3,
-)
-
-# Format for system prompt
-experience = format_traces_for_prompt(traces)
-----
-
-== Context Composition
-
-The `before_run()` hook composes context from all memory types:
-
-[source]
-----
-## Recent Conversation
-[Recent messages relevant to current query]
-
-## Known Preferences
-- Brand: Nike
-- Budget: Under $150
-- Style: Running shoes
-
-## Relevant Entities
-- Nike Air Max 90 (Product): Iconic style, $130
-- Nike Pegasus 40 (Product): Running shoe, $130
-
-## Past Experience
-Similar task: "Find running shoes" - Successfully recommended Pegasus
-----
-
-== Serialization
-
-Context providers and message stores support serialization for persistence:
-
-[source,python]
-----
-# Serialize state
-provider_state = provider.serialize()
-store_state = store.serialize()
-
-# Save to Redis, database, etc.
-await redis.set(f"provider:{thread_id}", json.dumps(provider_state))
-await redis.set(f"store:{thread_id}", json.dumps(store_state))
-
-# Later: restore state
-provider_state = json.loads(await redis.get(f"provider:{thread_id}"))
-store_state = json.loads(await redis.get(f"store:{thread_id}"))
-
-# Deserialize (requires fresh MemoryClient)
-provider = Neo4jContextProvider.deserialize(provider_state, memory_client=client)
-store = Neo4jChatMessageStore.deserialize(store_state, memory_client=client)
-----
-
-== Complete Example
-
-Here's a complete shopping assistant example. With callable `FunctionTool` instances, the framework auto-invokes tools during `agent.run()` — no manual dispatch needed:
-
-[source,python]
-----
-import asyncio
-import os
-
-from agent_framework import Message
-from agent_framework.azure import AzureOpenAIResponsesClient
-
-from neo4j_agent_memory import MemoryClient, MemorySettings
-from neo4j_agent_memory.integrations.microsoft_agent import (
-    Neo4jMicrosoftMemory,
-    GDSConfig,
-    GDSAlgorithm,
-    create_memory_tools,
-    record_agent_trace,
-)
-
-
-async def main():
-    settings = MemorySettings(
-        neo4j={"uri": "bolt://localhost:7687", "username": "neo4j", "password": "password"},
-        embedding={"provider": "openai", "api_key": "sk-..."},
-    )
-
-    gds_config = GDSConfig(
-        enabled=True,
-        expose_as_tools=[GDSAlgorithm.SHORTEST_PATH, GDSAlgorithm.NODE_SIMILARITY],
-        fallback_to_basic=True,
-    )
-
-    async with MemoryClient(settings) as client:
-        # Create memory
-        memory = Neo4jMicrosoftMemory(
-            memory_client=client,
-            session_id="shopping-session-1",
-            user_id="user-123",
-            gds_config=gds_config,
-        )
-
-        # Create chat client
-        chat_client = AzureOpenAIResponsesClient(model=os.getenv("OPENAI_MODEL", "gpt-5-mini"))
-
-        # Create memory tools bound to the memory instance
-        tools = create_memory_tools(memory, include_gds_tools=True)
-
-        # Create agent — tools are callable, framework auto-invokes them
-        agent = chat_client.as_agent(
-            name="ShoppingAssistant",
-            instructions="""You are a helpful shopping assistant.
-            Use memory tools to remember preferences and provide personalized recommendations.""",
-            tools=tools,
-            context_providers=[memory.context_provider],
-        )
-
-        # Conversation loop
-        while True:
-            user_input = input("You: ")
-            if user_input.lower() in ("quit", "exit"):
-                break
-
-            # Save user message
-            await memory.save_message("user", user_input)
-
-            # Run agent — framework auto-invokes tools and returns final response
-            response = await agent.run(Message("user", [user_input]))
-
-            # Display response
-            if response.text:
-                await memory.save_message("assistant", response.text)
-                print(f"Assistant: {response.text}")
-
-            # Record trace for learning
-            await record_agent_trace(
-                memory=memory,
-                messages=[
-                    {"role": "user", "content": user_input},
-                    {"role": "assistant", "content": response.text[:200] if response.text else ""},
-                ],
-                task=user_input,
-                outcome="success",
-                success=True,
-            )
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
-----
-
-[[api-compatibility]]
-== API Compatibility
-
-=== Target Version
-
-This integration targets:
-
-* **Package**: `agent-framework-core` (pulled by the `[microsoft-agent]` extra; also installed by the `agent-framework` meta-package)
-* **Version range**: `>=1.13,<2`
-* **Verified against**: 1.18.0
-* **Status**: GA
-
-=== Version Matrix
-
-[cols="2,2,2"]
-|===
-| neo4j-agent-memory | agent-framework | Status
-
-| 0.6.x
-| >=1.13,<2 (GA)
-| Current
-
-| 0.1.x - 0.5.x
-| 1.0.0b260212 (preview)
-| Superseded — does not import on the GA line
-|===
-
-=== APIs Used
-
-[cols="2,3"]
-|===
-| API | Import Path
-
-| `ContextProvider`
-| `agent_framework.ContextProvider`
-
-| `HistoryProvider`
-| `agent_framework.HistoryProvider`
-
-| `SessionContext`, `AgentSession`, `SupportsAgentRun`
-| `agent_framework`
-
-| `Message`
-| `agent_framework.Message`
-
-| `FunctionTool`, `tool`
-| `agent_framework`
-
-| `AzureOpenAIResponsesClient`
-| `agent_framework.azure.AzureOpenAIResponsesClient` (separate distribution)
-|===
-
-=== Breaking Change Detection
-
-Monitor for breaking changes:
-
-1. Check Microsoft Agent Framework release notes
-2. Run integration tests after upgrading
-3. Review API compatibility matrix in this documentation
-
-== Troubleshooting
-
-=== ImportError: agent_framework not found
-
-Install the Microsoft Agent Framework package:
+The program seeds an explicit preference and places two fictional products in agent instructions. `Neo4jMicrosoftMemory.context_provider` is the sole message writer. A separate `record_agent_trace` call records the observed task outcome and its returned ID is read back.
+
+== 3. Run and verify stored records
+
+anchor:_quick_start[]
+anchor:_using_neo4jcontextprovider[]
+anchor:_using_neo4jchatmessagestore[]
+anchor:_using_neo4jmicrosoftmemory_unified_interface[]
+anchor:_tool_execution[]
+anchor:_gds_integration[]
+anchor:_gds_fallback_behavior[]
+anchor:_reasoning_traces[]
+anchor:_target_version[]
+anchor:_version_matrix[]
+anchor:_breaking_change_detection[]
+anchor:_neo4jcontextprovider[]
+anchor:_neo4jchatmessagestore[]
+anchor:_neo4jmicrosoftmemory[]
+anchor:_functions[]
 
 [source,bash]
 ----
-pip install neo4j-agent-memory[microsoft-agent]
-# or
-pip install "agent-framework-core>=1.13,<2"
+python microsoft_shopping_tutorial.py
 ----
 
-=== ImportError: cannot import name 'BaseContextProvider'
+Expected: a nonempty response, confirmation that the context-provider hook persisted the exact user turn, and a verified trace. If the model raises an exception, the program records a failed task outcome and propagates it. The program does not query live inventory or promise an automatically inferred preference. For a complete database-startup walkthrough, see xref:tutorials/microsoft-agent-memory.adoc[the Microsoft tutorial].
 
-You are on an older `neo4j-agent-memory` (0.5.x or earlier) together with a GA
-`agent-framework`. The GA line renamed that class to `ContextProvider`.
-Upgrade the library:
+== Troubleshooting and cleanup
 
-[source,bash]
-----
-pip install -U "neo4j-agent-memory[microsoft-agent]"
-----
+anchor:_troubleshooting[]
+anchor:_importerror_agent_framework_not_found[]
+anchor:_importerror_cannot_import_name_basecontextprovider[]
+anchor:_gds_not_available_warning[]
+anchor:_empty_context[]
+anchor:_serialization_errors[]
 
-=== GDS Not Available Warning
+Check that the installed framework exposes the current `Agent` and `ContextProvider` interfaces before adapting legacy code. An OpenAI/Azure credential mismatch is a provider configuration error, not a Neo4j failure. Empty retrieved context does not prove data is absent; inspect direct conversation readback and the configured retrieval thresholds. Client shutdown does not delete stored preferences, conversations or traces; retain the printed IDs in the dedicated example database until inspection is complete.
 
-If you see "GDS not available, using fallback":
+== Adapt the integration and inspect example applications
 
-1. Install Neo4j GDS plugin on your database
-2. Or set `fallback_to_basic=True` (default) to use Cypher alternatives
-3. To silence: set `warn_on_fallback=False`
+anchor:_pass_through_your_agent_framework_client[]
+anchor:_memory_tools[]
+anchor:_available_tools[]
+anchor:_context_composition[]
+anchor:_serialization[]
+anchor:_complete_example[]
+anchor:api-compatibility[]
+anchor:_apis_used[]
+anchor:_api_reference[]
+anchor:_see_also[]
 
-=== Empty Context
+`Neo4jContextProvider` uses `before_run()` to supply context and `after_run()` to persist messages. `Neo4jChatMessageStore` supports explicit history storage; using it in addition to the writing context provider requires you to avoid duplicate writes. `Neo4jMicrosoftMemory` composes the two surfaces and exposes its `context_provider` for `Agent(context_providers=[...])`.
 
-If `get_context()` returns empty:
+The context provider can include short-term history, long-term knowledge and similar recorded traces with configured limits. Session and user identifiers are personalization/grouping inputs, not a universal access boundary. Serialized provider state records configuration; it is not a database backup or a credential export.
 
-1. Verify embeddings are configured and generated
-2. Check that messages/entities exist in Neo4j
-3. Lower `similarity_threshold` (default: 0.7)
+.Integration components; graph analytics are optional
+image::diagrams/microsoft-agent-architecture.svg["Microsoft Agent Framework context hooks and optional memory tools connect to Neo4j Agent Memory",width=100%,link=self]
 
-=== Serialization Errors
+The optional GDS helper requires suitable domain data and a supported graph surface. A Cypher fallback is a different retrieval/ranking method, not an equivalent execution of PageRank or Node Similarity. The minimal script above does not enable GDS; see `get_gds_config()` in https://github.com/neo4j-labs/agent-memory/blob/main/examples/microsoft_agent_retail_assistant/backend/memory_config.py[the retail application's `memory_config.py`] for a working `GDSConfig` that enables `GDSAlgorithm.SHORTEST_PATH`, `NODE_SIMILARITY` and `PAGERANK`. `create_memory_tools(...)` returns tool definitions that require the corresponding execution path; inspect the installed adapter before translating them into framework tool objects.
 
-`deserialize()` requires a fresh `MemoryClient`:
+https://github.com/neo4j-labs/agent-memory/tree/main/examples/microsoft_agent_retail_assistant[The maintained retail application] adds inventory, cart and product-search tools plus a UI and domain graph, and is also the GDS-enabled example referenced above. Those features belong to the example application, not to `MemoryClient` automatically.
 
-[source,python]
-----
-# Wrong - connection not serializable
-state = provider.serialize()
-# ... save to file ...
-provider = Neo4jContextProvider.deserialize(state)  # Missing client!
+.Screenshot of the separate TfL Explorer example application
+image::diagrams/tfl-explorer-app-screenshot.png["TfL Explorer example interface showing a route-planning conversation",width=540,align=left,link=self]
 
-# Correct
-state = provider.serialize()
-# ... save to file ...
-async with MemoryClient(settings) as client:  # Fresh client
-    provider = Neo4jContextProvider.deserialize(state, memory_client=client)
-----
+The screenshot illustrates a separate application (capture date not recorded in the repository); it is not the output of the shopping recipe or evidence that the memory library itself provides live transit data.
 
-== API Reference
-
-=== Neo4jContextProvider
-
-[cols="2,3"]
-|===
-| Method | Description
-
-| `before_run(*, agent, session, context, state)`
-| Called before agent invocation; injects memory context into `SessionContext`
-
-| `after_run(*, agent, session, context, state)`
-| Called after agent response; extracts and stores memories
-
-| `serialize()`
-| Serialize provider state
-
-| `deserialize(state, memory_client)`
-| Restore provider from state
-|===
-
-=== Neo4jChatMessageStore
-
-[cols="2,3"]
-|===
-| Method | Description
-
-| `add_messages(messages)`
-| Add messages to conversation history
-
-| `list_messages()`
-| Get all messages for the session
-
-| `clear()`
-| Clear session messages
-
-| `serialize()`
-| Serialize store state
-
-| `deserialize(serialized_state, memory_client)`
-| Restore store from state
-|===
-
-=== Neo4jMicrosoftMemory
-
-[cols="2,3"]
-|===
-| Property/Method | Description
-
-| `context_provider`
-| Get the underlying ContextProvider
-
-| `chat_store`
-| Get the underlying ChatMessageStore
-
-| `gds`
-| Get GDS integration (if enabled)
-
-| `get_context(query)`
-| Get combined context from all memory types
-
-| `save_message(role, content)`
-| Save a conversation message
-
-| `search_memory(query)`
-| Search across all memory types
-
-| `add_preference(category, preference)`
-| Add a user preference
-
-| `find_entity_path(source, target)`
-| Find path between entities
-
-| `find_similar_entities(entity)`
-| Find similar entities
-
-| `get_important_entities()`
-| Get entities ranked by importance
-|===
-
-=== Functions
-
-[cols="2,3"]
-|===
-| Function | Description
-
-| `create_memory_tools(memory, include_gds_tools=True)`
-| Create callable `FunctionTool` instances bound to a memory instance. Tools are auto-invoked by the framework.
-
-| `execute_memory_tool(...)` _(deprecated)_
-| Legacy manual tool dispatch. Use `create_memory_tools()` instead.
-
-| `record_agent_trace(...)`
-| Record agent execution
-
-| `get_similar_traces(...)`
-| Find similar past traces
-
-| `format_traces_for_prompt(traces)`
-| Format traces for prompts
-|===
-
-== See Also
-
-* link:../../../tutorials/microsoft-agent-memory.adoc[Tutorial: Building a Shopping Assistant]
-* link:../../reference/api/microsoft-agent.adoc[API Reference]
-* link:../../explanation/microsoft-agent-architecture.adoc[Architecture: Why Neo4j for Microsoft Agents]
+See xref:reference/api/adapters.adoc[Provider adapter reference], xref:how-to/migrate-to-providers.adoc[Provider configuration], xref:reference/backend-capabilities.adoc[Backend capabilities] and xref:explanation/memory-types.adoc[Memory concepts]. Neo4j Agent Memory is a community-supported Neo4j Labs project.

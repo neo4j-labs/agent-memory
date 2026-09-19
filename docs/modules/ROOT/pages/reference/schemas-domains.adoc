@@ -1,0 +1,179 @@
+= Built-in domain schemas
+:page-product: agent-memory
+:page-pagination:
+:toclevels: 2
+
+The eight registered GLiNER domain schemas from xref:reference/schemas.adoc[Domain schemas reference], and how to select one for extraction.
+
+== Available schemas
+
+The exact keys below are labels supplied to GLiNER. They are not necessarily the stored Entity.type; the extractor maps labels to POLE+O types/subtypes.
+
+=== poleo
+
+// domain-schema: poleo
+[cols="1,4",options="header"]
+|===
+| Extraction label | Description
+| `person` | A human individual, including their name, alias, or persona
+| `organization` | A company, institution, government agency, or group
+| `location` | A geographic place, address, city, country, or landmark
+| `event` | An incident, meeting, transaction, or notable occurrence
+| `object` | A physical or digital item like a vehicle, device, or document
+|===
+
+=== podcast
+
+// domain-schema: podcast
+[cols="1,4",options="header"]
+|===
+| Extraction label | Description
+| `person` | A person mentioned in the podcast, including hosts, guests, and people discussed
+| `company` | A company, startup, or business organization
+| `product` | A product, service, app, or software tool
+| `concept` | A business concept, methodology, framework, or strategy
+| `book` | A book, publication, or written work
+| `location` | A city, country, region, or specific place
+| `event` | A conference, meeting, milestone, or notable occurrence
+| `role` | A job title, position, or professional role
+| `metric` | A business metric, KPI, or measurement
+| `technology` | A technology, platform, programming language, or technical tool
+|===
+
+=== news
+
+// domain-schema: news
+[cols="1,4",options="header"]
+|===
+| Extraction label | Description
+| `person` | A person mentioned in the news article
+| `organization` | A company, government body, or institution
+| `location` | A geographic location, city, or country
+| `event` | A news event, incident, or occurrence
+| `date` | A date, time period, or temporal reference
+|===
+
+=== scientific
+
+// domain-schema: scientific
+[cols="1,4",options="header"]
+|===
+| Extraction label | Description
+| `author` | A researcher or paper author
+| `institution` | A university, research lab, or academic organization
+| `method` | A scientific method, algorithm, or technique
+| `dataset` | A dataset, corpus, or data collection
+| `metric` | A performance metric or evaluation measure
+| `concept` | A scientific concept, theory, or term
+| `tool` | A software tool, library, or framework
+|===
+
+=== business
+
+// domain-schema: business
+[cols="1,4",options="header"]
+|===
+| Extraction label | Description
+| `company` | A business, corporation, or startup
+| `person` | A business person, executive, or founder
+| `product` | A product, service, or offering
+| `industry` | An industry sector or market
+| `financial_metric` | A financial metric, revenue, or valuation
+| `location` | A business location, headquarters, or market
+|===
+
+=== entertainment
+
+// domain-schema: entertainment
+[cols="1,4",options="header"]
+|===
+| Extraction label | Description
+| `actor` | An actor, actress, or performer
+| `director` | A film or TV director
+| `film` | A movie, documentary, or film
+| `tv_show` | A television series or show
+| `character` | A fictional character
+| `award` | An award, nomination, or recognition
+| `studio` | A production studio or entertainment company
+| `genre` | A genre or category of entertainment
+|===
+
+=== medical
+
+// domain-schema: medical
+[cols="1,4",options="header"]
+|===
+| Extraction label | Description
+| `disease` | A disease, condition, or disorder
+| `drug` | A medication, drug, or treatment
+| `symptom` | A symptom or clinical sign
+| `procedure` | A medical procedure or intervention
+| `body_part` | An anatomical structure or body part
+| `gene` | A gene, protein, or biomarker
+| `organism` | A pathogen, virus, or organism
+|===
+
+=== legal
+
+// domain-schema: legal
+[cols="1,4",options="header"]
+|===
+| Extraction label | Description
+| `case` | A legal case or lawsuit
+| `person` | A party, lawyer, or judge
+| `organization` | A law firm, court, or legal entity
+| `law` | A law, statute, or regulation
+| `court` | A court or judicial body
+| `date` | A legal date, filing date, or deadline
+| `monetary_amount` | A settlement, fine, or monetary value
+|===
+
+== Using schemas
+
+=== With GLiNEREntityExtractor
+
+[source,python]
+----
+from neo4j_agent_memory.extraction import GLiNEREntityExtractor
+
+# Use named schema
+extractor = GLiNEREntityExtractor.for_schema("podcast")
+
+# With custom threshold
+extractor = GLiNEREntityExtractor.for_schema("medical", threshold=0.6)
+----
+
+=== With ExtractorBuilder
+
+[source,python]
+----
+from neo4j_agent_memory.extraction import ExtractorBuilder
+
+extractor = (
+    ExtractorBuilder()
+    .with_gliner_schema("news", threshold=0.5)
+    .build()
+)
+----
+
+=== Listing available schemas
+
+[source,python]
+----
+from neo4j_agent_memory.extraction import list_schemas, get_schema
+
+# List all schema names
+print(list_schemas())
+# ['poleo', 'podcast', 'news', 'scientific', 'business', 'entertainment', 'medical', 'legal']
+
+# Get schema details
+schema = get_schema("podcast")
+for entity_type, description in schema.entity_types.items():
+    print(f"{entity_type}: {description}")
+----
+
+== See also
+
+* xref:reference/schemas.adoc[Domain schemas reference]
+* xref:reference/schemas-custom.adoc[Custom schemas and persistence]
+* xref:how-to/entity-extraction.adoc[Configure entity extraction]

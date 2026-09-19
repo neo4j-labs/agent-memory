@@ -1,0 +1,44 @@
+Read the cleanup result before starting another run. These are illustrative
+shapes; your IDs and counts differ:
+
+[source,text]
+----
+Cleanup: {"complete":true,"retainedIds":[],"residualIds":[]}
+Cleanup: {"complete":false,"retainedIds":["<entity-id>"],"residualIds":[]}
+----
+
+[cols="1,2",options="header"]
+|===
+|Result |Next action
+|`complete: true`, exit status `0`
+|Keep the original ledger as the completed record. A new run uses a new state path.
+|`complete: false`, exit status `2`
+|Inspect each retained resource's reason. Ask the workspace owner to review its ownership; do not delete it by name or force a workspace reset.
+|Error, exit status `1`
+|Preserve the ledger and error. A timeout can be retried against the same state; an uncertain write or residual ID needs review before further writes or deletion.
+|===
+
+`inspect` reads only the local ledger and works without `.env`, a current key,
+or a service connection. It reports IDs, operation status and cleanup
+dispositions, omitting credentials, credential fingerprints, workspace
+selectors and message digests. It does not establish the current remote state.
+After key rotation, `verify`, `record` and `cleanup` still refuse a changed
+identity. Do not edit the ledger's identity to bypass that guard.
+
+For an uncertain or retained result, privately give the workspace owner the
+run ID, recorded resource IDs, operation statuses, selected workspace note and
+the failing command. Retain any original MCP create receipt. Do not send keys
+or the raw ledger. The owner must resolve the exact records before a cleanup
+claim; a new key or a repeated write is not evidence that the earlier attempt
+failed.
+
+Only after a completed run, start the next exercise with a distinct filename:
+
+[source,bash,subs="+attributes"]
+----
+npx tsx --env-file-if-exists=.env {ts-program} {ts-seed} .tutorial-state/{ts-next-state}
+----
+
+Use that new filename for all subsequent commands for the new run. Preserve
+the original ledger and any receipts; do not remove them to make `seed`,
+`teach` or `init` accept a used path.

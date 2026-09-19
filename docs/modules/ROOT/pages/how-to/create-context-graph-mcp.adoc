@@ -1,148 +1,98 @@
-= Add MCP Server to create-context-graph Projects
+= Add an MCP server to a context graph project
 :page-product: agent-memory
 :page-pagination:
 :toclevels: 2
-:sectanchors:
-:icons: font
-:source-highlighter: highlight.js
 
-How to add an MCP server to projects scaffolded with create-context-graph, enabling Claude Desktop to query your domain-specific knowledge graph.
+include::partial$backend-bolt-only.adoc[]
 
-== Overview
+To let an MCP client inspect a context graph application's memory, run the self-hosted Python MCP server against the application's Bolt database. The server needs compatible memory labels and indexes; connecting to an arbitrary domain graph does not automatically adopt it.
 
-link:https://create-context-graph.dev[create-context-graph] scaffolds full-stack AI applications with neo4j-agent-memory for conversation memory. By adding an MCP server endpoint, users can connect Claude Desktop directly to the same Neo4j knowledge graph that powers the web application.
-
-This creates a compelling workflow: seed your domain data, chat via the web UI, and also query the graph through Claude Desktop with full memory continuity.
-
+[#_overview]
+// Retain former section URLs at the current related topic.
 == Prerequisites
 
-* A project scaffolded with `create-context-graph` (v0.8.0+)
-* neo4j-agent-memory v0.0.5+ installed in the project
-* Claude Desktop installed
+anchor:_prerequisites[]
 
-== Step 1: Add MCP Dependency
+* A working application, such as one scaffolded with https://create-context-graph.dev[create-context-graph], with its database URI, database name and authorized credentials.
+* Python 3.10+ and an OpenAI key for this example's embedding provider. The command below installs `neo4j-agent-memory[mcp,openai]==0.6.0`.
+* An MCP client that supports launching a local stdio process.
+* For an existing non-memory graph, complete xref:how-to/adopt-existing-graph.adoc[graph adoption] and its dry run first.
 
-In your project's `pyproject.toml`, add the MCP extra:
+This procedure adds a second reader/writer of the same database. It does not create application-level authorization or automatically share a conversation between the web application and MCP host.
 
-[source,toml]
-----
-[project.optional-dependencies]
-mcp = ["neo4j-agent-memory[mcp]"]
-----
+== 1. Install and check the server command
 
-Then install:
+anchor:_step_1_add_mcp_dependency[]
+
+In the application's Python project, add the MCP and OpenAI extras with its normal dependency manager. For a project managed by uv:
 
 [source,bash]
 ----
-uv sync --extra mcp
+uv add 'neo4j-agent-memory[mcp,openai]==0.6.0'
+uv run neo4j-agent-memory mcp serve --help
 ----
 
-== Step 2: Add Makefile Target
+Confirm the selected command exposes `--backend`, `--database`, `--profile` and `--transport`. Resolve its executable path for the MCP host rather than relying on the GUI application's shell PATH.
 
-Add a convenient target to your project's `Makefile`:
+== 2. Configure a local stdio process
 
-[source,makefile]
-----
-.PHONY: mcp-server
-mcp-server:  ## Start MCP server for Claude Desktop (stdio)
-	neo4j-agent-memory mcp serve \
-		--uri $(NEO4J_URI) \
-		--user $(NEO4J_USER) \
-		--password $(NEO4J_PASSWORD) \
-		--profile extended
+anchor:_step_2_add_makefile_target[]anchor:_step_3_generate_claude_desktop_configuration[]
 
-.PHONY: mcp-server-http
-mcp-server-http:  ## Start MCP server over Streamable HTTP on :8080 (/mcp/)
-	neo4j-agent-memory mcp serve \
-		--uri $(NEO4J_URI) \
-		--user $(NEO4J_USER) \
-		--password $(NEO4J_PASSWORD) \
-		--profile extended \
-		--transport http --host 0.0.0.0 --port 8080
-----
-
-The `stdio` target is what Claude Desktop launches. The HTTP target is for the
-case where the scaffolded web app and an MCP host need to share one running
-server -- it serves Streamable HTTP at http://localhost:8080/mcp/. The
-`[mcp]` extra installs FastMCP 4, which dropped the legacy HTTP+SSE transport in
-favour of Streamable HTTP; see
-xref:../reference/mcp-tools.adoc#_transports[Transports].
-
-== Step 3: Generate Claude Desktop Configuration
-
-Create a `claude_desktop_config.json` snippet in your project:
+Use xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the Aura connection setup] for the application's dedicated AuraDB instance. Adapt this entry in your MCP client's configuration. Replace the executable path, database settings and secrets with your application values. The client configuration file location depends on the installed host. Copy the Aura username into `NEO4J_USER`, the CLI's supported alias; JSON values below are literal strings, not shell expressions.
 
 [source,json]
 ----
 {
   "mcpServers": {
-    "my-context-graph": {
-      "command": "neo4j-agent-memory",
+    "context-graph": {
+      "command": "/absolute/path/to/project/.venv/bin/neo4j-agent-memory",
       "args": [
-        "mcp", "serve",
-        "--uri", "bolt://localhost:7687",
-        "--password", "your-password",
-        "--profile", "extended"
+        "mcp", "serve", "--backend", "bolt",
+        "--database", "neo4j", "--profile", "extended"
       ],
       "env": {
-        "OPENAI_API_KEY": "sk-..."
+        "NEO4J_URI": "neo4j+s://<instance-id>.databases.neo4j.io",
+        "NEO4J_USER": "neo4j",
+        "NEO4J_PASSWORD": "replace-with-your-Aura-password",
+        "OPENAI_API_KEY": "replace-with-provider-key"
       }
     }
   }
 }
 ----
 
-Copy the relevant section into your Claude Desktop config file:
+Use the same supported embedding provider/index dimensions as the application. This CLI's default model-backed setup needs its provider key; other provider choices require explicit configuration as described in xref:reference/cli.adoc[CLI reference]. Store secrets using the host's supported configuration mechanism and do not commit this populated file.
 
-* **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-* **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+For an HTTP deployment, use `--transport http` with the `/mcp/` endpoint and an explicit authentication arrangement. See xref:reference/mcp-tools.adoc#_transports[transports] and xref:reference/deployment.adoc[deployment routes] rather than exposing a local example as a public service.
 
-== Step 4: Verify the Connection
+== 3. Verify tool registration and memory readback
 
-Restart Claude Desktop, then ask:
+anchor:_step_4_verify_the_connection[]
 
-> Search my knowledge graph for recent entities
+. Restart or reconnect the MCP host and inspect `tools/list`. The extended Bolt server registers sixteen tools.
+. Ask the host to call `memory_store_message` with a unique synthetic message and an explicit session ID, such as `docs-context-graph-check`.
+. Call `memory_get_conversation` with that same session ID and verify the exact stored content.
+. Inspect that conversation from the web application's explicitly scoped history path. Check returned content, not a generic semantic-search hit.
 
-Claude should call `memory_search` and return entities from your scaffolded project's Neo4j database.
+The write/readback proves shared storage for that session. A domain entity will appear in memory search only when it has the expected labels, searchable data and compatible embedding/index setup. Review failed tool results; a protocol-level success can contain an operation error.
 
-== Using the MemoryIntegration Layer
+[#_using_the_memoryintegration_layer]
+[#_session_strategy_considerations]
+// Retain former section URLs at the current related topic.
+== Integrate application context deliberately
 
-Both your web application and the MCP server can share the same `MemoryIntegration` class for consistent behavior:
+anchor:_using_the_memoryintegration_layer[]
 
-[source,python]
-----
-from neo4j_agent_memory import MemoryIntegration
+The shipped `MemoryIntegration` needs `async with` or an explicit connection lifecycle before use. Its session strategy chooses identifiers; it does not authorize reads. `per_conversation` creates a conversation identifier, `per_day` derives a daily identifier and `persistent` derives a stable one. Matching strategy names in two processes do not alone prove they resolved the same ID.
 
-# In your FastAPI backend
-memory = MemoryIntegration(
-    neo4j_uri="bolt://localhost:7687",
-    neo4j_password="password",
-    session_strategy="per_day",
-    auto_extract=True,
-    auto_preferences=True,
-)
+Use xref:reference/backend-capabilities.adoc#scope[the scope reference] when combining recent history with long-term retrieval. Global entity/preference searches can contribute content outside a conversation. For an application that needs a particular transcript, retain and pass its exact conversation ID.
 
-# Store a message (same extraction/resolution logic as MCP)
-await memory.store_message("user", "I prefer dark mode")
+[#_next_steps]
+// Retain former section URLs at the current related topic.
+== See also
 
-# Get context (same assembly logic as MCP)
-context = await memory.get_context(query="user preferences")
-----
 
-This ensures that whether a user interacts via Claude Desktop (MCP) or the web app (FastAPI), the same memory operations execute with the same extraction and resolution logic.
 
-== Session Strategy Considerations
-
-When running both a web app and MCP server against the same Neo4j instance, session strategy matters:
-
-* **`per_conversation`** (default): Each MCP session and web session gets a unique ID. No cross-session bleed, but no continuity either.
-* **`per_day`**: Good for daily assistant use. Both MCP and web sessions on the same day share context.
-* **`persistent`**: Maximum continuity. Use `--user-id` to scope sessions per user.
-
-For multi-user web apps, `per_conversation` or `per_day` with user-scoped IDs is recommended.
-
-== Next Steps
-
-* xref:../tutorials/mcp-server.adoc[MCP Server Tutorial] -- Step-by-step setup guide
-* xref:../reference/mcp-tools.adoc[MCP Tools Reference] -- Complete tool documentation
-* link:https://create-context-graph.dev[create-context-graph Documentation] -- Scaffolding tool docs
+* xref:tutorials/mcp-server.adoc[Run a complete Python MCP lesson]
+* xref:reference/mcp-tools.adoc[Self-hosted MCP tool parameters]
+* xref:how-to/multi-tenancy.adoc[Associate user data and check scope]

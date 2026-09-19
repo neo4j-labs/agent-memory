@@ -8,6 +8,7 @@ GET_LAST_MESSAGE = """
 MATCH (c:Conversation {id: $conversation_id})-[:HAS_MESSAGE]->(m:Message)
 WHERE NOT (m)-[:NEXT_MESSAGE]->()
 RETURN m
+ORDER BY m.timestamp DESC
 LIMIT 1
 """
 
@@ -67,8 +68,18 @@ LIMIT $limit
 
 CREATE_MESSAGE = """
 MATCH (c:Conversation {id: $conversation_id})
+// Write to the conversation before reading the tail. SET takes a write lock on
+// c that is held to commit, so concurrent appends to one conversation serialize
+// instead of all reading the same predecessor and forking the chain.
+SET c.updated_at = datetime()
+WITH c
 OPTIONAL MATCH (c)-[:HAS_MESSAGE]->(last:Message)
 WHERE NOT (last)-[:NEXT_MESSAGE]->()
+// A chain forked by a pre-fix write exposes more than one tail, and every
+// clause below runs once per row -- which would CREATE this message once per
+// tail and breach the uniqueness constraint on Message.id. Collapse to the
+// newest tail; MIGRATE_MESSAGE_LINKS rebuilds a chain that is already forked.
+WITH c, last ORDER BY last.timestamp DESC LIMIT 1
 CREATE (m:Message {
     id: $id,
     role: $role,
@@ -84,7 +95,6 @@ FOREACH (_ IN CASE WHEN last IS NOT NULL THEN [1] ELSE [] END |
 FOREACH (_ IN CASE WHEN last IS NULL THEN [1] ELSE [] END |
     CREATE (c)-[:FIRST_MESSAGE]->(m)
 )
-SET c.updated_at = datetime()
 RETURN m
 """
 

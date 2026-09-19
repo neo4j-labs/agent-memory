@@ -1,0 +1,242 @@
+= Entity and relationship operations
+:page-product: agent-memory
+:page-pagination:
+:toclevels: 2
+
+Entity CRUD, search, and relationship operations from xref:reference/api/long-term.adoc[LongTermMemory API reference]. Signatures show types, keyword-only arguments (`*`), and defaults; they are reference declarations, not calls to execute directly.
+
+anchor:_entity_operations[]
+anchor:_parameters[]
+anchor:_returns[]
+
+== Entity operations (bolt)
+
+=== add_entity
+
+On Bolt, entity writes merge by exact `(name, type)`, including when `deduplicate=False`. As of SDK 0.6.0, on an existing-node match `add_entity` re-reads the matched node and returns the entity carrying its persisted `id`, so a manual Cypher readback is no longer needed before linking repeated entities. The one exception is a node written by something other than this library that has no `id` property; that node is left as-is and the call returns the freshly generated id instead, since it cannot be adopted safely. The xref:tutorials/knowledge-graph.adoc[document tutorial] still reads back the exact name/type match, but to reject ambiguity across extraction results, not to work around an ID bug.
+
+Add an entity and return `(Entity, DeduplicationResult)`. Geocoding and enrichment flags default to True, but run only when their providers are configured. There is no `confidence` keyword; `attributes` and `metadata` are distinct fields.
+
+// contract: memory/long_term.py:LongTermMemory.add_entity
+[source,python]
+----
+async def add_entity(
+    name: str,
+    entity_type: EntityType | str,
+    *,
+    subtype: str | None=None,
+    description: str | None=None,
+    aliases: list[str] | None=None,
+    attributes: dict[str, Any] | None=None,
+    resolve: bool=True,
+    generate_embedding: bool=True,
+    deduplicate: bool=True,
+    geocode: bool=True,
+    enrich: bool=True,
+    coordinates: tuple[float, float] | None=None,
+    metadata: dict[str, Any] | None=None,
+) -> tuple[Entity, DeduplicationResult]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `name` | Entity name
+| `entity_type` | Entity type (PERSON, OBJECT, LOCATION, EVENT, ORGANIZATION)
+| `subtype` | Optional subtype (e.g., VEHICLE for OBJECT)
+| `description` | Optional description
+| `aliases` | Optional list of alternative names
+| `attributes` | Optional additional attributes
+| `resolve` | Whether to resolve against existing entities
+| `generate_embedding` | Whether to generate embedding
+| `deduplicate` | Whether to check for duplicate entities
+| `geocode` | Whether to geocode LOCATION entities (requires geocoder)
+| `enrich` | Whether to queue for background enrichment
+| `coordinates` | Optional (latitude, longitude) tuple to set directly
+| `metadata` | Optional metadata
+|===
+
+anchor:_get_entity[]
+
+=== get_entity_by_name
+
+Return an exact name match or None. This method does not accept an entity-type filter.
+
+// contract: memory/long_term.py:LongTermMemory.get_entity_by_name
+[source,python]
+----
+async def get_entity_by_name(name: str) -> Entity | None: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `name` | Entity name to search for (checks name, canonical_name, aliases)
+|===
+
+=== search_entities
+
+Semantic search with type, subtype, and similarity controls.
+
+// contract: memory/long_term.py:LongTermMemory.search_entities
+[source,python]
+----
+async def search_entities(
+    query: str,
+    *,
+    entity_types: list[EntityType | str] | None=None,
+    limit: int=10,
+    threshold: float=0.7,
+) -> list[Entity]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `query` | Search query
+| `entity_types` | Optional filter by entity types
+| `limit` | Maximum results
+| `threshold` | Minimum similarity threshold
+|===
+
+anchor:_update_entity[]
+anchor:_delete_entity[]
+There are no public `get_entity`, `update_entity`, or `delete_entity` wrappers in these Python stores. For bolt, use an application-specific graph query when the supported operations do not cover a mutation. NAMS endpoint existence does not imply a Python wrapper; consult xref:reference/rest-api.adoc[REST API mappings].
+
+== Relationships (bolt)
+
+=== add_relationship
+
+Create an entity relationship. `source` and `target` accept Entity models or UUIDs.
+
+// contract: memory/long_term.py:LongTermMemory.add_relationship
+[source,python]
+----
+async def add_relationship(
+    source: Entity | UUID,
+    target: Entity | UUID,
+    relationship_type: str,
+    *,
+    description: str | None=None,
+    confidence: float=1.0,
+    valid_from: datetime | None=None,
+    valid_until: datetime | None=None,
+    attributes: dict[str, Any] | None=None,
+) -> Relationship: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `source` | Source entity or ID
+| `target` | Target entity or ID
+| `relationship_type` | Type of relationship
+| `description` | Optional description
+| `confidence` | Confidence score
+| `valid_from` | Start of validity
+| `valid_until` | End of validity
+| `attributes` | Optional additional attributes
+|===
+
+The current implementation includes `attributes` on the returned model but does not pass them to the graph write. Do not depend on arbitrary relationship attributes surviving a later read through this method.
+
+If `source` or `target` does not resolve to a persisted `:Entity` node — a stale id, or the freshly generated id `add_entity` falls back to for a matched node that has no `id` property (see `add_entity` above) — `add_relationship` raises `NotFoundError` rather than silently returning a `Relationship` the graph does not contain. Re-adding an already-stored `(source, target, relationship_type)` triple does not raise: the `MERGE` keeps the original edge, and the returned `Relationship.id` is the id already stored on that edge, not a newly generated one.
+
+=== get_related_entities
+
+Get entities related to a given entity.
+
+// contract: memory/long_term.py:LongTermMemory.get_related_entities
+[source,python]
+----
+async def get_related_entities(
+    entity: Entity | UUID,
+    *,
+    relationship_types: list[str] | None=None,
+    depth: int=1,
+) -> list[tuple[Entity, Relationship]]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `entity` | Entity or ID to find relations for
+| `relationship_types` | Optional filter by relationship types
+| `depth` | Traversal depth
+|===
+
+=== get_entity_relationships
+
+Get relationships for an entity by name.
+
+// contract: memory/long_term.py:LongTermMemory.get_entity_relationships
+[source,python]
+----
+async def get_entity_relationships(entity_name: str) -> list[tuple[Entity, Relationship]]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `entity_name` | Name of the entity
+|===
+
+
+anchor:_entity_model[]
+
+== Models
+
+Import these Pydantic models from `neo4j_agent_memory.memory.long_term`. IDs are UUIDs, and inherited memory fields are shown below.
+
+=== Entity
+
+Pydantic model; inherited memory-entry fields are included.
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `id` | `UUID` | `new UUID` |
+| `created_at` | `datetime` | `current UTC time` |
+| `updated_at` | `datetime \| None` | `None` |
+| `embedding` | `list[float] \| None` | `None` |
+| `metadata` | `dict[str, Any]` | `{}` |
+| `name` | `str` | `required` | Entity name
+| `canonical_name` | `str \| None` | `None` | Resolved canonical name
+| `type` | `str` | `required` | Entity type (PERSON, OBJECT, LOCATION, EVENT, ORGANIZATION)
+| `subtype` | `str \| None` | `None` | Entity subtype (e.g., VEHICLE for OBJECT)
+| `description` | `str \| None` | `None` | Entity description
+| `confidence` | `float` | `1.0` | Confidence score
+| `aliases` | `list[str]` | `[]` | Alternative names
+| `attributes` | `dict[str, Any]` | `{}` | Additional entity attributes
+| `source_id` | `UUID \| None` | `None` | Source message/document ID
+|===
+
+=== Relationship
+
+Pydantic model; inherited memory-entry fields are included.
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `id` | `UUID` | `new UUID` |
+| `created_at` | `datetime` | `current UTC time` |
+| `updated_at` | `datetime \| None` | `None` |
+| `embedding` | `list[float] \| None` | `None` |
+| `metadata` | `dict[str, Any]` | `{}` |
+| `source_id` | `UUID` | `required` | Source entity ID
+| `target_id` | `UUID` | `required` | Target entity ID
+| `type` | `str` | `required` | Relationship type
+| `description` | `str \| None` | `None` | Relationship description
+| `confidence` | `float` | `1.0` | Confidence score
+| `valid_from` | `datetime \| None` | `None` | Start of validity
+| `valid_until` | `datetime \| None` | `None` | End of validity
+| `attributes` | `dict[str, Any]` | `{}` | Additional relationship attributes
+|===
+
+`Entity.display_name` prefers its canonical name; `Entity.full_type` returns type plus optional subtype. `Entity.entity_type` resolves a known enum value or None for custom types.
+
+== See also
+
+* xref:reference/api/long-term.adoc[LongTermMemory API reference]
+* xref:how-to/entities.adoc[Work with entities]
+* xref:explanation/poleo-model.adoc[POLE+O model]

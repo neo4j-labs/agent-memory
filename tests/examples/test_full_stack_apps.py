@@ -144,10 +144,14 @@ class TestFullStackChatAgent:
         )
 
     def test_quick_start_credentials_agree(self, app_dir):
-        """compose, .env.example and the README must use one Neo4j password.
+        """compose and .env.example agree; the README sends you to Aura instead.
 
         Three different values used to mean that following the README verbatim
-        booted the backend with memory silently disabled.
+        booted the backend with memory silently disabled. The README now
+        documents AuraDB rather than the bundled container, so it must say to
+        replace the local template values -- but compose and .env.example still
+        have to match each other, because .env.example advertises them as the
+        compose defaults and config.py falls back to them.
         """
         compose = (app_dir / "docker-compose.yml").read_text(encoding="utf-8")
         env_example = (app_dir / "backend" / ".env.example").read_text(encoding="utf-8")
@@ -159,7 +163,15 @@ class TestFullStackChatAgent:
         assert f"NEO4J_PASSWORD={password}" in env_example, (
             f"backend/.env.example must use the compose password {password!r}"
         )
-        assert f"`{password}`" in readme, f"README must document the compose password {password!r}"
+        assert f"NEWS_GRAPH_PASSWORD={password}" in env_example, (
+            f"backend/.env.example's news graph must use the compose password {password!r}"
+        )
+        assert "AURA_SETUP.md" in readme, "the README must link the shared Aura setup instructions"
+        assert re.search(r"replace .*NEO4J_\* .*with Aura", readme), (
+            "the README must tell the reader to replace .env.example's local "
+            "template values with their Aura settings -- otherwise following it "
+            "verbatim boots the backend against a database that is not running"
+        )
 
     def test_compose_pins_a_current_neo4j_with_apoc(self, app_dir):
         """Neo4j 5.26 LTS (or newer) plus APOC, which the schema tool needs."""

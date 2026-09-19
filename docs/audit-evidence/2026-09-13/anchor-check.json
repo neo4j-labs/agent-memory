@@ -1,0 +1,20 @@
+{
+  "baseline": "0303dc0066e0c071c8468536acc6219c183e2f97",
+  "pages_compared": 111,
+  "comparison": "Installed Asciidoctor renderer; includes removed only for ID comparison; full includes checked by fresh Antora build",
+  "lost_meaningful_ids": [],
+  "ignored_structural_ids": [
+    {
+      "file": "docs/modules/ROOT/pages/configuration.adoc",
+      "lost": [
+        "preamble"
+      ]
+    },
+    {
+      "file": "docs/modules/ROOT/pages/reference/deployment.adoc",
+      "lost": [
+        "preamble"
+      ]
+    }
+  ]
+}

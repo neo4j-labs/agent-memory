@@ -1,4 +1,4 @@
-= Migrate to a New Embedding Model
+= Migrate to a new embedding model
 :page-product: agent-memory
 :page-pagination:
 :toclevels: 3
@@ -6,183 +6,184 @@
 :icons: font
 :source-highlighter: highlight.js
 
-How to switch embedding model when you already have data in Neo4j.
+include::partial$backend-bolt-only.adoc[]
 
-[.lead]
-Neo4j vector indexes are sized at creation time. If you change embedding model to one with a different dimension count, existing indexes will not accept the new vectors. `MemoryClient.connect()` detects this and raises `EmbeddingDimensionMismatchError` before any data corruption can occur. This guide explains the error and walks the two safe remediations.
+Change the embedding model for an existing Bolt database while preserving the
+source data needed to regenerate vectors. A model change requires a backfill
+even when the old and new models have the same number of dimensions: their
+vectors are not interchangeable.
 
-== The error
+== Prerequisites
 
-[source,text]
+* A database backup or disposable test copy, plus the original model identifier and settings.
+* Source text for every vector you intend to preserve, and access to the new embedding provider.
+* A maintenance window that pauses writes and vector searches until backfill and validation finish.
+* The checked-out Python SDK. This runbook uses public Bolt graph/schema APIs; it is not a hosted workspace migration tool.
+
+== 1. Inspect the existing indexes and choose a migration path
+
+Run in Neo4j Query or through a connected Bolt client's `graph.execute_read`:
+
+[source,cypher]
 ----
-EmbeddingDimensionMismatchError:
-Vector index dimension mismatch.
-
-  Index 'message_embedding_idx': expected 384, found 1536
-  Index 'entity_embedding_idx':  expected 384, found 1536
-
-This usually means you've changed the embedding model since the
-indexes were created. Two options:
-
-  1. Drop and recreate the indexes (loses existing embeddings).
-     See docs/how-to/migrate-embedding-model.adoc.
-  2. Revert to the previous embedding model.
-
-Configured embedder dimensions: 384
+SHOW VECTOR INDEXES YIELD name, state, options
+RETURN name, state, options
 ----
 
-The exception's attributes (`expected_dimensions`, `actual_dimensions`, `index_name`) are also programmatically accessible.
+The library-managed vector index names are `message_embedding_idx`,
+`entity_embedding_idx`, `preference_embedding_idx`, `fact_embedding_idx`,
+`task_embedding_idx`, and `step_embedding_idx`.
 
-== Decision: rebuild or revert?
+`MemoryClient.connect()` sets up schema and validates existing managed vector
+index dimensions. A mismatch raises `EmbeddingDimensionMismatchError` with
+`expected_dimensions`, `actual_dimensions`, and `index_name`. The message lists
+all mismatches; the latter two attributes describe the first one. Validation
+compares dimensions, not model identity or every stored vector.
 
-The right answer depends on whether your old embeddings are *recoverable*.
-
-[cols="1,1,2",options="header"]
+[cols="1,2",options="header"]
 |===
-| If you have                           | And your old data is...           | Choose
-| Old embeddings of a known model       | Re-embeddable from source text    | **Rebuild** — the new model's vectors are what you want.
-| Old embeddings of an unknown vendor   | Not re-embeddable                 | **Revert** — keep the old indexes. Switching loses recall against old content.
-| A test or dev database                | Throwaway                         | **Rebuild** — wipe and start clean.
-| Production with mixed traffic         | Mostly recent                     | **Rebuild incrementally** — re-embed batch by batch (see below).
+| Situation | Action
+| Keep the original model
+| Restore its settings and retain the existing vectors and indexes.
+| Disposable data
+| Re-import source data into a fresh database configured for the new model.
+| Preserve existing entities and IDs
+| Backfill vectors in a paused database or a separate copy, following the remaining steps.
+| Missing source text or unknown original model
+| Recover that information before claiming equivalent retrieval. Rebuilding indexes alone cannot reconstruct vectors.
 |===
 
-== Option 1: Rebuild from scratch (lose existing embeddings)
+== 2. Remove only the indexes that must change dimension
 
-Use when the database is dev/test, or when re-embedding the entire corpus is acceptable.
+Keep the application paused. Use a Neo4j administration connection, or connect
+a Bolt client with the *old* embedding settings so dimension validation succeeds.
+Do not connect with the new model and expect to drop old indexes from inside
+that context: connection fails before reaching the body.
+
+For a migration of all six managed vector indexes, execute these statements
+individually in Neo4j Query:
+
+[source,cypher]
+----
+DROP INDEX message_embedding_idx IF EXISTS;
+DROP INDEX entity_embedding_idx IF EXISTS;
+DROP INDEX preference_embedding_idx IF EXISTS;
+DROP INDEX fact_embedding_idx IF EXISTS;
+DROP INDEX task_embedding_idx IF EXISTS;
+DROP INDEX step_embedding_idx IF EXISTS;
+----
+
+Dropping an index does *not* remove node embedding properties. Old vectors
+remain until you overwrite or explicitly remove them. For a same-dimension
+model change, index recreation is not required, but the complete backfill is.
+
+Avoid `client.schema.drop_all()` for a vector-only migration: it removes
+constraints and indexes selected by library name prefixes, including
+`conversation_`, `entity_`, and `message_`. A user-created schema element sharing
+a prefix can also be selected.
+
+== 3. Connect with the new model and backfill from source text
+
+Configure the new provider as in xref:how-to/configure-embedding-provider.adoc[Configure an embedding provider].
+After the old incompatible indexes are gone, connecting with the new settings
+creates missing indexes at the new dimensions. Keep traffic paused: this step
+has not regenerated existing vectors.
+
+Use a separate provider instance with the same configuration for the backfill.
+The following helper covers *entities only* and expects an already connected
+Bolt `client` and an `EmbeddingProvider` named `embedder`. Adapt it for each
+populated memory layer in the table below before resuming traffic.
 
 [source,python]
 ----
-import asyncio
-from neo4j_agent_memory import MemoryClient, MemorySettings
-
-async def rebuild():
-    # Open with the OLD embedder so the validator does not raise.
-    old = MemorySettings(
-        neo4j={"password": "p"},
-        embedding="openai/text-embedding-3-small",   # 1536-dim
-    )
-    async with MemoryClient(old) as client:
-        # Drop every library-managed vector index.
-        await client.schema.drop_all()
-
-    # Re-open with the NEW embedder; setup_all() recreates the indexes
-    # at the new dimensionality.
-    new = MemorySettings(
-        neo4j={"password": "p"},
-        embedding="BAAI/bge-small-en-v1.5",          # 384-dim
-    )
-    async with MemoryClient(new) as client:
-        # Indexes are now sized for 384 dims. Existing nodes have stale
-        # embedding properties — see "Re-embed existing nodes" below to
-        # backfill, or delete the properties to start clean.
-        ...
-
-asyncio.run(rebuild())
-----
-
-`drop_all()` removes every constraint and vector index whose name starts with one of the library prefixes (`message_`, `entity_`, `preference_`, `fact_`, `reasoning_`, `trace_`, `tool_`, `task_`, `step_`, `user_`, `consolidation_`, `memory_read_`). User-created indexes are left alone.
-
-== Option 2: Revert to the previous embedding model
-
-Pin the old model in your settings; nothing else changes.
-
-[source,python]
-----
-settings = MemorySettings(
-    neo4j={"password": "p"},
-    embedding="openai/text-embedding-3-small",  # original model
-)
-----
-
-This is the right choice when the original embeddings cannot be regenerated (lost source text, retired vendor model, etc.).
-
-== Option 3: Re-embed existing nodes (no data loss)
-
-The most operationally clean path: rebuild the indexes at the new dimensionality *and* recompute every node's embedding from its source text. This preserves recall against old content.
-
-[source,python]
-----
-import asyncio
-from neo4j_agent_memory import MemoryClient, MemorySettings
-
-async def reembed():
-    settings = MemorySettings(
-        neo4j={"password": "p"},
-        embedding="BAAI/bge-small-en-v1.5",  # new embedder
-    )
-    async with MemoryClient(settings) as client:
-        # 1. Drop the old vector indexes so dimensions can change.
-        await client.schema.drop_all()
-        # 2. Recreate at the new dimensions.
-        await client.schema.setup_all()
-        # 3. Walk every node that has an embedding property and
-        #    recompute it. Examples below — adapt to your scale.
-
-        # Messages
-        async for msg in _iter_with_embedding(client, "Message", "embedding"):
-            vec = await client._embedder.embed(msg["content"])
-            await client._client.execute_write(
-                "MATCH (m:Message {id: $id}) SET m.embedding = $vec",
-                {"id": msg["id"], "vec": vec},
-            )
-
-        # Entities (use name + description as the embedding text)
-        async for ent in _iter_with_embedding(client, "Entity", "embedding"):
-            text = ent.get("description") or ent["name"]
-            vec = await client._embedder.embed(text)
-            await client._client.execute_write(
-                "MATCH (e:Entity {id: $id}) SET e.embedding = $vec",
-                {"id": ent["id"], "vec": vec},
-            )
-
-        # Repeat for Preference, Fact, ReasoningTrace.task_embedding,
-        # ReasoningStep.embedding.
-
-async def _iter_with_embedding(client, label, prop, batch_size=200):
-    skip = 0
+async def reembed_entities(client, embedder, batch_size=200):
+    if batch_size < 1:
+        raise ValueError("batch_size must be positive")
+    after_id = ""
+    updated = 0
     while True:
-        rows = await client._client.execute_read(
-            f"MATCH (n:{label}) WHERE n.{prop} IS NOT NULL "
-            f"RETURN n.id AS id, n.content AS content, n.name AS name, "
-            f"n.description AS description SKIP $skip LIMIT $limit",
-            {"skip": skip, "limit": batch_size},
+        rows = await client.graph.execute_read(
+            "MATCH (e:Entity) WHERE e.id > $after_id AND e.name IS NOT NULL "
+            "RETURN e.id AS id, e.name AS text ORDER BY e.id LIMIT $limit",
+            {"after_id": after_id, "limit": batch_size},
         )
         if not rows:
-            return
-        for row in rows:
-            yield row
-        skip += batch_size
-
-asyncio.run(reembed())
+            return updated
+        vectors = await embedder.embed([row["text"] for row in rows])
+        if len(vectors) != len(rows) or any(
+            len(vector) != embedder.dimensions for vector in vectors
+        ):
+            raise ValueError("Embedding provider returned an unexpected shape")
+        await client.graph.execute_write(
+            "UNWIND $rows AS row MATCH (e:Entity {id: row.id}) "
+            "SET e.embedding = row.vector",
+            {"rows": [{"id": row["id"], "vector": vector}
+                      for row, vector in zip(rows, vectors)]},
+        )
+        updated += len(rows)
+        after_id = rows[-1]["id"]
 ----
 
-For very large graphs, run the recompute in batches with `MemorySettings.memory.write_mode = "buffered"` so the embedding RPCs and Neo4j writes overlap.
+The helper awaits each batch write. It uses stable ID ordering, requires
+non-null string IDs, and can be restarted from the beginning with the same
+model. It is not a resumable migration service. Record progress and preserve
+the backup if a provider call or database write fails.
 
-== Verifying the migration
+Match the source text used by the normal write APIs:
 
-After the rebuild, `MemoryClient.connect()` no longer raises. You can also explicitly check:
+[cols="1,1,3",options="header"]
+|===
+| Node | Property | Text to embed
+| `Message` | `embedding` | `content`
+| `Entity` | `embedding` | `name`
+| `Preference` | `embedding` | `category + ": " + preference`, followed by `" (" + context + ")"` when context is present
+| `Fact` | `embedding` | `subject + " " + predicate + " " + object`
+| `ReasoningTrace` | `task_embedding` | `task`
+| `ReasoningStep` | `embedding` | Nonempty thought, action, and observation values prefixed with `Thought: `, `Action: `, and `Observation: `, joined with a space
+|===
 
-[source,python]
+Inspect records with missing source text rather than silently counting them as
+migrated. If you choose different text construction for your application,
+apply it consistently to future writes and validate retrieval quality.
+
+`memory.write_mode="buffered"` does not defer these `graph.execute_write`
+calls. An explicit buffered migration would need separate submission, draining,
+and error handling; synchronous batch writes make completion easier to verify.
+
+== 4. Verify the migration before restoring traffic
+
+. Compare expected and updated node counts for every populated layer. Audit missing IDs and missing source text separately.
+. Check vector lengths and missing-vector counts. For example:
++
+[source,cypher]
 ----
-async with MemoryClient(settings) as client:
-    # Throws EmbeddingDimensionMismatchError if any managed index disagrees.
-    await client.schema.validate_vector_index_dimensions(
-        client._embedder.dimensions,
-    )
+MATCH (e:Entity)
+RETURN size(e.embedding) AS dimensions, count(*) AS entities
+ORDER BY dimensions
 ----
+. Confirm all six managed indexes that your database uses are `ONLINE` with the intended dimension in `SHOW VECTOR INDEXES`.
+. With the new provider, run `await client.schema.validate_vector_index_dimensions(embedder.dimensions)`. A successful connection alone is not evidence that every old vector was replaced.
+. Run labeled retrieval cases from xref:how-to/evaluation.adoc[Evaluate Memory Quality], including older records, before restoring traffic.
 
-== What the validator actually checks
+The dimension validator skips validation if the server rejects the `SHOW VECTOR
+INDEXES` syntax. Other query failures propagate. Do not treat a skipped check
+as proof that the schema or migration is correct.
 
-`SchemaManager.validate_vector_index_dimensions(expected)`:
+If validation fails, keep traffic paused and restore the database backup with
+the original model settings. Reverting settings alone after a partial backfill
+would leave mixed-model vectors.
 
-. Queries `SHOW VECTOR INDEXES` for every existing vector index.
-. Filters down to the library-managed names (`message_embedding_idx`, `entity_embedding_idx`, `preference_embedding_idx`, `fact_embedding_idx`, `task_embedding_idx`, `step_embedding_idx`).
-. Reads each index's `options.indexConfig['vector.dimensions']`.
-. Raises `EmbeddingDimensionMismatchError` with every mismatching index listed, if any.
+== See also
 
-The validation is skipped silently on Neo4j < 5.11 (the `SHOW VECTOR INDEXES` syntax did not exist before then) — there's nothing to validate on a server that does not support vector indexes natively.
+* xref:how-to/migrate-to-providers.adoc[Migrate to pluggable providers]
+* xref:how-to/configure-embedding-provider.adoc[Configure an embedding provider]
+* xref:reference/configuration.adoc[Configuration Reference]
 
-== Related
-
-* xref:how-to/migrate-to-providers.adoc[Migrate to Pluggable Providers] — for the broader v0.3 migration.
-* xref:reference/configuration.adoc[Configuration] — embedding settings reference.
+// Preserve historical section links after the procedure was reorganized.
+anchor:_the_error[]
+anchor:_decision_rebuild_or_revert[]
+anchor:_option_1_rebuild_from_scratch_lose_existing_embeddings[]
+anchor:_option_2_revert_to_the_previous_embedding_model[]
+anchor:_option_3_re_embed_existing_nodes_no_data_loss[]
+anchor:_verifying_the_migration[]
+anchor:_what_the_validator_actually_checks[]

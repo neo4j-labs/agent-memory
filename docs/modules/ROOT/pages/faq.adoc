@@ -1,4 +1,4 @@
-= Frequently Asked Questions
+= Frequently asked questions
 :page-product: agent-memory
 :page-pagination:
 :toclevels: 3
@@ -13,1114 +13,336 @@
 :page-ad-underline-role: button
 :page-ad-underline: Enroll now
 
-++++
-<style>
-.doc h3 { font-size: 1.15em; font-weight: 700; margin-top: 1.75rem; margin-bottom: 0.4rem; }
-.doc .hdlist dt { font-weight: 700; }
-</style>
-++++
+This FAQ answers common questions and links to the task or reference page that owns the details. Backend capabilities and installed release versions affect which instructions apply.
 
-This document answers common questions about neo4j-agent-memory, with a focus on the entity extraction pipeline and domain schemas.
+Jump to a section: <<choosing-a-backend,Choosing a backend>> • <<installing-and-versions,Installing and versions>> • <<storing-and-retrieving-memory,Storing and retrieving memory>> • <<extraction-and-entities,Extraction and entities>> • <<hosted-service-and-previews,Hosted service and previews>> • <<frameworks-and-integrations,Frameworks and integrations>> • <<operations,Operations>>
 
-== General Questions
+[[choosing-a-backend]]
+== Choosing a backend
 
 [[what-is-neo4j-agent-memory]]
 === What is neo4j-agent-memory?
 
-neo4j-agent-memory is a Python package that provides a comprehensive memory system for AI agents using Neo4j as the backend. It implements three memory types:
-
-* *Short-Term Memory* — Conversations and messages
-* *Long-Term Memory* — Entities, preferences, and facts (using the POLE+O data model)
-* *Reasoning Memory* — Reasoning traces and tool usage patterns
-
-See xref:index.adoc[Overview] for more details.
+Neo4j Agent Memory provides Python and TypeScript SDKs for persisted conversations, reusable knowledge, and recorded task execution. It is an experimental, community-supported Neo4j Labs project. See xref:index.adoc[the overview] and xref:explanation/memory-types.adoc[the three memory types].
 
 [[what-is-poleo]]
 === What is the POLE+O data model?
 
-POLE+O stands for **P**erson, **O**bject, **L**ocation, **E**vent, **O**rganization. It's a data model commonly used in law enforcement and intelligence analysis for organizing entities and their relationships.
-
-The package extends this with optional subtypes (e.g., `OBJECT:VEHICLE`, `LOCATION:ADDRESS`).
-
-See xref:explanation/poleo-model.adoc[POLE+O Data Model] for complete documentation.
+POLE+O means Person, Object, Location, Event, and Organization. These broad entity categories can be refined with subtypes or domain schemas. See xref:explanation/poleo-model.adoc[the POLE+O model].
 
 [[need-neo4j]]
 === Do I need my own Neo4j to use this package?
 
-No — you have two options. Use the hosted **NAMS** backend (sign up at link:https://memory.neo4jlabs.com[memory.neo4jlabs.com], set `MEMORY_API_KEY`, and there's nothing to run), or run your own Neo4j and use the **bolt** backend. The `MemoryClient` API is identical either way; see xref:explanation/backends.adoc[Bolt vs NAMS].
-
-You can also use the **entity extraction features independently** without any backend — the bolt-side extraction pipeline works standalone and returns Python objects.
+You can use hosted NAMS with an authorized workspace and API key, or connect Python directly to a Neo4j database through Bolt. The backends share concepts but support different operations and return shapes. See xref:reference/backend-capabilities.adoc[Backend capabilities] and xref:getting-started.adoc[Getting started]. Python's local extraction components can also operate on text independently of storage.
 
 [[whats-not-on-nams]]
 === What's not available on the NAMS backend?
 
-NAMS runs embedding, extraction, resolution, and enrichment server-side, so the client-side configs for those are ignored. A handful of bolt-only accessors raise `NotSupportedError` on NAMS: `client.users`, `client.buffered`, `client.consolidation`, `client.graph`, `schema.adopt_existing_graph()`, the geospatial methods, and the manual dedup-review methods. See the xref:explanation/backends.adoc#capability-matrix[capability matrix] for the full list and what NAMS does instead.
+NAMS manages extraction, embeddings, and resolution server-side. Python client-side settings do not configure those services, and several Bolt operations are unsupported on the hosted transport. See xref:reference/backend-capabilities.adoc[the per-operation capability table] rather than assuming that an accessor or similarly named method is supported on both backends.
 
 [[which-sdk]]
 === Which SDK should I use — Python or TypeScript?
 
-Both share the same memory model and the same NAMS backend, so pick by stack. The **Python SDK** supports *both* backends (bolt and NAMS) and the full extraction/enrichment pipeline. The **TypeScript SDK** is **NAMS-only** (a `fetch`-based HTTP client) and ideal for Node, Bun, Deno, Cloudflare Workers, and Vercel Edge. Mixed Python + TypeScript agents can read and write the same memory on a shared workspace. See xref:sdks/python.adoc[Python SDK] and xref:sdks/typescript.adoc[TypeScript SDK].
-
-[[what-are-skills]]
-=== What are NAMS Agent Skills? _(Preview)_
-
-Skills are a NAMS feature that *distils* a scoped slice of a workspace's accumulated memory — messages, entities, and reasoning traces — into a portable, provenance-grounded **Agent Skill** (an agentskills.io `SKILL.md` package) that another agent can load and reuse. Every claim and step is grounded in specific source nodes, so a skill is auditable rather than invented. Skills are exposed over REST and MCP only (there is no SDK method yet), and the feature is in **Preview**. See xref:explanation/skills.adoc[Agent Skills] and xref:reference/skills-api.adoc[Skills API].
-
-[[run-a-skill]]
-=== Can I run a distilled skill? _(Preview)_
-
-Not automatically — skill *execution* is **dry-run planning only** and gated off by default (`SKILL_EXECUTION_ENABLED=false`). The intended path is to **download** a published skill's `SKILL.md` package and load it into your agent like any other Agent Skill. NAMS handles distillation, review, and publishing; running the procedure is the agent's job. See xref:reference/skills-api.adoc[Skills API].
+Choose by language and backend. Python supports Bolt and NAMS; TypeScript targets NAMS REST. Agents can share supported records in the same authorized workspace, but the APIs and capabilities are not identical. See xref:sdks/python.adoc[Python], xref:sdks/typescript.adoc[TypeScript], and xref:reference/backend-capabilities.adoc[Backend capabilities].
 
 [[neo4j-versions]]
 === Which Neo4j versions are supported?
 
-Neo4j 5.x is supported, with **5.11+ recommended** for vector index support (used for semantic search).
+For Bolt, use the database prerequisites in xref:getting-started.adoc[Getting started] and the vector-index requirements in xref:reference/configuration.adoc[Configuration]. The Python Neo4j driver version is not the database server version. NAMS users do not manage the service's Neo4j version.
 
-
-[[aws-support]]
-=== Does neo4j-agent-memory work with AWS?
-
-Yes. The package provides full AWS support including:
-
-* *Amazon Bedrock Embeddings* — Use Bedrock embedding models (Titan, Cohere) instead of OpenAI. Install with `pip install neo4j-agent-memory[bedrock]`.
-* *Strands Agents SDK* — Pre-built tools for context graph operations with the AWS Strands Agents framework. Install with `pip install neo4j-agent-memory[strands]`.
-* *AgentCore Memory* — `HybridMemoryProvider` for routing between short-term and long-term memory stores.
-
-See xref:how-to/integrations/aws-strands.adoc[Strands Integration] and xref:how-to/integrations/aws-bedrock-embeddings.adoc[Bedrock Embeddings] for details.
-
-[[bedrock-credentials]]
-=== How do I configure AWS credentials for Bedrock embeddings?
-
-The Bedrock embedder uses standard AWS credential resolution (environment variables, `~/.aws/credentials`, IAM roles). You can configure the region and profile:
-
-[source,bash]
-----
-# Via environment variables
-export NAM_EMBEDDING__PROVIDER=bedrock
-export NAM_EMBEDDING__AWS_REGION=us-east-1
-export NAM_EMBEDDING__AWS_PROFILE=my-profile
-----
-
-Or in Python:
-
-[source,python]
-----
-from neo4j_agent_memory import MemorySettings
-
-settings = MemorySettings(
-    embedding={"provider": "bedrock", "aws_region": "us-east-1"}
-)
-----
-
-No API keys are needed if you're running on an AWS resource with an appropriate IAM role.
-
-[[strands-vs-direct]]
-=== Should I use Strands tools or the MemoryClient directly?
-
-Use **Strands tools** (`context_graph_tools()`) when building agents with the AWS Strands Agents SDK -- the tools are designed to be called by the agent autonomously.
-
-Use the **MemoryClient directly** when you need programmatic control over memory operations outside of an agent loop, or when using a non-Strands framework.
-
-You can combine both: use Strands tools for agent-facing operations and the MemoryClient for background tasks like batch processing.
-
-== Entity Extraction Pipeline
-
-[[how-pipeline-works]]
-=== How does the extraction pipeline work?
-
-The pipeline runs multiple extractors in sequence and merges their results:
-
-[source]
-----
-Text → [spaCy] → [GLiNER] → [LLM] → Merge → Filter → Results
-----
-
-[cols="1,2,1"]
-|===
-|Stage |Purpose |Speed
-
-|**spaCy**
-|Statistical NER for common entity types
-|~1ms
-
-|**GLiNER**
-|Zero-shot NER with custom types
-|~50ms
-
-|**LLM**
-|Context-aware extraction for complex cases
-|~500ms
-|===
-
-Each stage is optional and configurable. See xref:how-to/entity-extraction.adoc[Entity Extraction] for details.
-
-[[single-extractor]]
-=== Can I use just one extractor instead of the full pipeline?
-
-Yes, you can use any extractor individually:
-
-[source,python]
-----
-from neo4j_agent_memory.extraction import (
-    SpacyEntityExtractor,
-    GLiNEREntityExtractor,
-    LLMEntityExtractor,
-)
-
-# Just spaCy
-extractor = SpacyEntityExtractor()
-
-# Just GLiNER
-extractor = GLiNEREntityExtractor.for_schema("podcast")
-
-# Just LLM
-extractor = LLMEntityExtractor(model="gpt-4o-mini")
-
-result = await extractor.extract("Your text here")
-----
-
-[[merge-strategies]]
-=== What are merge strategies?
-
-When using multiple extractors, you need to combine their results. Available strategies:
-
-[cols="1,3"]
-|===
-|Strategy |Description
-
-|`union`
-|Keep all unique entities from all stages
-
-|`intersection`
-|Only keep entities found by multiple extractors
-
-|`confidence`
-|Keep highest confidence result per entity (default)
-
-|`cascade`
-|Use first extractor's results, fill gaps with others
-
-|`first_success`
-|Stop at first stage that returns results
-|===
-
-[[which-extractor]]
-=== Which extractor should I use?
-
-[cols="2,3"]
-|===
-|Use Case |Recommended Extractor
-
-|Fast, basic NER (names, orgs, places)
-|spaCy alone
-
-|Domain-specific extraction
-|GLiNER with domain schema
-
-|Custom entity types without training
-|GLiNER with custom schema
-
-|Complex text with context
-|Full pipeline with LLM fallback
-
-|Relationship extraction
-|LLM extractor
-
-|Cost-sensitive applications
-|spaCy + GLiNER (no LLM)
-|===
-
-
-== GLiNER and Domain Schemas
-
-[[schemas-gliner-only]]
-=== Are domain schemas only used with GLiNER?
-
-[IMPORTANT]
-====
-**Yes, domain schemas are specific to GLiNER.** They leverage GLiNER's ability to accept entity type descriptions at inference time, which helps the model understand what to extract.
-====
-
-[cols="1,3"]
-|===
-|Extractor |Schema Support
-
-|**spaCy**
-|Uses a fixed set of trained entity types (PERSON, ORG, GPE, etc.) -- cannot use domain schemas
-
-|**LLM**
-|Uses a prompt-based approach with entity type names but not the detailed descriptions from schemas
-
-|**GLiNER**
-|The only extractor that uses the full schema with descriptions
-|===
-
-[[labels-vs-schemas]]
-=== What's the difference between entity labels and domain schemas?
-
-**Entity labels** are simple strings:
-
-[source,python]
-----
-extractor = GLiNEREntityExtractor(entity_labels=["person", "company"])
-----
-
-**Domain schemas** include descriptions that help GLiNER understand what to extract:
-
-[source,python]
-----
-# Schema includes detailed descriptions
-extractor = GLiNEREntityExtractor.for_schema("podcast")
-# {"person": "A person mentioned in the podcast, including hosts, guests...", ...}
-----
-
-Domain schemas significantly improve extraction accuracy, especially for ambiguous terms.
-
-[[schemas-with-pipeline]]
-=== Can I use domain schemas with the full pipeline?
-
-Yes, when using the `ExtractorBuilder`, the schema applies to the GLiNER stage:
-
-[source,python]
-----
-extractor = (
-    ExtractorBuilder()
-    .with_spacy()                              # Uses spaCy's built-in types
-    .with_gliner_schema("podcast", threshold=0.5)  # Uses podcast schema
-    .with_llm_fallback()                       # Uses entity type names
-    .merge_by_confidence()
-    .build()
-)
-----
-
-[[which-schema]]
-=== Which schema should I use?
-
-[cols="2,1"]
-|===
-|Content Type |Schema
-
-|General purpose, investigations
-|`poleo`
-
-|Podcast transcripts, interviews
-|`podcast`
-
-|News articles, press releases
-|`news`
-
-|Research papers, academic content
-|`scientific`
-
-|Business reports, earnings calls
-|`business`
-
-|Movie/TV reviews, entertainment news
-|`entertainment`
-
-|Clinical notes, medical literature
-|`medical`
-
-|Legal documents, court cases
-|`legal`
-|===
-
-[[custom-schemas]]
-=== Can I create custom schemas?
-
-Yes, create a `DomainSchema` with your entity types and descriptions:
-
-[source,python]
-----
-from neo4j_agent_memory.extraction.domain_schemas import DomainSchema
-
-my_schema = DomainSchema(
-    name="real_estate",
-    entity_types={
-        "property": "A real estate property, building, or land parcel",
-        "agent": "A real estate agent or broker",
-        "price": "A property price, asking price, or sale price",
-        "neighborhood": "A neighborhood, district, or area",
-    },
-)
-
-extractor = GLiNEREntityExtractor(schema=my_schema)
-----
-
-See xref:how-to/entity-extraction.adoc#custom-schemas[Creating Custom Schemas] for more examples.
-
-[[poleo-mapping]]
-=== Do schema entity types map to POLE+O types?
-
-Yes, GLiNER entity types are automatically mapped to POLE+O types for Neo4j storage:
-
-* `person`, `author`, `actor`, `director` → `PERSON`
-* `company`, `organization`, `institution` → `ORGANIZATION`
-* `location`, `city`, `country` → `LOCATION`
-* `event`, `meeting`, `case` → `EVENT`
-* Everything else → `OBJECT` (with subtype from the label)
-
-You can also add custom mappings:
-
-[source,python]
-----
-extractor.add_label_mapping("podcast_episode", "EVENT", "PODCAST_EPISODE")
-----
-
-
-== spaCy Extraction
-
-[[spacy-entity-types]]
-=== What entity types does spaCy recognize?
-
-spaCy's English models recognize:
-
-[cols="1,2"]
-|===
-|Label |Description
-
-|`PERSON`
-|Named persons
-
-|`ORG`
-|Organizations, companies
-
-|`GPE`
-|Geopolitical entities (countries, cities)
-
-|`LOC`
-|Non-GPE locations
-
-|`DATE`
-|Dates and time expressions
-
-|`MONEY`
-|Monetary values
-
-|`PRODUCT`
-|Products
-|===
-
-[[spacy-custom-types]]
-=== Can I use custom entity types with spaCy?
-
-Not without training a custom model. spaCy's NER is based on statistical models trained on specific entity types.
-
-TIP: For custom entity types, use GLiNER instead.
-
-[[spacy-model-choice]]
-=== Which spaCy model should I use?
-
-[cols="2,1,1,1"]
-|===
-|Model |Size |Speed |Accuracy
-
-|`en_core_web_sm`
-|12MB
-|Fastest
-|Good
-
-|`en_core_web_md`
-|40MB
-|Fast
-|Better
-
-|`en_core_web_lg`
-|560MB
-|Medium
-|Best
-
-|`en_core_web_trf`
-|400MB
-|Slow
-|Best (transformer)
-|===
-
-For most use cases, `en_core_web_sm` is sufficient and fastest.
-
-
-== LLM Extraction
-
-[[when-use-llm]]
-=== When should I use the LLM extractor?
-
-Use LLM extraction when you need:
-
-* *Relationship extraction* — LLM is the only extractor that can extract relationships between entities
-* *Complex context* — When entity identification requires understanding context
-* *Highest accuracy* — When cost is not a concern
-
-[[llm-models]]
-=== What LLM models are supported?
-
-Any OpenAI-compatible model:
-
-* `gpt-4o-mini` (recommended for cost/performance balance)
-* `gpt-4o` (highest accuracy)
-* `gpt-3.5-turbo` (faster, cheaper)
-
-[[local-llms]]
-=== Can I use local LLMs?
-
-The current implementation uses OpenAI's API. For local LLMs, you would need to:
-
-. Run a local server with OpenAI-compatible API (e.g., using Ollama, vLLM)
-. Point the `OPENAI_BASE_URL` environment variable to your local server
-
-[[llm-slow]]
-=== Why is LLM extraction slow?
-
-LLM extraction requires an API call to the language model provider, which adds network latency (~200-500ms).
-
-For high-throughput scenarios, consider:
-
-* Using spaCy + GLiNER without LLM fallback
-* Batching texts and processing in parallel
-* Using a faster model like `gpt-3.5-turbo`
-
-
-== Batch and Streaming Extraction
-
-[[batch-extraction]]
-=== How do I process multiple documents at once?
-
-Use the batch extraction API:
-
-[source,python]
-----
-from neo4j_agent_memory.extraction import ExtractionPipeline
-
-pipeline = ExtractionPipeline()
-
-# Extract from multiple texts in parallel
-results = await pipeline.extract_batch(
-    texts=["Document 1...", "Document 2...", "Document 3..."],
-    batch_size=10,           # Process 10 at a time
-    on_progress=lambda done, total: print(f"{done}/{total}"),
-)
-----
-
-Benefits:
-* Parallel processing with configurable concurrency
-* Progress tracking callback
-* GPU batch processing for GLiNER (native batch support)
-
-[[streaming-extraction]]
-=== How do I handle very long documents?
-
-Use streaming extraction for documents over 100K tokens:
-
-[source,python]
-----
-from neo4j_agent_memory.extraction import StreamingExtractor
-
-extractor = StreamingExtractor(
-    chunk_size=4000,      # Tokens per chunk
-    chunk_overlap=200,    # Overlap to preserve context
-)
-
-# Stream results as they're extracted
-async for partial_result in extractor.stream(long_document):
-    print(f"Found {len(partial_result.entities)} entities in chunk")
-
-# Or get all results with automatic deduplication
-result = await extractor.extract(long_document)
-----
-
-[[relation-extraction-llm-free]]
-=== Can I extract relationships without LLM calls?
-
-Yes, use GLiREL (GLiNER + Relation Extraction):
-
-[source,python]
-----
-from neo4j_agent_memory.extraction import (
-    ExtractorBuilder,
-    GLiNEREntityExtractor,
-)
-
-# Enable GLiREL for relation extraction
-extractor = (
-    ExtractorBuilder()
-    .with_gliner_schema("podcast")
-    .with_gliner_relations(threshold=0.3)  # GLiREL for relations
-    .build()
-)
-
-result = await extractor.extract(text)
-# result.relations populated without LLM calls
-----
-
-GLiREL extracts relations using a fine-tuned model -- no API costs.
-
-
-== Entity Resolution and Deduplication
-
-[[what-is-resolution]]
-=== What is entity resolution?
-
-Entity resolution identifies when different text mentions refer to the same entity. For example, "John Smith", "J. Smith", and "John" might all refer to the same person.
-
-[[resolution-strategies]]
-=== What resolution strategies are available?
-
-[cols="1,3,2"]
-|===
-|Strategy |Description |Best For
-
-|`exact`
-|Case-insensitive string match
-|Exact duplicates
-
-|`fuzzy`
-|RapidFuzz similarity matching
-|Typos, abbreviations
-
-|`semantic`
-|Embedding-based similarity
-|Synonyms, paraphrases
-
-|`composite`
-|Tries exact → fuzzy → semantic
-|General use (default)
-|===
-
-[[resolution-type-aware]]
-=== Is resolution type-aware?
-
-Yes, the `CompositeResolver` is type-aware. Entities of different types (e.g., a PERSON named "Paris" vs a LOCATION named "Paris") are never merged, even if they have identical names.
-
-[[deduplication-on-ingest]]
-=== How does entity deduplication on ingest work?
-
-Entity deduplication automatically merges similar entities during extraction:
-
-[source,python]
-----
-from neo4j_agent_memory.memory.long_term import (
-    DeduplicationConfig,
-    LongTermMemory,
-)
-
-# Deduplication is configured at the memory layer, not on MemorySettings.
-dedup_config = DeduplicationConfig(
-    enabled=True,
-    auto_merge_threshold=0.95,    # High similarity = auto-merge
-    flag_threshold=0.85,          # Medium similarity = flagged SAME_AS link
-    use_fuzzy_matching=True,
-)
-
-# Pass into LongTermMemory when constructing it manually, or rely on the
-# defaults when using MemoryClient.
-----
-
-* **High confidence matches** (>0.92) are automatically merged
-* **Medium confidence matches** (0.85-0.92) create `SAME_AS` relationships for manual review
-* **Type-aware** -- only compares entities of the same type
-
-[[same-as-relationships]]
-=== What are SAME_AS relationships?
-
-`SAME_AS` relationships link entities that may refer to the same real-world entity but weren't merged automatically due to lower confidence:
-
-[source,cypher]
-----
-// Find potential duplicates
-MATCH (e1:Entity)-[r:SAME_AS]->(e2:Entity)
-RETURN e1.name, e2.name, r.confidence
-ORDER BY r.confidence DESC
-----
-
-You can manually merge or keep them separate based on your domain knowledge.
-
-
-== Neo4j and Storage
-
-[[indexes]]
-=== What indexes does the package create?
-
-The package automatically creates:
-
-* Unique constraints on ID fields
-* Vector indexes for semantic search (requires Neo4j 5.11+)
-* Regular indexes on frequently queried properties
-* Point index on `Entity.location` for geospatial queries
-
-[[entity-labels]]
-=== How are entities labeled in Neo4j?
-
-Entities get multiple labels based on their type:
-
-* *Base label* — `:Entity`
-* *Type label* — `:Person`, `:Organization`, `:Location`, `:Event`, `:Object`
-* *Subtype label* — `:Vehicle`, `:Address`, `:Company`, etc. (if specified)
-
-.Example
-====
-An entity of type `OBJECT` with subtype `VEHICLE` gets labels: `:Entity:Object:Vehicle`
-====
-
-[[query-by-type]]
-=== Can I query entities by type directly?
-
-Yes, the type labels enable efficient Cypher queries:
-
-[source,cypher]
-----
-// Find all people
-MATCH (p:Person) RETURN p
-
-// Find all vehicles
-MATCH (v:Vehicle) RETURN v
-
-// Find organizations in a specific location
-MATCH (o:Organization)-[:LOCATED_IN]->(l:Location {name: "New York"})
-RETURN o
-----
-
-
-== CLI Tool
+[[installing-and-versions]]
+== Installing and versions
 
 [[cli-installation]]
 === How do I install the CLI?
 
-Install with the CLI extra:
-
-[source,bash]
-----
-pip install neo4j-agent-memory[cli]
-----
+Install the package with the CLI extra and any extraction/provider extras needed by the chosen command. Follow xref:reference/cli.adoc[CLI installation and commands] for the exact package and invocation syntax.
 
 [[cli-usage]]
 === How do I use the CLI?
 
-[source,bash]
-----
-# Extract entities from text
-neo4j-agent-memory extract "John works at Acme Corp in New York"
-
-# Extract with specific schema
-neo4j-agent-memory extract --schema podcast "..."
-
-# Extract from file
-neo4j-agent-memory extract --input document.txt
-
-# Output as table
-neo4j-agent-memory extract --format table "..."
-
-# List available schemas
-neo4j-agent-memory schemas list
-
-# Get statistics
-neo4j-agent-memory stats
-----
+The CLI supports extraction and related utilities through its implemented commands. Use xref:reference/cli.adoc[the CLI reference] for arguments, flags, input modes, and output formats; command names from older examples may not exist.
 
 [[cli-configuration]]
 === How do I configure the CLI?
 
-The CLI reads from environment variables or a `.neo4j-memory.yaml` config file:
-
-[source,yaml]
-----
-# .neo4j-memory.yaml
-neo4j:
-  uri: bolt://localhost:7687
-  username: neo4j
-  password: your-password
-
-extraction:
-  extractor_type: pipeline
-  enable_gliner: true
-
-cli:
-  output_format: json
-----
-
-
-== Geocoding and Geospatial Queries
-
-[[geocoding-enable]]
-=== How do I enable geocoding for LOCATION entities?
-
-Configure geocoding in your settings:
-
-[source,python]
-----
-from neo4j_agent_memory import (
-    MemorySettings,
-    GeocodingConfig,
-    GeocodingProvider,
-)
-
-settings = MemorySettings(
-    geocoding=GeocodingConfig(
-        enabled=True,
-        provider=GeocodingProvider.NOMINATIM,  # Free, 1 req/sec limit
-    )
-)
-----
-
-Or use environment variables:
-
-[source,bash]
-----
-NAM_GEOCODING__ENABLED=true
-NAM_GEOCODING__PROVIDER=nominatim
-----
-
-[[geocoding-providers]]
-=== What geocoding providers are supported?
-
-[cols="1,2,2"]
-|===
-|Provider |Pros |Cons
-
-|**Nominatim**
-|Free, no API key needed
-|Rate-limited to 1 request/second
-
-|**Google Maps**
-|Higher accuracy, better address parsing
-|Requires API key, pay-per-use
-|===
-
-For Google Maps:
-
-[source,python]
-----
-from pydantic import SecretStr
-
-settings = MemorySettings(
-    geocoding=GeocodingConfig(
-        enabled=True,
-        provider=GeocodingProvider.GOOGLE,
-        api_key=SecretStr("your-google-api-key"),
-    )
-)
-----
-
-[[geocoding-batch]]
-=== How do I geocode existing locations?
-
-Use the batch geocoding method for LOCATION entities without coordinates:
-
-[source,python]
-----
-async with MemoryClient(settings) as memory:
-    stats = await memory.long_term.geocode_locations(
-        batch_size=50,
-        skip_existing=True,  # Don't re-geocode
-    )
-    print(f"Geocoded {stats['geocoded']} of {stats['processed']} locations")
-----
-
-[[geospatial-queries]]
-=== What geospatial queries are supported?
-
-Once locations are geocoded, you can:
-
-[source,python]
-----
-# Find locations near a point
-nearby = await memory.long_term.search_locations_near(
-    latitude=40.7128,
-    longitude=-74.0060,
-    radius_km=10.0,
-    limit=20,
-)
-
-# Find locations within a bounding box
-in_area = await memory.long_term.search_locations_in_bounds(
-    min_lat=40.70,
-    max_lat=40.80,
-    min_lon=-74.02,
-    max_lon=-73.95,
-)
-
-# Get coordinates for a specific location
-coords = await memory.long_term.get_entity_coordinates(entity_id)
-----
-
-[[geocoding-skip]]
-=== Can I disable geocoding for specific entities?
-
-Yes, use the `geocode=False` parameter:
-
-[source,python]
-----
-entity, _ = await memory.long_term.add_entity(
-    name="Custom Location",
-    entity_type="LOCATION",
-    geocode=False,  # Skip geocoding
-    coordinates=(40.7128, -74.0060),  # Provide coordinates directly
-)
-----
-
-
-== Observability and Tracing
-
-[[observability-setup]]
-=== How do I enable tracing?
-
-Install and configure a tracing provider:
-
-[source,bash]
-----
-# For OpenTelemetry
-pip install neo4j-agent-memory[opentelemetry]
-
-# For Opik (LLM-focused)
-pip install neo4j-agent-memory[opik]
-----
-
-[source,python]
-----
-from neo4j_agent_memory.observability import get_tracer
-
-# Observability tracers are obtained from
-# ``neo4j_agent_memory.observability.get_tracer(...)``, not from
-# ``MemorySettings``.
-tracer = get_tracer(
-    provider="opik",            # or "opentelemetry"
-    project_name="my-agent",
-)
-----
-
-[[what-is-traced]]
-=== What operations are traced?
-
-With tracing enabled, you get visibility into:
-
-* **Memory operations** -- reads, writes, searches with timing
-* **Extraction pipeline** -- each stage (spaCy, GLiNER, LLM) with duration
-* **LLM calls** -- tokens, latency, costs
-* **Entity resolution** -- matches, merges, SAME_AS creation
-
-[[opik-vs-otel]]
-=== Should I use OpenTelemetry or Opik?
-
-[cols="1,2,2"]
-|===
-|Aspect |OpenTelemetry |Opik
-
-|Focus
-|General observability
-|LLM-specific observability
-
-|Best for
-|Existing APM infrastructure
-|LLM application monitoring
-
-|Dashboard
-|Jaeger, Zipkin, Datadog
-|Opik UI (local or cloud)
-
-|LLM metrics
-|Basic spans
-|Token counts, costs, evaluations
-|===
-
-
-== Performance and Optimization
-
-[[speed-up-extraction]]
-=== How can I speed up extraction?
-
-. **Disable unused extractors**:
-+
-[source,python]
-----
-config = ExtractionConfig(
-    enable_spacy=True,
-    enable_gliner=True,
-    enable_llm_fallback=False,  # Skip LLM
-)
-----
-
-. **Use GPU acceleration for GLiNER**:
-+
-[source,python]
-----
-extractor = GLiNEREntityExtractor(device="cuda")  # or "mps" for Mac
-----
-
-. **Use batch extraction for multiple documents**:
-+
-[source,python]
-----
-results = await pipeline.extract_batch(texts, batch_size=10)
-----
-
-. **Use GLiREL instead of LLM for relations**:
-+
-[source,python]
-----
-extractor = ExtractorBuilder().with_gliner_relations().build()
-----
-
-. **Use a smaller GLiNER model**:
-+
-[source,python]
-----
-extractor = GLiNEREntityExtractor(model="gliner-community/gliner_small-v2.5")
-----
-
-[[memory-footprint]]
-=== What's the memory footprint?
-
-[cols="1,2"]
-|===
-|Component |Memory
-
-|spaCy (`en_core_web_sm`)
-|~50MB RAM
-
-|GLiNER (`medium-v2.5`)
-|~500MB RAM + ~500MB disk for model
-
-|LLM
-|Minimal (API-based)
-|===
-
-[[caching]]
-=== Can I cache extraction results?
-
-The package doesn't include built-in caching, but you can implement it:
-
-[source,python]
-----
-import hashlib
-from functools import lru_cache
-
-@lru_cache(maxsize=1000)
-async def cached_extract(text_hash: str, text: str):
-    return await extractor.extract(text)
-
-# Use hash as cache key
-text_hash = hashlib.md5(text.encode()).hexdigest()
-result = await cached_extract(text_hash, text)
-----
-
-
-== Troubleshooting
-
-[[gliner-download-fails]]
-=== GLiNER model download fails
-
-If the model download fails, try:
-
-. Check your internet connection
-. Set `HF_HUB_OFFLINE=0` to allow downloads
-. Manually download from HuggingFace and set local path
-
-[[spacy-model-not-found]]
-=== spaCy model not found
-
-Install the model:
-
-[source,bash]
-----
-python -m spacy download en_core_web_sm
-----
-
-[[low-accuracy]]
-=== Low extraction accuracy
-
-. **Use the right schema** -- Domain schemas significantly improve accuracy
-. **Lower the threshold** -- Try `threshold=0.3` instead of `0.5`
-. **Check for noise** -- Filter results with `result.filter_invalid_entities()`
-. **Consider LLM fallback** -- Enable for complex texts
-
-[[filtered-incorrectly]]
-=== Entities being filtered incorrectly
-
-Check if your entity is in the stopword list:
-
-[source,python]
-----
-from neo4j_agent_memory.extraction import is_valid_entity_name, ENTITY_STOPWORDS
-
-is_valid_entity_name("your entity")  # Check if it passes
-print("they" in ENTITY_STOPWORDS)    # Check specific word
-----
-
-[[memory-errors]]
-=== Memory errors with large texts
-
-GLiNER has a context window limit. For large texts:
-
-. Split into smaller chunks
-. Process chunks separately
-. Merge and deduplicate results
-
-[[extra-forbidden-from-env]]
-=== Why does `MemorySettings(...)` raise `extra_forbidden` for `neo4j_uri` / `openai_api_key`?
-
-You see an error like:
-
-[source,text]
-----
-ValidationError: 1 validation error for MemorySettings
-neo4j_uri
-  Extra inputs are not permitted [type=extra_forbidden, input_value='neo4j://localhost:7687']
-----
-
-…even though you only passed `neo4j={...}` as a kwarg. The cause is unrelated keys in your `.env` file (e.g. plain `NEO4J_URI=...` from a Docker setup, or `OPENAI_API_KEY=...` for a different tool). pydantic-settings 2.x leaks unmatched `.env` keys into the validation payload regardless of `env_prefix`, and `MemorySettings` uses `extra="forbid"` to catch code-level typos.
-
-**Fix:** upgrade to the next `0.2.x` patch release of `neo4j-agent-memory` (not `0.2.0`) or later -- `MemorySettings` filters non-`NAM_`-matching keys before they reach validation. No code change needed.
-
-**On older versions:** subclass `MemorySettings` (or your own settings class) with `extra="ignore"`:
-
-[source,python]
-----
-from pydantic_settings import SettingsConfigDict
-from neo4j_agent_memory import MemorySettings
-
-class MySettings(MemorySettings):
-    model_config = SettingsConfigDict(
-        env_prefix="NAM_",
-        env_nested_delimiter="__",
-        env_file=".env",
-        env_file_encoding="utf-8",
-        extra="ignore",
-    )
-----
+The current CLI constructs `MemorySettings`, which supports the documented environment variables and `.env` loading. It does not automatically load a `.neo4j-memory.yaml` configuration file. See xref:reference/cli.adoc[CLI configuration] and xref:reference/environment-variables.adoc[Environment variables].
 
 [[gliner-not-installed]]
 === ImportError: GLiNER not installed
 
-GLiNER is an optional dependency. Install with:
+GLiNER is optional. Install the specific extraction extras declared by xref:how-to/entity-extraction.adoc[the guide] in the environment running the program. A broad extra does not necessarily include local models, and installing a Python package does not download every model.
 
-[source,bash]
-----
-pip install neo4j-agent-memory[gliner]
-# or
-uv sync --all-extras
-----
+[[spacy-model-not-found]]
+=== spaCy model not found
 
-Check availability in code:
+Installing the spaCy package does not necessarily install the configured language model. Install the exact model named by the extraction configuration, then rerun the extraction guide's verification. See xref:how-to/entity-extraction.adoc[Configure extraction].
 
-[source,python]
-----
-from neo4j_agent_memory.extraction import is_gliner_available
+[[gliner-download-fails]]
+=== GLiNER model download fails
 
-if is_gliner_available():
-    extractor = GLiNEREntityExtractor.for_schema("podcast")
-else:
-    print("GLiNER not available, using spaCy only")
-    extractor = SpacyEntityExtractor()
-----
+Check the selected model identifier, access permissions, network access, and any configured offline mode. If using a local model path, confirm the required files are present. See xref:how-to/entity-extraction.adoc[the model setup procedure].
 
+[[extra-forbidden-from-env]]
+=== Why does `MemorySettings(...)` raise `extra_forbidden` for `neo4j_uri` / `openai_api_key`?
 
-== See Also
+Check for misspelled settings and the environment-loading behavior of the installed package. Current source filters unrelated `.env` keys while retaining strict validation of settings fields. Do not globally disable validation merely to hide an unknown key. See xref:reference/configuration.adoc[Settings] and xref:reference/environment-variables.adoc[Environment variables]; compare the installed release against https://github.com/neo4j-labs/agent-memory/blob/main/CHANGELOG.md[the changelog] or https://pypi.org/project/neo4j-agent-memory/#history[PyPI's release history] before assuming a source fix is available there.
 
-* xref:getting-started.adoc[Getting Started] -- Quick start guide
-* xref:how-to/entity-extraction.adoc[Entity Extraction Guide] -- Detailed extraction documentation
-* xref:explanation/memory-types.adoc[Memory Types] -- Short-term, long-term, and reasoning memory
-* xref:explanation/poleo-model.adoc[POLE+O Data Model] -- Entity type classification
-* xref:reference/configuration.adoc[Configuration Reference] -- All configuration options
-* xref:how-to/integrations/index.adoc[Framework Integrations] -- PydanticAI, LangChain, LlamaIndex, CrewAI, Strands
-* xref:how-to/integrations/aws-strands.adoc[Strands Integration] -- AWS Strands Agents
-* xref:how-to/integrations/aws-bedrock-embeddings.adoc[Bedrock Embeddings] -- Amazon Bedrock embedding models
-* link:../examples/domain-schemas/[Domain Schema Examples] -- Working code examples
-* https://github.com/neo4j-labs/agent-memory/issues[GitHub Issues] -- Report bugs or request features
+[[storing-and-retrieving-memory]]
+== Storing and retrieving memory
+
+[[indexes]]
+=== What indexes does the package create?
+
+Bolt manages constraints and indexes needed by its configured schema and search features. Index names, dimensions, and requirements belong in xref:reference/schema-objects.adoc[Schema objects] and xref:reference/configuration.adoc[Configuration]. NAMS manages its own storage indexes.
+
+[[entity-labels]]
+=== How are entities labeled in Neo4j?
+
+On Bolt, managed entities carry `:Entity`, a type property, and supported type/subtype labels such as `:Person` or `:Vehicle`. See xref:explanation/poleo-model.adoc[POLE+O] and xref:reference/schema-objects.adoc[Schema objects] for the distinction between stored labels and conceptual categories.
+
+[[query-by-type]]
+=== Can I query entities by type directly?
+
+Supported type filters and, on permitted Cypher surfaces, node labels can select entity categories. The query must match the actual backend schema and scope. See xref:how-to/entities.adoc[Work with entities] and xref:reference/backend-capabilities.adoc[Backend capabilities].
+
+[[what-is-resolution]]
+=== What is entity resolution?
+
+Resolution decides whether different mentions refer to the same entity. Similarity is evidence to investigate, not proof of identity. See xref:explanation/resolution-deduplication.adoc[Resolution and deduplication].
+
+[[resolution-strategies]]
+=== What resolution strategies are available?
+
+Python's Bolt resolution components use exact, fuzzy, semantic, or composite matching. Ingestion deduplication has separate configuration, and NAMS owns its server-side behavior. See xref:reference/configuration.adoc[Resolution settings] and xref:reference/backend-capabilities.adoc[Backend capabilities].
+
+[[resolution-type-aware]]
+=== Is resolution type-aware?
+
+Type constraints can prevent some false matches, but the behavior depends on the resolver and its configuration. Even same-type entities can be different people or product variants. See xref:explanation/resolution-deduplication.adoc[Identity evidence] and xref:how-to/deduplication.adoc[Configure deduplication].
+
+[[deduplication-on-ingest]]
+=== How does entity deduplication on ingest work?
+
+Bolt's `DeduplicationConfig` uses separate automatic-merge and review thresholds. Its defaults are `0.95` and `0.85` respectively; these are similarity cutoffs, not calibrated correctness probabilities. See xref:reference/api/long-term.adoc[the long-term API] and xref:how-to/deduplication.adoc[the review workflow]. NAMS uses its service-side contract.
+
+[[same-as-relationships]]
+=== What are SAME_AS relationships?
+
+A `:SAME_AS` edge can record a candidate duplicate for review while preserving both records. Its presence is not a completed merge or a guarantee of identity. See xref:explanation/resolution-deduplication.adoc[the review pattern] and xref:how-to/deduplication.adoc[Review duplicates].
+
+[[geocoding-enable]]
+=== How do I enable geocoding for LOCATION entities?
+
+Geocoding is a configurable Bolt capability. Use xref:reference/configuration.adoc[Geocoding configuration] and xref:reference/api/long-term.adoc[the location API] for the actual settings and supported operations. Client-side geocoding settings do not configure NAMS.
+
+[[geocoding-providers]]
+=== What geocoding providers are supported?
+
+The Bolt configuration exposes Nominatim and Google geocoding providers. Their credentials, service policies, quotas, and availability must be checked for the selected deployment; neither provider is universally more accurate. See xref:reference/configuration.adoc[Geocoding settings].
+
+[[geocoding-batch]]
+=== How do I geocode existing locations?
+
+The Bolt long-term API includes an operation for geocoding stored locations. Its parameters and returned statistics are documented in xref:reference/api/long-term.adoc[Long-term memory]. Check those fields rather than assuming it shares the batch-extraction signature.
+
+[[geospatial-queries]]
+=== What geospatial queries are supported?
+
+The Bolt long-term API supports location searches such as proximity and bounds, subject to stored coordinates and the method's scope. See xref:reference/api/long-term.adoc[Location operations] and xref:reference/backend-capabilities.adoc[Backend support].
+
+[[geocoding-skip]]
+=== Can I disable geocoding for specific entities?
+
+Use the supported per-entity geocoding controls when adding an entity on Bolt. Explicit coordinates and automatic geocoding are separate inputs; use the exact types in xref:reference/api/long-term.adoc[the entity API].
+
+[[extraction-and-entities]]
+== Extraction and entities
+
+[[how-pipeline-works]]
+=== How does the extraction pipeline work?
+
+Python's Bolt pipeline runs configured extraction stages and combines their candidates. Stages differ in vocabulary, resource requirements, and failure modes. See xref:explanation/extraction-pipeline.adoc[How extraction works] for the design and xref:how-to/entity-extraction.adoc[Configure extraction] for the procedure.
+
+[[single-extractor]]
+=== Can I use just one extractor instead of the full pipeline?
+
+Yes. An extractor can be used independently of a multi-stage pipeline. Choose a component with the entity and relation capabilities your task needs. See xref:reference/extractors.adoc[Extractor classes] and xref:how-to/entity-extraction.adoc[Configure extraction].
+
+[[merge-strategies]]
+=== What are merge strategies?
+
+Pipeline merge strategies combine candidates from extraction stages. The implemented names are `union`, `intersection`, `confidence`, `cascade`, and `first_success`; this differs from deduplicating entities already stored in the graph. See xref:explanation/extraction-pipeline.adoc#_merge_strategies[How results combine] and xref:reference/extractors.adoc[the exact API].
+
+[[which-extractor]]
+=== Which extractor should I use?
+
+Compare the required labels and relationships, local versus remote processing, resource limits, and quality on representative text. No extractor is universally fastest or most accurate. GLiREL and LLM extraction can both produce relationships. See xref:explanation/extraction-pipeline.adoc[Extraction tradeoffs].
+
+[[schemas-gliner-only]]
+=== Are domain schemas only used with GLiNER?
+
+Python's `DomainSchema` configures GLiNER labels and descriptions. Other schema concepts are separate: spaCy has model-defined labels, LLM extraction has a response schema, and NAMS ontologies define a hosted graph vocabulary. See xref:reference/schemas.adoc[Domain schemas] and xref:explanation/ontologies.adoc[Ontologies].
+
+[[labels-vs-schemas]]
+=== What's the difference between entity labels and domain schemas?
+
+Labels name the desired entity categories; a domain schema also gives those labels descriptions and can describe relation types. Descriptions clarify the intended vocabulary, but their effect on quality depends on the model and text. See xref:how-to/entity-extraction-schemas.adoc[Use extraction schemas].
+
+[[schemas-with-pipeline]]
+=== Can I use domain schemas with the full pipeline?
+
+Yes. A GLiNER schema can configure that stage inside a pipeline. It does not automatically change every other stage's vocabulary. See xref:how-to/entity-extraction.adoc[Configure the pipeline] and xref:reference/extractors.adoc[Extractor builder reference].
+
+[[which-schema]]
+=== Which schema should I use?
+
+Choose a vocabulary matching what the application needs to retain, then inspect representative outputs. The xref:reference/schemas.adoc[domain schema catalog] lists available schemas; xref:how-to/entity-extraction-schemas.adoc[the schema guide] explains how to apply or customize them.
+
+[[custom-schemas]]
+=== Can I create custom schemas?
+
+Yes. Define the entity labels and descriptions for the GLiNER task, using the actual `DomainSchema` fields. See xref:how-to/entity-extraction-schemas.adoc[Use custom extraction schemas]. For hosted graph validation, use xref:how-to/use-ontologies.adoc[NAMS ontologies] instead.
+
+[[poleo-mapping]]
+=== Do schema entity types map to POLE+O types?
+
+Extractor label mappings translate selected labels into POLE+O types and subtypes. A mapping does not prove that the model identified the entity correctly. See xref:reference/schemas.adoc[Schema mappings] and xref:explanation/poleo-model.adoc[POLE+O].
+
+[[spacy-entity-types]]
+=== What entity types does spaCy recognize?
+
+The available labels depend on the installed spaCy language model. Common English-model labels include `PERSON`, `ORG`, `GPE`, and `LOC`; the library maps recognized output into its entity vocabulary. See xref:reference/extractors.adoc[the spaCy extractor] for the integration contract.
+
+[[spacy-custom-types]]
+=== Can I use custom entity types with spaCy?
+
+Changing a GLiNER schema does not change spaCy's trained NER labels. A custom spaCy model or additional application extraction logic is a separate approach. See xref:explanation/extraction-pipeline.adoc[the extractor tradeoffs] before selecting that path.
+
+[[spacy-model-choice]]
+=== Which spaCy model should I use?
+
+Use a model for the document language and label requirements, and compare it on representative text. Download size, runtime memory, speed, and quality vary by model release and workload. Follow xref:how-to/entity-extraction.adoc[the extraction guide] for the configured model and installation steps.
+
+[[when-use-llm]]
+=== When should I use the LLM extractor?
+
+An LLM can help when extraction depends on broader context or a response schema. It adds provider calls and potential failures; it is not guaranteed to outperform local extraction. Relationship extraction is also available with GLiREL. See xref:explanation/extraction-pipeline.adoc[Extraction approaches].
+
+[[llm-models]]
+=== What LLM models are supported?
+
+`LLMEntityExtractor` can use the library's provider protocols and adapters, including supported native and LiteLLM paths. Model availability and structured-output support depend on the selected provider. See xref:reference/api/adapters.adoc[Adapters] and xref:how-to/configure-llm-provider.adoc[Configure an LLM provider].
+
+[[local-llms]]
+=== Can I use local LLMs?
+
+Yes, through a supported provider adapter or a custom provider implementation. A local model must satisfy the interface and extraction requirements of that path; changing an OpenAI environment variable alone is not a universal configuration method. See xref:how-to/bring-your-own-model.adoc[Bring your own model].
+
+[[llm-slow]]
+=== Why is LLM extraction slow?
+
+Generation time, network latency, input size, retries, and provider limits contribute to extraction latency. Compare the required quality against that cost, and use bounded concurrency. See xref:explanation/structured-extraction.adoc[Structured extraction] and xref:how-to/entity-extraction-batch.adoc[Batch extraction].
+
+[[batch-extraction]]
+=== How do I process multiple documents at once?
+
+Use the batch API for the selected extraction or message-storage operation. Its result shape, concurrency controls, and failure behavior depend on that operation. Follow xref:how-to/entity-extraction-batch.adoc[Batch extraction] or xref:how-to/batch-processing.adoc[Batch message processing].
+
+[[streaming-extraction]]
+=== How do I handle very long documents?
+
+Chunk documents when their length or structure exceeds the selected extractor's useful input window. There is no universal 100K-token cutoff. `StreamingExtractor` uses character-based `chunk_size` and `overlap` by default; `chunk_by_tokens=True` selects token-based chunking. See xref:how-to/entity-extraction-batch.adoc[Streaming extraction] for the supported calls.
+
+[[relation-extraction-llm-free]]
+=== Can I extract relationships without LLM calls?
+
+Yes. GLiREL can predict relationships alongside local entity extraction. It requires its own model and compute resources, even when it avoids remote LLM API calls. See xref:reference/extractors.adoc[GLiREL reference] and xref:how-to/running-without-an-llm.adoc[Run without an LLM].
+
+[[low-accuracy]]
+=== Low extraction accuracy
+
+Compare labeled expected entities and relations with actual output. Inspect domain vocabulary, ambiguous names, filtering, and chunk boundaries before changing thresholds. Lower thresholds may improve recall while adding false positives. See xref:explanation/extraction-pipeline.adoc[Extraction tradeoffs].
+
+[[filtered-incorrectly]]
+=== Entities being filtered incorrectly
+
+Check the extracted name against the implemented entity validation and stopword rules, then inspect the unfiltered result. See xref:reference/extractors.adoc[Extractor and validation reference] for supported helpers rather than relying on an example's assumed filtering API.
+
+[[memory-errors]]
+=== Memory errors with large texts
+
+Reduce input chunk size or concurrency according to the extractor's limits, and inspect peak runtime memory. Preserve enough overlap to retain useful context at boundaries. See xref:how-to/entity-extraction-batch.adoc[Batch and streaming extraction].
+
+[[hosted-service-and-previews]]
+== Hosted service and previews
+
+[[what-are-skills]]
+=== What are NAMS Agent Skills? _(preview)_
+
+Agent Skills is a NAMS preview feature that derives a portable procedure package from scoped memory. Provenance links support review of the generated procedure; they do not establish that every source claim is correct. See xref:explanation/skills.adoc[Agent Skills] and xref:reference/skills-api.adoc[the REST and MCP interface].
+
+[[run-a-skill]]
+=== Can I run a distilled skill? _(preview)_
+
+Downloading a published skill and loading it into an agent is separate from server-side distillation. The documented execution feature is gated dry-run planning, not automatic tool execution. See xref:reference/skills-api.adoc[Skills API] for its limits and xref:tutorials/skills-quickstart.adoc[the skill walkthrough] for the demonstrated outcome.
+
+[[frameworks-and-integrations]]
+== Frameworks and integrations
+
+[[aws-support]]
+=== Does neo4j-agent-memory work with AWS?
+
+Python provides a Bedrock embedding adapter, a Strands integration, and AgentCore memory components. Each has its own dependencies and supported behavior; this is not a claim of universal AWS feature support. See xref:how-to/integrations/aws-bedrock-embeddings.adoc[Bedrock embeddings], xref:how-to/integrations/aws-strands.adoc[Strands], and xref:how-to/integrations/aws-hybrid-memory.adoc[Hybrid memory].
+
+[[bedrock-credentials]]
+=== How do I configure AWS credentials for Bedrock embeddings?
+
+The Bedrock adapter uses the AWS SDK credential chain. The identity needs permission for the selected model and region. Follow xref:how-to/integrations/aws-bedrock-embeddings.adoc[Configure Bedrock embeddings] for the supported settings and credential setup.
+
+[[strands-vs-direct]]
+=== Should I use Strands tools or the MemoryClient directly?
+
+Use Strands tools when an agent should choose a memory operation through its tool interface. Use `MemoryClient` when application code should control the operation directly. A tool is only called when the agent or application invokes it. See xref:how-to/integrations/aws-strands.adoc[the Strands integration].
+
+[[operations]]
+== Operations
+
+[[observability-setup]]
+=== How do I enable tracing?
+
+The observability module provides tracer objects and span/decorator helpers. Obtaining a tracer does not automatically instrument every memory or model operation. Instrument the application's selected operations; distinguish these spans from xref:how-to/reasoning-traces.adoc[stored reasoning traces] and xref:how-to/audit-reasoning.adoc[audit records].
+
+[[what-is-traced]]
+=== What operations are traced?
+
+Only operations connected to the selected instrumentation are traced. Available attributes depend on what the application or adapter records; token counts and cost data are not implied for every operation. See xref:how-to/reasoning-traces.adoc[Reasoning traces] for the separate persisted task record.
+
+[[opik-vs-otel]]
+=== Should I use OpenTelemetry or Opik?
+
+Choose an observability integration that matches the application's monitoring system and required data. OpenTelemetry provides general tracing interfaces; Opik's integration targets LLM application observability. The selected instrumentation still determines which spans and attributes exist.
+
+[[speed-up-extraction]]
+=== How can I speed up extraction?
+
+Measure which stage dominates the actual workload, then evaluate changes to enabled stages, model choice, batching, and concurrency. Track quality as well as runtime. See xref:explanation/extraction-pipeline.adoc[Extraction tradeoffs] and xref:how-to/entity-extraction-batch.adoc[Batch and streaming extraction].
+
+[[memory-footprint]]
+=== What's the memory footprint?
+
+Runtime memory depends on the installed model, precision, device, input sizes, and concurrency. Model download size is not the same as peak process memory. Measure the configured environment; the docs do not provide a portable RAM estimate for every extractor.
+
+[[caching]]
+=== Can I cache extraction results?
+
+Application-level caching can reuse completed extraction results when the text, model, schema, and configuration are unchanged. Cache the completed value, not an asynchronous coroutine object: `functools.lru_cache` applied directly to an `async def` does not provide a safe reusable result cache. Define invalidation and size limits for the application's workload.
+
+== See also
+
+* xref:getting-started.adoc[Getting started]
+* xref:reference/backend-capabilities.adoc[Backend capabilities]
+* xref:how-to/entity-extraction.adoc[Configure entity extraction]
+* xref:explanation/memory-types.adoc[Memory types]
+* xref:how-to/integrations/index.adoc[Framework integration guides]
+* https://github.com/neo4j-labs/agent-memory/issues[Report an issue]

@@ -1,4 +1,4 @@
-= Migrate to Pluggable Providers
+= Migrate to pluggable providers
 :page-product: agent-memory
 :page-pagination:
 :toclevels: 3
@@ -6,32 +6,53 @@
 :icons: font
 :source-highlighter: highlight.js
 
-How to move v0.2.x configuration over to v0.3's pluggable-provider API.
+include::partial$backend-bolt-only.adoc[]
+
+Replace legacy `EmbeddingConfig` and `LLMConfig` objects with the provider API supported by the checked-out source.
 
 [.lead]
-v0.3 makes the LLM and embedding model pluggable. `MemorySettings.embedding` and `MemorySettings.llm` now accept three shapes: legacy `EmbeddingConfig` / `LLMConfig` (deprecated), a provider-string shorthand, or a fully-constructed Provider instance. This guide walks each migration pattern with side-by-side code.
+The provider API introduced in v0.3 makes the LLM and embedding model pluggable. `MemorySettings.embedding` and `MemorySettings.llm` now accept three shapes: legacy `EmbeddingConfig` / `LLMConfig` (deprecated), a provider-string shorthand, or a fully-constructed Provider instance. This guide walks each migration pattern with side-by-side code.
+
+== Prerequisites
+
+* Install the extras for each selected provider and configure its credentials. Quote package extras in shell commands, for example `pip install 'neo4j-agent-memory[openai]==0.6.0'`.
+* Use a dedicated AuraDB instance and export `NEO4J_URI`, `NEO4J_USERNAME`, and `NEO4J_PASSWORD` as shown in xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the Aura connection setup]. These examples use the `bolt` backend; `NEO4J_DATABASE` defaults to `neo4j` when omitted.
+* Model identifiers below illustrate adapter routing. Confirm the chosen model is available to your account before making a live request; successful provider construction does not verify model access.
+* Run snippets containing `await` in an async function. The `provider`, `messages`, and connected `client` in later fragments come from your application's setup.
+
+== Procedure
+
+. Choose a string, explicit adapter, or framework pass-through from the options below.
+. Configure both the LLM and embedding provider; changing one does not configure the other.
+. Run the verification at the end before applying the configuration to an existing graph.
 
 == Compatibility summary
 
-* **v0.2.x code keeps working** — passing `EmbeddingConfig` / `LLMConfig` emits one `DeprecationWarning` per `MemorySettings` construction and otherwise behaves identically.
-* **The deprecation warning escalates to `FutureWarning` in v0.4.**
-* **Legacy `EmbeddingConfig` / `LLMConfig` are removed in v0.5.0.**
-* All v0.2.x example code in this repo has been verified to still run unmodified.
+* The checked-out `MemorySettings` still accepts legacy `EmbeddingConfig` and `LLMConfig` objects. Explicit legacy objects emit `DeprecationWarning`; the source has not changed those warnings to `FutureWarning`.
+* Warning text names a planned v0.5 removal, but the types remain in this source. Treat that text as a migration notice, not evidence of removal in a published artifact.
+* Verify the version you install and run your own representative examples. This guide does not establish that every historical example runs unmodified.
 
 == Pattern 1: Drop in a provider-string shorthand
 
 The simplest migration. Replace the legacy config with a single string.
 
-.Before (v0.2.x — still works in v0.3, one warning)
+.Before (legacy objects; explicit fields emit deprecation warnings)
 [source,python]
 ----
+import os
 from neo4j_agent_memory import MemoryClient, MemorySettings
 from neo4j_agent_memory.config.settings import (
     EmbeddingConfig, EmbeddingProvider, LLMConfig, LLMProvider,
 )
 
 settings = MemorySettings(
-    neo4j={"uri": "bolt://localhost:7687", "password": "p"},
+    backend="bolt",
+    neo4j={
+        "uri": os.environ["NEO4J_URI"],
+        "username": os.environ["NEO4J_USERNAME"],
+        "password": os.environ["NEO4J_PASSWORD"],
+        "database": os.getenv("NEO4J_DATABASE", "neo4j"),
+    },
     embedding=EmbeddingConfig(
         provider=EmbeddingProvider.OPENAI,
         model="text-embedding-3-small",
@@ -43,13 +64,20 @@ settings = MemorySettings(
 )
 ----
 
-.After (v0.3 — no warning)
+.After (provider strings)
 [source,python]
 ----
+import os
 from neo4j_agent_memory import MemoryClient, MemorySettings
 
 settings = MemorySettings(
-    neo4j={"uri": "bolt://localhost:7687", "password": "p"},
+    backend="bolt",
+    neo4j={
+        "uri": os.environ["NEO4J_URI"],
+        "username": os.environ["NEO4J_USERNAME"],
+        "password": os.environ["NEO4J_PASSWORD"],
+        "database": os.getenv("NEO4J_DATABASE", "neo4j"),
+    },
     embedding="openai/text-embedding-3-small",
     llm="openai/gpt-4o-mini",
 )
@@ -61,33 +89,47 @@ Strings are resolved via `neo4j_agent_memory.llm.from_provider`. The factory doe
 
 [source,python]
 ----
+import os
 from neo4j_agent_memory import MemoryClient, MemorySettings
 
 settings = MemorySettings(
-    neo4j={"uri": "bolt://localhost:7687", "password": "p"},
+    backend="bolt",
+    neo4j={
+        "uri": os.environ["NEO4J_URI"],
+        "username": os.environ["NEO4J_USERNAME"],
+        "password": os.environ["NEO4J_PASSWORD"],
+        "database": os.getenv("NEO4J_DATABASE", "neo4j"),
+    },
     embedding="openai/text-embedding-3-small",
     llm="anthropic/claude-3-5-sonnet-latest",
 )
 ----
 
-Install the corresponding extra: `pip install neo4j-agent-memory[anthropic]`. Set `ANTHROPIC_API_KEY` in your environment (or pass `--llm-api-key` to the MCP CLI).
+Install both providers used above: `pip install 'neo4j-agent-memory[anthropic,openai]==0.6.0'`. Set `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` for the LLM and embeddings respectively.
 
 == Pattern 3: Local embeddings + Anthropic LLM (no OpenAI dependency)
 
 [source,python]
 ----
+import os
 from neo4j_agent_memory import MemoryClient, MemorySettings
 
 settings = MemorySettings(
-    neo4j={"uri": "bolt://localhost:7687", "password": "p"},
+    backend="bolt",
+    neo4j={
+        "uri": os.environ["NEO4J_URI"],
+        "username": os.environ["NEO4J_USERNAME"],
+        "password": os.environ["NEO4J_PASSWORD"],
+        "database": os.getenv("NEO4J_DATABASE", "neo4j"),
+    },
     embedding="BAAI/bge-small-en-v1.5",  # local sentence-transformers
     llm="anthropic/claude-3-5-sonnet-latest",
 )
 ----
 
-Install: `pip install neo4j-agent-memory[anthropic,sentence-transformers]`.
+Install: `pip install 'neo4j-agent-memory[anthropic,sentence-transformers]==0.6.0'`.
 
-This pattern is appealing for cost, privacy, and offline workflows: embeddings stay on your machine; only the LLM call leaves your network. See xref:tutorials/anthropic-and-local-embeddings.adoc[the tutorial] for a full walk-through.
+This pattern is appealing for cost, privacy, and offline workflows: embeddings stay on your machine; LLM calls still use the configured cloud service; download and cache the local embedding model before an offline deployment. See xref:tutorials/anthropic-and-local-embeddings.adoc[the tutorial] for a full walk-through.
 
 == Pattern 4: Construct a Provider instance directly (full control)
 
@@ -95,12 +137,19 @@ When you need to pass an `api_base` (vLLM, Ollama, an internal endpoint) or prov
 
 [source,python]
 ----
+import os
 from neo4j_agent_memory import MemoryClient, MemorySettings
 from neo4j_agent_memory.llm.adapters.litellm import LiteLLMProvider
 from neo4j_agent_memory.llm.adapters.openai import OpenAIEmbeddingProvider
 
 settings = MemorySettings(
-    neo4j={"uri": "bolt://localhost:7687", "password": "p"},
+    backend="bolt",
+    neo4j={
+        "uri": os.environ["NEO4J_URI"],
+        "username": os.environ["NEO4J_USERNAME"],
+        "password": os.environ["NEO4J_PASSWORD"],
+        "database": os.getenv("NEO4J_DATABASE", "neo4j"),
+    },
     embedding=OpenAIEmbeddingProvider("openai/text-embedding-3-small"),
     llm=LiteLLMProvider(
         "ollama/llama3.2",
@@ -117,6 +166,7 @@ Already configured a LangChain / Pydantic AI / LlamaIndex / CrewAI / Strands / M
 
 [source,python]
 ----
+import os
 from langchain_anthropic import ChatAnthropic
 from neo4j_agent_memory import MemoryClient, MemorySettings
 from neo4j_agent_memory.integrations.langchain import (
@@ -126,12 +176,18 @@ from neo4j_agent_memory.integrations.langchain import (
 chat = ChatAnthropic(model_name="claude-3-5-sonnet-latest")
 
 settings = MemorySettings(
-    neo4j={"uri": "bolt://localhost:7687", "password": "p"},
+    backend="bolt",
+    neo4j={
+        "uri": os.environ["NEO4J_URI"],
+        "username": os.environ["NEO4J_USERNAME"],
+        "password": os.environ["NEO4J_PASSWORD"],
+        "database": os.getenv("NEO4J_DATABASE", "neo4j"),
+    },
     llm=llm_provider_from_langchain(chat),
 )
 ----
 
-Every integration package exposes a `llm_provider_from_<framework>` helper:
+These integration packages expose a `llm_provider_from_<framework>` helper:
 
 * `from neo4j_agent_memory.integrations.langchain import llm_provider_from_langchain`
 * `from neo4j_agent_memory.integrations.pydantic_ai import llm_provider_from_pydantic_ai`
@@ -144,16 +200,13 @@ Every integration package exposes a `llm_provider_from_<framework>` helper:
 
 == Pattern 6: No LLM at all (unchanged)
 
-`MemorySettings.llm=None` continues to work exactly as in v0.2 — see xref:how-to/running-without-an-llm.adoc[Run Without an LLM].
+`MemorySettings.llm=None` disables LLM construction when extraction settings do not require an LLM — see xref:how-to/running-without-an-llm.adoc[Run Without an LLM].
 
 == Embedding dimensions and existing vector indexes
 
-If you change embedding model — for example, OpenAI's 1536-dim model to a 384-dim sentence-transformers model — `MemoryClient.connect()` will detect the mismatch against existing Neo4j vector indexes and raise `EmbeddingDimensionMismatchError`. Two options:
+If you change embedding model — for example, OpenAI's 1536-dim model to a 384-dim sentence-transformers model — `MemoryClient.connect()` will detect the mismatch against existing Neo4j vector indexes and raise `EmbeddingDimensionMismatchError`. Choose a complete migration or restore the original model. Dropping indexes does not remove stored embedding properties and does not regenerate them. A same-dimension model change also requires a backfill, although dimension validation cannot detect it.
 
-. **Drop and recreate the indexes** (loses existing embeddings).
-. **Revert to the previous embedding model.**
-
-See xref:how-to/migrate-embedding-model.adoc[Migrate Embedding Model] for the index-rebuild runbook.
+See xref:how-to/migrate-embedding-model.adoc[Migrate to a new embedding model] for the index-rebuild runbook.
 
 == Validating your migration
 
@@ -161,6 +214,7 @@ After updating, this should hold:
 
 [source,python]
 ----
+import os
 import warnings
 
 from neo4j_agent_memory import MemorySettings
@@ -168,7 +222,13 @@ from neo4j_agent_memory import MemorySettings
 with warnings.catch_warnings(record=True) as caught:
     warnings.simplefilter("always", DeprecationWarning)
     settings = MemorySettings(
-        neo4j={"password": "p"},
+        backend="bolt",
+        neo4j={
+            "uri": os.environ["NEO4J_URI"],
+            "username": os.environ["NEO4J_USERNAME"],
+            "password": os.environ["NEO4J_PASSWORD"],
+            "database": os.getenv("NEO4J_DATABASE", "neo4j"),
+        },
         embedding="openai/text-embedding-3-small",
         llm="anthropic/claude-3-5-sonnet-latest",
     )
@@ -197,18 +257,14 @@ This is intentionally not the default — silent deprecations make migrations sl
 
 == Behind the scenes
 
-The migration is implemented by a `@model_validator(mode="after")` on `MemorySettings` (named `_resolve_providers`). It:
+For the `_resolve_providers` model-validator and `_ProviderToEmbedderAdapter` implementation walkthrough, see xref:explanation/why-provider-protocol.adoc#_how_migration_resolves_provider_settings[Why the Provider Protocol? — How migration resolves provider settings].
 
-. Coerces dict input to legacy configs (so `MemorySettings(embedding={...})` still works).
-. Resolves provider strings via `from_provider`.
-. Emits `DeprecationWarning` when the user explicitly passed legacy `EmbeddingConfig` / `LLMConfig` instances.
-. Validates Provider instances against the runtime-checkable `EmbeddingProvider` / `LLMProvider` Protocols.
-. Leaves `llm=None` alone (lenient fallback continues to materialize an `LLMConfig` when extraction needs one).
+A clean warning check confirms configuration shape only. Verify a completion,
+an embedding vector, and representative retrieval using your selected providers.
+Use the embedding migration runbook before changing an existing graph's model.
 
-After resolution, `MemoryClient._create_embedder` and `_create_extractor` consume either shape transparently. A small adapter (`_ProviderToEmbedderAdapter`) bridges new Provider instances back to the legacy `Embedder` API so downstream memory layers keep working unchanged.
+== See also
 
-== Related
-
-* xref:how-to/bring-your-own-model.adoc[Bring Your Own Model] — the headline how-to for choosing a provider.
+* xref:how-to/bring-your-own-model.adoc[Bring your own model] — the headline how-to for choosing a provider.
 * xref:reference/configuration.adoc[Configuration] — the canonical `MemorySettings` reference.
 * xref:explanation/why-provider-protocol.adoc[Why the Provider Protocol?] — design rationale.

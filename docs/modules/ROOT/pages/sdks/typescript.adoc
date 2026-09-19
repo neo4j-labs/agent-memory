@@ -2,8 +2,15 @@
 :description: Install, configure, and use the TypeScript SDK for Neo4j Agent Memory.
 
 The TypeScript SDK is a thin HTTP client over the
-xref:reference/rest-api.adoc[NAMS] hosted service. It runs on Node 20+,
+xref:reference/rest-api.adoc[NAMS] hosted service. It runs on Node 22+,
 Bun, Deno, Cloudflare Workers, and Vercel Edge.
+
+include::partial$labs-disclaimer.adoc[]
+
+[NOTE]
+====
+Registry check on 13 September 2026: npm's latest `@neo4j-labs/agent-memory` was `0.4.1`. Run `npm view @neo4j-labs/agent-memory version engines` to re-check what is currently published. This checkout's Node 22 lesson setup describes source development, which can be ahead of that published artifact. Use the source bootstrap below until a matching release is verified.
+====
 
 == Install
 
@@ -15,7 +22,17 @@ pnpm add @neo4j-labs/agent-memory
 bun add @neo4j-labs/agent-memory
 ----
 
-Requires Node.js 20+.
+Requires Node.js 22+. This page maps current source; inspect the installed
+package before using APIs added after its release. For a complete source-checkout
+setup, follow xref:tutorials/hosted-quickstart-typescript.adoc[the hosted tutorial].
+
+[#source-bootstrap]
+== Source bootstrap
+
+Build the SDK from source when you need APIs that are not on npm yet, such as
+the V4 Vercel AI middleware:
+
+include::partial$typescript-tutorial-checkout.adoc[]
 
 == Quick start
 
@@ -57,17 +74,6 @@ All five ship as subpath exports.
 | AWS Strands | `@neo4j-labs/agent-memory/integrations/strands` | xref:how-to/typescript/strands.adoc[Strands]
 |===
 
-== Where to go next
-
-* xref:tutorials/first-agent-memory-typescript.adoc[Tutorial: First agent memory (TypeScript)]
-* xref:tutorials/hosted-quickstart-typescript.adoc[Tutorial: Hosted quickstart]
-* xref:how-to/typescript/authenticate.adoc[How-to: authenticate]
-* xref:how-to/typescript/edge-runtime.adoc[How-to: deploy to edge runtimes]
-* xref:how-to/typescript/observability.adoc[How-to: enable observability]
-* xref:how-to/typescript/handle-errors.adoc[How-to: handle errors]
-* xref:how-to/typescript/troubleshooting.adoc[Troubleshooting]
-* xref:reference/typescript-api.adoc[Full API reference] (with the link:{attachmentsdir}/api/typescript/index.html[TypeDoc-generated method-level reference])
-
 == Source and releases
 
 * Package: link:https://www.npmjs.com/package/@neo4j-labs/agent-memory[`@neo4j-labs/agent-memory` on npm]
@@ -87,4 +93,19 @@ link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples[`t
 with link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/nextjs-memory-chat[`nextjs-memory-chat/`] —
 the flagship full-stack demo: a Next.js 16 App Router assistant on hosted NAMS
 with a live entity-graph rail, an extraction-status badge and a reasoning-trace
-drawer. Every example is type-checked, tested and (where it builds) built in CI.
+drawer. See xref:how-to/typescript/nextjs-memory-chat.adoc[the task-oriented guide]
+for the four decisions behind it, or clone the example directly. The CI example matrix checks source compatibility with mocked services.
+The eve commerce demo currently has unsupported hosted preference/fact paths;
+see its README before using it as a deployment example. Offline checks do not
+prove npm artifact availability or live-service behavior.
+
+== See also
+
+* xref:tutorials/first-agent-memory-typescript.adoc[Tutorial: First agent memory (TypeScript)]
+* xref:tutorials/hosted-quickstart-typescript.adoc[Tutorial: Hosted quickstart]
+* xref:how-to/typescript/authenticate.adoc[Authenticate a TypeScript client]
+* xref:how-to/typescript/edge-runtime.adoc[Deploy to edge runtimes]
+* xref:how-to/typescript/observability.adoc[Enable request logging]
+* xref:how-to/typescript/handle-errors.adoc[Handle TypeScript REST errors]
+* xref:how-to/typescript/troubleshooting.adoc[Troubleshooting]
+* xref:reference/typescript-api.adoc[Full API reference] (with the link:{attachmentsdir}/api/typescript/index.html[TypeDoc-generated method-level reference])

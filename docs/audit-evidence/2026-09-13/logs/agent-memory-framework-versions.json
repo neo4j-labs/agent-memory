@@ -1,0 +1,18 @@
+{
+  "agent-framework-core": "1.18.0",
+  "agent-framework-openai": "1.14.3",
+  "langchain": "1.4.0",
+  "langchain-core": "1.6.3",
+  "langchain-openai": "1.6.2",
+  "pydantic-ai-slim": "2.38.0",
+  "crewai": "1.6.1",
+  "llama-index-core": "0.14.24",
+  "google-adk": "2.9.0",
+  "strands-agents": "1.55.1",
+  "openai": "3.3.0",
+  "openai-agents": "0.22.2",
+  "google-cloud-aiplatform": "2.1.0",
+  "google-genai": "2.23.0",
+  "boto3": "1.43.93",
+  "pytest": "9.1.1"
+}

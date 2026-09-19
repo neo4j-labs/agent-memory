@@ -7,8 +7,8 @@
 > ⚠️ **Neo4j Labs Project**
 >
 > This project is part of Neo4j Labs and is actively maintained, but not
-> officially supported. There are no SLAs or guarantees around backwards
-> compatibility and deprecation. For questions and support, please use
+> officially supported. There are no SLAs, backward-compatibility guarantees,
+> or scheduled deprecation commitments. APIs may change without notice. For questions and support, please use
 > the [Neo4j Community Forum](https://community.neo4j.com).
 
 An MCP server you run yourself, backed by the
@@ -51,13 +51,46 @@ you:
   use a **workspace-scoped data-plane key**, not an admin key
 - An MCP client: Claude Desktop, an MCP-aware IDE, or your own
 
+## Build the shared SDK first
+
+This is a source-checkout example. Its `file:../..` dependency and shared
+`../tsconfig.base.json` require the repository layout. From the repository root:
+
+```bash
+cd typescript
+npm ci
+npm run build
+cd examples/mcp
+```
+
+Run the commands below from `typescript/examples/mcp/`. Build **before**
+installing this example; package exports point at `typescript/dist/` and npm does
+not build the local SDK on installation. For standalone copies, follow the
+[copy checklist](../README.md#copying-an-example) and verify the selected npm
+artifact supplies every API used here.
+
 ## Run it
 
 ```bash
-cp .env.example .env       # set MEMORY_API_KEY
-npm install
+if [ ! -e .env ]; then
+  (umask 077; set -C; cat .env.example > .env)
+fi
+chmod 600 .env
+npm ci
+```
+
+Edit the private `.env` with `MEMORY_API_KEY` before running `npm start`.
+The commands preserve an existing file.
+
+```bash
 npm start                  # waits on stdio for an MCP client
 ```
+
+For the separate step-by-step
+[Claude Desktop tutorial](../../../docs/modules/ROOT/pages/tutorials/mcp-server-typescript.adoc),
+follow its standalone `my-memory-mcp/` setup and `.env.tutorial.example`
+template. Its selected tools and resource-accounting helpers differ from this
+general server example.
 
 Expected output on **stderr** (stdout is the protocol channel and stays clean):
 
@@ -145,7 +178,11 @@ loader and a network-capable `npx` to the launch path.
 mechanism Desktop offers a self-hosted stdio server. So:
 
 - use a workspace-scoped data-plane key, never an admin key;
-- rotate it with `client.auth.rotateApiKey()` if the file leaks;
+- if the file leaks, have the key owner rotate or revoke that exact key through
+  their authenticated management interface, replace Desktop's private value,
+  and verify the old key is rejected; API management requires the `keyId` and
+  an owner-user or administrator credential, which must stay out of Desktop
+  ([key lifecycle](../../../docs/modules/ROOT/pages/reference/authentication.adoc#_key_lifecycle));
 - if you want OAuth instead of a long-lived key, use the hosted MCP host — it
   supports it and this pattern cannot.
 
@@ -198,6 +235,4 @@ Apache 2.0 — see the repository root.
 
 ---
 
-_Verified against `@neo4j-labs/agent-memory` 0.5.0-dev,
-`@modelcontextprotocol/sdk` 1.30.0, `zod` 4.6.2, `vitest` 5.0.0, Node.js 22+
-(tested on 25.0.0) — 2026-09-10._
+_Compatibility scope: this example targets the current source checkout and its committed package/lock files. Offline tests validate the exercised contracts; they do not establish published-package availability, a live model result, or deployed NAMS behavior. Use the runtime floor above; record the actual package/runtime versions when verifying a release or deployment._

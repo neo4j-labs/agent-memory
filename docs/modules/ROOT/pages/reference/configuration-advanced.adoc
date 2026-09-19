@@ -1,0 +1,93 @@
+= Deduplication, observability, and CLI settings
+:page-product: agent-memory
+:page-pagination:
+:toclevels: 2
+
+Settings and constructs that sit outside `MemorySettings` for xref:reference/configuration.adoc[Configuration reference]: the ingest-time `DeduplicationConfig` dataclass, the observability factory, and CLI configuration — plus how invalid values are validated.
+
+anchor:deduplication[]
+
+anchor:_python_configuration_10[]
+anchor:_environment_variables_11[]
+anchor:_deduplication_strategies[]
+
+== Deduplication configuration
+
+`DeduplicationConfig` is a dataclass from `neo4j_agent_memory.memory.long_term`. It belongs to the bolt LongTermMemory constructor; it is not a MemorySettings group or a MemoryClient constructor argument. There is no `DeduplicationStrategy` enum and no `NAM_DEDUPLICATION__...` environment family.
+
+[source,python]
+----
+from neo4j_agent_memory.memory.long_term import DeduplicationConfig, LongTermMemory
+
+config = DeduplicationConfig(auto_merge_threshold=0.97, flag_threshold=0.88)
+# Use only when constructing a store explicitly with your connected graph client.
+store = LongTermMemory(graph_client, embedder=embedder, deduplication=config)
+----
+
+MemoryClient constructs its long-term store with the dataclass defaults. `add_entity(..., deduplicate=False)` disables checking for that call. See xref:reference/api/long-term.adoc[Long-term API] for all fields and review/merge operations.
+
+anchor:observability[]
+
+anchor:_python_configuration_opentelemetry[]
+anchor:_python_configuration_opik[]
+anchor:_environment_variables_12[]
+anchor:_parameters_5[]
+anchor:_tracing_providers[]
+
+== Observability configuration
+
+There is no `ObservabilityConfig` on MemorySettings and no `NAM_OBSERVABILITY__...` family. Use the observability factory and provider SDK settings.
+
+[source,python]
+----
+from neo4j_agent_memory.observability import get_tracer
+
+tracer = get_tracer(
+    provider="opentelemetry", service_name="my-agent-memory",
+    endpoint="http://localhost:4317",
+)
+# Or: get_tracer(provider="opik", project_name="my-agent-memory")
+
+async with tracer.async_span("entity-search") as span:
+    span.set_attribute("query_length", len(query))
+    result = await client.long_term.search_entities(query)
+----
+
+`get_tracer` accepts `auto`, `opentelemetry`, `opik`, and `noop`; auto-detection depends on installed libraries. Instrument the operations you intend to trace. OpenTelemetry export requires an explicit endpoint and an installed OTLP exporter; merely setting OTEL_EXPORTER_OTLP_ENDPOINT does not install an exporter on this tracer. Use `tracer.span` for a synchronous context manager or `tracer.async_span` for an async one.
+
+anchor:cli[]
+
+anchor:_environment_variables_13[]
+anchor:_configuration_file[]
+anchor:_cli_commands[]
+
+== CLI configuration
+
+The CLI exposes command-specific Click options and environment aliases; see xref:reference/cli.adoc[CLI reference]. It does not automatically read `.neo4j-memory.yaml`, nor does it implement `NAM_CLI__...`. An extraction `--schema` argument is a YAML schema file path, not a CLI settings file or named built-in schema.
+
+== Validation
+
+Numeric constraints appear in each field table. Invalid enum values or unknown constructor/nested fields raise Pydantic ValidationError. Missing optional provider packages may instead fail during provider construction; connection and model requests have their own errors.
+
+[source,python]
+----
+from pydantic import ValidationError
+from neo4j_agent_memory.config.settings import ResolutionConfig
+
+try:
+    ResolutionConfig(semantic_threshold=1.5)
+except ValidationError as exc:
+    print(exc.errors()[0]["type"])  # less_than_equal
+----
+
+anchor:_complete_example[]
+anchor:_python_configuration_11[]
+anchor:_environment_variables_env_file[]
+anchor:_next_steps[]
+
+
+== See also
+
+* xref:reference/configuration.adoc[Configuration reference]
+* xref:reference/api/long-term-deduplication.adoc[Deduplication and provenance]
+* xref:reference/cli.adoc[CLI reference]

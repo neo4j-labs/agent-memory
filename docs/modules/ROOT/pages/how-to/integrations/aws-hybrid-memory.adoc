@@ -1,367 +1,113 @@
-= AWS Hybrid Memory Provider
-:description: Combine AgentCore Memory with Neo4j Context Graphs for optimal memory management
-:keywords: agentcore, hybrid, memory, aws, neo4j, routing
+= Route memory searches with the hybrid provider
+:page-product: agent-memory
+:page-pagination:
+:toclevels: 2
+:sectanchors:
 
-This guide shows how to use the HybridMemoryProvider to intelligently route queries between short-term session memory and long-term context graphs.
+Use `HybridMemoryProvider` to route message, entity and preference retrieval within a Neo4j-backed MemoryClient. Despite its AgentCore integration package name, this class does not connect to a second AWS AgentCore Memory service or synchronize data between independent stores.
 
-== Overview
+== 1. Prepare the selected environment
 
-The Hybrid Memory Provider combines two memory systems:
+anchor:_overview[]
+anchor:_installation[]
 
-* **Short-Term Memory**: Recent conversation context, working facts
-* **Long-Term Memory**: Entity relationships, persistent knowledge
+Use Python 3.10+ and a POSIX shell. The recipe uses xref:reference/configuration.adoc[`BoltSettings`] to select Neo4j explicitly and disables entity extraction so that message persistence can be checked independently. Use a dedicated AuraDB instance with vector-index support and no incompatible existing vectors. Follow xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the Aura connection setup] and copy its connection values into the exports below. These recipes use the published Python 0.6.0 package; provider access and database execution must be verified in your environment.
 
-Queries are automatically routed to the appropriate backend based on content analysis.
-
-== Installation
+include::partial$python-tutorial-setup.adoc[]
 
 [source,bash]
 ----
-pip install neo4j-agent-memory[aws]
+python -m pip install 'neo4j-agent-memory[openai]==0.6.0'
+export NEO4J_URI='neo4j+s://<instance-id>.databases.neo4j.io'
+export NEO4J_USERNAME='neo4j'
+export NEO4J_PASSWORD='replace-with-your-Aura-password'
+export NEO4J_DATABASE='neo4j'
+export OPENAI_API_KEY='replace-with-your-provider-key'
 ----
 
-== Quick Start
+The OpenAI-backed recipes require access to `text-embedding-3-small`; it produces 1536-dimensional vectors in this configuration. Configure the selected chat model separately where required. Credentials are read from the environment, never printed by the programs.
 
+== 2. Read the complete recipe
+
+Create the subdirectory below, then save both complete files under the displayed names. Run commands from `agent-memory-tutorials/`; Python resolves `common` from the script's `integrations/` directory.
+
+[source,bash]
+----
+mkdir -p integrations
+----
+
+
+The script imports this shared helper from the same directory. It supplies explicit database settings, closes clients through the calling context manager, and fails when expected records are absent. Task traces record the observable outcome of the call; they do not expose hidden model reasoning.
+
+.Complete `integrations/common.py`
+[%collapsible]
+====
+.Save as `integrations/common.py`
 [source,python]
 ----
-from neo4j_agent_memory import MemoryClient, MemorySettings
-from neo4j_agent_memory.integrations.agentcore import HybridMemoryProvider
-
-async with MemoryClient(settings) as client:
-    provider = HybridMemoryProvider(
-        memory_client=client,
-        namespace="my-app",
-        routing_strategy="auto",  # Intelligent routing
-    )
-
-    # Store a memory
-    await provider.store_memory(
-        session_id="session-123",
-        content="John mentioned he prefers morning meetings",
-    )
-
-    # Search - automatically routed
-    results = await provider.search_memory(
-        query="What time does John prefer meetings?",
-    )
+include::example$integrations/common.py[]
 ----
+====
 
-== Routing Strategies
-
-=== AUTO (Recommended)
-
-Analyzes query content to determine the best backend:
-
+.Complete `integrations/hybrid_recipe.py`
+[%collapsible]
+====
+.Save as `integrations/hybrid_recipe.py`
 [source,python]
 ----
-provider = HybridMemoryProvider(
-    memory_client=client,
-    routing_strategy="auto",
-)
+include::example$integrations/hybrid_recipe.py[]
+----
+====
 
-# Recent context → Short-term
-results = await provider.search_memory("What did I just say?")
+== 3. Run and verify persistence
 
-# Relationships → Long-term
-results = await provider.search_memory("How is John related to Acme Corp?")
+anchor:_quick_start[]
+anchor:_auto_recommended[]
+anchor:_explicit[]
+anchor:_all[]
+anchor:_short_term_first[]
+anchor:_long_term_first[]
+anchor:_storing_memories[]
+anchor:_basic_storage[]
+anchor:_with_entity_extraction[]
+anchor:_searching_memories[]
+anchor:_basic_search[]
+anchor:_entity_relationships[]
+anchor:_session_management[]
+anchor:_get_session_history[]
+anchor:_clear_session[]
+anchor:_use_with_strands_agents[]
+
+[source,bash]
+----
+python integrations/hybrid_recipe.py
 ----
 
-Query patterns routed to **short-term**:
+Expected: `Verified stored message and explicit route`, with a session ID and search candidate count. The script first verifies the exact returned message ID through direct session readback, then confirms `memory_types_searched == ["message"]`. Semantic search rank is not used as the persistence check.
 
-* "What did I say..."
-* "Recently mentioned..."
-* "In this conversation..."
-* "Last message..."
+== Troubleshooting and cleanup
 
-Query patterns routed to **long-term**:
+anchor:_performance_optimization[]
+anchor:_reduce_latency[]
 
-* "How is X related to Y..."
-* "What do I know about..."
-* "Entity relationships..."
-* "Tell me about [Person/Company]..."
+include::partial$python-integration-troubleshooting.adoc[tag=troubleshooting]
 
-=== EXPLICIT
+== Adapt the integration
 
-Caller specifies which backend to use:
+anchor:_routing_strategies[]
+anchor:_memory_types[]
+anchor:_session_scoped_search[]
+anchor:_user_scoped_search[]
+anchor:_configuration_options[]
+anchor:_reduce_api_calls[]
+anchor:_see_also[]
 
-[source,python]
-----
-provider = HybridMemoryProvider(
-    memory_client=client,
-    routing_strategy="explicit",
-)
+The supported search kinds are `message`, `entity` and `preference`. `store_memory` accepts `message`, `preference` or `fact`; it does not accept the old `SHORT_TERM`/`LONG_TERM`/`EPISODIC` examples or create a separate Episode store.
 
-# Explicitly search short-term
-results = await provider.search_memory(
-    query="recent context",
-    memory_types=["short_term"],
-)
+`explicit` uses the supplied search kinds; `all` selects all three. `auto` applies keyword patterns to choose kinds, not a learned classifier. `short_term_first` searches messages then falls back to entities/preferences only when the first result is empty; `long_term_first` reverses that order. These are choices inside the same provider, not independent backend selection. Evaluate routing using your own queries and inspect `filters_applied` rather than claiming it always selects the best source.
 
-# Explicitly search long-term
-results = await provider.search_memory(
-    query="entity info",
-    memory_types=["long_term"],
-)
-----
+`extract_entities` is a constructor option; it is not a `store_memory` keyword. `sync_entities` does not implement cross-store synchronization. When extraction is enabled, wait for the backend's supported readiness condition before relying on derived entities. Namespaces and user IDs on this adapter are not a universal access-control boundary; entities and preferences do not inherit a session's authorization automatically.
 
-=== ALL
+For relationship enrichment, enable `include_relationships` only when the underlying Bolt graph surface and expected entities exist; failures or empty results are not evidence of a successful enrichment. See xref:explanation/multi-agent-sharing.adoc[Shared memory consistency] and xref:how-to/integrations/aws-strands.adoc[the Strands integration] for the larger application context.
 
-Search both backends and merge results:
-
-[source,python]
-----
-provider = HybridMemoryProvider(
-    memory_client=client,
-    routing_strategy="all",
-)
-
-# Searches both, merges by score
-results = await provider.search_memory(query="John's preferences")
-----
-
-=== SHORT_TERM_FIRST
-
-Try short-term first, fall back to long-term if no results:
-
-[source,python]
-----
-provider = HybridMemoryProvider(
-    memory_client=client,
-    routing_strategy="short_term_first",
-)
-----
-
-=== LONG_TERM_FIRST
-
-Try long-term first, fall back to short-term if no results:
-
-[source,python]
-----
-provider = HybridMemoryProvider(
-    memory_client=client,
-    routing_strategy="long_term_first",
-)
-----
-
-== Memory Types
-
-The provider supports four memory types:
-
-[cols="1,2,2"]
-|===
-| Type | Use Case | Storage
-
-| `SHORT_TERM`
-| Current session context
-| Session-scoped messages
-
-| `LONG_TERM`
-| Persistent facts and entities
-| Context Graph (Entity nodes)
-
-| `PROCEDURAL`
-| Task execution patterns
-| Reasoning traces
-
-| `EPISODIC`
-| Specific events and episodes
-| Episode nodes with timestamps
-|===
-
-== Storing Memories
-
-=== Basic Storage
-
-[source,python]
-----
-from neo4j_agent_memory.integrations.agentcore import MemoryType
-
-memory = await provider.store_memory(
-    session_id="session-123",
-    content="The user prefers Python for backend development",
-    memory_type=MemoryType.LONG_TERM,  # Optional, auto-detected
-    metadata={"source": "user_statement"},
-)
-----
-
-=== With Entity Extraction
-
-[source,python]
-----
-memory = await provider.store_memory(
-    session_id="session-123",
-    content="John Smith from Acme Corp discussed the Q4 roadmap",
-    extract_entities=True,  # Auto-extract entities
-)
-
-# Entities extracted: John Smith (Person), Acme Corp (Organization)
-----
-
-== Searching Memories
-
-=== Basic Search
-
-[source,python]
-----
-result = await provider.search_memory(
-    query="What are John's preferences?",
-    top_k=10,
-)
-
-for memory in result.memories:
-    print(f"[{memory.score:.2f}] {memory.content}")
-----
-
-=== Session-Scoped Search
-
-[source,python]
-----
-result = await provider.search_memory(
-    query="recent discussion",
-    session_id="session-123",  # Only this session
-)
-----
-
-=== User-Scoped Search
-
-[source,python]
-----
-result = await provider.search_memory(
-    query="preferences",
-    user_id="user-456",  # All sessions for this user
-)
-----
-
-== Entity Relationships
-
-Query entity relationships directly:
-
-[source,python]
-----
-relationships = await provider.get_entity_relationships(
-    entity_name="John Smith",
-    depth=2,  # Traverse 2 hops
-    relationship_types=["WORKS_AT", "KNOWS"],  # Filter types
-)
-
-print(f"Entity: {relationships['entity']['name']}")
-for rel in relationships['relationships']:
-    print(f"  -{rel['type']}-> {rel['target']['name']}")
-----
-
-== Session Management
-
-=== Get Session History
-
-[source,python]
-----
-memories = await provider.get_session_memories(
-    session_id="session-123",
-    memory_types=[MemoryType.SHORT_TERM],
-    limit=50,
-)
-----
-
-=== Clear Session
-
-[source,python]
-----
-deleted_count = await provider.clear_session(
-    session_id="session-123",
-)
-print(f"Deleted {deleted_count} memories")
-----
-
-== Configuration Options
-
-[source,python]
-----
-provider = HybridMemoryProvider(
-    memory_client=client,
-
-    # Namespace for multi-tenant apps
-    namespace="my-app",
-
-    # Routing strategy
-    routing_strategy="auto",
-
-    # Sync entities between short-term and long-term stores
-    sync_entities=True,
-
-    # Max depth for relationship traversal
-    relationship_depth=2,
-
-    # Extract entities when storing memories
-    extract_entities=True,
-
-    # Generate embeddings for semantic search
-    generate_embeddings=True,
-)
-----
-
-NOTE: Embedding and LLM model configuration is set on the `MemoryClient` via `MemorySettings`, not on the `HybridMemoryProvider` directly.
-See xref:reference/configuration.adoc[Configuration Reference] for embedding settings.
-
-== Use with Strands Agents
-
-Combine with Strands tools for full agent memory:
-
-[source,python]
-----
-from strands import Agent
-from neo4j_agent_memory.integrations.strands import context_graph_tools
-from neo4j_agent_memory.integrations.agentcore import HybridMemoryProvider
-
-# Create hybrid provider for backend logic
-provider = HybridMemoryProvider(
-    memory_client=client,
-    routing_strategy="auto",
-)
-
-# Create tools for agent interface
-tools = context_graph_tools(
-    neo4j_uri=settings.neo4j.uri,
-    neo4j_password=settings.neo4j.password,
-    embedding_provider="bedrock",
-)
-
-agent = Agent(
-    model="anthropic.claude-sonnet-4-20250514-v1:0",
-    tools=tools,
-)
-----
-
-== Performance Optimization
-
-=== Reduce Latency
-
-[source,python]
-----
-# Use explicit routing when you know the target
-provider = HybridMemoryProvider(
-    routing_strategy="explicit",
-)
-
-# Specify memory types directly
-results = await provider.search_memory(
-    query="entity info",
-    memory_types=["long_term"],  # Skip analysis
-)
-----
-
-=== Reduce API Calls
-
-[source,python]
-----
-# Disable entity extraction when not needed
-memory = await provider.store_memory(
-    content="Simple fact",
-    extract_entities=False,
-)
-----
-
-== See Also
-
-* xref:how-to/integrations/aws-strands.adoc[Strands Agents Integration]
-* xref:how-to/integrations/aws-bedrock-embeddings.adoc[Configure Bedrock Embeddings]
-* xref:explanation/memory-types.adoc[Understanding Memory Types]
+include::partial$python-integration-troubleshooting.adoc[tag=closing]

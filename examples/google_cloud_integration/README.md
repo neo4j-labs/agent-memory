@@ -54,16 +54,9 @@ is the smaller starting point and owns the full ADK `Runner` loop.
 
 ## Prerequisites
 
-### 1. Neo4j (or a hosted NAMS key)
+### 1. AuraDB (or a hosted NAMS key)
 
-```bash
-# Docker, matching what CI uses
-docker run -d --name neo4j \
-  -p 7474:7474 -p 7687:7687 \
-  -e NEO4J_AUTH=neo4j/test-password \
-  -e NEO4J_PLUGINS='["apoc"]' \
-  neo4j:5.26-community
-```
+Follow [Aura setup and cleanup](../AURA_SETUP.md) for a dedicated empty instance. Export `NEO4J_URI`, `NEO4J_USERNAME`, and `NEO4J_PASSWORD`; `_common.py` reads these values for the Bolt backend.
 
 Or set `MEMORY_API_KEY` to use the hosted service and skip Neo4j entirely.
 
@@ -93,7 +86,8 @@ export EMBEDDING_PROVIDER=vertex_ai
 ### 4. Environment
 
 ```bash
-cp .env.example .env     # loaded automatically by every script
+cp .env.example .env
+# Replace local NEO4J_* values with the Aura connection and configure the selected providers.
 ```
 
 ## Quick start
@@ -235,10 +229,10 @@ gcloud auth application-default print-access-token
 gcloud auth application-default login
 
 # Neo4j connection
-cypher-shell -a bolt://localhost:7687 -u neo4j -p test-password "RETURN 1"
+cypher-shell -a "$NEO4J_URI" -u "$NEO4J_USERNAME" -p "$NEO4J_PASSWORD" "RETURN 1"
 
 # MCP server over HTTP, then list its tools
-neo4j-agent-memory mcp serve --transport http --host 0.0.0.0 --port 8080 &
+NEO4J_USER="$NEO4J_USERNAME" neo4j-agent-memory mcp serve --backend bolt --transport http --host 0.0.0.0 --port 8080 &
 fastmcp list http://127.0.0.1:8080/mcp/
 ```
 
@@ -261,4 +255,6 @@ that line first and install `[extraction]` plus the spaCy model.
 
 ---
 
-_Verified against `neo4j-agent-memory` 0.6.0-dev with google-adk 2.7.0, google-genai 2.22.0, fastmcp 4.0.3, google-cloud-aiplatform 2.1.0 on 2026-09-10 — all four scripts run end to end against Neo4j 5.26 with no API keys (local embedder, local extraction). The Vertex AI embedding phases require real GCP credentials and were not exercised in this pass._
+**Historical verification report — 2026-09-10.** The following records a prior checkout/test report. Its development-version labels, passing counts, and release-availability statements are historical, not evidence of current package compatibility. See the [current source and artifact evidence](../../DOCUMENTATION_REMEDIATION_STATUS.md) before selecting an SDK artifact.
+
+> _Verified against `neo4j-agent-memory` 0.6.0-dev with google-adk 2.7.0, google-genai 2.22.0, fastmcp 4.0.3, google-cloud-aiplatform 2.1.0 on 2026-09-10 — all four scripts run end to end against Neo4j 5.26 with no API keys (local embedder, local extraction). The Vertex AI embedding phases require real GCP credentials and were not exercised in this pass._

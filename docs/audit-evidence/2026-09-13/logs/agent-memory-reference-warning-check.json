@@ -1,0 +1,126 @@
+[
+  {
+    "file": "docs/modules/ROOT/pages/reference/ontology-api.adoc",
+    "messages": [],
+    "beforeMessages": [
+      {
+        "severity": "WARN",
+        "text": "skipping reference to missing attribute: id"
+      },
+      {
+        "severity": "WARN",
+        "text": "skipping reference to missing attribute: name"
+      },
+      {
+        "severity": "WARN",
+        "text": "skipping reference to missing attribute: id"
+      },
+      {
+        "severity": "WARN",
+        "text": "skipping reference to missing attribute: version_id"
+      },
+      {
+        "severity": "WARN",
+        "text": "skipping reference to missing attribute: id"
+      },
+      {
+        "severity": "WARN",
+        "text": "skipping reference to missing attribute: id"
+      },
+      {
+        "severity": "WARN",
+        "text": "skipping reference to missing attribute: n"
+      },
+      {
+        "severity": "WARN",
+        "text": "skipping reference to missing attribute: m"
+      },
+      {
+        "severity": "WARN",
+        "text": "skipping reference to missing attribute: id"
+      },
+      {
+        "severity": "WARN",
+        "text": "skipping reference to missing attribute: job_id"
+      },
+      {
+        "severity": "WARN",
+        "text": "skipping reference to missing attribute: id"
+      },
+      {
+        "severity": "WARN",
+        "text": "skipping reference to missing attribute: job_id"
+      }
+    ],
+    "renderedHtmlUnchanged": true,
+    "displayedPlaceholdersPreserved": true
+  },
+  {
+    "file": "docs/modules/ROOT/pages/reference/skills-api.adoc",
+    "messages": [],
+    "beforeMessages": [
+      {
+        "severity": "WARN",
+        "text": "skipping reference to missing attribute: id"
+      },
+      {
+        "severity": "WARN",
+        "text": "skipping reference to missing attribute: id"
+      },
+      {
+        "severity": "WARN",
+        "text": "skipping reference to missing attribute: id"
+      },
+      {
+        "severity": "WARN",
+        "text": "skipping reference to missing attribute: id"
+      },
+      {
+        "severity": "WARN",
+        "text": "skipping reference to missing attribute: id"
+      },
+      {
+        "severity": "WARN",
+        "text": "skipping reference to missing attribute: id"
+      },
+      {
+        "severity": "WARN",
+        "text": "skipping reference to missing attribute: id"
+      },
+      {
+        "severity": "WARN",
+        "text": "skipping reference to missing attribute: id"
+      },
+      {
+        "severity": "WARN",
+        "text": "skipping reference to missing attribute: id"
+      },
+      {
+        "severity": "WARN",
+        "text": "skipping reference to missing attribute: id"
+      },
+      {
+        "severity": "WARN",
+        "text": "skipping reference to missing attribute: id"
+      },
+      {
+        "severity": "WARN",
+        "text": "skipping reference to missing attribute: id"
+      },
+      {
+        "severity": "WARN",
+        "text": "skipping reference to missing attribute: stepid"
+      },
+      {
+        "severity": "WARN",
+        "text": "skipping reference to missing attribute: id"
+      }
+    ],
+    "renderedHtmlUnchanged": true,
+    "displayedPlaceholdersPreserved": true
+  },
+  {
+    "file": "docs/modules/ROOT/pages/reference/configuration.adoc",
+    "messages": []
+  }
+]

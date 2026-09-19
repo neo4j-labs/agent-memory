@@ -1,0 +1,41 @@
+These are the maintained method names on each SDK's client (`client.<layer>` in Python, `client.<camelCaseLayer>` in TypeScript), not a support matrix — the TypeScript SDK talks to the hosted NAMS REST backend only, so confirm an operation is exposed there in xref:reference/backend-capabilities.adoc[backend capabilities] before assuming parity with a Bolt-connected Python client.
+
+.Short-term memory: `client.short_term` / `client.shortTerm`
+[cols="1,1",options="header"]
+|===
+|Python |TypeScript
+|`add_message` |`addMessage`
+|`add_messages_batch` |`bulkAddMessages`
+|`get_conversation` |`getConversation`
+|`search_messages` |`searchMessages`
+|`list_sessions` |`listSessions`
+|`clear_session` |`clearSession`
+|===
+
+.Long-term memory: `client.long_term` / `client.longTerm`
+[cols="1,1",options="header"]
+|===
+|Python |TypeScript
+|`add_entity` |`addEntity`
+|`search_entities` |`searchEntities`
+|`get_entity_by_name` |`getEntityByName`
+|`add_relationship` |`addRelationship`
+|`get_related_entities` |`getRelatedEntities`
+|`add_preference` |`addPreference`
+|`search_preferences` |`searchPreferences`
+|`add_fact` |`addFact`
+|`merge_duplicate_entities` |`mergeDuplicateEntities`
+|===
+
+.Reasoning memory: `client.reasoning` / `client.reasoning`
+[cols="1,1",options="header"]
+|===
+|Python |TypeScript
+|`start_trace` |`startTrace`
+|`add_step` |`addStep`
+|`record_tool_call` |`recordToolCall`
+|`complete_trace` |`completeTrace`
+|`get_trace_with_steps` |`getTraceWithSteps`
+|`list_traces` |`listTraces`
+|`get_similar_traces` |`getSimilarTraces`
+|===

@@ -1,273 +1,122 @@
-= Migrate to NAMS
+= Migrate a Python application to NAMS
 :page-product: agent-memory
 :page-pagination:
-:toclevels: 3
-:sectanchors:
-:icons: font
-:source-highlighter: highlight.js
+:toclevels: 2
 
-How to port an existing direct-bolt project to the hosted **Neo4j Agent Memory Service (NAMS)** backend, including the full `NotSupportedError` reference table.
+To change an existing Bolt application to NAMS, inventory its operations and data assumptions, replace unsupported paths, then verify the application against a separate workspace.
 
-[.lead]
-NAMS is a hosted backend behind the same `MemoryClient`. The migration is additive — your existing bolt code keeps working unchanged; switching to NAMS usually means one config change.
+// Retain former section URLs at the current related topic.
+== Prerequisites
 
-== TL;DR
+anchor:_6_run_your_tests[]
 
-```bash
-export MEMORY_API_KEY=nams_xxxxxxxxxxxxxxxx
-```
+* An application with a passing Bolt baseline and identified memory reads/writes.
+* Python 3.10+ with `neo4j-agent-memory[nams]==0.6.0`; use xref:how-to/use-nams.adoc[the installation and connection check] below.
+* A NAMS sandbox workspace key and a synthetic test dataset. Use a separate workspace for migration tests.
+* A data-migration decision. Keep the source database until any separately planned import and rollback procedure has been verified.
 
-If your code uses `MemoryClient()` without explicit settings, that's the whole migration. The `_resolve_backend` validator picks up `MEMORY_API_KEY` and switches to NAMS automatically.
+== 1. Inventory operations before changing configuration
 
-If you have explicit `MemorySettings(neo4j=Neo4jConfig(...))`, swap it:
+anchor:_tl_dr[]anchor:_step_by_step[]
 
-```python
-# Before (bolt)
-settings = MemorySettings(neo4j=Neo4jConfig(password=SecretStr("...")))
-
-# After (NAMS)
-settings = MemorySettings(
-    backend="nams",
-    nams=NamsConfig(api_key=SecretStr("nams_...")),
-)
-```
-
-== Step-by-step
-
-=== 1. Install the `[nams]` extra
-
-```bash
-uv pip install 'neo4j-agent-memory[nams]>=0.5.0'
-```
-
-=== 2. Provision an API key
-
-Get one at https://memory.neo4jlabs.com[memory.neo4jlabs.com]. Keys start with `nams_`.
-
-=== 3. Decide on env-vs-explicit config
-
-Two equally valid patterns:
-
-* **Env-driven** (recommended for apps that deploy via env vars):
-  ```bash
-  export MEMORY_API_KEY=nams_xxx
-  # optional: export MEMORY_ENDPOINT=https://your-private-deployment/v1
-  ```
-* **Explicit** (recommended for libraries embedding `neo4j-agent-memory`):
-  ```python
-  settings = MemorySettings(
-      backend="nams",
-      nams=NamsConfig(api_key=SecretStr("nams_xxx")),
-  )
-  ```
-
-=== 4. Audit your code for bolt-only calls
-
-Search your codebase for any of these patterns — they need replacement or guards:
-
-[cols="2,2",options="header"]
-|===
-| Pattern | Replace with
-
-| `await client.graph.execute_read(...)`
-| `await client.query.cypher(...)`
-| `await client.graph.execute_write(...)`
-| Use the appropriate higher-level method (`add_entity`, `add_relationship`, etc.). NAMS does not expose write-Cypher.
-| `await client.users.upsert_user(...)`
-| Remove; NAMS scopes per-conversation via `user_identifier=`.
-| `client.buffered.submit(...)`
-| Remove; NAMS commits synchronously.
-| `client.consolidation.dedupe_entities()`
-| Remove; NAMS handles deduplication server-side.
-| `client.schema.adopt_existing_graph(...)`
-| Cannot port; consider keeping that pipeline on bolt.
-| `client.long_term.geocode_locations()`, `search_locations_near()`, etc.
-| Not available on NAMS; keep on bolt or pre-geocode at ingest.
-| `client.long_term.find_potential_duplicates()`, `merge_duplicate_entities()`, `review_duplicate()`
-| Removed by NAMS (server handles dedup automatically).
-| `await client.get_stats()` / `get_graph()` / `get_locations()`
-| Use `client.query.cypher` with a counting / traversal query, or skip.
-|===
-
-=== 5. Migrate raw Cypher calls
-
-`client.graph.execute_read` is deprecated on bolt and raises `NotSupportedError` on NAMS. The portable replacement is `client.query.cypher`:
-
-[source,python]
-----
-# Before (deprecated on bolt, raises on NAMS):
-results = await client.graph.execute_read(
-    "MATCH (e:Entity) RETURN e.name AS name LIMIT 10"
-)
-
-# After (works on both backends):
-results = await client.query.cypher(
-    "MATCH (e:Entity) RETURN e.name AS name LIMIT 10"
-)
-----
-
-Both validate read-only client-side. Writes (CREATE, MERGE, DELETE, SET, REMOVE, etc.) raise `ValueError`.
-
-`client.graph.execute_write` is bolt-only and stays without deprecation — there is no NAMS analog. Use higher-level methods or keep the relevant codepath on bolt.
-
-=== 6. Run your tests
-
-The bolt suite still passes unchanged. For NAMS-mode tests, point your test fixture at a NAMS sandbox key (or use `respx` to mock — see `tests/unit/nams/` in this repo for the pattern).
-
-== Full `NotSupportedError` reference
-
-What raises on each backend, with workarounds:
-
-=== `backend="nams"` — bolt-only features raise
-
-[cols="2,2,3",options="header"]
-|===
-| Accessor / Method | Behavior on NAMS | Workaround
-
-| `client.graph` (property access)
-| Raises immediately
-| `client.query.cypher(query, params)`
-| `client.graph.execute_write(...)`
-| Property access raises first
-| Use higher-level methods (`add_entity`, `add_relationship`, etc.). NAMS has no write-Cypher.
-| `client.users.upsert_user(...)`, `.get_user(...)`, `.list_users(...)`
-| Method call raises
-| Pass `user_identifier=` on the calling method (NAMS sends as `userId`).
-| `client.buffered.submit(...)`, `.flush(...)`, `.stop(...)`
-| Method call raises
-| Remove the buffered queue — NAMS commits synchronously.
-| `client.consolidation.dedupe_entities()`
-| Method call raises
-| NAMS deduplicates on `add_entity` server-side.
-| `client.consolidation.summarize_long_traces()`
-| Method call raises
-| Server-managed; not exposed via API yet.
-| `client.consolidation.archive_expired_conversations()`
-| Method call raises
-| Server-managed.
-| `client.schema.adopt_existing_graph(...)`
-| Method call raises
-| Not supported — NAMS owns its schema.
-| `client.schema.setup_all()` etc.
-| Method call raises
-| Server-managed schema; no client-side setup needed.
-| `client.long_term.geocode_locations()`
-| Method call raises
-| Not exposed by NAMS. Pre-geocode at ingest.
-| `client.long_term.search_locations_near()`, `search_locations_in_bounding_box()`, `get_location_coordinates()`
-| Method call raises
-| Same — no NAMS analog.
-| `client.long_term.find_potential_duplicates()`, `merge_duplicate_entities()`, `review_duplicate()`, `get_same_as_cluster()`, `get_deduplication_stats()`
-| Method call raises
-| NAMS handles dedup server-side; the surface isn't exposed.
-| `client.long_term.register_extractor()`, `link_entity_to_message()`, `link_entity_to_extractor()`, `list_extractors()`
-| Method call raises
-| Provenance is server-managed; query via `get_entity_provenance(entity_id)`.
-| `client.short_term.add_messages_batch(...)`
-| Not on `NamsShortTermMemory`
-| Use `client.short_term.bulk_add_messages(session_id, messages)`.
-| `client.short_term.extract_entities_from_session(...)`
-| Not on `NamsShortTermMemory`
-| NAMS extracts server-side. Just call `add_message` and the entities appear in subsequent searches.
-| `client.short_term.migrate_message_links()`
-| Not on `NamsShortTermMemory`
-| Bolt schema migration; not applicable on NAMS.
-| `client.short_term.generate_embeddings_batch(...)`
-| Not on `NamsShortTermMemory`
-| NAMS embeds server-side.
-| `client.reasoning.on_tool_call_recorded` (hook decorator)
-| Not on `NamsReasoningMemory`
-| Bolt schema-edge mechanism; no NAMS equivalent.
-| `client.reasoning.migrate_tool_stats()`
-| Not on `NamsReasoningMemory`
-| Bolt schema migration.
-| `client.get_stats()`
-| Method call raises
-| `client.query.cypher("MATCH (n) RETURN labels(n), count(n)")`.
-| `client.get_graph()`
-| Method call raises
-| `client.query.cypher` with a custom MATCH; or use `client.long_term.get_entity_provenance` for citations.
-| `client.get_locations()`
-| Method call raises
-| No NAMS equivalent — geospatial features are bolt-only.
-|===
-
-=== `backend="bolt"` — NAMS-only methods raise
-
-These methods exist on `NamsLongTermMemory` / `NamsShortTermMemory` but not on the bolt classes:
+Use xref:reference/backend-capabilities.adoc[the capability matrix] as the canonical inventory. Search application code for graph writes, preferences/facts, user registry calls, buffering, consolidation, geospatial queries, schema setup and legacy reasoning traces.
 
 [cols="2,3",options="header"]
 |===
-| Method | Workaround on bolt
-
-| `client.long_term.set_entity_feedback(entity_id, feedback)`
-| Store feedback yourself as a relationship: `(:Entity)-[:HAS_FEEDBACK]->(:Feedback)`.
-| `client.long_term.get_entity_history(entity_id)`
-| Derive from `MENTIONS` edges: `MATCH (m:Message)-[:MENTIONS]->(e:Entity {id: $id}) RETURN m.session_id, count(*)`.
-| `client.short_term.bulk_add_messages(session_id, messages)`
-| Use `client.short_term.add_messages_batch(session_id, messages)` (bolt-only — different name, same idea).
-| `client.short_term.get_observations(session_id)`
-| Use the bolt `MemoryObserver` from `mcp._observer`. Or extract observations client-side from `client.short_term.get_conversation(session_id)`.
-| `client.short_term.get_reflections(session_id)`
-| Use the bolt `MemoryObserver.get_reflections(session_id)`.
-| `client.short_term.create_conversation(session_id)`
-| Bolt creates conversations implicitly on first `add_message`. Just call `add_message`.
-| `client.short_term.list_conversations()`
-| `client.short_term.list_sessions()` is the bolt equivalent.
+| Existing behavior | Migration action
+| Raw read Cypher | Use `client.query.cypher`; check the query against the target schema and the service's read policy.
+| Raw write Cypher or `add_relationship` | Retain the operation on Bolt or redesign around supported service writes. NAMS has no direct client-created relationship equivalent.
+| Preference/fact CRUD | Retain Bolt or deliberately redesign application storage. A message containing a preference is not a drop-in replacement for preference records.
+| `client.users` and user-scoped reads | Keep application identity/authorization explicit. Check which methods accept and forward user metadata; it is not universal isolation.
+| Buffering, schema adoption, geocoding or client consolidation | Keep the relevant pipeline on Bolt or replace it with an explicitly supported service/application operation. Do not assume an unavailable operation runs automatically on the server.
+| Legacy reasoning traces | Verify the hosted step representation. Synthetic trace IDs/task/outcome state are not durable equivalents; see xref:reference/api/reasoning.adoc[reasoning reference].
 |===
 
-== Behavior differences (subtle but important)
+If an essential behavior has no supported replacement, finish that design before switching the application.
 
-=== Deduplication
+// Retain former section URLs at the current related topic.
+== 2. Configure a sandbox connection
 
-* **Bolt**: client-side deduplication runs on every `add_entity` (configurable via `DeduplicationConfig`). `add_entity` returns `(Entity, DeduplicationResult)` — the tuple carries info about whether a merge happened.
-* **NAMS**: dedup is server-side. `add_entity` returns just `Entity`; auto-merge details are available in `entity.metadata["nams_resolution"]`. Existing code that unpacks the tuple (`entity, dedup = await client.long_term.add_entity(...)`) **will break** on NAMS — the result isn't iterable as a 2-tuple. Migrate to:
-  +
-  ```python
-  result = await client.long_term.add_entity(...)
-  if isinstance(result, tuple):
-      entity, dedup = result  # bolt
-  else:
-      entity = result  # NAMS
-  ```
+anchor:_1_install_the_nams_extra[]anchor:_2_provision_an_api_key[]anchor:_3_decide_on_env_vs_explicit_config[]anchor:_4_audit_your_code_for_bolt_only_calls[]anchor:_geocoding_and_enrichment[]
 
-For auto-merges, `nams_resolution` contains `merged_into`, the separate
-`merge_confidence` score when present, and a `fallback` flag. A fallback uses
-request/default-derived fields when the canonical read returns 404 or an
-incomplete response. See xref:reference/rest-api.adoc#auto-merged-entity-creates[Auto-merged entity creates]
-for the return and error behavior.
+Follow xref:how-to/use-nams.adoc[Connect a Python application to NAMS] and run its message write/readback check. Use explicit `NamsSettings` for migration code so an unrelated environment variable cannot silently select a different backend.
 
-=== Embeddings and vector indexes
+For applications retaining `MemoryClient`, the equivalent explicit settings are:
 
-* **Bolt**: you configure an embedder (OpenAI, sentence-transformers, etc.) on `MemorySettings.embedding`; the client embeds text before storage; vector indexes are created at `connect()` sized to the embedder's dimensions.
-* **NAMS**: server-managed. The `MemorySettings.embedding` config emits a single `UserWarning` at `connect()` time and is ignored.
+[source,python]
+----
+import os
+from pydantic import SecretStr
+from neo4j_agent_memory import MemoryClient, MemorySettings, NamsConfig
 
-=== Entity resolution
+settings = MemorySettings(
+    backend="nams",
+    nams=NamsConfig(api_key=SecretStr(os.environ["MEMORY_API_KEY"])),
+)
+client = MemoryClient(settings)
+----
 
-* **Bolt**: configurable via `ResolutionConfig` (exact / fuzzy / semantic / composite).
-* **NAMS**: server-managed; `MemorySettings.resolution` is ignored with a warning.
+Connect and close this client through its async context manager or application lifecycle.
 
-=== Geocoding and enrichment
+[#_behavior_differences_subtle_but_important]
+[#_deduplication]
+[#_embeddings_and_vector_indexes]
+[#_entity_resolution]
+[#_geocoding_and_enrichment]
+[#_audit_edges_touched]
+// Retain former section URLs at the current related topic.
+== 3. Adapt identifiers, results and readiness
 
-* **Bolt**: opt-in via `GeocodingConfig.enabled=True` / `EnrichmentConfig.enabled=True`.
-* **NAMS**: not available. Configs ignored at `connect()`.
+anchor:_backendnams_bolt_only_features_raise[]anchor:_embeddings_and_vector_indexes[]
 
-=== Audit edges (`:TOUCHED`)
+. Persist the ID returned by `create_conversation`; do not continue using its display name as the message session ID.
+. Handle entity creation correctly: Bolt returns `(Entity, DeduplicationResult)`, while NAMS returns an `Entity`. Keep backend-specific code explicit when the application needs merge details.
+. After asynchronous ingestion, use a bounded extraction wait and verify the exact expected entity or session status.
+. Remove inactive client-side embedding/extraction/resolution settings from the NAMS configuration. Configure an LLM provider separately only for client-side summary or application model work.
+. Replace combined-context isolation assumptions with explicit retrieval and application authorization. Test a second conversation with different synthetic content.
 
-* **Bolt**: `client.reasoning.record_tool_call(..., touched_entities=[...])` writes `(:ReasoningStep)-[:TOUCHED]->(:Entity)` edges for auditability.
-* **NAMS**: `touched_entities=` kwarg is ignored. Audit dimension of `client.eval` returns empty results on NAMS.
+[#_full_notsupportederror_reference]
+[#_backendnams_bolt_only_features_raise]
+[#_backendbolt_nams_only_methods_raise]
+// Retain former section URLs at the current related topic.
+== 4. Verify the ported application
 
-== Deprecation timeline
+anchor:_behavior_differences_subtle_but_important[]anchor:_deduplication[]anchor:_entity_resolution[]
 
-`client.graph` is being retired in favour of `client.query.cypher`:
+Run the following checks in the sandbox and retain the returned IDs and failures:
 
-* **Now** — `client.graph.execute_read` emits a one-time `DeprecationWarning` per process on bolt.
-* **Planned (targeted v0.6.0)** — `client.graph` is removed; `client.query.cypher` becomes the only path for raw Cypher.
+. Store a message and retrieve it by the returned conversation ID.
+. Start a fresh process and reopen that ID without reseeding its original content.
+. Store and read an entity through supported operations; if extraction is used, verify its bounded success and timeout paths.
+. Exercise the application's model/tool failure path and inspect the recorded hosted steps/tool results.
+. Test authentication failures, rate limits and unsupported operations. Mock tests should reject unimplemented routes instead of silently returning success.
+. Confirm that content from another user/conversation is handled by the intended access policy; do not treat the presence of a `userId` field as proof.
 
-See the https://github.com/neo4j-labs/agent-memory/blob/main/CHANGELOG.md[CHANGELOG] for the authoritative schedule.
+Only switch the application after these application-specific checks pass. The detailed supported operations and exceptions remain in xref:reference/backend-capabilities.adoc[backend capabilities] and the xref:reference/api/memory-client.adoc[Python API reference].
 
-== Need help?
+[#_deprecation_timeline]
+// Retain former section URLs at the current related topic.
+== Keep raw-write requirements explicit
 
-* xref:explanation/backends.adoc[Bolt vs NAMS] — when to choose which.
-* xref:how-to/use-nams.adoc[Use NAMS] — full config reference.
-* https://github.com/neo4j-labs/agent-memory/issues[File an issue] if you hit a `NotSupportedError` you think should work.
+anchor:_full_notsupportederror_reference[]
+
+`client.graph.execute_read` currently warns on Bolt; use `client.query.cypher` as the preferred read accessor. `client.graph.execute_write` remains the Bolt write path.
+
+[#_limits_and_gotchas]
+== Limits and gotchas
+
+* Changing a backend setting does not transfer the existing Neo4j database; keep the source database until a separately planned import and rollback procedure has been verified.
+* This guide does not promise an unshipped removal version or a NAMS write-Cypher replacement.
+* A nonempty workspace search does not prove a given run's extraction completed — verify the exact expected entity or session status instead.
+* A successful Bolt test suite is a baseline, not evidence of hosted equivalence.
+
+[#_need_help]
+// Retain former section URLs at the current related topic.
+== See also
+
+anchor:_tldr[]anchor:_5_migrate_raw_cypher_calls[]
+
+* xref:how-to/use-nams.adoc[Connect to NAMS]
+* xref:reference/rest-api.adoc[REST transport and result mapping]
+* xref:how-to/multi-tenancy.adoc[Associate user data and verify scope]
+* xref:explanation/backends.adoc[Backend tradeoffs]

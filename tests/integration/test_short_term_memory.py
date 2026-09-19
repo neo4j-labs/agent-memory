@@ -338,16 +338,25 @@ class TestShortTermMemoryEdgeCases:
 
     @pytest.mark.asyncio
     async def test_concurrent_message_additions(self, memory_client, session_id):
-        """Test concurrent message additions to same conversation.
+        """Concurrent appends to one conversation keep the chain a chain.
 
-        Note: This test uses a small delay between concurrent calls to avoid
-        potential UUID collision issues in some CI environments.
+        These used to be staggered by a sleep, blamed on "UUID collisions".
+        The real failure was that appends did not serialize: two of them read
+        the same tail, both linked to it, and the conversation was left with
+        two tails. The next append then matched both, ran its CREATE once per
+        row and breached the uniqueness constraint on Message.id -- after
+        which every further append to that conversation failed too.
+
+        The first message is added on its own so the conversation already
+        exists. `_ensure_conversation` is a separate read-then-create race
+        that this test is not about: concurrent first writes to one session
+        can still mint several conversations, and session_id is deliberately
+        not unique, so that one needs a data-model decision rather than a
+        query fix.
         """
         import asyncio
 
         async def add_message(index):
-            # Small staggered delay to reduce UUID collision risk
-            await asyncio.sleep(index * 0.01)
             return await memory_client.short_term.add_message(
                 session_id,
                 MessageRole.USER,
@@ -356,15 +365,28 @@ class TestShortTermMemoryEdgeCases:
                 generate_embedding=False,
             )
 
-        # Add 5 messages concurrently with staggered starts
-        tasks = [add_message(i) for i in range(5)]
-        results = await asyncio.gather(*tasks)
-
+        first = await add_message(0)
+        results = await asyncio.gather(*(add_message(i) for i in range(1, 6)))
         assert len(results) == 5
+        assert len({str(m.id) for m in [first, *results]}) == 6
 
-        # Verify all messages were added
         conv = await memory_client.short_term.get_conversation(session_id)
-        assert len(conv.messages) == 5
+        assert len(conv.messages) == 6
+
+        # One head, one tail, one unbroken chain -- not a fork.
+        shape = await memory_client._client.execute_read(
+            """
+            MATCH (c:Conversation {session_id: $session_id})
+            OPTIONAL MATCH (c)-[:FIRST_MESSAGE]->(head:Message)
+            WITH c, count(DISTINCT head) AS heads
+            MATCH (c)-[:HAS_MESSAGE]->(m:Message)
+            WHERE NOT (m)-[:NEXT_MESSAGE]->()
+            RETURN heads, count(DISTINCT m) AS tails
+            """,
+            {"session_id": session_id},
+        )
+        assert shape[0]["heads"] == 1, "conversation has more than one FIRST_MESSAGE"
+        assert shape[0]["tails"] == 1, "conversation chain forked into several tails"
 
     @pytest.mark.asyncio
     async def test_message_timestamps_are_ordered(self, memory_client, session_id):
@@ -386,6 +408,87 @@ class TestShortTermMemoryEdgeCases:
         # Verify timestamps are in ascending order
         timestamps = [msg.created_at for msg in conv.messages]
         assert timestamps == sorted(timestamps)
+
+
+@pytest.mark.integration
+class TestForkedChainRecovery:
+    """A conversation with several tails must not wedge every later append.
+
+    Reproduces the end state of the concurrency bug directly, so the check does
+    not depend on winning a race: an append used to fan out over every tail and
+    CREATE its message once per row, breaching the uniqueness constraint on
+    Message.id. Any conversation written before the fix can still be in this
+    shape, so appending to one has to keep working.
+    """
+
+    async def _fork(self, memory_client, session_id):
+        """Give the conversation two messages that are both tails."""
+        first = await memory_client.short_term.add_message(
+            session_id,
+            MessageRole.USER,
+            "First",
+            extract_entities=False,
+            generate_embedding=False,
+        )
+        # A second HAS_MESSAGE with no NEXT_MESSAGE into it: the exact state two
+        # un-serialized appends used to leave behind.
+        await memory_client._client.execute_write(
+            """
+            MATCH (c:Conversation {session_id: $session_id})
+            CREATE (c)-[:HAS_MESSAGE]->(:Message {
+                id: $id, role: 'user', content: 'Forked sibling',
+                timestamp: datetime(), metadata: '{}'
+            })
+            """,
+            {"session_id": session_id, "id": "00000000-0000-0000-0000-00000000f00d"},
+        )
+        return first
+
+    @pytest.mark.asyncio
+    async def test_append_to_a_forked_chain_creates_exactly_one_message(
+        self, memory_client, session_id
+    ):
+        await self._fork(memory_client, session_id)
+
+        appended = await memory_client.short_term.add_message(
+            session_id,
+            MessageRole.USER,
+            "After the fork",
+            extract_entities=False,
+            generate_embedding=False,
+        )
+
+        stored = await memory_client._client.execute_read(
+            "MATCH (m:Message {id: $id}) RETURN count(m) AS count",
+            {"id": str(appended.id)},
+        )
+        assert stored[0]["count"] == 1, "the append duplicated its own message node"
+
+        conv = await memory_client.short_term.get_conversation(session_id)
+        assert len(conv.messages) == 3
+
+    @pytest.mark.asyncio
+    async def test_forked_chain_is_repairable_and_then_appendable(self, memory_client, session_id):
+        await self._fork(memory_client, session_id)
+        await memory_client.short_term.migrate_message_links()
+
+        await memory_client.short_term.add_message(
+            session_id,
+            MessageRole.USER,
+            "After the repair",
+            extract_entities=False,
+            generate_embedding=False,
+        )
+
+        shape = await memory_client._client.execute_read(
+            """
+            MATCH (c:Conversation {session_id: $session_id})-[:HAS_MESSAGE]->(m:Message)
+            WHERE NOT (m)-[:NEXT_MESSAGE]->()
+            RETURN count(DISTINCT m) AS tails
+            """,
+            {"session_id": session_id},
+        )
+        assert shape[0]["tails"] == 1, "migrate_message_links left the chain forked"
 
 
 @pytest.mark.integration

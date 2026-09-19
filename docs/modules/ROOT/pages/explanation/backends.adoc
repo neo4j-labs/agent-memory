@@ -1,261 +1,69 @@
-= Backends: Bolt vs NAMS
+= Bolt and NAMS backends
 :page-product: agent-memory
 :page-pagination:
-:toclevels: 3
-:sectanchors:
-:icons: font
-:source-highlighter: highlight.js
+:toclevels: 2
 
-A conceptual look at the two storage backends `MemoryClient` supports — when to pick which, what's different at the operational layer, and what trade-offs each makes.
+Neo4j Agent Memory can store memory through a Python client connected directly to Neo4j with Bolt, or through the hosted Neo4j Agent Memory Service (NAMS). The choice changes who operates the database, where extraction runs, and which operations are available.
 
-[.lead]
-The same `MemoryClient` API runs against two completely different storage backends: direct-bolt-to-Neo4j (the historical default) and the hosted Neo4j Agent Memory Service (NAMS). For task-oriented setup, see xref:how-to/use-nams.adoc[Use NAMS]. For porting, see xref:how-to/migrate-to-nams.adoc[Migrate to NAMS].
+[#_tldr]
+// Retain former section URLs at the current related topic.
+== Choosing a backend
 
-== TL;DR
+anchor:_when_to_choose_which[]anchor:_choose_bolt_when[]anchor:_choose_nams_when[]
 
-[cols="1,2,2",options="header"]
-|===
-| Concern | Bolt (direct Neo4j) | NAMS (hosted service)
+Choose *Bolt* when you operate Neo4j, need custom write Cypher, want to configure local extraction/embedding providers, or use preferences, facts, graph adoption, geospatial queries, buffering, or consolidation. Database access, backups, indexes and upgrades remain your responsibility. An air-gapped deployment also needs locally available models and dependencies; selecting Bolt alone does not disable outbound provider requests.
 
-| You provision
-| Neo4j cluster (or Aura)
-| Just an API key
-| Ops burden
-| You own indexes, backups, upgrades
-| Managed for you
-| Schema control
-| Full (you can extend models)
-| Server-managed
-| Custom Cypher
-| Read + write
-| Read-only (via `client.query.cypher`)
-| Geospatial features
-| Yes (Point properties, GDS)
-| Not exposed
-| Multi-tenancy
-| `user_identifier` kwarg
-| `user_identifier` (sent as `userId`) + workspace via API key or `workspace_id`
-| Workspace addressing
-| n/a
-| `workspace_id` → `X-Workspace-Id` header (for header-scoped deployments)
-| Ontologies
-| `NotSupportedError` (use `SchemaModel.CUSTOM`)
-| `client.ontology` — typed, versioned, validated domain schemas
-| Embeddings / extraction
-| Client-side (your config)
-| Server-side (managed)
-| Latency
-| In-cluster (microseconds)
-| HTTPS round-trip (tens of ms)
-|===
+Choose *NAMS* when a managed workspace and REST API suit the application. The service manages the storage and extraction pipeline. Applications use supported conversation, entity, graph, reasoning and ontology operations; they do not gain every Bolt method by changing the connection settings. The TypeScript SDK's normal transport is NAMS REST.
 
-== When to choose which
-
-=== Choose **bolt** when:
-
-* You already operate Neo4j (Aura or self-hosted) and want first-class access.
-* You need write-Cypher for custom data ingestion alongside agent memory.
-* You're using bolt-only features: GDS algorithms, custom indexes, `adopt_existing_graph` to layer agent memory onto an existing knowledge graph.
-* You need geospatial queries (`Point` properties, distance search).
-* Air-gapped deployments — no outbound HTTPS to a hosted service.
-
-=== Choose **NAMS** when:
-
-* You don't want to run Neo4j. A managed REST API is enough.
-* You're building a quick prototype and an API key is faster than spinning up Aura.
-* You don't need write-Cypher — the high-level `client.short_term` / `client.long_term` / `client.reasoning` surface covers your use case.
-* You want server-managed embedding, extraction, and deduplication.
-
-=== Use both at once
-
-`MemoryClient` is backend-monomorphic per-instance — one client holds one backend. But you can construct two clients in the same process if you want hybrid setups (e.g. bolt for domain data + NAMS for agent memory).
+[#_when_to_choose_which]
+[#_use_both_at_once]
+One client has one backend. An application can create separate clients for separate stores, but moving data, reconciling identifiers and authorizing access are application responsibilities.
 
 [#capability-matrix]
-== Feature matrix
+== Capability boundaries
 
-This is the canonical capability reference. Backend-sensitive how-to pages link here from their _Available on NAMS_ badge.
+The canonical xref:reference/backend-capabilities.adoc[backend capabilities reference] lists language, operation, return-shape and scope differences. A method can satisfy a Python protocol or appear in a TypeScript compatibility interface while raising `NotSupportedError` on the selected backend. Interface similarity is useful for adapters; it is not proof of behavioral portability.
 
-[NOTE]
-====
-**"Tiers" are about conformance, not access.** The Bronze / Silver / Gold / Platinum labels used elsewhere in the project are link:https://github.com/neo4j-labs/agent-memory-tck[agent-memory-tck] cross-language _conformance_ levels — they describe how much of the memory model a client SDK implements, **not** a NAMS pricing or access tier. Every capability marked _Yes_ below is available to any authenticated NAMS workspace. For real usage limits, see xref:reference/nams-limits.adoc[NAMS limits & behavior].
-====
-
-[cols="2,1,1",options="header"]
-|===
-| Capability | Bolt | NAMS
-
-| `client.short_term.add_message` / `search_messages`
-| Yes | Yes
-| `client.short_term.list_sessions` / `list_conversations`
-| Yes | Bolt-only / Yes
-| `client.short_term.create_conversation` / `bulk_add_messages`
-| (synthesized) | Yes
-| `client.short_term.get_observations` / `get_reflections`
-| `NotSupportedError` | Yes
-| `client.long_term.add_entity` / `search_entities`
-| Yes (with dedup) | Yes (server-side dedup)
-| `client.long_term.set_entity_feedback` / `get_entity_history`
-| `NotSupportedError` | Yes
-| `client.long_term.get_entity_provenance`
-| Yes | Yes
-| `client.long_term.geocode_locations` / `search_locations_near`
-| Yes | No
-| `client.long_term.find_potential_duplicates` / `merge_duplicate_entities`
-| Yes | (handled server-side)
-| `client.reasoning.start_trace` / `add_step` / `record_tool_call`
-| Yes | Yes
-| `client.reasoning.get_tool_stats`
-| Yes (`dict`) | No (use `client.query.cypher`)
-| `client.users` (UserMemory)
-| Yes | No (use `user_identifier=` on calls)
-| `client.buffered` (BufferedWriter)
-| Yes | No (NAMS commits synchronously)
-| `client.consolidation` (dedupe / archival jobs)
-| Yes | No (server-managed)
-| `client.eval` (evaluation harness)
-| Yes | Yes (audit dimension is bolt-only)
-| `client.query.cypher` (read-only)
-| Yes | Yes
-| `client.graph` (raw `Neo4jClient`)
-| Yes (deprecated, removal v0.6.0) | No (use `client.query.cypher`)
-| `client.schema.adopt_existing_graph`
-| Yes | No (server-managed schema)
-| Agent Skills — distil memory into portable Agent Skills (_Preview_)
-| No | REST + MCP only, no SDK method (see xref:reference/skills-api.adoc[Skills API])
-| MCP server
-| Yes (16 tools) | Yes (16 tools + 4 NAMS extras)
-| LangChain, LlamaIndex, CrewAI, OpenAI Agents, Microsoft Agent, Google ADK
-| Yes | Yes (transparent — no code changes)
-| Pydantic AI
-| Yes | Yes + `nams_memory_tools()` for NAMS extras
-| Strands / AgentCore (AWS)
-| Yes | Yes + `nams_context_graph_tools()` for NAMS extras
-|===
+Preferences, facts, client-created relationships and extraction-pipeline configuration are Bolt capabilities. Hosted applications can retrieve information from messages and extracted entities instead, but should not describe that as an equivalent preference/fact API. The hosted Cypher endpoint is read-only.
 
 [#tenancy]
-== Tenancy & scoping
+== Sharing and isolation
 
-"How do I isolate one tenant's memory from another's?" The answer has **two independent axes**, and which ones you use depends on the backend.
+NAMS uses a *workspace* as the tenancy boundary, selected by the authenticated key or the supported workspace header. Conversation user identifiers are separate metadata and filtering inputs. Reusing a user identifier does not automatically load an earlier conversation.
 
-[cols="1,2,2",options="header"]
-|===
-| Axis | Bolt (direct Neo4j) | NAMS (hosted)
+Bolt's user nodes and selected `user_identifier` arguments associate data with a user. They do not provide universal authorization or add user filters to all searches. In particular, the current Bolt semantic message search accepts `session_id` but does not apply it to its Cypher query. Applications must review their retrieval paths and database access boundaries; see xref:reference/backend-capabilities.adoc#scope[data scope] and xref:how-to/multi-tenancy.adoc[scoped reads and writes].
 
-| **User** — separate one end-user's conversations, entities, and preferences from another's
-| `user_identifier=` kwarg on `add_message`, `start_trace`, `add_entity`, … (requires `memory.multi_tenant=True`). First-class `:User` nodes via `client.users`.
-| `user_identifier=` on the same calls, forwarded to the service as `userId`. (`client.users` is not available — scoping is per-call only.)
+== Where processing happens
 
-| **Workspace** — separate whole projects / customers / environments, each with its own graph
-| Not a built-in concept — run separate databases or separate `MemoryClient` instances.
-| The unit of isolation. A *workspace key* is permanently bound to one workspace; an *admin key* selects the workspace per-request via `workspace_id` → the `X-Workspace-Id` header. Different key/workspace = different graph. See xref:reference/authentication.adoc[key categories].
-|===
+anchor:_operational_model[]
 
-In short: on **bolt** you scope by `user_identifier` (and operate separate databases for hard isolation); on **NAMS** the **workspace** (key- or header-bound) is the hard boundary and `user_identifier` sub-divides users within it. There is no `workspace_id` argument on memory calls — workspace is established at connect time, not per operation.
+.Bolt writes directly to a Neo4j instance you operate; NAMS writes through a hosted workspace with background extraction
+image::diagrams/bolt-vs-nams-data-flow.svg["Two stacked panels. Bolt: your application drives client-side embedding and entity-extraction providers and writes through the Bolt driver straight to a Neo4j instance you operate. NAMS: your application calls the hosted workspace over HTTPS; the workspace triggers background, server-side extraction that reaches a not-yet-ready state until the readiness API reports it complete",width=100%,link=self]
 
-For the task-oriented walkthrough see xref:how-to/multi-tenancy.adoc[Multi-Tenant Memory] (bolt) and xref:how-to/use-nams.adoc[Use NAMS] (workspace setup). Sharing one workspace across several agents is covered in xref:explanation/multi-agent-sharing.adoc[Cross-Agent Memory Sharing].
+[#_bolt_you_own_the_database]
+The Bolt client opens a driver connection pool and issues Cypher. Client-side providers can generate embeddings and extracted entities, while Neo4j stores memory and indexes. The chosen provider determines whether model processing is local or remote.
 
-== Operational model
+[#_nams_hosted_rest_api]
+A NAMS client calls the service over HTTPS. Writes and background extraction have different completion points: a stored message can be readable before its extracted graph is ready. A workflow that needs extracted entities must use the supported readiness/status APIs with bounded waiting.
 
-=== Bolt: you own the database
+[#_wire_protocols_nams_only]
+The hosted API uses REST `/v1`. A TCK bridge exists for development and conformance testing; it is not an alternative hosted feature surface. Conformance labels describe clients, not paid service tiers.
 
-The driver opens a persistent Bolt connection pool to a Neo4j instance. Reads and writes are issued as Cypher statements; schema setup (constraints, vector indexes, point indexes) is run on `connect()`. Memory lives entirely inside Neo4j — your backups, your upgrades, your ops.
+[#_error_semantics]
+[#_the_unified_api_contract]
+[#_whats_not_on_either_backend]
+// Retain former section URLs at the current related topic.
+== Errors and migration
 
-=== NAMS: hosted REST API
+anchor:_error_semantics[]anchor:_the_unified_api_contract[]
 
-`MemoryClient` opens an `httpx.AsyncClient` to the NAMS endpoint. Every operation is one HTTP request. NAMS owns the underlying Neo4j cluster; you never touch it directly. Auth is a single long-lived API key (`MEMORY_API_KEY`), sent as `Authorization: Bearer ...`.
+Backend-specific failures and retry behavior belong to each SDK's reference: xref:reference/api/memory-client.adoc[Python] and xref:reference/typescript-api.adoc[TypeScript]. Do not copy one language's error class or retry promise into the other language's guide.
 
-=== Wire protocols (NAMS only)
+[#_migration_is_one_env_var_away]
+Migration requires reviewing supported operations, returned IDs, result shapes, extraction readiness and data scope. See xref:how-to/migrate-to-nams.adoc[Migrate to NAMS] for the task and xref:how-to/use-nams.adoc[Use NAMS] for connection setup.
 
-NAMS supports two:
+== Performance tradeoffs
 
-* **REST** (`POST /v1/conversations/{session_id}/messages` etc.) — the hosted service URL ending in `/v1`.
-* **TCK bridge** (`POST /{snake_case_method}`) — used by the conformance test reference implementation. The transport auto-selects based on whether the endpoint URL contains `/v\d+`.
+anchor:_performance_characteristics[]
 
-You can force one or the other with `NamsConfig(transport_mode="rest" | "bridge")`.
-
-== Error semantics
-
-Both backends share the same exception hierarchy under `MemoryError`. NAMS adds five subclasses for HTTP-specific failures:
-
-[cols="1,2",options="header"]
-|===
-| Exception | When raised
-
-| `TransportError` (subclass of `ConnectionError`)
-| Network errors and 5xx after retries exhausted
-| `AuthenticationError`
-| 401, 403
-| `NotSupportedError`
-| Method unavailable on the active backend (or HTTP 405/501)
-| `RateLimitError`
-| 429 after retries exhausted (carries `retry_after`)
-| `ValidationError`
-| HTTP 400 (carries `details`)
-|===
-
-The retry policy honors `Retry-After` on 429 and uses exponential backoff for 5xx and network errors.
-
-== The unified API contract
-
-Both backends honor four `@runtime_checkable` Protocols in `neo4j_agent_memory.core.protocols`:
-
-* `ShortTermProtocol` — `add_message`, `get_conversation`, `search_messages`, `list_sessions`, `delete_message`, `clear_session`, `get_context`, `get_conversation_summary`, `create_conversation`, `list_conversations`, `bulk_add_messages`, `get_observations`, `get_reflections`.
-* `LongTermProtocol` — `add_entity`, `add_preference`, `add_fact`, `add_relationship`, `search_entities`, `search_preferences`, `search_facts`, `get_entity_by_name`, `get_related_entities`, `get_preferences_for`, `supersede_preference`, `get_facts_about`, `get_entity_relationships`, `get_context`, `set_entity_feedback`, `get_entity_history`, `get_entity_provenance`.
-* `ReasoningProtocol` — `start_trace`, `add_step`, `record_tool_call`, `complete_trace`, `search_steps`, `get_similar_traces`, `get_trace`, `get_trace_with_steps`, `get_session_traces`, `list_traces`, `get_tool_stats`, `link_trace_to_message`, `get_context`.
-* `CypherQueryProtocol` — `cypher(query, params)` (read-only).
-
-Code written against these Protocols (or their concrete bolt classes, which structurally satisfy them) is portable. Bolt-specific extras like `add_messages_batch`, `extract_entities_from_session`, `find_potential_duplicates`, `geocode_locations` live on the bolt classes only and aren't part of the protocol contract.
-
-== What's not on either backend
-
-Some features are bolt-only by design (the underlying service doesn't expose them):
-
-* `client.users` (first-class `User` nodes)
-* `client.buffered.submit(...)` (background write queue)
-* `client.consolidation.*` (dedupe / archival jobs)
-* `client.schema.adopt_existing_graph()` (layering onto a pre-existing graph)
-* Geospatial / Point-property features
-* Audit-edge (`:TOUCHED`) features
-
-On NAMS these accessors return a `_NamsUnsupported` sentinel — property access is harmless, but method calls raise `NotSupportedError` with a workaround hint. See xref:how-to/migrate-to-nams.adoc[Migrate to NAMS] for the full table.
-
-== Performance characteristics
-
-[cols="2,1,1",options="header"]
-|===
-| Operation | Bolt | NAMS
-
-| Single `add_message`
-| ~1ms (in-cluster) | ~50ms (HTTPS RT)
-| Bulk `add_messages_batch(100)`
-| ~10ms | (bolt-only)
-| `bulk_add_messages(100)`
-| (NAMS only) | ~80ms
-| `search_messages` (vector)
-| ~5-50ms (index size) | ~50-100ms
-| `client.query.cypher` (small read)
-| ~1ms | ~50ms
-|===
-
-NAMS is dominated by HTTPS round-trip cost. For high-throughput workloads, bolt is materially faster. For typical chat-agent workloads (one message per turn), the difference is invisible to users.
-
-== Migration is one env var away
-
-```python
-# Existing bolt code:
-async with MemoryClient(MemorySettings(neo4j={"password": "..."})) as client:
-    await client.short_term.add_message(...)
-```
-
-Becomes:
-
-```python
-import os
-os.environ["MEMORY_API_KEY"] = "nams_xxxxx"
-
-# Same code body — backend auto-selects NAMS from env.
-async with MemoryClient() as client:
-    await client.short_term.add_message(...)
-```
-
-See xref:how-to/migrate-to-nams.adoc[Migrate to NAMS] for the porting guide and full `NotSupportedError` reference.
+Latency depends on network placement, request size, index state, graph size and model processing. A local database can avoid a hosted network hop; a managed service removes database operations work. Batch supported writes to reduce per-request overhead and measure the complete workload before choosing limits or deployment topology. No universal millisecond or throughput comparison is established here.

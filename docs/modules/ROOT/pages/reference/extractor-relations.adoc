@@ -1,0 +1,182 @@
+= Relation extractors
+:page-product: agent-memory
+:page-pagination:
+:toclevels: 2
+
+Relation extraction that consumes previously extracted entities, from xref:reference/extractors.adoc[Extractor classes reference]. Import from `neo4j_agent_memory.extraction`.
+
+== GLiRELExtractor
+
+Relation extraction consumes previously extracted entities with span positions. Import from `neo4j_agent_memory.extraction`.
+
+The SDK does not define a `glirel` extra, so install the `glirel` package separately alongside `neo4j-agent-memory`. Its current release also requires `loguru` at import time without declaring that dependency, so install `loguru` explicitly too.
+
+// contract: extraction/gliner_extractor.py:GLiRELExtractor.__init__
+[source,python]
+----
+def GLiRELExtractor(
+    model: str=DEFAULT_GLIREL_MODEL,
+    relation_types: dict[str, str] | list[str] | None=None,
+    threshold: float=0.5,
+    device: str='cpu',
+): ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `model` | GLiREL model name from HuggingFace
+| `relation_types` | Relation types to extract. Can be: - dict[str, str]: Relation names with descriptions (recommended) - list[str]: Simple list of relation names - None: Use default POLE+O relation types
+| `threshold` | Confidence threshold for including relations
+| `device` | Device to run on (cpu, cuda, mps)
+|===
+
+=== extract_relations
+
+Extract relations between entities using GLiREL.
+
+// contract: extraction/gliner_extractor.py:GLiRELExtractor.extract_relations
+[source,python]
+----
+async def extract_relations(
+    text: str,
+    entities: list[ExtractedEntity],
+    *,
+    relation_types: list[str] | None=None,
+) -> list[ExtractedRelation]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `text` | The source text
+| `entities` | Pre-extracted entities (from GLiNER or other extractor)
+| `relation_types` | Optional list of relation types to extract. Defaults to all configured relation types.
+|===
+
+[source,python]
+----
+from neo4j_agent_memory.extraction import GLiNEREntityExtractor, GLiRELExtractor
+
+entity_result = await GLiNEREntityExtractor.for_poleo().extract(text)
+relations = await GLiRELExtractor().extract_relations(text, entities=entity_result.entities)
+for relation in relations:
+    print(relation.source, relation.relation_type, relation.target)
+----
+
+
+== GLiNERWithRelationsExtractor
+
+Combine entity and relation extractors. `for_schema` takes a built-in schema *name*, not an EntitySchemaConfig. For custom descriptions, construct a GLiNEREntityExtractor with DomainSchema and a GLiRELExtractor with relation types, then compose them.
+
+// contract: extraction/gliner_extractor.py:GLiNERWithRelationsExtractor.__init__
+[source,python]
+----
+def GLiNERWithRelationsExtractor(
+    entity_extractor: GLiNEREntityExtractor,
+    relation_extractor: GLiRELExtractor,
+): ...
+----
+
+=== extract
+
+Extract entities and relations from text.
+
+// contract: extraction/gliner_extractor.py:GLiNERWithRelationsExtractor.extract
+[source,python]
+----
+async def extract(
+    text: str,
+    *,
+    entity_types: list[str] | None=None,
+    relation_types: list[str] | None=None,
+    extract_relations: bool=True,
+    extract_preferences: bool=False,
+) -> ExtractionResult: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `text` | The text to extract from
+| `entity_types` | Optional list of entity types to extract
+| `relation_types` | Optional list of relation types to extract
+| `extract_relations` | Whether to extract relations (default True)
+| `extract_preferences` | Ignored (GLiNER/GLiREL don't extract preferences)
+|===
+
+=== for_schema
+
+Create combined extractor for a domain schema.
+
+// contract: extraction/gliner_extractor.py:GLiNERWithRelationsExtractor.for_schema
+[source,python]
+----
+def for_schema(
+    schema_name: str,
+    *,
+    gliner_model: str=DEFAULT_GLINER2_MODEL,
+    glirel_model: str=DEFAULT_GLIREL_MODEL,
+    entity_threshold: float=0.5,
+    relation_threshold: float=0.5,
+    device: str='cpu',
+    relation_types: dict[str, str] | None=None,
+) -> GLiNERWithRelationsExtractor: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `schema_name` | Domain schema name (poleo, podcast, news, etc.)
+| `gliner_model` | GLiNER model for entity extraction
+| `glirel_model` | GLiREL model for relation extraction
+| `entity_threshold` | Confidence threshold for entities
+| `relation_threshold` | Confidence threshold for relations
+| `device` | Device to run models on
+| `relation_types` | Custom relation types (defaults to POLE+O relations)
+|===
+
+=== for_poleo
+
+Create combined extractor optimized for POLE+O extraction.
+
+// contract: extraction/gliner_extractor.py:GLiNERWithRelationsExtractor.for_poleo
+[source,python]
+----
+def for_poleo(
+    *,
+    gliner_model: str=DEFAULT_GLINER2_MODEL,
+    glirel_model: str=DEFAULT_GLIREL_MODEL,
+    entity_threshold: float=0.5,
+    relation_threshold: float=0.5,
+    device: str='cpu',
+) -> GLiNERWithRelationsExtractor: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `gliner_model` | GLiNER model for entity extraction
+| `glirel_model` | GLiREL model for relation extraction
+| `entity_threshold` | Confidence threshold for entities
+| `relation_threshold` | Confidence threshold for relations
+| `device` | Device to run models on
+|===
+
+[source,python]
+----
+from neo4j_agent_memory.extraction import GLiNERWithRelationsExtractor
+
+extractor = GLiNERWithRelationsExtractor.for_poleo()
+result = await extractor.extract("John works at Acme Corp")
+print(result.entities, result.relations)
+----
+
+`DEFAULT_GLIREL_MODEL` is `jackboyla/glirel_base`. Model output varies; validate entity names, types, and relation endpoints on representative data.
+
+
+== See also
+
+* xref:reference/extractors.adoc[Extractor classes reference]
+* xref:reference/extractor-classes.adoc[Built-in extractor classes]
+* xref:how-to/running-without-an-llm.adoc[Run without an LLM]

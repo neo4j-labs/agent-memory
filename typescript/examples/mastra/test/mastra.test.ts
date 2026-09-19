@@ -85,22 +85,23 @@ describe("mastra example", () => {
     const { result, transport } = await run();
     expect(result.searchHits).toBeGreaterThan(0);
     expect(transport.calls.some((c) => c.method === "get_context")).toBe(true);
+    expect(transport.calls.some((c) => /preference|add_fact/.test(c.method))).toBe(false);
   });
 
-  it("gives the second thread a distinct id and recalls the first thread's preference", async () => {
+  it("gives the second thread a distinct id and explicitly recalls the first thread's messages", async () => {
     const { result } = await run();
 
     expect(result.secondThreadId).not.toBe(result.threadId);
     expect(result.threadsForResource).toBe(2);
-    expect(result.recalledPreferences).toContain("Prefers food and history trips");
+    expect(result.recalledMessages.join(" ")).toContain("I prefer food and history trips");
   });
 
-  it("primes the new thread from long-term memory, not from its own history", async () => {
+  it("primes the new thread from the explicitly selected prior conversation", async () => {
     const { prompts } = await run();
 
     const followUp = prompts.at(-1)!;
-    expect(followUp).toContain("Prefers food and history trips");
-    expect(followUp).not.toContain("what should I book first");
+    expect(followUp).toContain("I prefer food and history trips");
+    expect(followUp).toContain("what should I book first");
   });
 
   it("deletes both threads when cleanup is requested", async () => {

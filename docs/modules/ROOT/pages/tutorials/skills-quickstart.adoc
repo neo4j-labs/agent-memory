@@ -1,156 +1,361 @@
-= Skills Quickstart (Preview)
+= Distil and download a skill from a recorded procedure
 :page-product: agent-memory
+:page-role: code-nocollapse
 :page-pagination:
-:toclevels: 3
+:toclevels: 2
 :sectanchors:
-:icons: font
-:source-highlighter: highlight.js
+:state-file: skills.json
 
-[NOTE]
-====
-icon:flask[] *Preview.* Agent Skills is a NAMS feature in preview, reachable over
-REST and MCP only (no SDK method yet). This walkthrough uses `curl`; the same
-steps are available as xref:reference/nams-mcp.adoc[MCP tools]
-(`skill_generate`, `skill_run_status`, …) for agent-driven use.
-====
+We will seed a simulated refund-decision procedure in an empty test workspace,
+request distillation, inspect the generated procedure and its provenance, then
+explicitly publish and download a ZIP if the service creates a skill. We will
+verify that the ZIP contains `SKILL.md` and record the disposition of every
+resource. Loading or executing the skill in another agent is outside this lesson.
 
-[.lead]
-Distil a workspace's accumulated memory into a portable, provenance-grounded
-Agent Skill, then review, publish, and download it — end to end against the
-hosted NAMS service.
+NOTE: Agent Skills is a NAMS preview feature exposed through REST and MCP, not
+an SDK skill accessor. A run can be withheld or fail. Offline contract checks do
+not establish that a live workspace will pass the service's quality gates.
 
-== What you'll need
+[[_what_youll_need]]
+== Before you begin
 
-* A NAMS API key with the `skills:read` and `skills:write` scopes (a workspace
-key carries these). https://memory.neo4jlabs.com[Sign up here].
-* A workspace that already holds some memory — ideally a handful of reasoning
-traces for a *single, repeatable procedure* (see xref:explanation/skills.adoc[Agent Skills]
-on why narrow scopes distil best).
-* `curl` and a JSON tool like `jq`.
+Provision a second, empty NAMS workspace for this lesson from https://memory.neo4jlabs.com[the NAMS dashboard] before continuing.
 
-Set your key and base URL once:
+* Python 3.10 or newer and a POSIX shell.
+* A newly provisioned *empty* NAMS test workspace reserved for this fixture,
+  with a workspace data key permitting the lesson's memory operations and
+  `skills:read` / `skills:write` (see xref:reference/authentication.adoc#_key_categories[Key categories]).
+* An identified workspace owner/operator and a verified disposal procedure or
+  explicitly agreed retention arrangement for the records described below.
 
-[source,bash]
-----
-export NAMS_KEY="nams_xxxxxxxxxxxxxxxxxxxx"
-export NAMS="https://memory.neo4jlabs.com/v1"
-auth=(-H "Authorization: Bearer $NAMS_KEY" -H "Content-Type: application/json")
-----
+The generation scope is the entire selected workspace. A zero-conversation
+count does not prove the workspace has no entities, reasoning records or skills.
+Have its owner verify that the new workspace is empty before seeding. A valid
+data key alone establishes neither this condition nor administrative permission
+to retire a workspace. See xref:reference/authentication.adoc[Authentication].
 
-== 1. Start a distillation run
+The fixture creates one conversation, two messages, nine application-authored
+steps and nine simulated tool calls. Extraction may create entities; generation
+creates a run and may create a skill. *There is no verified public deletion
+route for steps, tool calls, skill runs or skills.* Publishing and downloading
+do not remove them. Establish the owner and actual disposition arrangement
+before running seed; a generic promise to use a management interface is not a
+verified disposal procedure. See
+xref:reference/backend-capabilities.adoc#hosted-cleanup[Hosted cleanup limits].
 
-Kick off a run over a scope. `scope.type` is required — start with `workspace`,
-or narrow to a single `entity` / `ontology_class` for a cleaner result.
+All orders and decisions are simulated. No payment is issued and no generated
+procedure is executed by this lesson.
 
-[source,bash]
-----
-curl -s "${auth[@]}" -X POST "$NAMS/skills/generate" \
-  -d '{"name": "refund-procedure", "scope": {"type": "workspace"}}'
-# => 202 {"runId": "run_123", "status": "queued"}
-----
+Install the published SDK, then create the local files shown in this lesson:
 
-== 2. Poll the run
-
-Distillation is asynchronous (scope → snapshot → grounded synthesis → quality
-gates → package). Poll until it settles:
+include::partial$python-tutorial-setup.adoc[]
 
 [source,bash]
 ----
-curl -s "${auth[@]}" "$NAMS/skills/runs/run_123" | jq '{status, outcome, skillId}'
+python -m pip install 'neo4j-agent-memory[nams]==0.6.0'
+python -c "from importlib.metadata import version; import neo4j_agent_memory; assert version('neo4j-agent-memory') == '0.6.0'; print('SDK 0.6.0 import verified')"
 ----
 
-A run resolves to one of three outcomes:
+Expected: `SDK 0.6.0 import verified`. Keep `agent-memory-tutorials` as your
+working directory. Do not reuse a nonempty workspace
+merely because it was used for the preceding lesson.
 
-* `Created` — a skill draft passed the grounding and coverage gates.
-* `Withheld` — the scope held more than one procedure (or grounding was too low);
-the response suggests splitting it. This is normal for a broad `workspace` scope.
-* `Failed` — the run errored.
-
-If you get `Withheld`, re-run with a narrower scope.
-
-== 3. Inspect provenance
-
-Every claim and step is grounded in specific source nodes. Confirm the skill is
-_auditable, not invented_:
+Set the key for the owner-verified empty workspace:
 
 [source,bash]
 ----
-curl -s "${auth[@]}" "$NAMS/skills/{skillId}/explain-provenance" | jq
+export MEMORY_API_KEY="replace-with-the-empty-workspace-key"
+export MEMORY_ENDPOINT="https://memory.neo4jlabs.com/v1"
+unset MEMORY_WORKSPACE_ID
+python -c "from neo4j_agent_memory import NamsSettings; s=NamsSettings(); print(s.backend, s.nams.endpoint)"
 ----
 
-== 4. Review, then publish
+Expected: `nams https://memory.neo4jlabs.com/v1`. This checks configuration only;
+it does not authenticate or prove emptiness. Keep these credentials and this
+tutorial directory for every following command. The maintained client uses
+the same resolved settings for its SDK and direct HTTP calls.
 
-A skill must be approved before it can be published:
+Before seeding, identify the workspace name or ID in the dashboard and its
+responsible operator. Supply those non-secret labels in the seed command below.
+They are saved as operator notes; they do not change request routing or prove
+workspace identity. Because this lesson unsets `MEMORY_WORKSPACE_ID`, the
+ledger's selector can be null: the workspace key selects the workspace.
+Never put a key in the workspace label or disposal-owner note.
 
-[source,bash]
-----
-curl -s "${auth[@]}" -X POST "$NAMS/skills/{skillId}/review"  -d '{"decision": "approve"}'
-curl -s "${auth[@]}" -X POST "$NAMS/skills/{skillId}/publish"
-----
+[[_1_start_a_distillation_run]]
+== Step 1: Seed the exact procedure
 
-Publishing signs a detached-JWS attestation. Verify it (or let any consumer
-verify offline against `/.well-known/skill-attest-jwks.json`):
+The script checks the service's distillation capability before any fixture
+write. Disabled or unavailable distillation stops seeding. The explicit
+empty-workspace flag records the owner's check; it does not perform workspace
+provisioning or independently certify emptiness.
 
-[source,bash]
-----
-curl -s "${auth[@]}" "$NAMS/skills/{skillId}/verify" | jq
-----
+Create the three shared helpers below, then save `skills_quickstart.py` in
+the same lesson folder:
 
-== 5. Download and load the skill
+Copy these files into the same lesson folder. The final row is the program
+we will run; the other files are tutorial support, not SDK APIs. Reuse a helper
+only when its contents match. Finish pending cleanup/recovery before replacing
+code that owns an existing ledger.
 
-Download the `SKILL.md` package (a ZIP with `SKILL.md`, `provenance.json`, and
-`references/`) and hand it to an agent like any other
-link:https://agentskills.io[agentskills.io] skill:
+[cols="2,3,1",options="header"]
+|===
+|File |Purpose |Continuing reader
+|`hosted_tutorial_state.py` |Private ledger and local inspection |Reuse unchanged
+|`hosted_tutorial_cleanup.py` |Supported scoped cleanup; retained resources stay explicit |Reuse unchanged
+|`hosted_tutorial_helpers.py` |Bounded polling and ontology support shared with the preceding lesson |Reuse unchanged
+|`skills_quickstart.py` |The learner-facing seed, generate, review and disposition commands |New lesson file
+|===
 
-[source,bash]
-----
-curl -s "${auth[@]}" "$NAMS/skills/{skillId}/download" -o refund-procedure.zip
-----
+include::partial$python-hosted-state-file.adoc[]
 
-[IMPORTANT]
-====
-NAMS distils, reviews, and publishes skills; it does **not** run them. Skill
-_execution_ is dry-run planning only and gated off by default — the loading
-agent is responsible for actually performing the procedure.
-====
+include::partial$python-hosted-cleanup-file.adoc[]
 
-== Prefer to script it?
+include::partial$python-hosted-helpers-file.adoc[]
 
-There is no `client.skill` SDK method yet, but the REST API is easy to drive from
-code. The same generate-then-poll loop in Python with `httpx`:
-
+.Save as `skills_quickstart.py`
 [source,python]
 ----
-import asyncio
-import httpx
-
-NAMS = "https://memory.neo4jlabs.com/v1"
-HEADERS = {"Authorization": "Bearer nams_xxxxxxxxxxxxxxxxxxxx"}
-
-
-async def distil_skill() -> str:
-    async with httpx.AsyncClient(base_url=NAMS, headers=HEADERS) as http:
-        started = await http.post(
-            "/skills/generate",
-            json={"name": "refund-procedure", "scope": {"type": "workspace"}},
-        )
-        run_id = started.json()["runId"]
-
-        while True:
-            run = (await http.get(f"/skills/runs/{run_id}")).json()
-            if run["status"] != "running":
-                return run.get("skillId", "")
-            await asyncio.sleep(2.0)
-
-
-skill_id = asyncio.run(distil_skill())
+include::example$skills_quickstart.py[]
 ----
 
-For agent-driven use, the xref:reference/nams-mcp.adoc[hosted MCP tools]
-(`skill_generate`, `skill_run_status`, …) expose the same flow.
+Before the first service operation, check the assembled files offline:
 
+[source,bash]
+----
+python -m py_compile hosted_tutorial_state.py hosted_tutorial_cleanup.py hosted_tutorial_helpers.py skills_quickstart.py
+python skills_quickstart.py --help
+----
+
+Expected: compilation prints nothing and exits successfully; `--help` prints
+the command choices. Compilation catches syntax errors; the CLI check also
+loads the local imports. Neither command authenticates, contacts NAMS or
+creates tutorial state. Fix a missing or truncated file before continuing.
+
+Replace the owner and disposition text below with the actual arrangement you
+verified. Supply `--empty-workspace-confirmed` only after that owner has checked
+the newly provisioned workspace:
+
+[source,bash]
+----
+python skills_quickstart.py seed \
+  --state .tutorial-state/skills.json \
+  --workspace-label 'workspace name or ID from the dashboard' \
+  --empty-workspace-confirmed \
+  --disposal-owner 'the responsible workspace owner' \
+  --disposal-plan 'the verified disposal procedure or explicitly agreed retention'
+----
+
+Expected: exact readback of the two messages, followed by `Verified fixture:
+conversation ...; 9 recorded steps and 9 tool calls`. The step and tool-call IDs
+must match the saved fixture IDs, not merely an aggregate count.
+
+The private `.tutorial-state/skills.json` retains the owner arrangement,
+endpoint/workspace/credential identity, returned IDs and partial operation
+status. A changed identity or existing state file blocks accidental reseeding.
+If a write fails, retain the state and inspect it with:
+
+[source,bash]
+----
+python skills_quickstart.py state --state .tutorial-state/skills.json
+----
+
+Keep `.tutorial-state/` out of version control. The `state` command displays
+saved information without running generation or publication.
+
+[[_2_poll_the_run]]
+== Step 2: Generate and poll with real IDs
+
+anchor:_prefer_to_script_it[]
+
+[source,bash]
+----
+python skills_quickstart.py generate --state .tutorial-state/skills.json
+python skills_quickstart.py inspect --state .tutorial-state/skills.json
+----
+
+Generation submits `nameHint` and workspace scope, then saves the actual
+`runId`. A hint is not a promise that the service will use exactly that name.
+The inspect command polls that run for at most two minutes, with bounded HTTP
+requests. Queued/running states remain pending. `Created` must contain a real
+`skillId`; `Withheld` and `Failed` stop without publication. Missing IDs,
+unknown states and request failures are errors, not successful generation.
+
+Expected on creation: a private `.tutorial-state/skills-review.json` containing
+the skill detail and provenance. A duplicate generate command is refused. If a
+run is withheld, inspect its recorded result and stop the publication path;
+do not broaden the scope or invent a skill ID.
+
+Choose the next action from the observed result, not from the next numbered
+heading. A two-minute client timeout does not cancel the service job.
+
+[cols="2,4",options="header"]
+|===
+|Outcome |Next action
+|`Created` with accepted provenance |Review `skills-review.json` in step 3; publish only after that review.
+|`Withheld` or `Failed` |Run `state` to read the recorded outcome, then proceed to step 6 for disposition. Do not publish, regenerate or broaden the scope.
+|Timeout; job remains queued/running |Repeat `inspect` with the same state and run ID. It only observes that job; each attempt has the same two-minute bound. If you cannot continue, hand the run ID to the operator.
+|Unknown state or unrecognized/unexplained provenance |Keep the saved state and any review report for maintainer/operator inspection. Do not bypass the parser or publish.
+|Interrupted approval/publication |Inspect local state and have the owner reconcile the saved skill ID. Do not blindly repeat `publish` or clear its pending operation.
+|===
+
+To resume observation after a timeout:
+
+[source,bash]
+----
+python skills_quickstart.py inspect --state .tutorial-state/skills.json
+----
+
+A recorded `Withheld` or `Failed` outcome still demonstrates submitting and
+observing a job; it does not demonstrate a generated or published skill. The
+remaining review/publish/download milestones are skipped. Cleanup refuses a
+saved run whose terminal outcome has not been observed: first inspect that
+same run or arrange operator handoff for the still-running job. Neither a
+client exit nor conversation deletion establishes that the service job ended.
+
+[[_3_inspect_provenance]]
+== Step 3: Inspect the procedure and evidence
+
+[source,bash]
+----
+python -m json.tool .tutorial-state/skills-review.json
+----
+
+Check that the generated procedure is limited to the simulated three-step
+workflow, carries the return-window and damage conditions, and never claims a
+payment was issued. Compare its reported source IDs with the recorded fixture
+messages, steps, tool calls and proven derived entities. Provenance makes the
+result reviewable; it is not a truth guarantee.
+
+The program blocks publication when sources are unexplained. The service's
+provenance response is free-form JSON: this inspector accepts explicit source-ID
+fields and stops if their shape is unrecognized or empty. Such a response needs
+inspection and a reviewed parser update, not an automatic bypass or a claim
+that live provenance passed.
+
+Do not publish if the procedure misstates the fixture or needs further review.
+
+[[_4_review_then_publish]]
+== Step 4: Publish only the reviewed result
+
+[source,bash]
+----
+python skills_quickstart.py publish --state .tutorial-state/skills.json
+----
+
+This command rechecks the saved skill and provenance. If they changed since
+inspection, it saves the new report and stops for another review. Otherwise,
+it submits approval and publication for the saved `skillId`.
+Expected: `Published skill ID:` followed by that ID.
+
+Publication is deliberately separate from reading or generating a draft.
+An interrupted approval/publication retains pending state; do not repeat it
+blindly or delete the ledger to bypass the recovery check.
+
+[[_5_download_and_load_the_skill]]
+== Step 5: Download and inspect the package
+
+[source,bash]
+----
+python skills_quickstart.py download --state .tutorial-state/skills.json
+python -m zipfile -l .tutorial-state/simulated-refund-skill.zip
+python -m json.tool .tutorial-state/skills-attestation.json
+----
+
+Expected: `Verified ZIP contains SKILL.md; saved` followed by the path to
+`.tutorial-state/simulated-refund-skill.zip`, then the archive listing.
+The program saves the ZIP privately and inspects its members without extracting
+arbitrary paths.
+
+Inspect attestation separately: ZIP validity does not prove a valid signature.
+`attestationConfigured: false` means signing is not configured; an unsigned
+publication must not be described as a verified signed artifact. Download,
+package structure and attestation are separate outcomes. The package is neither
+loaded into an agent nor executed.
+
+== Step 6: Clean up supported records and retain the disposition
+
+anchor:_6_clean_up_supported_records_and_retain_the_disposition[]
+
+[source,bash]
+----
+python skills_quickstart.py cleanup --state .tutorial-state/skills.json
+printf 'Cleanup exit status: %s\n' "$?"
+python skills_quickstart.py state --state .tutorial-state/skills.json
+----
+
+The helper checks and deletes only the owned conversation and proven-owned
+entities through supported routes, verifying their absence. It reports retained
+steps, tool calls, skill runs and skills separately, including partial or
+published artifacts. Shared or uncertain entities also remain recorded.
+
+Expected output distinguishes `Verified: owned conversation and proven-owned
+entities are absent` from `Retained resources:` and the outstanding operator
+disposition. Cleanup exits with status `2` when any resource is retained, even
+when the supported deletions passed; this is not an empty-workspace result. Keep
+the private state, review files and archive until the named owner has verified
+disposal or recorded the agreed retention of every remaining resource. Do not
+invent a delete route or reset the workspace to make a cleanup result look
+complete.
+
+Illustrative disposition after a terminal generated run (placeholder IDs):
+
+[source,text]
+----
+Verified: owned conversation and proven-owned entities are absent
+Retained resources: {'step': ['<step-id>', '...'], 'tool_call': ['<tool-id>', '...'], 'skill_run': ['<run-id>'], 'skill': ['<skill-id>']}
+Operator disposition is still required for retained step/tool/run/skill records
+Cleanup exit status: 2
+----
+
+A `Withheld` run has no created skill ID, but its recorded steps, tool calls and
+run still require disposition. The complete ID lists are in the state file;
+`...` above only shortens this illustration. This expected exit `2` is not an
+empty-workspace pass and is not a reason to reseed.
+
+include::partial$python-hosted-lifecycle.adoc[]
+
+== Keep the old run and start a separate exercise
+
+See xref:how-to/use-nams.adoc#_recover_from_an_interrupted_tutorial_run[Recover from an interrupted tutorial run] to check the recorded state before reseeding.
+
+A normal Skills run retains steps, tool calls and possibly a run/skill. Its
+cleanup does not make the workspace empty. Another Skills exercise requires a
+newly provisioned, owner-verified empty workspace and a new disposition
+agreement; preserve the first workspace's ledger and reports. The automatic
+check below does not approve starting over with retained resources.
+
+For a prerequisite failure *before* the first remote write, the new ledger's
+`remote_write_started: false`, empty resources and absent pending operation
+establish that this program did not attempt a mutation. An empty ledger alone
+is not enough. Older empty ledgers without that marker, a lost returned ID, or any
+uncertain write fail the check and require owner inspection.
+
+After correcting the prerequisite and repeating the empty-workspace/owner
+checks, choose this unused run directory. The first command only reads the old ledger and checks the new path. It preserves
+the original file and creates nothing. `&&` prevents seed if that check fails:
+
+[source,bash]
+----
+python hosted_tutorial_state.py check-new-run .tutorial-state/skills.json \
+  --next-state .tutorial-state/skills-run-2/state.json &&
+python skills_quickstart.py seed --state .tutorial-state/skills-run-2/state.json \
+  --workspace-label 'workspace name or ID from the dashboard' \
+  --empty-workspace-confirmed \
+  --disposal-owner 'the responsible workspace owner' \
+  --disposal-plan 'the verified disposal procedure or explicitly agreed retention'
+----
+
+Expected before seed: `Recorded new-run check: no_remote_write_started` for
+an unstarted run, or `recorded_disposition_complete` for fully disposed records.
+This is a check of saved evidence, not a new service verification. The seed
+still checks its own prerequisites and refuses an existing target state file.
+Use the new `--state` path for every later command; reports and archives are
+written alongside that new state. Never copy the old IDs into the new ledger.
+
+[[_next_steps]]
 == Next steps
 
-* xref:explanation/skills.adoc[Agent Skills] — the provenance model and lifecycle.
-* xref:reference/skills-api.adoc[Skills API] — the full REST + MCP surface.
-* xref:reference/nams-mcp.adoc[Hosted NAMS MCP Server] — drive these steps from an agent.
+* xref:explanation/skills.adoc[Agent Skills concepts and limits]
+* xref:reference/skills-api.adoc[Skills REST contract]
+* xref:reference/nams-mcp.adoc[Hosted MCP tools]

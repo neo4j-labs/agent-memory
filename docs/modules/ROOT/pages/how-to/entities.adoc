@@ -1,661 +1,109 @@
-= Work with Entities
+= Store entities, relationships, and facts
 :page-product: agent-memory
 :page-pagination:
-:toclevels: 3
+:toclevels: 2
 :sectanchors:
-:icons: font
-:source-highlighter: highlight.js
 
 include::partial$backend-both.adoc[]
 
-How to create, search, and manage entities in long-term memory.
+To build explicit graph knowledge, create typed entities, connect their returned IDs, and read the stored relationship back. Use POLE+O types with optional subtypes to distinguish domain concepts such as products.
 
-[NOTE]
-====
-This page's prose targets the **Python SDK against a Bolt-connected
-Neo4j**. The canonical entity operations port to the **TypeScript SDK
-against NAMS** — the cheat-sheet below maps them and the `[tabs]`
-block on the first example shows both side-by-side. For TS-only
-patterns (entity retriever, knowledge-graph tutorials) see
-xref:how-to/index.adoc[the TypeScript SDK section of the how-to index] and
-xref:reference/typescript-api.adoc[the TypeScript API reference].
-====
+.A Person and an Organization entity connected by a RELATED_TO relationship, with a separate Fact node
+image::diagrams/entity-relationship-recipe.svg["A Person and an Organization entity connected by a RELATED_TO relationship, with a separate Fact node",width=100%,link=self]
 
-== TypeScript equivalents at a glance
+For the rationale, see xref:explanation/poleo-model.adoc[The POLE+O data model].
 
-[cols="2,2,2", options="header"]
-|===
-|Operation |Python (Bolt) |TypeScript (NAMS)
+anchor:_prerequisites[]
 
-|Add an entity
-|`client.long_term.add_entity(name, entity_type)`
-|`memory.longTerm.addEntity(name, entityType)`
+== 1. Prepare the Bolt client
 
-|Get an entity by name
-|`client.long_term.get_entity_by_name(name)`
-|`memory.longTerm.getEntityByName(name)`
+Use a dedicated AuraDB instance from xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the first memory tutorial's Aura setup], with exported `NEO4J_URI`, `NEO4J_USERNAME`, and `NEO4J_PASSWORD`. Set `OPENAI_API_KEY` for the selected embedding provider. Prepare the example files below and install the provider extra:
 
-|Search entities (semantic)
-|`client.long_term.search_entities(query, entity_types=, limit=)`
-|`memory.longTerm.searchEntities(query, { type, limit })`
+include::partial$python-tutorial-setup.adoc[]
 
-|Walk related entities
-|`client.long_term.get_related_entities(entity_id, relationship_type=)`
-|`memory.longTerm.getRelatedEntities(entityId, { relationshipType, depth })`
-
-|Add a relationship
-|`client.long_term.add_relationship(source_id, target_id, relationship_type)`
-|`memory.longTerm.addRelationship(sourceId, targetId, relationshipType)`
-
-|Merge duplicates
-|`client.long_term.merge_duplicate_entities(source_id, target_id)`
-|`memory.longTerm.mergeDuplicateEntities(sourceId, targetId)`
-
-|Rich entity attributes
-|`add_entity(..., attributes={...})`
-|`addEntity(name, type, { description })` + update via `updateEntity` with `metadata`. NAMS uses lowercase types (`"person"`, `"organization"`, ...) vs Bolt's POLE+O (`"PERSON"`, ...).
-
-|Entity provenance
-|`client.long_term.get_entity_provenance(entity_id)`
-|`memory.reasoning.getEntityProvenance(entityId)` _(NAMS only)_
-
-|Entity history / audit
-|_(not exposed)_
-|`memory.longTerm.getEntityHistory(entityId)` _(NAMS only)_
-|===
-
-== Prerequisites
-
-* Neo4j database running with vector index support
-* `neo4j-agent-memory` installed
-* For automatic extraction: embedding model configured
-
-== Add Entities Manually
-
-=== Basic Entity Creation
-
-Create entities with name and type:
-
-[tabs]
-======
-Python (Bolt)::
-+
-[source,python]
+[source,bash]
 ----
-from neo4j_agent_memory import MemoryClient, MemorySettings
-
-settings = MemorySettings(
-    neo4j={"uri": "bolt://localhost:7687", "password": "password"},
-)
-
-client = MemoryClient(settings)
-
-# Add a customer entity. Python add_entity returns (entity, dedup_result).
-entity, _ = await client.long_term.add_entity(
-    name="John Smith",
-    entity_type="PERSON",
-)
-
-print(f"Created entity: {entity.id}")
+python -m pip install 'neo4j-agent-memory[openai]==0.6.0'
 ----
 
-TypeScript (NAMS)::
-+
-[source,typescript]
-----
-import { MemoryClient } from "@neo4j-labs/agent-memory";
+include::partial$python-core-recipe-intro.adoc[]
 
-const memory = new MemoryClient();  // reads MEMORY_API_KEY
+include::partial$python-core-recipe-files.adoc[]
 
-// NAMS uses lowercase entity types: "person", "organization", "location",
-// "concept", "tool", "custom". Server-side dedup is automatic.
-const entity = await memory.longTerm.addEntity("John Smith", "person", {
-  description: "Customer who ordered SKU-NKE-AM90 on 2026-04-01",
-});
+== 2. Apply the task function
 
-console.log(`Created entity: ${entity.id}`);
-----
-======
+Create a source and target entity, link them with an explicit relationship, and attach a fact to one of them. `add_entity` returns `(Entity, DeduplicationResult)` on Bolt. Repeated exact name/type writes merge at storage even with `deduplicate=False`. Python 0.6.0 returns the existing stored ID for SDK-created entities, so the returned entity can be used as a relationship endpoint. The recipe disables resolution and deduplication for its isolated example names, then verifies the stored edge. `add_fact` takes `obj` (or its third positional argument), and `Fact.as_triple` is a property.
 
-=== Entity with Properties
-
-Add rich metadata to entities:
-
-.Financial Services Example
-[source,python]
-----
-# Add a client entity with full profile
-client_entity, _ = await client.long_term.add_entity(
-    name="Acme Investment Holdings LLC",
-    entity_type="ORGANIZATION",
-    attributes={
-        "client_id": "CL-78901",
-        "client_type": "institutional",
-        "aum": 50000000,  # Assets under management
-        "risk_profile": "moderate-growth",
-        "relationship_manager": "Sarah Johnson",
-        "onboarded_date": "2020-03-15",
-        "kyc_status": "verified",
-        "jurisdiction": "US",
-    },
-)
-
-# Add a security entity
-security, _ = await client.long_term.add_entity(
-    name="Apple Inc.",
-    entity_type="SECURITY",
-    attributes={
-        "ticker": "AAPL",
-        "exchange": "NASDAQ",
-        "sector": "Technology",
-        "industry": "Consumer Electronics",
-        "market_cap": "3T",
-        "asset_class": "US Large Cap Equity",
-    },
-)
-----
-
-.Ecommerce Retail Example
-[source,python]
-----
-# Add a product entity
-product, _ = await client.long_term.add_entity(
-    name="Nike Air Max 90",
-    entity_type="PRODUCT",
-    attributes={
-        "sku": "SKU-NKE-AM90-001",
-        "brand": "Nike",
-        "category": "Footwear",
-        "subcategory": "Running Shoes",
-        "price": 129.99,
-        "colors": ["white", "black", "red"],
-        "sizes_available": ["8", "9", "10", "11", "12"],
-        "rating": 4.7,
-        "review_count": 2341,
-    },
-)
-
-# Add a customer entity
-customer, _ = await client.long_term.add_entity(
-    name="Jane Doe",
-    entity_type="CUSTOMER",
-    attributes={
-        "customer_id": "CUST-12345",
-        "email": "jane.doe@example.com",
-        "tier": "gold",
-        "lifetime_value": 2500.00,
-        "preferred_categories": ["footwear", "athletic wear"],
-        "preferred_brands": ["Nike", "Adidas"],
-        "shoe_size": "9",
-    },
-)
-----
-
-=== Entity with Description
-
-Add searchable descriptions for semantic retrieval:
+The function below is included from the complete maintained program, which already supplies imports, client setup, unique IDs, and `asyncio.run`. Run the file in step 3; this extract is not a separate top-level script.
 
 [source,python]
 ----
-# Description enables semantic search
-entity, _ = await client.long_term.add_entity(
-    name="Q4 2024 Earnings Report",
-    entity_type="DOCUMENT",
-    description="""
-    Quarterly earnings report for Q4 2024 showing strong revenue growth
-    of 15% year-over-year. Key highlights include expansion into European
-    markets, successful product launches in the athletic footwear segment,
-    and improved gross margins due to supply chain optimization.
-    """,
-    attributes={
-        "document_type": "earnings_report",
-        "fiscal_period": "Q4 2024",
-        "release_date": "2025-01-15",
-        "status": "published",
-    },
-)
+include::example$core_memory_recipes.py[tag=entities]
 ----
 
-== Search Entities
+== 3. Run and verify
 
-=== Semantic Search
-
-Find entities by meaning:
-
-[source,python]
+[source,bash]
 ----
-# Find technology companies
-results = await client.long_term.search_entities(
-    query="tech companies in the smartphone industry",
-    limit=10,
-)
-
-for entity in results:
-    print(f"{entity.name} ({entity.type})")
-    print(f"  Score: {entity.score:.3f}")
-    if entity.description:
-        print(f"  Description: {entity.description[:100]}...")
+python core_memory_recipes.py entities
 ----
 
-=== Filter by Type
+Expected: `Verified: entity relationship and fact readback; person=...`. The recipe checks the exact source/target names and stored logical relationship type, then checks the fact triple returned by `get_facts_about`.
 
-Search within specific entity types:
+The command retains its example records for inspection. Remove the disposable tutorial database using that tutorial's cleanup command when finished. Do not substitute an unrestricted delete query against an existing database.
 
-.Find financial institutions
-[source,python]
-----
-results = await client.long_term.search_entities(
-    query="investment bank wealth management",
-    entity_types=["FINANCIAL_INSTITUTION"],
-    limit=20,
-)
-----
+anchor:_search_entities[]
 
-.Find products in a category
-[source,python]
-----
-results = await client.long_term.search_entities(
-    query="comfortable running shoes for marathon training",
-    entity_types=["PRODUCT"],
-    limit=15,
-)
-----
+== Search or list entities
 
-=== Filter by Properties
+Use `search_entities(query, entity_types=["PERSON"], threshold=0.7, limit=10)` for semantic candidates. Similarity is in `entity.metadata["similarity"]`, not a top-level `score` field. An empty semantic query is not an all-entities listing.
 
-Combine semantic search with property filters:
+For an exact ID/type/property lookup on Bolt, use `client.query.cypher` with parameters. Entity `attributes` and metadata may be serialized fields; inspect xref:reference/schema-objects.adoc[the stored schema] before writing a property filter. `get_entity_by_name` checks names/canonical names/aliases but has no type argument.
 
-.Find high-value customers interested in luxury goods
-[source,python]
-----
-results = await client.long_term.search_entities(
-    query="luxury fashion premium brands",
-    entity_types=["CUSTOMER"],
-    property_filter={
-        "tier": "gold",
-        "lifetime_value": {"$gte": 5000},
-    },
-    limit=50,
-)
-----
+anchor:_create_relationships[]
 
-.Find securities in specific sectors
-[source,python]
-----
-results = await client.long_term.search_entities(
-    query="artificial intelligence machine learning",
-    entity_types=["SECURITY"],
-    property_filter={
-        "sector": "Technology",
-        "market_cap": {"$in": ["Large Cap", "Mega Cap"]},
-    },
-    limit=30,
-)
-----
+== Preserve relationship and source meaning
 
-== Create Relationships
+Explicit `add_relationship` calls store the logical relationship name in `RELATED_TO.type`; automatic message extraction uses the separate `RELATED_TO.relation_type` property. Python 0.6.0 returns the stored relationship ID when an existing edge is matched and raises `NotFoundError` when an endpoint is absent. Its write does not persist the `attributes` argument — a documented limitation of 0.6.0; do not depend on a provenance attribute surviving that call. Use `link_entity_to_message` for `EXTRACTED_FROM` links and `get_entity_provenance` for inspection. The xref:tutorials/knowledge-graph.adoc[document tutorial] demonstrates complete extraction and provenance storage.
 
-=== Direct Relationships
+anchor:_update_entities[]
+anchor:_delete_entities[]
 
-Link entities together:
+== Update an existing graph deliberately
 
-[source,python]
-----
-# Customer purchased product
-await client.long_term.add_relationship(
-    from_entity=customer.id,
-    to_entity=product.id,
-    relationship_type="PURCHASED",
-    properties={
-        "order_id": "ORD-98765",
-        "purchase_date": "2024-01-15",
-        "quantity": 1,
-        "price_paid": 119.99,
-        "channel": "mobile_app",
-    },
-)
+There are no Python `update_entity`, `delete_entity`, `merge_entities`, or `get_entity` wrappers in these stores. For manual duplicate resolution use xref:how-to/deduplication.adoc[`merge_duplicate_entities`]. For another Bolt mutation, implement a parameterized application query through `client.graph.execute_write`, validate the exact affected IDs, and consider any linked provenance. `client.query.cypher` is read-only; hosted query access does not provide an equivalent write path.
 
-# Client holds security
-await client.long_term.add_relationship(
-    from_entity=client_entity.id,
-    to_entity=security.id,
-    relationship_type="HOLDS",
-    properties={
-        "shares": 10000,
-        "cost_basis": 150.00,
-        "acquired_date": "2023-06-01",
-        "account_type": "taxable",
-    },
-)
-----
+For enrichment and geospatial tasks, follow xref:reference/configuration.adoc#enrichment[enrichment configuration] and xref:reference/api/long-term.adoc[geospatial operations]. Full parameters, result models, facts, and relationship queries are in xref:reference/api/long-term.adoc[the long-term reference].
 
-=== Find Related Entities
+// Historical section links resolve to the maintained task and reference pointers.
+anchor:_typescript_equivalents_at_a_glance[]
 
-Query the knowledge graph for connected entities:
+include::partial$python-typescript-equivalents.adoc[]
 
-.Find products purchased together
-[source,python]
-----
-# Get products frequently bought with a specific item
-related = await client.long_term.get_related_entities(
-    entity_id=product.id,
-    relationship_type="FREQUENTLY_BOUGHT_WITH",
-    limit=10,
-)
-
-for entity, relationship in related:
-    print(f"{entity.name}")
-    print(f"  Co-purchase count: {relationship.properties.get('count')}")
-----
-
-.Find client's complete portfolio
-[source,python]
-----
-# Get all securities held by a client
-holdings = await client.long_term.get_related_entities(
-    entity_id=client_entity.id,
-    relationship_type="HOLDS",
-    direction="outgoing",
-    limit=100,
-)
-
-total_value = 0
-for security, holding in holdings:
-    shares = holding.properties.get("shares", 0)
-    # Would need current price from market data
-    print(f"{security.name}: {shares} shares")
-----
-
-=== Graph Traversal
-
-Find entities through multi-hop paths:
-
-.Find customers who bought products from the same brand
-[source,python]
-----
-# Cypher query for complex traversal
-query = """
-MATCH (c1:Customer)-[:PURCHASED]->(p1:Product)-[:MADE_BY]->(brand:Brand)
-      <-[:MADE_BY]-(p2:Product)<-[:PURCHASED]-(c2:Customer)
-WHERE c1.id = $customer_id AND c1 <> c2
-RETURN DISTINCT c2, count(DISTINCT p2) as shared_brand_purchases
-ORDER BY shared_brand_purchases DESC
-LIMIT 10
-"""
-
-results = await client.graph.execute_read(
-    query,
-    parameters={"customer_id": customer.id}
-)
-----
-
-== Update Entities
-
-=== Modify Properties
-
-Update entity properties:
-
-[source,python]
-----
-# Update customer tier after purchase milestone
-await client.long_term.update_entity(
-    entity_id=customer.id,
-    properties={
-        "tier": "platinum",
-        "lifetime_value": 10500.00,
-        "tier_upgraded_at": "2024-01-20",
-    },
-)
-----
-
-=== Merge Entities
-
-Combine duplicate entities:
-
-[source,python]
-----
-# Merge duplicate customer records
-await client.long_term.merge_entities(
-    primary_id=entity1.id,
-    duplicate_id=entity2.id,
-    merge_properties=True,  # Combine properties from both
-    keep_aliases=True,      # Store duplicate name as alias
-)
-----
-
-== Delete Entities
-
-=== Remove Single Entity
-
-[source,python]
-----
-# Delete an entity (also removes its relationships)
-await client.long_term.delete_entity(entity_id=entity.id)
-----
-
-=== Bulk Delete
-
-[source,python]
-----
-# Delete all entities of a specific type
-await client.long_term.delete_entities(
-    entity_type="TEMPORARY_ENTITY",
-)
-
-# Delete entities matching criteria
-await client.long_term.delete_entities(
-    property_filter={"status": "archived"},
-)
-----
-
-== Work with Facts
-
-Facts are structured assertions about entities:
-
-=== Add Facts
-
-[source,python]
-----
-# Add facts about an entity
-await client.long_term.add_fact(
-    entity_id=customer.id,
-    fact="Prefers to receive shipments on weekends",
-    category="shipping_preference",
-    confidence=0.95,
-    source="stated_in_conversation",
-)
-
-await client.long_term.add_fact(
-    entity_id=client_entity.id,
-    fact="Has a 5-year investment horizon for retirement accounts",
-    category="investment_goal",
-    confidence=0.90,
-    source="advisory_call_2024-01-15",
-)
-----
-
-=== Query Facts
-
-[source,python]
-----
-# Get all facts about an entity
-facts = await client.long_term.get_entity_facts(
-    entity_id=customer.id,
-)
-
-for fact in facts:
-    print(f"[{fact.category}] {fact.fact}")
-    print(f"  Confidence: {fact.confidence}, Source: {fact.source}")
-----
-
-== Entity Enrichment
-
-image::diagrams/background-entity-enrichment.png[Background enrichment flow: entity created → enrichment queue → Wikipedia/Diffbot → entity updated with description and metadata,width=540,align=left]
-
-Automatically enrich entities with external data:
-
-=== Enable Enrichment
-
-[source,python]
-----
-from neo4j_agent_memory import MemoryClient, MemorySettings
-from neo4j_agent_memory.enrichment import WikimediaEnricher
-
-# Configure enrichment
-settings = MemorySettings(
-    neo4j={"uri": "bolt://localhost:7687", "password": "password"},
-)
-client = MemoryClient(settings, enrichment_provider=WikimediaEnricher())
-
-# Entity will be automatically enriched
-entity, _ = await client.long_term.add_entity(
-    name="Apple Inc.",
-    entity_type="ORGANIZATION",
-    auto_enrich=True,
-)
-
-print(f"Description: {entity.description}")
-print(f"Wikipedia URL: {entity.wikipedia_url}")
-print(f"Wikidata ID: {entity.wikidata_id}")
-----
-
-=== Manual Enrichment
-
-[source,python]
-----
-# Enrich existing entity
-enriched = await client.long_term.enrich_entity(
-    entity_id=entity.id,
-    provider="wikimedia",
-)
-----
-
-== Entity Statistics
-
-Get insights about your entity graph:
-
-[source,python]
-----
-stats = await client.long_term.get_entity_statistics()
-
-print(f"Total entities: {stats.total_entities}")
-print(f"Total relationships: {stats.total_relationships}")
-
-print("\nEntities by type:")
-for entity_type, count in stats.by_type.items():
-    print(f"  {entity_type}: {count}")
-
-print("\nRelationships by type:")
-for rel_type, count in stats.by_relationship.items():
-    print(f"  {rel_type}: {count}")
-----
-
-== Best Practices
-
-=== 1. Use Consistent Entity Types
-
-Define a clear taxonomy for your domain:
-
-.Financial Services Entity Types
-[source,python]
-----
-ENTITY_TYPES = {
-    "PERSON": ["Client", "Advisor", "Contact"],
-    "ORGANIZATION": ["Financial Institution", "Company", "Fund"],
-    "SECURITY": ["Stock", "Bond", "ETF", "Mutual Fund"],
-    "ACCOUNT": ["Investment Account", "Retirement Account", "Trust"],
-    "TRANSACTION": ["Trade", "Deposit", "Withdrawal", "Transfer"],
-    "DOCUMENT": ["Report", "Statement", "Agreement", "Prospectus"],
-}
-----
-
-.Ecommerce Entity Types
-[source,python]
-----
-ENTITY_TYPES = {
-    "PERSON": ["Customer", "Seller", "Support Agent"],
-    "PRODUCT": ["Physical Product", "Digital Product", "Service"],
-    "CATEGORY": ["Department", "Category", "Subcategory"],
-    "BRAND": ["Brand", "Manufacturer"],
-    "ORDER": ["Order", "Return", "Exchange"],
-    "LOCATION": ["Warehouse", "Store", "Shipping Address"],
-    "PROMOTION": ["Coupon", "Sale", "Bundle"],
-}
-----
-
-=== 2. Design for Queries
-
-Structure entities based on how you'll query them:
-
-[source,python]
-----
-# Good: Separate entities for different query patterns
-brand, _ = await client.long_term.add_entity(
-    name="Nike",
-    entity_type="BRAND",
-    attributes={"headquarters": "Oregon"}
-)
-
-product, _ = await client.long_term.add_entity(
-    name="Nike Air Max 90",
-    entity_type="PRODUCT",
-    attributes={"brand": "Nike", "category": "Running"}
-)
-
-# Then connect them
-await client.long_term.add_relationship(
-    from_entity=product.id,
-    to_entity=brand.id,
-    relationship_type="MADE_BY",
-)
-----
-
-=== 3. Include Searchable Descriptions
-
-Descriptions enable semantic search:
-
-[source,python]
-----
-# Good: Rich, searchable description
-entity, _ = await client.long_term.add_entity(
-    name="AAPL",
-    entity_type="SECURITY",
-    description="""
-    Apple Inc. common stock traded on NASDAQ. Technology company
-    known for iPhone, Mac computers, iPad, Apple Watch, and services
-    including App Store, iCloud, and Apple Music. Part of the
-    "Magnificent Seven" large-cap tech stocks.
-    """,
-)
-
-# Avoid: No description (only findable by exact name match)
-entity, _ = await client.long_term.add_entity(
-    name="AAPL",
-    entity_type="SECURITY",
-)
-----
-
-=== 4. Track Provenance
-
-Record where entities came from:
-
-[source,python]
-----
-entity, _ = await client.long_term.add_entity(
-    name="John Smith",
-    entity_type="PERSON",
-    attributes={
-        "source": "crm_import",
-        "source_id": "CRM-12345",
-        "imported_at": "2024-01-15T10:00:00Z",
-        "last_verified": "2024-01-15T10:00:00Z",
-    },
-)
-----
-
-== See Also
-
-* xref:how-to/entity-extraction.adoc[Configure Entity Extraction]
-* xref:how-to/deduplication.adoc[Handle Duplicate Entities]
-* xref:explanation/poleo-model.adoc[The POLE+O Data Model]
-* xref:reference/api/long-term.adoc[LongTermMemory API Reference]
+anchor:_add_entities_manually[]
+anchor:_basic_entity_creation[]
+anchor:_entity_with_properties[]
+anchor:_entity_with_description[]
+anchor:_semantic_search[]
+anchor:_filter_by_type[]
+anchor:_filter_by_properties[]
+anchor:_direct_relationships[]
+anchor:_find_related_entities[]
+anchor:_graph_traversal[]
+anchor:_modify_properties[]
+anchor:_merge_entities[]
+anchor:_remove_single_entity[]
+anchor:_bulk_delete[]
+anchor:_work_with_facts[]
+anchor:_add_facts[]
+anchor:_query_facts[]
+anchor:_entity_enrichment[]
+anchor:_enable_enrichment[]
+anchor:_manual_enrichment[]
+anchor:_entity_statistics[]
+anchor:_best_practices[]
+anchor:_1_use_consistent_entity_types[]
+anchor:_2_design_for_queries[]
+anchor:_3_include_searchable_descriptions[]
+anchor:_4_track_provenance[]
+anchor:_see_also[]

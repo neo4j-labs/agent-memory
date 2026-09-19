@@ -1,347 +1,38 @@
-= ShortTermMemory API Reference
+= ShortTermMemory API reference
 :page-product: agent-memory
 :page-pagination:
 :toclevels: 2
 
-API for conversation and message storage.
+Conversation and message operations exposed through `client.short_term`. Signatures in the bolt sections describe `ShortTermMemory`; the NAMS table identifies hosted differences.
+
+Signatures below show types, keyword-only arguments (`*`), and defaults. They are reference declarations; the examples show calls to execute.
+
+See xref:reference/backend-capabilities.adoc[Backend capabilities] for availability and data scope. This page is a short overview and index; each subsystem has its own page.
 
 == Overview
 
-`ShortTermMemory` handles conversations and messages with sequential linking, semantic search, and session management.
-
 [source,python]
 ----
-async with MemoryClient(settings) as client:
-    # Access via client
-    short_term = client.short_term
-
-    # Add a message
-    message = await short_term.add_message(
-        session_id="user-123",
-        role="user",
-        content="Hello, world!"
-    )
-----
-
-== Message Operations
-
-=== add_message
-
-Add a message to a conversation.
-
-[source,python]
-----
-message = await short_term.add_message(
-    session_id: str,
-    role: str,
-    content: str,
-    metadata: dict[str, Any] | None = None,
-    timestamp: datetime | None = None,
+message = await client.short_term.add_message(
+    session_id="example", role="user", content="Hello, world!"
 )
+conversation = await client.short_term.get_conversation("example")
+for stored in conversation.messages:
+    print(stored.role.value, stored.content)
 ----
 
-==== Parameters
+The example uses bolt, where a session name can create a conversation implicitly. On NAMS, call `create_conversation` first and use its returned ID.
 
-[cols="1,1,1,3", options="header"]
-|===
-| Parameter | Type | Default | Description
+== On this subsystem
 
-| `session_id`
-| `str`
-| _required_
-| Conversation/session identifier
+* anchor:_message_operations_bolt[]anchor:_add_message[]anchor:_add_messages_batch[]anchor:_get_conversation[]anchor:_delete_message[]anchor:_nams_and_shared_conversation_operations[]anchor:_create_conversation[]anchor:_list_conversations[]anchor:_bulk_add_messages[]anchor:_get_observations[]anchor:_get_reflections[]anchor:_get_extraction_status[]anchor:_models[]anchor:_message[]anchor:_conversation[]anchor:_extractionstatus[]anchor:_message_operations[]anchor:_parameters[]anchor:_returns[]anchor:_add_messages[]anchor:_get_messages[]anchor:_get_message[]anchor:_extraction_status_nams[]anchor:_message_model[]xref:reference/api/short-term-messages.adoc[Conversation and message operations] — `add_message`, `add_messages_batch`, `get_conversation`, `delete_message`, the NAMS conversation operations (`create_conversation`, `list_conversations`, `bulk_add_messages`, `get_observations`, `get_reflections`, `get_extraction_status`), and the `Message`/`Conversation`/`ExtractionStatus` models.
+* anchor:_search_operations_bolt[]anchor:_search_messages[]anchor:_get_context[]anchor:_search_operations[]anchor:_parameters_2[]anchor:_returns_2[]xref:reference/api/short-term-search.adoc[Message search and context] — `search_messages` and `get_context`.
+* anchor:_session_operations_bolt[]anchor:_list_sessions[]anchor:_clear_session[]anchor:_conversation_summaries_bolt[]anchor:_get_conversation_summary[]anchor:_message_linking_and_deferred_processing_bolt[]anchor:_migrate_message_links[]anchor:_generate_embeddings_batch[]anchor:_extract_entities_from_session[]anchor:_sessioninfo[]anchor:_conversationsummary[]anchor:_session_operations[]anchor:_returns_3[]anchor:_delete_session[]anchor:_conversation_summaries[]anchor:_returns_4[]anchor:_generate_summary[]anchor:_get_summary[]anchor:_message_linking[]xref:reference/api/short-term-sessions.adoc[Sessions, summaries, and maintenance] — `list_sessions`, `clear_session`, `get_conversation_summary`, `migrate_message_links`, `generate_embeddings_batch`, `extract_entities_from_session`, and the `SessionInfo`/`ConversationSummary` models.
 
-| `role`
-| `str`
-| _required_
-| Message role (`user`, `assistant`, `system`)
+anchor:_example[]
 
-| `content`
-| `str`
-| _required_
-| Message content
+== See also
 
-| `metadata`
-| `dict`
-| `None`
-| Additional metadata
-
-| `timestamp`
-| `datetime`
-| _now_
-| Message timestamp
-|===
-
-==== Returns
-
-`Message` object with generated `id` and embedding.
-
-=== add_messages
-
-Add multiple messages in batch.
-
-[source,python]
-----
-messages = await short_term.add_messages(
-    session_id: str,
-    messages: list[dict],  # [{"role": "user", "content": "..."}]
-)
-----
-
-=== get_message
-
-Get a message by ID.
-
-[source,python]
-----
-message = await short_term.get_message(message_id: str)
-----
-
-=== get_messages
-
-Get messages from a conversation.
-
-[source,python]
-----
-messages = await short_term.get_messages(
-    session_id: str,
-    limit: int = 50,
-    before: datetime | None = None,
-    after: datetime | None = None,
-)
-----
-
-=== delete_message
-
-Delete a message.
-
-[source,python]
-----
-await short_term.delete_message(message_id: str)
-----
-
-== Search Operations
-
-=== search_messages
-
-Semantic search across messages.
-
-[source,python]
-----
-results = await short_term.search_messages(
-    query: str,
-    session_id: str | None = None,
-    limit: int = 10,
-    min_score: float = 0.0,
-    metadata_filter: dict[str, Any] | None = None,
-)
-----
-
-==== Parameters
-
-[cols="1,1,1,3", options="header"]
-|===
-| Parameter | Type | Default | Description
-
-| `query`
-| `str`
-| _required_
-| Search query
-
-| `session_id`
-| `str`
-| `None`
-| Filter to specific session
-
-| `limit`
-| `int`
-| `10`
-| Maximum results
-
-| `min_score`
-| `float`
-| `0.0`
-| Minimum similarity score
-
-| `metadata_filter`
-| `dict`
-| `None`
-| Filter by metadata fields
-|===
-
-==== Returns
-
-List of `(Message, score)` tuples, sorted by relevance.
-
-== Extraction Status (NAMS)
-
-On the NAMS backend, entity extraction runs asynchronously — writes are accepted
-immediately and extracted entities appear a moment later. These methods let you
-wait for the pipeline to settle before asserting on results.
-
-=== get_extraction_status
-
-[source,python]
-----
-status = await client.short_term.get_extraction_status(session_id)
-# or: get_extraction_status(conversation_id=...)
-status.is_complete    # bool  — no messages still pending
-status.pending_count  # int   — messages not yet extracted
-----
-
-Returns an `ExtractionStatus`. Backed by `GET /v1/conversations/{id}/extraction-status`.
-On bolt, extraction is synchronous, so this rollup is trivially complete.
-
-TIP: `client.long_term.wait_for_extraction(session_id=...)` polls this endpoint
-for you, then (optionally) confirms via entity search — see
-xref:reference/nams-limits.adoc[NAMS Limits & Behavior].
-
-== Session Operations
-
-=== list_sessions
-
-List all conversation sessions.
-
-[source,python]
-----
-sessions = await short_term.list_sessions(
-    user_id: str | None = None,
-    limit: int = 100,
-)
-----
-
-==== Returns
-
-List of session info dictionaries:
-
-[source,python]
-----
-[
-    {
-        "session_id": "user-123",
-        "message_count": 42,
-        "first_message": datetime(...),
-        "last_message": datetime(...),
-    },
-    ...
-]
-----
-
-=== get_conversation
-
-Get a conversation and all its messages for a session.
-
-[source,python]
-----
-conversation = await short_term.get_conversation(
-    session_id: str,
-    limit: int | None = None,
-)
-# conversation.messages contains the list of Message objects
-----
-
-=== delete_session
-
-Delete a session and all its messages.
-
-[source,python]
-----
-deleted_count = await short_term.delete_session(session_id: str)
-----
-
-== Conversation Summaries
-
-=== generate_summary
-
-Generate an LLM summary of a conversation.
-
-[source,python]
-----
-summary = await short_term.generate_summary(
-    session_id: str,
-    max_messages: int = 50,
-)
-----
-
-==== Returns
-
-`ConversationSummary` object:
-
-[source,python]
-----
-@dataclass
-class ConversationSummary:
-    session_id: str
-    summary: str
-    message_count: int
-    generated_at: datetime
-----
-
-=== get_summary
-
-Get cached summary for a session.
-
-[source,python]
-----
-summary = await short_term.get_summary(session_id: str)
-----
-
-== Message Linking
-
-Messages are automatically linked in sequence:
-
-[source]
-----
-(Conversation) -[:FIRST_MESSAGE]-> (Message1)
-(Message1) -[:NEXT_MESSAGE]-> (Message2)
-(Message2) -[:NEXT_MESSAGE]-> (Message3)
-----
-
-=== migrate_message_links
-
-Migrate existing data to sequential links (one-time operation).
-
-[source,python]
-----
-stats = await short_term.migrate_message_links()
-# Returns: {"session-1": 10, "session-2": 5, ...}
-----
-
-== Message Model
-
-[source,python]
-----
-@dataclass
-class Message:
-    id: str
-    session_id: str
-    role: str
-    content: str
-    timestamp: datetime
-    metadata: dict[str, Any]
-    embedding: list[float] | None
-----
-
-== Example
-
-[source,python]
-----
-async with MemoryClient(settings) as client:
-    # Store conversation
-    await client.short_term.add_message("user-123", "user", "What's the weather?")
-    await client.short_term.add_message("user-123", "assistant", "It's sunny today!")
-
-    # Search across all conversations
-    results = await client.short_term.search_messages("weather forecast")
-    for message, score in results:
-        print(f"[{score:.2f}] {message.role}: {message.content}")
-
-    # Get recent messages for a session
-    messages = await client.short_term.get_messages("user-123", limit=10)
-----
-
-== See Also
-
-* xref:reference/api/memory-client.adoc[MemoryClient API]
-* xref:how-to/messages.adoc[Store and Search Messages]
-* xref:explanation/memory-types.adoc[Understanding Memory Types]
+* xref:reference/api/memory-client.adoc[MemoryClient]
+* xref:how-to/messages.adoc[Store and search messages]
+* xref:reference/nams-limits.adoc[NAMS behavior]

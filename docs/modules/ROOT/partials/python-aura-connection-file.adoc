@@ -1,0 +1,11 @@
+Open the helper below and save its complete source as `aura_connection.py` in your lesson folder.
+
+.Show `aura_connection.py`
+[%collapsible]
+====
+.Save as `aura_connection.py`
+[source,python]
+----
+include::example$aura_connection.py[]
+----
+====

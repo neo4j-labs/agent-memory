@@ -1,74 +1,49 @@
 = Ontologies
 :description: What a NAMS ontology is, how it extends POLE+O, and how validation modes and versioning work.
 
-[NOTE]
-====
-Ontologies are a *NAMS (hosted backend)* capability. On the bolt backend the
-`client.ontology` methods raise `NotSupportedError`; define a custom schema with
-`SchemaModel.CUSTOM` instead. See xref:explanation/backends.adoc[Backends].
-====
+An ontology supplies a domain vocabulary and validation policy for NAMS. It refines the broad POLE+O categories without requiring every application to treat all entities as generic people, places, or objects.
 
+NOTE: Ontology methods are a NAMS capability. Bolt uses client-side schema configuration instead. See xref:reference/backend-capabilities.adoc[Backend capabilities] and xref:explanation/backends.adoc[Bolt and NAMS].
+
+[[_what_is_an_ontology]]
 == What is an ontology?
 
-An *ontology* is a typed, versioned, validated schema for your knowledge graph.
-Where the base xref:explanation/poleo-model.adoc[POLE+O model] gives you five
-coarse entity categories (Person, Organization, Location, Event, Object), an
-ontology refines them into a concrete domain vocabulary:
+An ontology describes entity types, properties, and allowed relationships for a domain. For example, a research domain can distinguish a study from a dataset and describe how they are connected while retaining a broad POLE+O category.
 
-* **Entity types** — each carries a `pole_type` (one of the POLE+O categories),
-  an optional `subtype`, display metadata (`color`, `icon`), and a list of typed
-  **properties**.
-* **Properties** — a `name`, a `type` (`string`, `datetime`, `date`, `float`,
-  `integer`), and optional `required`, `unique`, and `enum` constraints.
-* **Relationships** — a typed edge (`UPPER_SNAKE`) with `source` and `target`
-  entity labels.
+A schema makes the vocabulary explicit. It does not guarantee that extracted information is true or that the model selected the correct type. The complete document structure belongs in xref:reference/ontology-api.adoc[the ontology reference].
 
-NAMS ships ~28 *system templates* (healthcare, legal, cybersecurity,
-financial-services, software-engineering, and more). Activating one makes
-server-side extraction produce a clean, predictable graph — `Patient`,
-`Provider`, `Diagnosis` with enforced fields and enumerations — instead of
-generic, loosely-typed nodes.
+[[_templates_vs_workspace_owned_ontologies]]
+== Templates and workspace-owned ontologies
 
-== Templates vs. workspace-owned ontologies
+A system template offers a starting vocabulary. A workspace-owned copy allows an application to adapt that vocabulary without modifying the shared template.
 
-System templates are read-only (`is_system = true`). To customize one you
-*clone* it into a workspace-owned copy, which you can then revise. A workspace
-also has exactly one *active* ontology at a time; until you activate one, the
-`nams-default` template is implicitly bound.
+An active ontology version determines the workspace's validation policy. Template availability and active-version behavior are part of the service contract; retrieve the available and active records rather than depending on a fixed template count. See xref:how-to/use-ontologies.adoc[Use ontologies].
 
+[[_versioning_and_immutability]]
 == Versioning and immutability
 
-Every change produces a new *immutable revision*. `clone` yields revision 1;
-each `update` yields revision n+1. A version records its `revision`,
-`validation_mode`, a `schema_hash`, and provenance. You `activate` a specific
-*version* (by its `ov_…` id) — activation is what binds a schema to the
-workspace and starts validating writes against it.
+A version identifies a particular schema revision. Changing a schema and activating a version are distinct operations: an editable definition is not necessarily the one governing current writes.
 
-== Validation modes
+Version history supports comparison and deliberate rollout. Changing the active version may affect other applications using the workspace. A tutorial or experiment should preserve the previous active version or use a disposable workspace, rather than treating activation as local program state.
 
-Each version has a `validation_mode`:
+[[_validation_modes]]
+== Validation tradeoffs
 
-[cols="1,3",options="header"]
-|===
-| Mode | Behavior
-| `permissive` | (default) Non-conforming entity writes are accepted and recorded.
-| `strict` | Writes that violate the schema are rejected. The SDK surfaces the rejection as `ValidationError`.
-|===
+Permissive validation favors accepting input while recording non-conformance. Strict validation favors rejecting writes that violate the active schema. The right choice depends on whether the application can tolerate incomplete ingestion or imperfectly typed records.
 
-`permissive` favors ingestion tolerance; `strict` favors graph cleanliness. You
-choose per version, and `get_active()` reports the active mode.
+Validation enforces the declared constraints. It cannot determine whether a source statement is factually correct. See xref:reference/ontology-api.adoc[Validation modes and errors] for the current request and result contract.
 
+[[_relationship_to_server_side_extraction]]
 == Relationship to server-side extraction
 
-Ontologies shape the *server-side* GraphRAG extraction pipeline. Once a version
-is active, entities extracted from stored messages — and entities you write
-directly with `add_entity` — are validated against the active schema. Extraction
-is asynchronous; use
-xref:how-to/use-ontologies.adoc[`wait_for_extraction`] when you need to observe
-the result deterministically.
+The active vocabulary informs the server-side graph extraction and validation path. A completed message write does not necessarily mean that asynchronous extraction has finished.
 
+Applications that need extracted entities before their next operation must observe the supported extraction-completion mechanism. The xref:how-to/use-ontologies.adoc[ontology guide] provides the exact waiting and verification steps. Activating a new version is also separate from migrating already stored records.
+
+[[_see_also]]
 == See also
 
-* xref:how-to/use-ontologies.adoc[How-to: Use ontologies]
-* xref:reference/ontology-api.adoc[Reference: Ontology API]
-* xref:tutorials/ontology-quickstart.adoc[Tutorial: Ontology quickstart]
+* xref:how-to/use-ontologies.adoc[Use ontologies]
+* xref:reference/ontology-api.adoc[Ontology API]
+* xref:tutorials/ontology-quickstart.adoc[Ontology quickstart]
+* xref:explanation/poleo-model.adoc[POLE+O classification]

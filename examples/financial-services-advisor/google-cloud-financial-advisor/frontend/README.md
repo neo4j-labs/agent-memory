@@ -16,8 +16,8 @@
 
 ## Prerequisites
 
-- **Node.js 22 LTS or newer** (Node 18 reached end of life in April 2025; the
-  Docker build image is `node:22-alpine`).
+- **Node.js 22.13+ on the 22 release line, or Node.js 24**, for development and checks.
+  The locked lint/test toolchain sets this floor independently of the TypeScript memory SDK.
 - The FastAPI backend from [`../backend`](../backend) running on port 8000
   (`make run-backend` from the example root), with Neo4j loaded
   (`make load-data`).
@@ -140,7 +140,9 @@ Double-clicking any node expands its neighbours instead.
 
 ---
 
-_Verified against `neo4j-agent-memory` 0.6.0-dev (editable path install in the
-backend), Vite 8.3, React 19.2, react-router 7.18, Chakra UI 3.37, motion 13.2,
-`@neo4j-nvl/*` 1.2.1, TanStack Query 5.102, TypeScript 5.9, ESLint 10 +
-typescript-eslint 8, Node 22 — 2026-09-10._
+**Historical verification report — 2026-09-10.** The following records a prior checkout/test report. Its development-version labels, passing counts, and release-availability statements are historical, not evidence of current package compatibility. See the [current source and artifact evidence](../../../../DOCUMENTATION_REMEDIATION_STATUS.md) before selecting an SDK artifact.
+
+> _Verified against `neo4j-agent-memory` 0.6.0-dev (editable path install in the
+> backend), Vite 8.3, React 19.2, react-router 7.18, Chakra UI 3.37, motion 13.2,
+> `@neo4j-nvl/*` 1.2.1, TanStack Query 5.102, TypeScript 5.9, ESLint 10 +
+> typescript-eslint 8, Node 22 — 2026-09-10._

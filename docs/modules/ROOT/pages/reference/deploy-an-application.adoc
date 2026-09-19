@@ -1,0 +1,56 @@
+= Deploy a memory application
+:page-product: agent-memory
+:toclevels: 2
+
+This reference compares the deployment paths this repository documents for an
+application built on the SDKs. See xref:reference/backend-capabilities.adoc[backend
+capabilities] before treating these as interchangeable: Bolt and NAMS support
+different operations, and the TypeScript SDK is REST/NAMS-only.
+
+== Options and constraints
+
+Each option below lists the same facts the comparison used to show in table
+form: transport, backend, credentials, and requirements and constraints.
+
+=== Hosted NAMS workspace (Python or TypeScript)
+
+Transport:: HTTPS REST, `https://memory.neo4jlabs.com/v1` by default
+Backend:: NAMS (no database to operate)
+Credentials:: A workspace API key (`MEMORY_API_KEY`, prefixed `nams_`), plus `MEMORY_WORKSPACE_ID` (sent as `X-Workspace-Id`) on deployments that scope by header rather than by key; a workspace-bound key rejects a different workspace id
+Requirements and constraints:: No Neo4j instance or extraction pipeline to run yourself. Some Bolt-only operations (preferences, facts, client-created relationships, geospatial search, custom Cypher writes) are unsupported; see xref:reference/backend-capabilities.adoc[backend capabilities]. See xref:how-to/use-nams.adoc[Connect a Python application to NAMS].
+
+=== Python SDK embedded in your own application
+
+Transport:: Bolt (`bolt://`, `neo4j+s://`) from your own process — no MCP server
+Backend:: Bolt, against a Neo4j instance you operate (self-managed or AuraDB)
+Credentials:: `NEO4J_URI` / `NEO4J_USERNAME` / `NEO4J_PASSWORD`, plus embedding/LLM provider credentials for the selected providers (`MemorySettings` implicitly selects OpenAI embeddings)
+Requirements and constraints:: Full Bolt operation set, including preferences, facts, client-created relationships, geospatial search and custom Cypher; you operate the database and the extraction pipeline. See xref:reference/configuration.adoc[configuration reference].
+
+=== Self-hosted Python MCP server, stdio transport
+
+Transport:: stdio (the CLI default)
+Backend:: Bolt, against a Neo4j instance you operate
+Credentials:: `NEO4J_URI` / `NEO4J_USER` / `NEO4J_PASSWORD` for the database; provider credentials (for example an OpenAI key) only if extraction or embeddings are enabled
+Requirements and constraints:: For local MCP hosts — Claude Desktop, Claude Code, Cursor. Not a network-reachable deployment: the host process owns stdio.
+
+=== Self-hosted Python MCP server, Streamable HTTP transport
+
+Transport:: `http` (`streamable-http` is an explicit spelling of the same transport; `sse` is accepted but deprecated and served as `http`)
+Backend:: Bolt, against a Neo4j instance you operate (for example AuraDB)
+Credentials:: Database credentials plus embedding/LLM provider credentials for whichever provider you select
+Requirements and constraints:: The documented example (https://github.com/neo4j-labs/agent-memory/blob/main/deploy/cloudrun/README.md[Cloud Run MCP deployment]) runs this transport on Cloud Run with Vertex AI embeddings (`gemini-embedding-001`, 768 dimensions), Secret Manager for `NEO4J_URI`/`NEO4J_USER`/`NEO4J_PASSWORD`, Cloud Run IAM for endpoint authentication, and automatic extraction/preference detection disabled by default. It has no built-in application-level authentication — the platform (Cloud Run IAM, or your own reverse proxy) must supply that.
+
+=== TypeScript REST client on an edge runtime (Cloudflare Workers, Vercel Edge)
+
+Transport:: HTTPS REST, via `fetch` only (zero runtime dependencies)
+Backend:: NAMS
+Credentials:: `MEMORY_API_KEY`, passed explicitly through the runtime's request-scoped bindings (`env.MEMORY_API_KEY` on Workers) rather than read from `process.env`
+Requirements and constraints:: Bolt is not reachable from these runtimes; NAMS/REST is the only supported backend here. See xref:how-to/typescript/edge-runtime.adoc[Deploy to edge runtimes] for the API-key-resolution gotcha and what does and doesn't work on edge (for example, the TCK bridge transport is not tested there).
+
+== See also
+
+* xref:reference/backend-capabilities.adoc[Backend capabilities and data scope] — which operations each backend/language combination supports.
+* xref:reference/configuration.adoc[Configuration reference] — `MemorySettings`, `BoltSettings`, and provider configuration for the embedded Python SDK.
+* xref:how-to/use-nams.adoc[Connect a Python application to NAMS] — hosted setup walkthrough.
+* xref:how-to/typescript/edge-runtime.adoc[TypeScript edge runtime deployment] — Cloudflare Workers and Vercel Edge specifics.
+* https://github.com/neo4j-labs/agent-memory/blob/main/deploy/cloudrun/README.md[Cloud Run MCP deployment] — the full Cloud Run deployment procedure, including secret setup, IAM, and troubleshooting.

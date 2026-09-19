@@ -92,14 +92,6 @@ ONTOLOGY_DOC = {
     "entity_types": [{"label": "Person", "pole_type": "PERSON", "properties": []}],
     "relationships": [{"type": "KNOWS", "source": "Person", "target": "Person"}],
 }
-ONTOLOGY_SUMMARY = {
-    "id": "ont_1",
-    "name": "general",
-    "display_name": "General",
-    "is_system": True,
-    "current_revision": 1,
-    "is_active": True,
-}
 ONTOLOGY_VERSION = {
     "id": "ov_1",
     "ontology_id": "ont_1",
@@ -174,11 +166,12 @@ def _mock_nams(router: respx.Router) -> None:
         200,
         json={"conversationId": CONVERSATION_ID, "steps": [STEP], "toolCalls": [TOOL_CALL]},
     )
-    # 6. active ontology (get_active composes version metadata from list + get)
-    router.get(f"{ENDPOINT}/ontologies/active").respond(200, json={"ontology": ONTOLOGY_DOC})
-    router.get(f"{ENDPOINT}/ontologies").respond(200, json={"ontologies": [ONTOLOGY_SUMMARY]})
-    router.get(f"{ENDPOINT}/ontologies/ont_1").respond(
-        200, json={"record": {"id": "ont_1", "name": "general"}, "versions": [ONTOLOGY_VERSION]}
+    # 6. active ontology. get_active() reads the binding from this response's own
+    # `version` and makes no further request: which revision is bound is a fact
+    # only the server knows, so a legacy body without it leaves revision and
+    # validation_mode None rather than inferring them from the newest version.
+    router.get(f"{ENDPOINT}/ontologies/active").respond(
+        200, json={"ontology": ONTOLOGY_DOC, "version": ONTOLOGY_VERSION}
     )
     # 7. portable read-only Cypher
     router.post(f"{ENDPOINT}/query").respond(

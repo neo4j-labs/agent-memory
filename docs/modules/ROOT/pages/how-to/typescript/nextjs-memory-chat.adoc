@@ -1,5 +1,4 @@
-= How to: build a Next.js chat app with a memory rail
-:toc: left
+= Build a Next.js chat app with a memory rail
 :source-highlighter: rouge
 
 This guide builds a Next.js 16 App Router chat app whose whole memory — the
@@ -16,8 +15,19 @@ that make it work.
 Next 16 uses Turbopack by default — a custom `webpack` config fails the build.
 ====
 
+[NOTE]
+====
+npm's published `@neo4j-labs/agent-memory` (`0.4.1`) predates the
+`LanguageModelV4Middleware` implementation and the `wrapStream` assistant-message
+persistence that this guide's route handler depends on
+(`agentMemoryMiddleware` from `@neo4j-labs/agent-memory/middleware/vercel-ai`).
+Build the SDK from source and link it locally, below, until a matching release
+ships — see xref:sdks/typescript.adoc#source-bootstrap[the source bootstrap] on
+the TypeScript SDK page for the same steps.
+====
+
 If all you need is the middleware wiring in one file, start at
-xref:how-to/typescript/vercel-ai.adoc[How to: integrate with the Vercel AI SDK]
+xref:how-to/typescript/vercel-ai.adoc[Integrate with the Vercel AI SDK]
 instead and come back when you want the UI.
 
 == What you need
@@ -27,12 +37,26 @@ instead and come back when you want the UI.
 * An `OPENAI_API_KEY` (model id via `OPENAI_MODEL`, default `gpt-5-mini`)
 * Optionally a `MEMORY_WORKSPACE_ID` to scope the data to one workspace
 
+Build the SDK from source and link it into your app — the same source
+build-and-link path xref:how-to/typescript/vercel-ai.adoc[the Vercel AI SDK
+guide] uses — so the app resolves the unreleased middleware and streaming
+persistence this guide's code needs:
+
 [source,bash]
 ----
-npm install ai@^7 @ai-sdk/openai@^4 @ai-sdk/react@^4 \
-            @neo4j-labs/agent-memory \
-            @neo4j-nvl/react@^1.2 @neo4j-nvl/base@^1.2
+git clone https://github.com/neo4j-labs/agent-memory.git
+(cd agent-memory/typescript && npm ci && npm run build)
+
+npm install ai@^7 @ai-sdk/openai@^4 @ai-sdk/react@^4 @neo4j-nvl/react@^1.2
+npm install ./agent-memory/typescript
 ----
+
+`npm install ./agent-memory/typescript` records a `file:` dependency on the
+local build — the same wiring the
+link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/nextjs-memory-chat[runnable
+example]'s own `package.json` uses (`file:../..`). Adjust the path if you
+cloned the repository somewhere else, and rebuild (`npm run build` in
+`typescript/`) after pulling SDK changes.
 
 == Decision 1: put the conversation id in the URL
 
@@ -43,7 +67,7 @@ resumable — because every message behind it is in NAMS, not in the browser.
 `app/page.tsx` mints one and redirects. `force-dynamic` keeps the page off the
 build-time prerender path, so `next build` succeeds on a machine with no API key:
 
-[source,typescript]
+[source,tsx]
 ----
 export const dynamic = "force-dynamic";
 
@@ -64,7 +88,7 @@ export default async function Home() {
 
 In Next 16 `params` is a promise — the synchronous form was removed:
 
-[source,typescript]
+[source,tsx]
 ----
 export default async function ConversationPage({
   params,
@@ -116,9 +140,14 @@ export async function POST(request: Request) {
 }
 ----
 
-Both sides of the turn are persisted by the middleware — the user's message in
+The middleware attempts both writes — the user's message in
 `transformParams`, the assistant's in `wrapStream` once the stream finishes. You
-write no `addMessage` call.
+write no `addMessage` call in this minimal route. The assistant write is
+fire-and-forget, so returning/draining the stream does not prove persistence
+before a serverless runtime stops — see
+xref:how-to/typescript/edge-runtime.adoc#streaming-memory-persistence[the full
+derivation]. For a route that must coordinate storage with its lifecycle, use
+the xref:how-to/typescript/edge-runtime.adoc[application-owned write pattern].
 
 On the client, `useChat` with `DefaultChatTransport` sends the conversation id in
 the request body:
@@ -203,7 +232,10 @@ const settled = await client.longTerm.waitForExtraction({
 ----
 
 It returns `false` on timeout rather than throwing, so a quiet turn that produced
-no new entities degrades to "nothing new" instead of an error. Order the rail's
+no new entities degrades to "nothing new" instead of an error. Validation and
+transport errors still propagate. A new workspace entity can also come from
+another conversation: this predicate is a UI refresh hint, not extraction
+provenance for this turn. Order the rail's
 refresh as *context → wait for extraction → refetch graph*, and surface the middle
 step as a badge so the reader can see the window open and close.
 
@@ -225,6 +257,24 @@ const trace = await client.reasoning.getTraceByConversation(conversationId);
 // trace.steps: [{ id, reasoning, actionTaken, result, createdAt }, …]
 ----
 
+== Deploying
+
+[source,bash]
+----
+npx vercel deploy
+----
+
+Set `MEMORY_API_KEY`, `OPENAI_API_KEY` and optionally `MEMORY_WORKSPACE_ID` as
+project environment variables. There is no database to provision. The route
+handlers use only `fetch`, `Request` and `Response`, so they are edge-deployable —
+pass `apiKey` to `MemoryClient` explicitly, because on edge runtimes
+`process.env` is only populated inside the request scope. See
+xref:how-to/typescript/edge-runtime.adoc[Deploy to edge runtimes].
+Current-source example dependency declarations (not a release or live-service
+verification): `next` 16.3.4, `react` 19.3.0, `ai` 7.0.97, `@ai-sdk/openai`
+4.0.65, `@ai-sdk/react` 4.0.100, `@chakra-ui/react` 3.37.0, `@neo4j-nvl/react`
+1.2.1, Node.js 22 — 2026-09-10.
+
 == Testing it without an API key
 
 Put each route's behaviour in a `(deps, Request) => Response` function and keep
@@ -245,30 +295,12 @@ expect(state.rolesOf(conversationId)).toEqual(["user", "assistant"]);
 
 Mocking the network rather than the SDK means a wrong URL, verb or body shape
 fails the suite. Answer 501 for any endpoint you have not implemented so that a
-new call fails loudly instead of passing silently.
-
-== Deploying
-
-[source,bash]
-----
-npx vercel deploy
-----
-
-Set `MEMORY_API_KEY`, `OPENAI_API_KEY` and optionally `MEMORY_WORKSPACE_ID` as
-project environment variables. There is no database to provision. The route
-handlers use only `fetch`, `Request` and `Response`, so they are edge-deployable —
-pass `apiKey` to `MemoryClient` explicitly, because on edge runtimes
-`process.env` is only populated inside the request scope. See
-xref:how-to/typescript/edge-runtime.adoc[How to: deploy to edge runtimes].
+new call fails loudly instead of passing silently. This is the last check before
+shipping: a green suite here means the route, the middleware wiring and the
+memory persistence contract all hold without needing a live API key.
 
 == See also
 
-* xref:how-to/typescript/vercel-ai.adoc[How to: integrate with the Vercel AI SDK] — the middleware on its own
+* xref:how-to/typescript/vercel-ai.adoc[Integrate with the Vercel AI SDK] — the middleware on its own
 * xref:tutorials/conversation-memory-typescript.adoc[Tutorial: conversation memory in TypeScript]
 * xref:sdks/typescript.adoc[TypeScript SDK]
-
-== Compatibility
-
-Verified against `@neo4j-labs/agent-memory` 0.6.0-dev (in-tree), `next` 16.3.4,
-`react` 19.3.0, `ai` 7.0.97, `@ai-sdk/openai` 4.0.65, `@ai-sdk/react` 4.0.100,
-`@chakra-ui/react` 3.37.0, `@neo4j-nvl/react` 1.2.1, Node.js 22 — 2026-09-10.

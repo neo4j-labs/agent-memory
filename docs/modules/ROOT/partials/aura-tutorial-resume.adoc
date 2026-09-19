@@ -1,0 +1,22 @@
+[[resume-this-lesson]]
+== Resume this lesson later
+
+A new Python process keeps the same shell exports; a new terminal does not. If this lesson's Aura instance still exists, resume it without creating another instance or asserting that its database is empty:
+
+. Return to the existing folder and activate its environment:
++
+[source,bash]
+----
+cd ~/agent-memory-tutorials
+source .venv/bin/activate
+----
+. Re-export the original instance's `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`, and `NEO4J_DATABASE` from its saved credentials. Restore this page's provider key/model/region settings too. Keep secrets out of the Python files.
+. Check the same database:
++
+[source,bash]
+----
+python wait_for_tutorial_neo4j.py
+----
+. Use the readback or inspection step described below. Do not repeat the seed/record/write command just to recover context. Preserve existing IDs and state until you know which operations completed.
+
+If the instance was already destroyed, its stored results cannot be resumed; complete local cleanup and start a new empty lesson instance. A different lesson also starts with a fresh instance, while keeping the folder and environment.

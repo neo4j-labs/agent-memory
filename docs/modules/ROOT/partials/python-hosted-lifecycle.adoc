@@ -1,0 +1,22 @@
+== Inspect locally after a credential change
+
+If the original key expires or is rotated, normal lesson commands keep refusing
+to use its saved IDs with another credential. Use this separate local command:
+
+[source,bash,subs="+attributes"]
+----
+python hosted_tutorial_state.py inspect-file .tutorial-state/{state-file}
+----
+
+It needs no key and makes no service requests. The summary omits credential
+fingerprints, message digests, fixture metadata and review/provenance payloads.
+It still contains resource IDs and operator labels, so keep it private. Its
+`local_only: true` and `service_checked: false` mean it reports saved evidence,
+not current remote state or authorization.
+
+Give the authorized owner the workspace label, endpoint, run token, exact
+resource IDs and pending operation through your agreed private channel. The
+owner must establish the actual workspace and reconcile those resources with
+a valid credential. Do not edit the identity hash, substitute a key in the
+ledger, or remove state to unlock a write. The helper cannot migrate a run to a
+new key or supply an administrative deletion route.

@@ -1,4 +1,4 @@
-= Configure an LLM Provider
+= Configure an LLM provider
 :page-product: agent-memory
 :page-pagination:
 :toclevels: 3
@@ -6,75 +6,54 @@
 :icons: font
 :source-highlighter: highlight.js
 
-The complete reference for wiring an LLM provider into `MemorySettings.llm`.
+include::partial$backend-bolt-only.adoc[]
+
+Configure an LLM provider through `MemorySettings.llm` and verify which adapter handles requests.
 
 [.lead]
-This is a task-oriented page for "I have X and want to do Y." For the bigger-picture choice between providers, see xref:how-to/bring-your-own-model.adoc[Bring Your Own Model]. For the conceptual rationale, see xref:explanation/why-provider-protocol.adoc[Why the Provider Protocol?].
+For the bigger-picture choice between providers, see xref:how-to/bring-your-own-model.adoc[Bring your own model]. For the conceptual rationale, see xref:explanation/why-provider-protocol.adoc[Why the Provider Protocol?].
 
-== Set the LLM via a provider string
+CAUTION: Setting only `MemorySettings.llm` does not configure embeddings. `MemorySettings.embedding` defaults to `EmbeddingConfig()`, whose provider defaults to OpenAI's `text-embedding-3-small` — so an LLM-only configuration still needs `OPENAI_API_KEY` set for extraction and search to embed text. Set `embedding=` explicitly (see xref:how-to/configure-embedding-provider.adoc[Configure an embedding provider]) to use a different embedding provider.
 
-Recommended for most users.
+== Prerequisites
 
-[source,python]
-----
-from neo4j_agent_memory import MemorySettings
+* Install the extras for each selected provider and configure its credentials. Quote package extras in shell commands, for example `pip install 'neo4j-agent-memory[openai]==0.6.0'`.
+* Use a dedicated AuraDB instance and export `NEO4J_URI`, `NEO4J_USERNAME`, and `NEO4J_PASSWORD` as shown in xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the Aura connection setup]. These examples use the `bolt` backend; `NEO4J_DATABASE` defaults to `neo4j` when omitted.
+* Model identifiers below illustrate adapter routing. Confirm the chosen model is available to your account before making a live request; successful provider construction does not verify model access.
+* Run snippets containing `await` in an async function. The `provider`, `messages`, and connected `client` in later fragments come from your application's setup.
 
-settings = MemorySettings(
-    neo4j={"password": "p"},
-    llm="anthropic/claude-3-5-sonnet-latest",
-)
-----
+== Procedure
 
-Resolved via `from_provider(model, kind="llm")`. The factory does native-first dispatch.
+. Choose a string, explicit adapter, or framework pass-through from the options below.
+. Configure both the LLM and embedding provider; changing one does not configure the other.
+. Run the verification at the end before applying the configuration to an existing graph.
 
-== Set the LLM via an explicit Provider instance
+== Set the LLM
 
-When you need adapter-specific kwargs.
+anchor:_set_the_llm_via_a_provider_string[]anchor:_set_the_llm_via_an_explicit_provider_instance[]anchor:_set_the_llm_via_a_framework_model[]
 
-[source,python]
-----
-from neo4j_agent_memory import MemorySettings
-from neo4j_agent_memory.llm.adapters.anthropic import AnthropicProvider
+`MemorySettings.llm` accepts the same three shapes as every other provider setting — a provider string, an explicit Provider instance, or a framework pass-through. xref:how-to/bring-your-own-model.adoc#_three_ways_to_wire_a_provider[Bring your own model — Three ways to wire a provider] is the canonical walkthrough with runnable code for all three; the deltas specific to the LLM field are below.
 
-settings = MemorySettings(
-    neo4j={"password": "p"},
-    llm=AnthropicProvider(
-        "anthropic/claude-3-5-sonnet-latest",
-        cache_system=True,            # Anthropic prompt caching
-        timeout=120.0,
-        max_retries=5,
-    ),
-)
-----
-
-== Set the LLM via a framework model
-
-[source,python]
-----
-from langchain_openai import ChatOpenAI
-from neo4j_agent_memory import MemorySettings
-from neo4j_agent_memory.integrations.langchain import (
-    llm_provider_from_langchain,
-)
-
-chat = ChatOpenAI(model_name="gpt-4o-mini")
-settings = MemorySettings(
-    neo4j={"password": "p"},
-    llm=llm_provider_from_langchain(chat),
-)
-----
-
-Pass-through helpers exist for every supported integration. See xref:how-to/migrate-to-providers.adoc[Migrate to Pluggable Providers — Pattern 5] for the full list.
+* **Provider string** (recommended for most users) — `llm="anthropic/claude-3-5-sonnet-latest"` resolves via `from_provider(model, kind="llm")` with native-first dispatch.
+* **Explicit Provider instance** — construct the adapter directly for kwargs the string form can't express, for example `AnthropicProvider(..., cache_system=True, timeout=120.0, max_retries=5)` for Anthropic prompt caching, request timeout, and retry count.
+* **Framework pass-through** — wrap an already-configured `ChatOpenAI`, `ChatAnthropic`, etc. with the matching `llm_provider_from_<framework>` helper. Pass-through helpers exist for every supported integration; see xref:how-to/migrate-to-providers.adoc[Migrate to pluggable providers — Pattern 5] for the full list.
 
 == Use no LLM at all
 
 [source,python]
 ----
+import os
 from neo4j_agent_memory import MemorySettings
 from neo4j_agent_memory.config.settings import ExtractionConfig, ExtractorType
 
 settings = MemorySettings(
-    neo4j={"password": "p"},
+    backend="bolt",
+    neo4j={
+        "uri": os.environ["NEO4J_URI"],
+        "username": os.environ["NEO4J_USERNAME"],
+        "password": os.environ["NEO4J_PASSWORD"],
+        "database": os.getenv("NEO4J_DATABASE", "neo4j"),
+    },
     llm=None,
     extraction=ExtractionConfig(
         extractor_type=ExtractorType.GLINER,  # or SPACY / PIPELINE
@@ -138,7 +117,7 @@ Useful for consistency tests, observability standardisation across providers, or
 [source,bash]
 ----
 neo4j-agent-memory mcp serve \
-  --password mypw \
+  --backend bolt --uri "$NEO4J_URI" --user "$NEO4J_USERNAME" \
   --llm anthropic/claude-3-5-sonnet-latest \
   --llm-api-key $ANTHROPIC_API_KEY \
   --llm-api-base https://custom-endpoint.example.com  # optional
@@ -150,7 +129,7 @@ Or env vars:
 ----
 export NAM_LLM=anthropic/claude-3-5-sonnet-latest
 export NAM_LLM_API_KEY=$ANTHROPIC_API_KEY
-neo4j-agent-memory mcp serve --password mypw
+neo4j-agent-memory mcp serve --backend bolt --uri "$NEO4J_URI" --user "$NEO4J_USERNAME"
 ----
 
 == Catch provider errors uniformly
@@ -164,17 +143,18 @@ from neo4j_agent_memory.llm import (
 try:
     result = await provider.complete(messages)
 except ProviderRateLimitError as exc:
-    # Same exception type across OpenAI / Anthropic / Bedrock / LiteLLM.
-    await asyncio.sleep(exc.retry_after or 1.0)
+    # This branch reports the failure; waiting alone does not retry the call.
+    print("Rate limited; suggested delay:", exc.retry_after)
+    raise
 except ProviderAuthError:
     raise SystemExit("API key invalid — check your env vars.")
 except ProviderTimeoutError:
-    ...
+    raise  # Let the caller decide whether another attempt is appropriate.
 ----
 
 == Verify which adapter you got
 
-Provider strings dispatch to different adapter classes based on what's installed. To confirm:
+Provider strings dispatch to different adapter classes based on what is installed. This checks routing without making a model request:
 
 [source,python]
 ----
@@ -188,9 +168,14 @@ print(type(provider).__name__)
 # LiteLLMProvider (when only [litellm] is installed)
 ----
 
-== Related
+Then perform a small request using the credentials and model selected for
+your environment, and verify the returned content. Construction alone does
+not verify authentication, quota, model availability, or extraction quality.
+If you add retries, bound their number and account for adapter-level retries.
 
-* xref:how-to/bring-your-own-model.adoc[Bring Your Own Model] — the headline overview.
-* xref:how-to/configure-embedding-provider.adoc[Configure Embedding Provider].
+== See also
+
+* xref:how-to/bring-your-own-model.adoc[Bring your own model] — the headline overview.
+* xref:how-to/configure-embedding-provider.adoc[Configure an embedding provider].
 * xref:reference/configuration.adoc[Configuration Reference].
 * xref:reference/cli.adoc[CLI Reference].

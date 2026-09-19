@@ -1,4 +1,4 @@
-= Entity Resolution and Deduplication
+= Entity resolution and deduplication
 :page-product: agent-memory
 :page-pagination:
 :toclevels: 3
@@ -6,517 +6,111 @@
 :icons: font
 :source-highlighter: highlight.js
 
-Understanding how agent memory systems handle duplicate and variant entity references to maintain data quality.
+Entity resolution asks whether two mentions identify the same real-world thing. Deduplication applies that decision to stored records. Both seek a balance: missed matches fragment knowledge, while false merges combine information that should remain separate.
 
-NOTE: The resolution and deduplication strategies here are *client-side*, configurable on the *bolt* backend. On *NAMS*, resolution and dedup run server-side automatically: `add_entity` runs the full resolution cascade synchronously and reports a `resolution` outcome (`created` / `merged` / `review_pending`), with ambiguous matches landing in a `SAME_AS` review queue. The manual review APIs (`find_potential_duplicates`, `merge_duplicate_entities`) are bolt-only. See xref:explanation/backends.adoc#capability-matrix[Bolt vs NAMS].
+NOTE: Python's configurable resolvers and manual deduplication review methods are Bolt capabilities. NAMS performs resolution server-side and returns service-specific outcomes. See xref:reference/backend-capabilities.adoc[Backend capabilities] and xref:explanation/backends.adoc[Bolt and NAMS] before applying a workflow.
 
-== The Entity Resolution Problem
+[[_the_entity_resolution_problem]]
+== The entity resolution problem
 
-When agents process conversations and documents, the same real-world entity often appears with different names, spellings, or references:
+An abbreviated name can identify an existing entity, a different entity, or nothing specific enough to resolve. Context and authoritative identifiers matter more than textual resemblance.
 
-.Financial Services Examples
-[cols="2,3"]
+[cols="2,2,3",options="header"]
 |===
-|Mentions |Same Entity
-
-|"JPMorgan", "JP Morgan Chase", "Chase Bank", "JPMC"
-|JPMorgan Chase & Co.
-
-|"John Smith", "Mr. Smith", "J. Smith", "the client"
-|Client ID: 12345
-
-|"S&P 500", "SPX", "the index", "Standard & Poor's 500"
-|S&P 500 Index
-
-|"Q4 earnings", "fourth quarter results", "FY24 Q4"
-|Q4 2024 Earnings Report
+|Mentions |Identity decision |Evidence needed
+|"Northstar Robotics" and "Northstar Robotics, Inc." |Possible aliases |The same verified organization identifier
+|"Maya Chen" and "M. Chen" |Unresolved from names alone |Matching person identifier and context
+|"Apple iPhone 15 Pro" and "iPhone 15 Pro" |Possible aliases |Matching model, capacity, color, and catalog identifier
+|"iPhone 15 Pro" and "iPhone 15 Pro Max" |Distinct variants |Keep separate product records
+|"Nike Air Max" and "Nike Air Max 90" |Product family versus a specific model |Do not merge without a more specific identity
+|"order NR-2048" and "the package" |Unresolved from names alone |A source linking that package to that exact order
 |===
 
-.Ecommerce Retail Examples
-[cols="2,3"]
-|===
-|Mentions |Same Entity
+A shared family name, brand, or description is evidence of relatedness, not necessarily identity.
 
-|"iPhone 15 Pro", "Apple iPhone 15 Pro Max", "the new iPhone"
-|Apple iPhone 15 Pro Max
+[[_why_entity_resolution_matters]]
+== Why identity matters
 
-|"Nike Air Max", "Air Max 90", "Nike AM90"
-|Nike Air Max 90 Sneakers
+anchor:_1_relationship_integrity[]anchor:_2_accurate_analytics[]anchor:_3_context_quality[]
 
-|"free shipping", "complimentary delivery", "no shipping cost"
-|Free Shipping Promotion
+A graph split across duplicate nodes can lose useful context: a message mentions one spelling while a purchase or tool result points to another. Counts can also be misleading when aliases are counted separately.
 
-|"John's order", "order #12345", "the package"
-|Order ID: 12345
-|===
+The opposite error is more damaging in some domains. Merging two product variants can mix inventory or prices; merging people can attach one person's statements to another. A resolution policy should consider the cost of a false merge as well as the cost of missed matches.
 
-Without entity resolution, the knowledge graph becomes fragmented—the same entity exists as multiple disconnected nodes, losing the relationships that make graph memory powerful.
+[[_resolution_strategies]]
+== Evidence used by resolution
 
-== Why Entity Resolution Matters
+anchor:_embedding_based_similarity[]anchor:_fuzzy_string_matching[]anchor:_type_constrained_matching[]
 
-=== 1. Relationship Integrity
+.Embedding-based entity resolution from a new entity to merge, flag, or create
+image::diagrams/embedding-based-similarity.svg["Embedding-based entity resolution: new entity → embedding → candidate search → similarity scores → merge, flag, or create",width=100%,align=left,link=self]
 
-Consider tracking a customer's brand preferences:
+Exact-name matching detects repeated forms. Fuzzy matching tolerates spelling and word-order differences. Embedding similarity finds semantically related candidates. Each is a signal, not an identity proof: nearby vectors can describe competitors or different variants of the same product.
 
-[source]
-----
-Without Resolution:
-(Customer)-[:PURCHASED]->(Product)-[:MADE_BY]->("Nike")
-(Customer)-[:MENTIONED_PREFERENCE]->("Nike Inc")
-(Customer)-[:VIEWED]->(Product)-[:MADE_BY]->("NIKE")
+Type-constrained matching reduces some false positives, such as an organization named "Apple" and an object representing the fruit. It does not distinguish two people with the same name or guarantee that a broad `OBJECT` category contains only interchangeable products.
 
-Result: Three separate "Nike" nodes with no connection
-----
+The configured resolver and ingestion deduplication are separate mechanisms. Their thresholds and matching order belong in xref:reference/configuration.adoc[Configuration] and xref:reference/api/long-term.adoc[the long-term API reference].
 
-[source]
-----
-With Resolution:
-(Customer)-[:PURCHASED]->(Product)-[:MADE_BY]->(Nike:Organization)
-(Customer)-[:MENTIONED_PREFERENCE]->(Nike)
-(Customer)-[:VIEWED]->(Product)-[:MADE_BY]->(Nike)
+[[_the_same_as_pattern]]
+== The :SAME_AS review pattern
 
-Result: Single Nike node with all relationships connected
-----
+anchor:_review_workflow[]
 
-=== 2. Accurate Analytics
+A `:SAME_AS` edge can record a potential duplicate without collapsing the records immediately. This preserves both candidates while an application or reviewer gathers evidence.
 
-Duplicate entities skew metrics:
+Review needs more than a similarity score: compare descriptions, provenance, domain identifiers, and relationships. Two missing SKU values are not evidence of a shared SKU. A meaningful comparison requires both identifiers to be present and to refer to the same identifier system.
 
-- **Entity frequency**: "Apple Inc" appears 50 times, but "Apple", "AAPL", and "Apple Computer" appear 100 more times—total mentions should be 150
-- **Relationship counts**: A customer appears to have relationships with 3 different "Microsoft" entities instead of 1
-- **Trend detection**: Duplicate entities hide the true importance of concepts
+Follow xref:how-to/deduplication.adoc[Review duplicates] for the implemented Bolt workflow. The pending, confirmed, or rejected state of a candidate is different from a completed merge.
 
-=== 3. Context Quality
+[[_merge_strategies]]
+== What a merge changes
 
-When agents retrieve context for responses, duplicate entities mean:
+anchor:_keep_primary_default[]anchor:_merge_properties[]anchor:_keep_aliases[]
 
-- Incomplete context (missing related information on variant nodes)
-- Redundant context (same information repeated under different names)
-- Confused reasoning (treating variants as different entities)
+A merge selects a surviving record and reconciles supported properties and relationships. It can affect every query that previously referenced either node, so the choice of primary record and handling of conflicting values matter.
 
-== Resolution Strategies
+An alias preserves an alternative name; it should not conceal a product variant or a separate legal entity. Do not assume that adding arbitrary `metadata.aliases` makes every resolver bypass similarity search. Use the actual alias and merge fields in xref:reference/api/long-term.adoc[the API reference].
 
-=== Embedding-Based Similarity
+[[_configuration_options]]
+== Thresholds express a policy
 
-The primary resolution method uses vector embeddings to find semantically similar entities:
+anchor:_threshold_tuning[]anchor:_per_entity_control[]
 
-image::diagrams/embedding-based-similarity.png[Embedding-based entity resolution: new entity → embedding → vector similarity search → similarity scores → merge/flag/create,width=540,align=left]
+Bolt's ingestion configuration separates an automatic-merge threshold from a review threshold. Raising the automatic threshold reduces the set of candidates merged without review; moving the review threshold changes which ambiguous pairs reach the queue. The thresholds are similarity cutoffs, not guaranteed precision percentages.
 
-.How It Works
-1. New entity text is converted to a vector embedding
-2. Neo4j vector index finds nearest neighbors
-3. Similarity scores determine action:
-   - **Above auto-merge threshold**: Automatically merge with existing entity
-   - **Between flag and merge thresholds**: Create `SAME_AS` link for human review
-   - **Below flag threshold**: Create as new entity
+Choose them using labeled matches and non-matches from the actual domain. A broad, low threshold is risky for similar product variants or same-name people. Per-entity deduplication controls can preserve intentionally distinct records; see xref:how-to/deduplication.adoc[Configure deduplication].
 
-=== Fuzzy String Matching
+[[_handling_edge_cases]]
+== Ambiguity, history, and related entities
 
-Complements embedding similarity for handling typos and abbreviations:
+anchor:_ambiguous_entities[]anchor:_historical_name_changes[]anchor:_subsidiary_relationships[]
 
-[source,python]
-----
-from rapidfuzz import fuzz
+Names need context. A company can change its name while retaining an identity, but a merger, acquisition, or subsidiary relationship may involve separate legal entities. Preserve dates and provenance when the distinction matters.
 
-# Token-based comparison handles word order
-fuzz.token_sort_ratio("JP Morgan Chase", "Chase JP Morgan")  # 100
+A parent company and a subsidiary should normally be modeled as related entities, not merged because they share a brand. Likewise, "Air Max" can denote a family while "Air Max 90" denotes a model. The graph can retain their relationship without asserting that they are the same thing.
 
-# Partial matching handles abbreviations
-fuzz.partial_ratio("JPMC", "JPMorgan Chase")  # 80
+[[_monitoring_and_quality]]
+== Evaluating resolution quality
 
-# Combined scoring
-embedding_score = 0.92
-fuzzy_score = fuzz.token_sort_ratio(new_name, existing_name) / 100
-combined_score = (embedding_score * 0.7) + (fuzzy_score * 0.3)
-----
+anchor:_deduplication_statistics[]anchor:_quality_signals[]
 
-=== Type-Constrained Matching
+Evaluate both accepted and rejected matches against a labeled sample. Review queue size alone does not establish quality: a small queue might mean accurate resolution, an overly narrow candidate search, or excessive automatic merging.
 
-Only match entities of the same type to avoid false positives:
-
-[cols="2,2,2"]
-|===
-|Entity |Type |Should Match?
-
-|"Apple" (company)
-|ORGANIZATION
-|✅ Yes with "Apple Inc"
-
-|"Apple" (fruit)
-|PRODUCT
-|❌ No with "Apple Inc"
-
-|"Chase" (bank)
-|ORGANIZATION
-|✅ Yes with "JPMorgan Chase"
-
-|"Chase" (verb)
-|—
-|❌ Not an entity
-|===
-
-== The SAME_AS Pattern
-
-When automatic merging isn't confident enough, the system creates `SAME_AS` relationships for human review:
-
-[source,cypher]
-----
-// Structure of SAME_AS relationships
-(e1:Entity)-[:SAME_AS {
-    confidence: 0.89,
-    status: 'pending',      // pending, confirmed, rejected
-    created_at: datetime(),
-    method: 'embedding+fuzzy',
-    reviewed_by: null,
-    reviewed_at: null
-}]->(e2:Entity)
-----
-
-=== Review Workflow
-
-.Financial Services Example
-[source,python]
-----
-# Get pending duplicates for compliance review
-duplicates = await memory.long_term.find_potential_duplicates(limit=50)
-
-for entity1, entity2, confidence in duplicates:
-    print(f"Potential duplicate: '{entity1.name}' ↔ '{entity2.name}'")
-    print(f"  Confidence: {confidence:.2%}")
-    print(f"  Entity 1 context: {entity1.description}")
-    print(f"  Entity 2 context: {entity2.description}")
-
-    # Compliance officer reviews
-    if user_confirms_same_entity():
-        await memory.long_term.review_duplicate(entity1.id, entity2.id, confirm=True)
-    else:
-        await memory.long_term.review_duplicate(entity1.id, entity2.id, confirm=False)
-----
-
-.Ecommerce Retail Example
-[source,python]
-----
-# Get pending product duplicates for catalog team
-duplicates = await memory.long_term.find_potential_duplicates(limit=100)
-
-for product1, product2, confidence in duplicates:
-    # Show products side by side
-    print(f"'{product1.name}' vs '{product2.name}'")
-    print(f"  SKU 1: {product1.metadata.get('sku')}")
-    print(f"  SKU 2: {product2.metadata.get('sku')}")
-
-    # If same SKU, definitely merge
-    if product1.metadata.get('sku') == product2.metadata.get('sku'):
-        await memory.long_term.review_duplicate(product1.id, product2.id, confirm=True)
-----
-
-== Merge Strategies
-
-When entities are confirmed as duplicates, they must be merged. Several strategies handle different scenarios:
-
-=== Keep Primary (Default)
-
-Keep the existing entity, transfer all relationships from the duplicate:
-
-[source,cypher]
-----
-// Before merge
-(Customer)-[:MENTIONED]->("Nike Inc")
-(Customer)-[:PURCHASED]->(Product)-[:MADE_BY]->("Nike")
-
-// After merge (Nike Inc is primary)
-(Customer)-[:MENTIONED]->(Nike:Organization {name: "Nike Inc"})
-(Customer)-[:PURCHASED]->(Product)-[:MADE_BY]->(Nike)
-
-// Duplicate node deleted, relationships transferred
-----
-
-=== Merge Properties
-
-Combine properties from both entities:
-
-[source,python]
-----
-# Original entities
-primary = {
-    "name": "Apple Inc",
-    "type": "ORGANIZATION",
-    "description": "Technology company",
-    "stock_symbol": "AAPL"
-}
-
-duplicate = {
-    "name": "Apple",
-    "type": "ORGANIZATION",
-    "description": "Consumer electronics and software company",
-    "founded": "1976",
-    "headquarters": "Cupertino, CA"
-}
-
-# Merged result
-merged = {
-    "name": "Apple Inc",  # Keep primary name
-    "type": "ORGANIZATION",
-    "description": "Consumer electronics and software company",  # Longer description
-    "stock_symbol": "AAPL",
-    "founded": "1976",
-    "headquarters": "Cupertino, CA",
-    "aliases": ["Apple"]  # Track alternate names
-}
-----
-
-=== Keep Aliases
-
-Maintain a list of known aliases for future matching:
-
-[source,cypher]
-----
-(Entity:Organization {
-    name: "JPMorgan Chase & Co.",
-    aliases: ["JPMorgan", "JP Morgan", "Chase", "JPMC", "Chase Bank"],
-    canonical: true
-})
-----
-
-Future mentions of any alias immediately resolve to the canonical entity without embedding search.
-
-== Configuration Options
-
-=== Threshold Tuning
-
-Different domains require different thresholds:
-
-.Financial Services (High Precision)
-[source,python]
-----
-# Conservative settings for compliance-sensitive data
-config = DeduplicationConfig(
-    auto_merge_threshold=0.98,    # Very high confidence required
-    flag_threshold=0.90,          # Review more candidates
-    match_same_type_only=True,    # Strict type matching
-    use_fuzzy_matching=True,      # Catch abbreviations
-)
-----
-
-.Ecommerce Retail (Balanced)
-[source,python]
-----
-# Balance precision and recall for product catalog
-config = DeduplicationConfig(
-    auto_merge_threshold=0.95,    # Standard confidence
-    flag_threshold=0.85,          # Flag likely duplicates
-    match_same_type_only=True,
-    use_fuzzy_matching=True,
-)
-----
-
-.Content/Media (High Recall)
-[source,python]
-----
-# Aggressive deduplication for content entities
-config = DeduplicationConfig(
-    auto_merge_threshold=0.92,    # More automatic merging
-    flag_threshold=0.75,          # Cast wider net
-    match_same_type_only=False,   # Cross-type matching allowed
-    use_fuzzy_matching=True,
-)
-----
-
-=== Per-Entity Control
-
-Disable deduplication for specific entities:
-
-[source,python]
-----
-# Some entities should never be deduplicated
-# (e.g., intentionally similar product variants)
-
-entity, result = await memory.long_term.add_entity(
-    name="iPhone 15 Pro - Titanium Blue",
-    entity_type="PRODUCT",
-    deduplicate=False  # Skip deduplication
-)
-----
-
-== Handling Edge Cases
-
-=== Ambiguous Entities
-
-Some names are inherently ambiguous:
-
-[source,python]
-----
-# "Apple" could be a company or a fruit
-# Context determines correct resolution
-
-# In financial context
-entity, _ = await memory.long_term.add_entity(
-    name="Apple",
-    entity_type="ORGANIZATION",
-    metadata={
-        "context": "stock market discussion",
-        "related_terms": ["AAPL", "Tim Cook", "iPhone"]
-    }
-)
-
-# In grocery context
-entity, _ = await memory.long_term.add_entity(
-    name="Apple",
-    entity_type="PRODUCT",
-    metadata={
-        "context": "produce section",
-        "related_terms": ["Granny Smith", "organic", "fruit"]
-    }
-)
-----
-
-=== Historical Name Changes
-
-Companies and products change names over time:
-
-[source,cypher]
-----
-// Model name changes explicitly
-(Facebook:Organization {
-    name: "Meta Platforms, Inc.",
-    aliases: ["Facebook", "Facebook, Inc."],
-    former_names: [
-        {name: "Facebook, Inc.", until: date("2021-10-28")}
-    ]
-})
-
-// Or use time-bounded relationships
-(Facebook)-[:KNOWN_AS {from: date("2004"), to: date("2021-10-28")}]->
-    (Name {value: "Facebook, Inc."})
-(Facebook)-[:KNOWN_AS {from: date("2021-10-28")}]->
-    (Name {value: "Meta Platforms, Inc."})
-----
-
-=== Subsidiary Relationships
-
-Distinguish between same entity vs. related entities:
-
-[source,cypher]
-----
-// These are the SAME entity (should merge)
-"Chase Bank" ↔ "JPMorgan Chase"
-
-// These are RELATED but DIFFERENT entities (should NOT merge)
-(JPMorgan:Organization)-[:OWNS]->(Chase:Organization)
-(Alphabet:Organization)-[:OWNS]->(Google:Organization)
-(LVMH:Organization)-[:OWNS]->(LouisVuitton:Organization)
-----
-
-== Monitoring and Quality
-
-=== Deduplication Statistics
-
-Track resolution quality over time:
-
-[source,python]
-----
-stats = await memory.long_term.get_deduplication_stats()
-
-print(f"Total entities: {stats.total_entities}")
-print(f"Auto-merged: {stats.auto_merged_count}")
-print(f"Pending review: {stats.pending_review_count}")
-print(f"Confirmed merges: {stats.confirmed_count}")
-print(f"Rejected merges: {stats.rejected_count}")
-print(f"Rejection rate: {stats.rejection_rate:.2%}")  # If high, adjust thresholds
-----
-
-=== Quality Signals
-
-High rejection rates indicate thresholds need adjustment:
-
-[cols="1,2,2"]
-|===
-|Metric |Healthy Range |Action if Outside
-
-|Auto-merge rejection rate
-|< 2%
-|Raise auto_merge_threshold
-
-|Flag-to-confirm rate
-|60-90%
-|Adjust flag_threshold
-
-|Orphan entity rate
-|< 10%
-|Lower flag_threshold
-
-|Review queue size
-|Manageable
-|Raise auto_merge_threshold
-|===
-
-== Best Practices
-
-=== 1. Start Conservative
-
-Begin with high thresholds and lower them based on observed quality:
-
-[source,python]
-----
-# Initial deployment
-config = DeduplicationConfig(
-    auto_merge_threshold=0.98,
-    flag_threshold=0.92,
-)
-
-# After validating quality, can relax
-config = DeduplicationConfig(
-    auto_merge_threshold=0.95,
-    flag_threshold=0.85,
-)
-----
-
-=== 2. Use Domain-Specific Entity Types
-
-More specific types improve matching accuracy:
-
-[source,python]
-----
-# Too generic - leads to false matches
-"ORGANIZATION"  # Bank ↔ Tech company ↔ Retailer
-
-# More specific - better matching
-"FINANCIAL_INSTITUTION"
-"TECHNOLOGY_COMPANY"
-"RETAIL_BRAND"
-----
-
-=== 3. Leverage Aliases Early
-
-Add known aliases when creating entities:
-
-[source,python]
-----
-entity, _ = await memory.long_term.add_entity(
-    name="Amazon.com, Inc.",
-    entity_type="ORGANIZATION",
-    metadata={
-        "aliases": ["Amazon", "AMZN", "AWS parent company"]
-    }
-)
-----
-
-=== 4. Regular Review Cycles
-
-Establish a cadence for reviewing flagged duplicates:
-
-[source,python]
-----
-# Daily review of high-confidence flags
-daily_review = await memory.long_term.find_potential_duplicates(limit=50)
-
-# Weekly review of lower-confidence flags
-weekly_review = await memory.long_term.find_potential_duplicates(limit=200)
-----
-
-== See Also
-
-* xref:explanation/extraction-pipeline.adoc[How Entity Extraction Works]
-* xref:explanation/poleo-model.adoc[The POLE+O Data Model]
-* xref:how-to/deduplication.adoc[Configure Entity Deduplication]
-* xref:reference/configuration.adoc#deduplication[Deduplication Configuration Reference]
+Useful observations include false merges, missed aliases, disagreement by entity type, and time spent reviewing candidates. Choose workload-specific targets and record how the sample was labeled. No universal rejection-rate or queue-size percentage establishes that a deployment is healthy.
+
+[[_best_practices]]
+== A conservative identity policy
+
+anchor:_1_start_conservative[]anchor:_2_use_domain_specific_entity_types[]anchor:_3_leverage_aliases_early[]anchor:_4_regular_review_cycles[]
+
+Use stable domain identifiers where available, retain provenance, and keep distinct variants separate. Treat broad names as ambiguous until a source resolves them. Adjust thresholds after reviewing representative matches and non-matches.
+
+A shared memory graph benefits from consistent naming, but consistency is not a reason to merge unrelated records. Periodic review should include automatic decisions as well as flagged candidates.
+
+[[_see_also]]
+== See also
+
+* xref:how-to/deduplication.adoc[Configure and review deduplication]
+* xref:reference/api/long-term.adoc[Long-term memory API]
+* xref:explanation/extraction-pipeline.adoc[Extraction and candidate merging]
+* xref:explanation/poleo-model.adoc[POLE+O classification]

@@ -1,0 +1,164 @@
+= Custom schemas and persistence
+:page-product: agent-memory
+:page-pagination:
+:toclevels: 2
+
+Building a custom `DomainSchema`, the Bolt-only schema persistence overview, GLiNER-to-POLE+O entity type mapping, and the schema models, from xref:reference/schemas.adoc[Domain schemas reference].
+
+== Creating custom schemas
+
+=== DomainSchema class
+
+[source,python]
+----
+from neo4j_agent_memory.extraction.gliner_extractor import DomainSchema
+
+real_estate_schema = DomainSchema(
+    name="real_estate",
+    entity_types={
+        "property": "A real estate property, building, or land parcel",
+        "agent": "A real estate agent or broker",
+        "buyer": "A property buyer or purchaser",
+        "seller": "A property seller or owner",
+        "price": "A property price, valuation, or asking price",
+        "location": "A neighborhood, city, or street address",
+    },
+)
+
+extractor = GLiNEREntityExtractor(schema=real_estate_schema, threshold=0.5)
+----
+
+anchor:_schema_description_guidance[]
+
+See xref:how-to/entity-extraction-schemas.adoc#_write_effective_schema_descriptions[writing effective schema descriptions] for guidance on wording `DomainSchema` entity-type descriptions.
+
+== Schema persistence
+
+Bolt only. Store EntitySchemaConfig documents in Neo4j using `neo4j_agent_memory.schema.SchemaManager`. This is a different class from the graph index/constraint manager at `client.schema`. Saving a schema does not automatically activate it on a MemoryClient or make it a named DomainSchema: load it and pass it explicitly to a supported builder/validator.
+
+[source,python]
+----
+from neo4j_agent_memory.schema import SchemaManager, EntitySchemaConfig, EntityTypeConfig
+
+# Create schema config
+config = EntitySchemaConfig(
+    name="real_estate",
+    version="1.0",
+    description="Real estate domain schema",
+    entity_types=[
+        EntityTypeConfig(name="PROPERTY", description="A real estate property"),
+        EntityTypeConfig(name="AGENT", description="A real estate agent"),
+    ],
+)
+
+# Save to Neo4j
+manager = SchemaManager(client.graph)
+stored = await manager.save_schema(config, created_by="admin")
+
+# Load later
+schema = await manager.load_schema("real_estate")
+----
+
+The full CRUD surface — `save_schema`, `load_schema`, `list_schemas`, `set_active_version`, `delete_schema`, and the rest — is on xref:reference/schemas-api.adoc[SchemaManager persistence API].
+
+anchor:_schema_best_practices[]
+
+== Entity type mapping
+
+Common default GLiNER mappings to POLE+O graph labels (other subtype labels may also be added):
+
+[cols="1,1,1", options="header"]
+|===
+| Schema Type | POLE+O Type | Neo4j Labels
+
+| `PERSON`, `ACTOR`, `AUTHOR`
+| `PERSON`
+| `:Entity:Person`
+
+| `COMPANY`, `ORGANIZATION`, `INSTITUTION`
+| `ORGANIZATION`
+| `:Entity:Organization`
+
+| `LOCATION`, `CITY`, `COUNTRY`
+| `LOCATION`
+| `:Entity:Location`
+
+| `EVENT`, `MEETING`, `INCIDENT`
+| `EVENT`
+| `:Entity:Event`
+
+| `PRODUCT`, `OBJECT`, `VEHICLE`
+| `OBJECT`
+| `:Entity:Object`
+|===
+
+For GLiNER, unmapped labels default to type `OBJECT` with the uppercased label as subtype; they are not automatically stored as a custom top-level entity type. Supply `label_mapping` or use `add_label_mapping` to control this mapping. Direct bolt `add_entity` can store validated custom type/subtype labels; this separate path uses the graph query builder to convert labels to UpperCamelCase.
+
+== Schema models
+
+`DomainSchema` belongs to local GLiNER extraction. `EntitySchemaConfig` describes reusable entity/relation type metadata. NAMS ontologies have their own document/API contract at xref:reference/ontology-api.adoc[Ontology API]. These schemas are not interchangeable.
+
+=== DomainSchema
+
+Fields and defaults:
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `name` | `str` | `required` | Schema name identifier
+| `entity_types` | `dict[str, str]` | `required` | Mapping of entity type names to descriptions
+| `relation_types` | `dict[str, str]` | `{}` | Mapping of relation type names to descriptions
+|===
+
+=== EntityTypeConfig
+
+Fields and defaults:
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `name` | `str` | `required` | Entity type name (e.g., PERSON)
+| `description` | `str \| None` | `None` | Description of the entity type
+| `subtypes` | `list[str]` | `[]` | Valid subtypes for this entity
+| `attributes` | `list[str]` | `[]` | Common attributes for this entity type
+| `color` | `str \| None` | `None` | Color for visualization (hex)
+|===
+
+=== RelationTypeConfig
+
+Fields and defaults:
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `name` | `str` | `required` | Relationship type name
+| `description` | `str \| None` | `None` |
+| `source_types` | `list[str]` | `[]` | Valid source entity types
+| `target_types` | `list[str]` | `[]` | Valid target entity types
+| `properties` | `list[str]` | `[]` | Properties on this relationship
+|===
+
+=== EntitySchemaConfig
+
+Fields and defaults:
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `name` | `str` | `'poleo'` | Schema name
+| `version` | `str` | `'1.0'` | Schema version
+| `description` | `str \| None` | `'POLE+O entity schema for knowledge graphs'` | Schema description
+| `entity_types` | `list[EntityTypeConfig]` | `POLE+O entity definitions` | List of valid entity types with their configurations
+| `relation_types` | `list[RelationTypeConfig]` | `POLE+O relation definitions` | List of valid relationship types
+| `default_entity_type` | `str` | `'OBJECT'` | Default type when entity type cannot be determined
+| `enable_subtypes` | `bool` | `True` | Whether to track entity subtypes
+| `strict_types` | `bool` | `False` | Whether to reject unknown entity types
+|===
+
+EntitySchemaConfig provides `get_entity_type_names()`, `get_subtypes(type)`, `get_relation_types()`, `is_valid_type(type)`, and `normalize_type(type)`. In non-strict mode, is_valid_type accepts unknown types. In strict mode, normalize_type maps an unknown type to default_entity_type; these helpers do not automatically instrument graph writes.
+
+== See also
+
+* xref:reference/schemas.adoc[Domain schemas reference]
+* xref:reference/schemas-api.adoc[SchemaManager persistence API]
+* xref:how-to/entity-extraction-schemas.adoc[Apply a custom entity extraction schema]

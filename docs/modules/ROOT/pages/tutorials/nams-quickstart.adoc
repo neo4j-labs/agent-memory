@@ -1,323 +1,288 @@
-= 5-Minute NAMS Quickstart
+= Store and read back memory on NAMS
 :page-product: agent-memory
+:page-role: code-nocollapse
 :page-pagination:
-:toclevels: 3
+:toclevels: 2
 :sectanchors:
-:icons: font
-:source-highlighter: highlight.js
+:state-file: nams.json
 
-A hands-on, five-minute walkthrough: install, configure, store some memory, and read it back — using the hosted **Neo4j Agent Memory Service (NAMS)** backend.
+We will create a hosted conversation, read its two messages back, wait for
+extraction, and verify the same messages from a fresh process. We will retain
+the IDs returned by NAMS and use them for scoped cleanup. This path needs no
+model API key and creates no reasoning records.
 
-[.lead]
-By the end of this tutorial you'll have a Python script that stores a conversation, an entity, and a reasoning trace in the hosted service, waits for NAMS to finish extracting entities from your messages, and reads everything back — including portable Cypher. You won't run a database, configure embeddings, or supply an extraction model.
+This lesson uses `neo4j-agent-memory` 0.6.0 from PyPI and the complete programs on this page in a POSIX shell. Create the local files shown below; the checks below verify the results in your environment.
 
-[TIP]
-====
-This tutorial builds the same script as the runnable example
-https://github.com/neo4j-labs/agent-memory/tree/main/examples/nams-quickstart[`examples/nams-quickstart/`],
-which adds `.env` loading and is covered by an offline smoke test. Clone the repo
-and run `uv run python examples/nams-quickstart/main.py` if you'd rather read the
-finished script first.
-====
+[[_what_youll_need]]
+== Before you begin
 
-== What you'll need
+* Python 3.10 or newer and a POSIX shell.
+* A dedicated NAMS test workspace and its *workspace key*, using `https://memory.neo4jlabs.com/v1`.
+* Permission to create tutorial records in that workspace. Keep the same workspace key throughout the lesson.
 
-* Python 3.10 or newer.
-* A NAMS API key. https://memory.neo4jlabs.com[Sign up here].
-* About five minutes.
+See xref:reference/authentication.adoc[Authentication] for obtaining the key before beginning. This path uses a workspace key; admin keys and custom deployments belong in xref:how-to/use-nams.adoc[the NAMS guide].
 
-== 1. Install
+[[_1_install]]
+== Step 1: Install the published SDK
 
-In a fresh virtualenv:
+include::partial$python-tutorial-setup.adoc[]
 
 [source,bash]
 ----
-uv pip install 'neo4j-agent-memory[nams]>=0.5.0,<0.7'
+python -m pip install 'neo4j-agent-memory[nams]==0.6.0'
+python -c "from importlib.metadata import version; import neo4j_agent_memory; assert version('neo4j-agent-memory') == '0.6.0'; print('SDK 0.6.0 import verified')"
 ----
 
-Or with `pip`:
+Expected: `SDK 0.6.0 import verified`. Keep `agent-memory-tutorials` as your working directory for every command below.
+
+[[_2_configure]]
+== Step 2: Configure the hosted workspace
 
 [source,bash]
 ----
-pip install 'neo4j-agent-memory[nams]>=0.5.0,<0.7'
+export MEMORY_API_KEY="replace-with-your-workspace-key"
+export MEMORY_ENDPOINT="https://memory.neo4jlabs.com/v1"
+unset MEMORY_WORKSPACE_ID
+python -c "from neo4j_agent_memory import NamsSettings; s=NamsSettings(); print(s.backend, s.nams.endpoint)"
 ----
 
-== 2. Configure
+Expected: `nams https://memory.neo4jlabs.com/v1`. This validates configuration only; it does not authenticate or write data.
 
-Set your API key in the environment:
+Before seeding, identify the workspace name or ID in the dashboard and its
+responsible operator. Supply those non-secret labels in the seed command below.
+They are saved as operator notes; they do not change request routing or prove
+workspace identity. Because this lesson unsets `MEMORY_WORKSPACE_ID`, the
+ledger's selector can be null: the workspace key selects the workspace.
+Never put a key in either note.
+
+[[_3_first_write]]
+== Step 3: Write and read back one message
+
+Before building the tutorial's stateful ledger, confirm the SDK itself works
+end to end: build settings from the API key exported in Step 2, open a
+client, write a message, and read it back.
+
+[source,python]
+----
+include::example$nams_first_write.py[]
+----
 
 [source,bash]
 ----
-export MEMORY_API_KEY=nams_xxxxxxxxxxxx  # your real key
+python nams_first_write.py
 ----
 
-That's all the configuration most keys need. Two optional variables exist:
+You should see `Stored and read back: user said 'Hello, NAMS!'`.
 
-`MEMORY_ENDPOINT`:: Point at a private deployment instead of `+https://memory.neo4jlabs.com/v1+`.
-`MEMORY_WORKSPACE_ID`:: **Required by deployments that scope by header** (the development/staging service). It is sent as the `X-Workspace-Id` header; without it such an endpoint answers `403`. Leave it unset on production keys.
+[[_3_connect]]
+== Step 4: Read the complete program
 
-With `MEMORY_API_KEY` set, `NamsSettings()` reads all three.
+anchor:_4_connect[]
 
-== 3. Connect
+The rest of this lesson wraps that same round trip in scaffolding the later
+verify and cleanup steps use: a private ledger and scoped-deletion helpers.
+Create them below, then save `nams_quickstart.py`. Each block contains the
+complete file, including imports and client cleanup.
 
-Create `quickstart.py`:
+Copy these files into the same lesson folder. The final row is the program
+we will run; the other files are tutorial support, not SDK APIs. Reuse a helper
+only when its contents match. Finish pending cleanup/recovery before replacing
+code that owns an existing ledger.
 
+[cols="2,3,1",options="header"]
+|===
+|File |Purpose |Continuing reader
+|`hosted_tutorial_state.py` |Private ledger and local inspection |Reuse unchanged
+|`hosted_tutorial_cleanup.py` |Scoped deletion and independent absence checks |Reuse unchanged
+|`nams_quickstart.py` |The learner-facing seed, verify and cleanup commands |New lesson file
+|===
+
+include::partial$python-hosted-state-file.adoc[]
+
+include::partial$python-hosted-cleanup-file.adoc[]
+
+.Save as `nams_quickstart.py`
 [source,python]
 ----
-import asyncio
-
-from neo4j_agent_memory import NamsSettings, connect
-from neo4j_agent_memory.core.exceptions import (
-    AuthenticationError,
-    NotSupportedError,
-    RateLimitError,
-    TransportError,
-)
-
-CONVERSATION_NAME = "nams-quickstart-demo"
-
-TRANSCRIPT = [
-    {"role": "user", "content": "Hi, I'm Alice."},
-    {"role": "assistant", "content": "Nice to meet you, Alice!"},
-    {
-        "role": "user",
-        "content": "I love Italian food and dislike crowded restaurants.",
-    },
-]
-
-
-async def main() -> None:
-    settings = NamsSettings()
-    client = await connect(settings)
-    print(f"Connected to {settings.nams.endpoint} (backend={client.backend})")
-    try:
-        ...  # steps 4-9 go here
-    finally:
-        await client.close()
-
-
-asyncio.run(main())
+include::example$nams_quickstart.py[]
 ----
 
-`NamsSettings` is the hosted twin of `BoltSettings`: no Neo4j URI, no embedding provider, no LLM. `connect()` returns a NAMS-typed client, so the hosted-only calls below are statically visible instead of needing a capability probe. It hands back an *already-connected* client rather than a context manager, so you own closing it — hence the `try`/`finally`. Every snippet below replaces the `...` placeholder, at that indentation.
-
-== 4. Short-term memory
-
-NAMS mints conversation ids server-side, so create the conversation first and use the id it returns everywhere else. `bulk_add_messages` sends the whole transcript in one round-trip (100 messages max per call):
-
-[source,python]
-----
-        conversation = await client.short_term.create_conversation(CONVERSATION_NAME)
-        conversation_id = str(conversation.id)
-        print(f"\nConversation: {conversation_id}")
-
-        stored = await client.short_term.bulk_add_messages(conversation_id, TRANSCRIPT)
-        print(f"Stored {len(stored)} messages in one request:")
-        for message in stored:
-            print(f"   {message.role.value:>9}: {message.content}")
-----
-
-== 5. Long-term memory — and asynchronous extraction
-
-Two things write to long-term memory here. One is your own `add_entity` call. The other is NAMS: it extracts entities from the messages you just stored, in a *background pipeline*.
-
-That pipeline is the one NAMS behaviour to internalise. A write returns before its entities are searchable, so a read immediately afterwards can legitimately come back empty. Don't sleep — await it:
-
-[source,python]
-----
-        entity = await client.long_term.add_entity(
-            "Alice",
-            "PERSON",
-            description="The user introducing themselves.",
-        )
-        print(f"\nWrote entity: {entity.display_name} ({entity.full_type})")
-
-        status = await client.short_term.get_extraction_status(conversation_id)
-        print(f"Extraction right after the write: {status.pending_count} message(s) pending")
-        settled = await client.long_term.wait_for_extraction(
-            session_id=conversation_id,
-            expected_names=["Alice"],
-            timeout=30.0,
-        )
-        extracted = await client.long_term.search_entities("Alice", limit=5)
-        print(f"Extraction settled: {settled}; searchable entities: {len(extracted)}")
-        for found in extracted:
-            print(f"   {found.display_name} ({found.full_type})")
-----
-
-`get_extraction_status(conversation_id)` is the authoritative rollup (`pending_count`, `is_complete`). `wait_for_extraction` polls it and then confirms the named entities are searchable; it returns `False` on timeout rather than raising, so you can branch instead of failing.
-
-NAMS also resolves before it creates: a near-duplicate name merges onto the existing entity, and the canonical one is what comes back.
-
-== 6. Server-assembled context and the graph
-
-The reason to use a hosted backend: the three-tier view (reflections over observations over recent messages) is built for you, and the graph around an entity is one call:
-
-[source,python]
-----
-        context = await client.short_term.get_context("Italian food", session_id=conversation_id)
-        observations = await client.short_term.get_observations(conversation_id)
-        reflections = await client.short_term.get_reflections(conversation_id)
-        print(
-            f"\nContext block: {len(context)} chars, "
-            f"{len(observations)} observation(s), {len(reflections)} reflection(s)"
-        )
-
-        if extracted:
-            neighborhood = await client.long_term.expand_graph(str(extracted[0].id))
-            print(
-                f"Neighborhood of {extracted[0].display_name}: "
-                f"{len(neighborhood['nodes'])} node(s), {len(neighborhood['edges'])} edge(s)"
-            )
-----
-
-== 7. Reasoning memory
-
-Record a trace with a step and a tool call, then read the steps back from the server so a silent write failure is visible:
-
-[source,python]
-----
-        trace = await client.reasoning.start_trace(
-            session_id=conversation_id,
-            task="Recommend a restaurant for Alice.",
-        )
-        step = await client.reasoning.add_step(
-            trace.id,
-            thought="Alice likes Italian and dislikes crowds.",
-            action="Look up quiet Italian places.",
-            observation="Found 3 candidates.",
-        )
-        await client.reasoning.record_tool_call(
-            step.id,
-            tool_name="restaurant_search",
-            arguments={"cuisine": "Italian", "noise_level": "quiet"},
-            result=["Da Mario", "Trattoria Bella", "Osteria del Sole"],
-        )
-        await client.reasoning.complete_trace(
-            trace.id, outcome="Suggested 3 restaurants.", success=True
-        )
-
-        traces = await client.reasoning.get_session_traces(conversation_id)
-        steps = traces[0].steps if traces else []
-        print(f"\nServer-side reasoning steps for this conversation: {len(steps)}")
-        for number, recorded in enumerate(steps, start=1):
-            print(f"   step {number}: {len(recorded.tool_calls)} tool call(s)")
-----
-
-[NOTE]
-====
-NAMS stores steps and tool calls per conversation and has no Trace entity, so
-`get_session_traces` re-assembles a single aggregate trace client-side with the
-literal task `"Aggregated session reasoning"`. Assert on the step count, not on
-`traces[0].task`.
-====
-
-== 8. The active ontology
-
-The ontology is the schema server-side extraction is validated against. It is a NAMS-only accessor:
-
-[source,python]
-----
-        try:
-            active = await client.ontology.get_active()
-        except NotSupportedError as exc:
-            print(f"\nNo active ontology bound for this workspace: {exc}")
-        else:
-            print(
-                f"\nActive ontology: {active.document.domain.name} "
-                f"(revision {active.revision}, {active.validation_mode}) — "
-                f"{len(active.document.entity_types)} entity type(s)"
-            )
-----
-
-See xref:tutorials/ontology-quickstart.adoc[Tutorial: Ontologies] for cloning, editing, and activating one.
-
-== 9. Portable read-only Cypher
-
-`client.query.cypher` works on both backends. Write keywords are rejected client-side (a `ValueError`) before any request is sent; the NAMS endpoint is read-only by contract. Catch the transport errors narrowly so a real failure isn't mislabelled as a missing feature:
-
-[source,python]
-----
-        try:
-            rows = await client.query.cypher(
-                "MATCH (e:Entity {name: $name}) RETURN e.name AS name LIMIT 1",
-                {"name": "Alice"},
-            )
-        except NotSupportedError as exc:
-            print(f"Cypher is not available on this deployment: {exc}")
-        except (AuthenticationError, RateLimitError, TransportError) as exc:
-            print(f"Cypher request failed: {exc}")
-            raise
-        else:
-            print(f"Cypher round-trip: {rows}")
-
-        print("\nDone. Your memory graph is at https://memory.neo4jlabs.com.")
-----
-
-That's the last of the `try` block — the `finally: await client.close()` and `asyncio.run(main())` from step 3 close the script.
-
-== 10. Run it
+Before the first service operation, check the assembled files offline:
 
 [source,bash]
 ----
-python quickstart.py
+python -m py_compile hosted_tutorial_state.py hosted_tutorial_cleanup.py nams_quickstart.py
+python nams_quickstart.py --help
 ----
 
-Expected output:
+Expected: compilation prints nothing and exits successfully; `--help` prints
+the command choices. Compilation catches syntax errors; the CLI check also
+loads the local imports. Neither command authenticates, contacts NAMS or
+creates tutorial state. Fix a missing or truncated file before continuing.
+
+The shared state and cleanup modules sit beside the script. Its private
+`.tutorial-state/nams.json` file records the selected endpoint, workspace and
+credential identity, returned IDs, content digests and operation status. Keep
+that directory private and out of version control. Reusing the file with a different key or
+workspace stops before saved IDs are used; reseeding an existing file is refused.
+
+[[_4_short_term_memory]]
+== Step 5: Store and read back the fixture
+
+anchor:_5_short_term_memory[]
+anchor:_5_long_term_memory_and_asynchronous_extraction[]
+anchor:_10_run_it[]
+
+[source,bash]
+----
+python nams_quickstart.py seed --state .tutorial-state/nams.json \
+  --workspace-label 'workspace name or ID from the dashboard' \
+  --workspace-owner 'responsible workspace operator'
+----
+
+The program prints these milestones in order:
+
+. `Conversation ID:` identifies the actual server-created conversation.
+. `Verified: exact IDs, roles and content for 2 stored messages` confirms a
+  separate read of both fixture messages.
+. `Extraction settled; workspace search returned ... candidate(s)` reports the
+  search after a finite extraction wait. Candidate count and names depend on
+  the service; a workspace search match does not prove that this conversation
+  produced the entity.
+. `Retained state:` identifies the file needed for verification and cleanup.
+
+A timeout or exception means that stage is not verified. Keep the saved state
+rather than rerunning seed and creating another fixture.
+
+== Step 6: Verify from a fresh process
+
+anchor:_5_verify_from_a_fresh_process[]
+anchor:_6_verify_from_a_fresh_process[]
+
+The seed command has exited. From the same `agent-memory-tutorials` directory, run:
+
+[source,bash]
+----
+python nams_quickstart.py inspect --state .tutorial-state/nams.json
+python nams_quickstart.py verify --state .tutorial-state/nams.json
+----
+
+`inspect` displays the saved resource IDs and pending/disposition information.
+Expected from `verify`: `Verified: exact IDs, roles and content for 2 stored
+messages`. That command reads the original records without repeating seed,
+search or model generation. This checks a client-process restart; the hosted
+service is not restarted.
+
+anchor:_7_reasoning_memory[]
+
+The introductory path creates no reasoning steps or tool calls. Those records
+currently have no verified public deletion route, and deleting a conversation
+must not be described as deleting them. See
+xref:reference/api/reasoning.adoc[Reasoning API] and
+xref:reference/backend-capabilities.adoc#hosted-cleanup[Hosted cleanup limits]
+before adding a reasoning exercise with an explicit retention arrangement.
+
+[[_cleanup]]
+== Step 7: Clean up and inspect the disposition
+
+anchor:_7_cleanup[]
+
+Before switching workspaces or continuing to another lesson, run:
+
+[source,bash]
+----
+python nams_quickstart.py cleanup --state .tutorial-state/nams.json
+printf 'Cleanup exit status: %s\n' "$?"
+python nams_quickstart.py inspect --state .tutorial-state/nams.json
+----
+
+The helper waits for terminal extraction of the saved messages, examines only
+entities linked to them, and checks creation and all source/neighbor IDs before
+deletion. It uses supported conversation/entity DELETE routes, then verifies
+404 responses and a query restricted to this run's IDs. It does not use a
+workspace reset or write-Cypher workaround.
+
+Expected: `Verified: owned conversation and proven-owned entities are absent`,
+followed by `Retained resources:`. An empty retained-resource mapping means no
+recorded resource remains. Shared, merged or ambiguous entities stay listed and
+must not be called deleted. Exit status `2` reports retained resources even
+when the supported deletions passed. Inspect that disposition before claiming
+this run is fully removed. An uncertain write, failed extraction, failed request
+or unexpected residual stops the check and preserves the state for inspection.
+
+Two illustrative outcomes (placeholder IDs, not a recorded live run):
 
 [source,text]
 ----
-Connected to https://memory.neo4jlabs.com/v1 (backend=nams)
-
-Conversation: 3f6b2c51-6d0e-4f0a-9a3a-2c1b8e0f7a11
-Stored 3 messages in one request:
-        user: Hi, I'm Alice.
-   assistant: Nice to meet you, Alice!
-        user: I love Italian food and dislike crowded restaurants.
-
-Wrote entity: Alice (PERSON)
-Extraction right after the write: 3 message(s) pending
-Extraction settled: True; searchable entities: 2
-   Alice (PERSON)
-   Italian food (OBJECT)
-
-Context block: 214 chars, 1 observation(s), 0 reflection(s)
-Neighborhood of Alice: 2 node(s), 1 edge(s)
-
-Server-side reasoning steps for this conversation: 1
-   step 1: 1 tool call(s)
-
-Active ontology: General (revision 1, permissive) — 5 entity type(s)
-Cypher round-trip: [{'name': 'Alice'}]
-
-Done. Your memory graph is at https://memory.neo4jlabs.com.
+Verified: owned conversation and proven-owned entities are absent
+Retained resources: {}
+Cleanup exit status: 0
 ----
 
-Your counts will differ: extracted entities depend on what the server pulls out of the transcript, entity types on your active ontology, and observations and reflections accumulate over a conversation.
+[source,text]
+----
+Verified: owned conversation and proven-owned entities are absent
+Retained resources: {'entity': ['<shared-entity-id>']}
+Cleanup exit status: 2
+----
 
-== What just happened?
+The second outcome means the supported deletions passed, but the shared entity
+was retained. The next action is owner review of `inspect` output, not another
+seed. If cleanup instead raises an error, preserve the state and inspect the
+unfinished operation; neither example output describes that failure.
 
-* `NamsSettings()` read `MEMORY_API_KEY` from the environment and selected the hosted backend; `connect()` returned a NAMS-typed client.
-* Every method call became an HTTPS request to `+https://memory.neo4jlabs.com/v1/...+`.
-* NAMS embedded your messages, extracted entities from them asynchronously, resolved your entity against what already existed, and stored the reasoning steps — all server-side.
-* `client.query.cypher` ran a read-only query against the hosted graph.
+Closing a client only releases its connections. Keep the private state until
+every returned ID has a verified deletion or retention disposition. If a write
+was interrupted before its ID was saved, establish that exact resource with the
+workspace owner instead of deleting by a similar name or reseeding.
 
-You didn't touch Neo4j, configure embeddings, or run schema setup.
+include::partial$python-hosted-lifecycle.adoc[]
 
-== Which calls are portable?
+== Keep the old run and start a separate exercise
 
-Steps 4, the entity write in 5, 7 and 9 are the backend-agnostic Protocol: swap `NamsSettings()` for `BoltSettings(neo4j=...)` and they run against your own Neo4j unchanged. `get_extraction_status`, `get_observations`, `get_reflections`, `expand_graph` and `client.ontology` are hosted-only. On bolt, extraction is synchronous (`wait_for_extraction` returns immediately) and `add_entity` returns `(entity, dedup_result)` rather than an entity.
+See xref:how-to/use-nams.adoc#_recover_from_an_interrupted_tutorial_run[Recover from an interrupted tutorial run] to check the recorded state before reseeding.
 
-== What now?
+For a prerequisite failure *before* the first remote write, the new ledger's
+`remote_write_started: false`, empty resources and absent pending operation
+establish that this program did not attempt a mutation. An empty ledger alone
+is not enough. Older empty ledgers without that marker, a lost returned ID, or any
+uncertain write fail the check and require owner inspection.
 
-* https://github.com/neo4j-labs/agent-memory/tree/main/examples/nams-quickstart[`examples/nams-quickstart/`] — the runnable version of this script.
-* xref:how-to/use-nams.adoc[How-to: Use NAMS] — full config reference.
-* xref:how-to/migrate-to-nams.adoc[How-to: Migrate to NAMS] — port existing bolt code.
-* xref:explanation/backends.adoc[Bolt vs NAMS] — when to choose which.
-* xref:tutorials/first-agent-memory.adoc[Tutorial: Build your first agent with memory] — full LLM-agent example.
+After correcting the prerequisite, choose this unused run directory. The
+first command only reads the old ledger and checks the new path. It preserves
+the original file and creates nothing. `&&` prevents seed if that check fails:
 
-== Cleanup
+[source,bash]
+----
+python hosted_tutorial_state.py check-new-run .tutorial-state/nams.json \
+  --next-state .tutorial-state/nams-run-2/state.json &&
+python nams_quickstart.py seed --state .tutorial-state/nams-run-2/state.json \
+  --workspace-label 'workspace name or ID from the dashboard' \
+  --workspace-owner 'responsible workspace operator'
+----
 
-Your tutorial data lives in your NAMS workspace; manage it through the dashboard at https://memory.neo4jlabs.com.
+Expected before seed: `Recorded new-run check: no_remote_write_started` for
+an unstarted run, or `recorded_disposition_complete` for fully disposed records.
+This is a check of saved evidence, not a new service verification. The seed
+still checks its own prerequisites and refuses an existing target state file.
+Use the new `--state` path for every later command; reports and archives are
+written alongside that new state. Never copy the old IDs into the new ledger.
 
-Write Cypher (`MATCH (n) DETACH DELETE n`) is rejected client-side before a request is sent, so use the dashboard, or `clear_session(conversation_id)` for a single conversation.
+[[_what_just_happened]]
+== What we learned
+
+anchor:_which_calls_are_portable[]
+
+The conversation name and returned ID have different roles. Exact message
+readback verifies persistence independently of asynchronous extraction and
+workspace-wide semantic search. A saved run ledger makes the later verification
+and cleanup refer to the same records.
+
+The Python Bolt and NAMS APIs have different creation and return contracts. Do not switch the settings object and assume this script is portable. See xref:reference/backend-capabilities.adoc[Backend capabilities].
+
+[[_6_server_assembled_context_and_the_graph]]
+== Explore the next hosted capabilities
+
+anchor:_8_the_active_ontology[]anchor:_9_portable_read_only_cypher[]anchor:_what_now[]
+
+Context assembly, graph expansion, ontology management, and read-only Cypher are separate tasks. Their commands and result contracts belong in xref:how-to/use-nams.adoc[Use NAMS] and xref:reference/rest-api.adoc[REST API]. Continue with xref:tutorials/ontology-quickstart.adoc[the ontology lesson] after this conversation path succeeds.

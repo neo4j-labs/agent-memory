@@ -1,314 +1,94 @@
-= Entity Extraction: Domain Schemas
+= Apply a custom entity extraction schema
 :page-product: agent-memory
 :page-pagination:
-:toclevels: 3
+:toclevels: 2
 :sectanchors:
-:icons: font
-:source-highlighter: highlight.js
 
-How to use pre-built domain schemas and define custom entity types for domain-specific extraction.
+include::partial$backend-bolt-only.adoc[]
 
-[TIP]
-====
-Domain schemas improve extraction quality for specialized text: the entity-type descriptions are what the model reads, so a medical schema that describes `drug` and `symptom` gives it far more context than a generic POLE+O label set on the same document, with the same underlying model.
-====
+To identify customer and product mentions, provide domain descriptions and an explicit mapping from extraction labels to persisted entity types. Test the mapping against a representative sentence before writing graph data.
 
-== Available Built-In Schemas
+For the rationale, see xref:explanation/extraction-pipeline.adoc[Understanding the extraction pipeline].
 
-Eight schemas ship with the library. `list_schemas()` is the authoritative list; `get_schema(name)` returns the `DomainSchema` (entity types plus their descriptions).
+anchor:_prerequisites[]
+
+== 1. Install the local extractor
+
+Use Python 3.10 or newer and a POSIX shell. Prepare the example files and install the required extra:
+
+include::partial$python-tutorial-setup.adoc[]
+
+[source,bash]
+----
+python -m pip install 'neo4j-agent-memory[gliner]==0.6.0'
+----
+
+The maintained program `extraction_recipes.py` supplies its own imports, source texts, and event-loop entry point. It downloads the GLiNER model on first inference; allow disk space and network access for the download. These commands do not connect to a database or require an LLM API key.
+
+include::partial$python-extraction-recipe-file.adoc[]
+
+== 2. Configure and run the extraction
+
+The custom schema names `customer` and `product`. Its mapping uses `(TYPE, SUBTYPE)` tuples: a customer maps to PERSON and a product to OBJECT/PRODUCT. `for_schema` is reserved for registry names; a custom `DomainSchema` is passed to the constructor.
+
+The following function is included from the complete program. Run the maintained file with the command below it.
 
 [source,python]
 ----
-from neo4j_agent_memory.extraction import get_schema, list_schemas
-
-print(list_schemas())
-# ['poleo', 'podcast', 'news', 'scientific', 'business', 'entertainment', 'medical', 'legal']
-
-print(list(get_schema("medical").entity_types))
-# ['disease', 'drug', 'symptom', 'procedure', 'body_part', 'gene', 'organism']
+include::example$extraction_recipes.py[tags=schema;extract]
 ----
 
-[cols="1,3,2", options="header"]
-|===
-|Schema |Optimized For |Key Entity Types
-
-|`poleo`
-|General investigations and intelligence
-|person, organization, location, event, object
-
-|`podcast`
-|Podcast and interview transcripts
-|person, company, product, concept, book, technology
-
-|`news`
-|News articles and journalism
-|person, organization, location, event, date
-
-|`scientific`
-|Research papers
-|author, institution, method, dataset, metric, tool
-
-|`business`
-|Earnings calls, market analysis, deal announcements
-|company, person, product, industry, financial_metric
-
-|`entertainment`
-|Film and television coverage
-|actor, director, film, tv_show, character, award
-
-|`medical`
-|Healthcare text
-|disease, drug, symptom, procedure, body_part, gene
-
-|`legal`
-|Legal documents
-|case, person, organization, law, court, monetary_amount
-|===
-
-Extracted entities come back mapped onto POLE+O types with a subtype, so `drug` becomes `OBJECT` / `DRUG` and `actor` becomes `PERSON` / `ACTOR`.
-
-[source,python]
+[source,bash]
 ----
-from neo4j_agent_memory.extraction import GLiNEREntityExtractor
-
-extractor = GLiNEREntityExtractor.for_schema("business", threshold=0.4)
-
-result = await extractor.extract(
-    "CEO Sarah Mitchell said TechVision Cloud revenue reached $2.4 billion, up 34%."
-)
-for entity in result.filter_invalid_entities().entities:
-    print(f"{entity.name}: {entity.full_type}")
-    # Sarah Mitchell: PERSON
-    # TechVision Cloud: OBJECT:PRODUCT
-    # $2.4 billion: OBJECT:FINANCIAL_METRIC
+python extraction_recipes.py schema
 ----
 
-[TIP]
-====
-Runnable version: `examples/domain-schemas/run.py --schema business` extracts a synthetic corpus with each of the eight schemas and, with `--store`, writes the result to Neo4j.
-====
+== 3. Verify the result
 
-== Custom Schema: Financial Services
+Expected: candidates from “Maya Chen bought a Trail Starter shoe,” with PERSON and/or OBJECT/PRODUCT types, then the verified candidate count. Model output can omit or misidentify a mention; inspect it before using the schema on a corpus.
 
-There is no built-in `financial` schema — finance is a good example of a domain you define yourself with `DomainSchema`. The descriptions are the prompt, so write them for the model.
+The command raises on the documented failure conditions. Inspect candidate names, types, and confidence against source text before storing them. Counts alone do not measure extraction accuracy.
 
-[source,python]
+anchor:_available_built_in_schemas[]
+
+== Select a registered schema when it fits
+
+Registered names are `poleo`, `podcast`, `news`, `scientific`, `business`, `entertainment`, `medical`, and `legal`. The exact label inventories and descriptions are in xref:reference/schemas.adoc[built-in schemas]. There are no registered `financial` or `ecommerce` names. Use a custom schema for those domains.
+
+`DomainSchema` configures GLiNER label descriptions and optional relation descriptions. `EntitySchemaConfig` is the separate SDK schema configuration model; do not interchange the two or pass unsupported `examples` fields. `ExtractorBuilder.with_schema` forwards type names, not every constraint and relation in a schema configuration. See xref:reference/schemas.adoc[schema models and persistence] before relying on validation.
+
+anchor:_relationship_extraction[]
+
+== Extract relationships and persist schema configuration
+
+For GLiREL, install `glirel` and `loguru` explicitly — the SDK does not define a `glirel` extra, and GLiREL's current package requires `loguru` at import time without declaring that dependency — plus spaCy and the `en_core_web_sm` tokenizer model:
+
+[source,bash]
 ----
-from neo4j_agent_memory.extraction import DomainSchema, GLiNEREntityExtractor
-
-financial_schema = DomainSchema(
-    name="financial",
-    entity_types={
-        "person": "A client, advisor or contact, such as 'Sarah Johnson'",
-        "organization": "A company, fund or institution holding or managing assets",
-        "security": "A stock, bond, ETF or fund, such as 'Treasury Bond'",
-        "ticker": "A stock or fund symbol, such as 'AAPL' or 'BND'",
-        "account": "An account type or number, such as 'IRA' or 'Account #12345'",
-        "amount": "A dollar amount, percentage or share count",
-        "date": "A date or time period, such as 'Q4 2024'",
-        "sector": "An industry sector, such as 'Technology'",
-        "risk_profile": "A risk classification, such as 'moderate-growth'",
-    },
-)
-
-extractor = GLiNEREntityExtractor(schema=financial_schema, threshold=0.4)
-
-text = """
-    Client meeting with Acme Investment Holdings regarding their Q4 portfolio review.
-    They currently hold 10,000 shares of Northwind Industries (NWI) and 5,000 shares
-    of Orion Systems (ORN). Risk tolerance remains moderate-growth. Advisor Sarah
-    Johnson recommended a 15% allocation to technology, balanced with fixed income.
-"""
-
-result = await extractor.extract(text)
-for entity in result.filter_invalid_entities().entities:
-    print(f"{entity.name}: {entity.full_type}")
+python -m pip install 'neo4j-agent-memory[gliner,spacy]==0.6.0' glirel 'loguru>=0.7,<1'
+python -m spacy download en_core_web_sm
 ----
 
-Unknown labels map to `OBJECT` with the label as the subtype (`security` becomes `OBJECT:SECURITY`), so custom schemas need no library change to be queryable.
+Then construct `GLiRELExtractor(relation_types=...)` and compose it with the entity extractor. A custom domain object's existence does not automatically wire a relation extractor. The xref:tutorials/knowledge-graph.adoc[knowledge-graph tutorial] includes the complete constructor/storage path.
 
-== Custom Schema: Ecommerce Retail
+Persisting an `EntitySchemaConfig` through the Bolt schema manager stores configuration; it does not automatically validate every existing graph node or deploy a hosted ontology. Select/load the intended configuration explicitly when constructing extraction. See xref:reference/schemas.adoc[the persistence API] and xref:how-to/use-ontologies.adoc[hosted ontology tasks] for the separate contracts.
 
-[source,python]
-----
-ecommerce_schema = DomainSchema(
-    name="ecommerce",
-    entity_types={
-        "customer": "A customer name or customer ID",
-        "product": "A product name, such as 'running shoe, model X'",
-        "sku": "A product identifier, such as 'NKE-AM90-001'",
-        "brand": "A brand name",
-        "category": "A product category, such as 'Footwear'",
-        "order_id": "An order identifier, such as 'ORD-98765'",
-        "carrier": "A shipping carrier",
-        "location": "An address, store or warehouse",
-        "payment_method": "A payment type, such as a wallet or card brand",
-        "promotion": "A coupon or discount, such as '20% off'",
-    },
-)
+// Historical section links resolve to the maintained task and reference pointers.
+anchor:_custom_schema_financial_services[]
+anchor:_custom_schema_ecommerce_retail[]
+anchor:_custom_domain_schemas[]
+anchor:_define_entity_types[]
+anchor:_extend_built_in_schemas[]
+anchor:_persist_schemas_to_neo4j[]
+anchor:_glirel_no_llm_required[]
+anchor:_custom_relationship_types[]
+anchor:_see_also[]
 
-extractor = GLiNEREntityExtractor(schema=ecommerce_schema, threshold=0.4)
+== Write effective schema descriptions
 
-text = """
-    Customer inquiry from Jane Doe (Gold member) about order #ORD-98765.
-    She ordered the Trailrunner 90 in size 9 (SKU: TRL-90-WHT-9) from our
-    mobile app. The package shipped via Northbound Freight to Brooklyn, NY.
-"""
+Improve GLiNER's zero-shot accuracy by tuning the description text passed to `DomainSchema`:
 
-result = await extractor.extract(text)
-for entity in result.filter_invalid_entities().entities:
-    print(f"{entity.name}: {entity.full_type}")
-----
-
-== Custom Domain Schemas
-
-=== Define Entity Types
-
-A GLiNER extractor takes a `DomainSchema`: a name plus a `{label: description}` mapping. Labels are lowercase (GLiNER prefers them that way) and the description is the prompt.
-
-[source,python]
-----
-from neo4j_agent_memory.extraction import DomainSchema, GLiNEREntityExtractor
-
-insurance_schema = DomainSchema(
-    name="insurance",
-    entity_types={
-        "policyholder": "An insurance policy holder or applicant, a person or a company",
-        "policy": "An insurance policy with a number, such as 'Policy #INS-2024-001'",
-        "claim": "An insurance claim reference, such as 'Claim #CLM-98765'",
-        "coverage": "A type of insurance coverage, such as 'liability' or 'collision'",
-        "premium": "An insurance premium amount, such as '$500/month'",
-        "vehicle": "An insured vehicle, such as '2024 sedan, model X'",
-    },
-)
-
-extractor = GLiNEREntityExtractor(schema=insurance_schema, threshold=0.4)
-----
-
-[TIP]
-====
-*Write descriptions as prompts.* The description is what the model reads to decide whether a span matches this type. "An insurance policy holder or applicant" is better than "a person" — it gives the model the domain context it needs to avoid false positives. Naming a representative value inside the description ("such as 'Policy #INS-2024-001'") helps more than a longer abstract definition.
-====
-
-=== Extend Built-In Schemas
-
-`DomainSchema.entity_types` is a plain dict, so extending a built-in schema is a merge:
-
-[source,python]
-----
-from neo4j_agent_memory.extraction import DomainSchema, GLiNEREntityExtractor, get_schema
-
-base_schema = get_schema("business")
-
-extended_schema = DomainSchema(
-    name="business_extended",
-    entity_types={
-        **base_schema.entity_types,
-        "loyalty_tier": "A customer loyalty program tier, such as 'Gold member'",
-        "subscription": "A subscription service or plan",
-    },
-)
-
-extractor = GLiNEREntityExtractor(schema=extended_schema, threshold=0.4)
-----
-
-=== Persist Schemas to Neo4j
-
-`SchemaManager` stores `EntitySchemaConfig` — the POLE+O type registry used for validation and for `MemorySettings.schema_config`, which is a different object from the GLiNER `DomainSchema` above. Persist one, then derive the extractor schema from it:
-
-[source,python]
-----
-from neo4j_agent_memory.extraction import DomainSchema, GLiNEREntityExtractor
-from neo4j_agent_memory.schema import EntitySchemaConfig, EntityTypeConfig, SchemaManager
-
-insurance_types = EntitySchemaConfig(
-    name="insurance",
-    version="1.0",
-    description="Schema for insurance industry context graphs",
-    entity_types=[
-        EntityTypeConfig(
-            name="POLICYHOLDER",
-            description="An insurance policy holder or applicant",
-        ),
-        EntityTypeConfig(
-            name="POLICY",
-            description="An insurance policy with a number",
-        ),
-    ],
-)
-
-# ``client`` is a connected MemoryClient; ``client.graph`` is its Neo4jClient.
-manager = SchemaManager(client.graph)
-
-stored = await manager.save_schema(insurance_types, created_by="admin", set_active=True)
-print(f"Schema saved with ID: {stored.id}")
-
-# Load it in another session and build the extractor from it.
-loaded = await manager.load_schema("insurance")
-assert loaded is not None
-extractor = GLiNEREntityExtractor(
-    schema=DomainSchema(
-        name=loaded.name,
-        entity_types={
-            entity_type.name.lower(): entity_type.description or entity_type.name
-            for entity_type in loaded.entity_types
-        },
-    ),
-    threshold=0.4,
-)
-----
-
-== Relationship Extraction
-
-=== GLiREL (No LLM Required)
-
-GLiREL is an optional dependency (`pip install glirel`) — check for it before constructing the combined extractor.
-
-[source,python]
-----
-from neo4j_agent_memory.extraction import GLiNERWithRelationsExtractor, is_glirel_available
-
-if is_glirel_available():
-    extractor = GLiNERWithRelationsExtractor.for_schema("business", entity_threshold=0.4)
-
-    text = """
-        Jane Doe purchased a Trailrunner 90 from our Manhattan store.
-        The product was manufactured by Northwind Industries.
-    """
-
-    result = await extractor.extract(text)
-
-    for rel in result.relations:
-        print(f"  ({rel.source}) -[:{rel.relation_type}]-> ({rel.target})")
-        # (Jane Doe) -[:PURCHASED]-> (Trailrunner 90)
-        # (Trailrunner 90) -[:MANUFACTURED_BY]-> (Northwind Industries)
-----
-
-=== Custom Relationship Types
-
-`relation_types` is a `{name: description}` mapping, the same shape as a schema's entity types:
-
-[source,python]
-----
-financial_relations = {
-    "ADVISES": "A financial advisor advises a client",
-    "HOLDS": "An account holds a security position",
-    "TRADED": "An executed trade in a security",
-    "SUBSIDIARY_OF": "A company is a subsidiary of a parent company",
-    "CUSTODIED_AT": "Assets are custodied at an institution",
-}
-
-extractor = GLiNERWithRelationsExtractor.for_schema(
-    "business",
-    entity_threshold=0.4,
-    relation_threshold=0.4,
-    relation_types=financial_relations,
-)
-----
-
-== See Also
-
-* xref:how-to/entity-extraction.adoc[Basic Extraction & Pipelines]
-* xref:how-to/entity-extraction-batch.adoc[Batch & Streaming Extraction]
-* xref:reference/schemas.adoc[Schemas Reference]
-* xref:reference/extractors.adoc[Extractor Classes Reference]
+1. Use descriptive names — `"A real estate property"` scores better than `"property"`.
+2. Include synonyms in the description — `"A company, startup, or business organization"` catches more of the mentions a plain `"company"` label misses.
+3. Be domain-specific — tailor descriptions to your corpus's vocabulary rather than reusing a generic label.
+4. Test thresholds on a sample document before committing to one — a lower `threshold` catches more entities but can reduce precision.

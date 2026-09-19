@@ -200,15 +200,15 @@ They have drifted in the details, though, and it is worth knowing before you tre
 
 The honest answer is "half and half". The three **memory** layers work unchanged against the hosted [Neo4j Agent Memory Service](https://memory.neo4jlabs.com) — point `MemorySettings` at it with a `MEMORY_API_KEY` and the conversations, entities, facts and reasoning traces are stored there. The **compliance domain graph** is not memory: it is your data, in your schema, and the loader writes it over bolt to a database you own. `client.schema.adopt_existing_graph()` is bolt-only for the same reason — the schema is server-managed on the hosted service.
 
-So: run both apps against a Neo4j instance you control (Aura Free is enough), which is what the steps below do. See [Backends: self-hosted vs hosted](https://neo4j.com/labs/agent-memory/explanation/backends.html) for the full picture.
+Run each app against a dedicated empty AuraDB instance using [the shared Aura setup and cleanup guide](../AURA_SETUP.md). Start with the small synthetic dataset and confirm capacity before expanding it. Both applications use `NEO4J_USER` for the username: copy the value of `NEO4J_USERNAME` from the shared setup into that field in the private `.env` file, together with the matching Aura URI and password. See [Backends: self-hosted vs hosted](https://neo4j.com/labs/agent-memory/explanation/backends.html) for the full picture.
 
-One constraint if you run both apps: they use different embedders (Titan is 1024-d, Vertex is 768-d) and the memory vector indexes are sized from whichever connects first. Give each app its own database, or `MemoryClient.connect()` will raise `EmbeddingDimensionMismatchError` — deliberately, rather than corrupting the indexes.
+One constraint if you run both apps: they use different embedders (Titan is 1024-d, Vertex is 768-d) and the memory vector indexes are sized from whichever connects first. Give each app its own Aura instance, or `MemoryClient.connect()` will raise `EmbeddingDimensionMismatchError` — deliberately, rather than corrupting the indexes.
 
 ### AWS (Bedrock + Strands)
 
 ```bash
 cd aws-financial-services-advisor
-cp .env.example backend/.env    # Configure Neo4j + AWS credentials
+cp .env.example backend/.env    # Configure Aura NEO4J_URI/USER/PASSWORD + AWS credentials
 make install                    # Install Python + Node dependencies
 make load-data                  # Load sample data into Neo4j (idempotent)
 make adopt-graph                # Optional: adopt the graph as memory entities
@@ -221,7 +221,7 @@ Full tutorial: [aws-financial-services-advisor/GETTING_STARTED.md](aws-financial
 
 ```bash
 cd google-cloud-financial-advisor
-cp .env.example backend/.env    # Configure Neo4j + Google API key
+cp .env.example .env            # Configure Aura NEO4J_URI/USER/PASSWORD + Google credentials
 make install                    # Install Python + Node dependencies
 make load-data                  # Load sample data into Neo4j
 make dev                        # Start backend (8000) + frontend (5173)
@@ -319,4 +319,6 @@ Both implementations expose this core REST API:
 
 ---
 
-_Verified against `neo4j-agent-memory` v0.5.0 on 2026-09-10 — the shared loader runs idempotently against Neo4j 5.26 and the AWS implementation's 151 tests pass (124 unit, 27 integration). A full end-to-end chat run needs AWS or GCP credentials._
+**Historical verification report — 2026-09-10.** The following records a prior checkout/test report. Its development-version labels, passing counts, and release-availability statements are historical, not evidence of current package compatibility. See the [current source and artifact evidence](../../DOCUMENTATION_REMEDIATION_STATUS.md) before selecting an SDK artifact.
+
+> _Verified against `neo4j-agent-memory` v0.5.0 on 2026-09-10 — the shared loader runs idempotently against Neo4j 5.26 and the AWS implementation's 151 tests pass (124 unit, 27 integration). A full end-to-end chat run needs AWS or GCP credentials._

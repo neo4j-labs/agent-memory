@@ -1,290 +1,149 @@
-= Use NAMS (hosted backend)
+= Connect a Python application to NAMS
 :page-product: agent-memory
 :page-pagination:
-:toclevels: 3
-:sectanchors:
-:icons: font
-:source-highlighter: highlight.js
+:toclevels: 2
 
-How to configure `MemoryClient` to talk to the **Neo4j Agent Memory Service (NAMS)** — Neo4j's hosted memory API — instead of a direct Neo4j cluster.
+To store and retrieve messages through NAMS, configure the Python client with a workspace key and use the conversation ID returned by the service.
 
-[.lead]
-NAMS is a managed REST service backed by Neo4j. You don't run the database; you just point `MemoryClient` at the service with an API key. The rest of the library API is unchanged. For the conceptual comparison with bolt, see xref:explanation/backends.adoc[Bolt vs NAMS].
-
+// Retain former section URLs at the current related topic.
 == Prerequisites
 
-* Python 3.10+
-* A NAMS API key — sign up at https://memory.neo4jlabs.com[memory.neo4jlabs.com]. Keys start with `nams_`.
+anchor:_env_var_reference[]anchor:_next_steps[]
 
-== Install
+* Python 3.10+ and a POSIX shell.
+* A data-plane workspace key and the intended NAMS endpoint. Obtain these from your workspace administrator or the https://memory.neo4jlabs.com[dashboard]. A key's permissions and workspace association determine access; two keys can belong to the same workspace.
+* Review xref:reference/backend-capabilities.adoc[backend capabilities] before moving existing Bolt code.
 
-```bash
-uv pip install 'neo4j-agent-memory[nams]>=0.5.0'
-```
+This procedure uses the published Python 0.6.0 package. It performs a message write and leaves the test conversation available for inspection.
 
-The `[nams]` extra pulls in `httpx`. If you already have `httpx` (or any framework integration that depends on it), you don't strictly need the extra — the import is lazy.
+[#_install]
+// Retain former section URLs at the current related topic.
+== 1. Install the client
 
-== Configure
+anchor:_custom_endpoint_private_deployments[]
 
-The shortest path: set one environment variable.
+Create a directory for the connection check and install the package in its own environment:
 
-```bash
-export MEMORY_API_KEY=nams_xxxxxxxxxxxxxxxx
-```
-
-That's enough — `MemoryClient()` with no args picks up the env var and switches the backend to NAMS:
-
-[source,python]
+[source,bash]
 ----
-from neo4j_agent_memory import MemoryClient
-
-async with MemoryClient() as client:
-    conversation = await client.short_term.create_conversation("session-1")
-    conversation_id = str(conversation.id)
-    await client.short_term.add_message(conversation_id, "user", "Hello!")
+mkdir nams-connection-check
+cd nams-connection-check
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install 'neo4j-agent-memory[nams]==0.6.0'
+export MEMORY_API_KEY='nams_replace_with_workspace_key'
+export MEMORY_ENDPOINT='https://memory.neo4jlabs.com/v1'
 ----
 
-Or be explicit:
+Keep the key out of source control. A workspace header is needed only when required by your deployment; see xref:reference/configuration.adoc#nams[NAMS settings] for explicit precedence and fields.
 
-[source,python]
-----
-from pydantic import SecretStr
+== 2. Save a complete connection check
 
-from neo4j_agent_memory import MemoryClient, MemorySettings, NamsConfig
+anchor:_configure[]anchor:_first_request[]
 
-settings = MemorySettings(
-    backend="nams",
-    nams=NamsConfig(api_key=SecretStr("nams_xxxxxxxxxxxx")),
-)
+Save this as `check_nams.py` in `nams-connection-check/`:
 
-async with MemoryClient(settings) as client:
-    conversation = await client.short_term.create_conversation("session-1")
-    conversation_id = str(conversation.id)
-    await client.short_term.add_message(conversation_id, "user", "Hello!")
-----
-
-== NamsConfig fields
-
-[cols="1,1,3",options="header"]
-|===
-| Field | Default | Description
-
-| `endpoint`
-| `+https://memory.neo4jlabs.com/v1+`
-| Base URL. The `/v\d+` suffix triggers REST mode; other shapes use the TCK bridge protocol.
-| `api_key`
-| `None`
-| Your NAMS API key (`SecretStr`). `MemorySettings()` can lift `MEMORY_API_KEY`
-  into this field when the backend is resolved from the environment.
-| `workspace_id`
-| `None`
-| NAMS workspace id. When set, transmitted as the `X-Workspace-Id` header on
-  every request — required by deployments that scope by header (e.g. the
-  development/staging service) instead of encoding the workspace in the API key
-  (production). Optional and harmless when unset. `MemorySettings()` can lift
-  `MEMORY_WORKSPACE_ID` into this field. An explicit `X-Workspace-Id` entry in
-  `headers` overrides it.
-| `timeout`
-| `30.0`
-| HTTP request timeout in seconds.
-| `max_retries`
-| `3`
-| Retry budget for 429, 5xx, and network errors.
-| `retry_backoff_seconds`
-| `0.5`
-| Base exponential backoff (0.5, 1.0, 2.0, ...).
-| `headers`
-| `{}`
-| Extra HTTP headers (e.g. tracing IDs).
-| `validate_on_connect`
-| `True`
-| If True, `connect()` makes a fail-fast authenticated probe request to verify credentials and reachability.
-| `transport_mode`
-| `"auto"`
-| Override wire-protocol detection: `"rest"` or `"bridge"`.
-|===
-
-== Env var reference
-
-[cols="1,2",options="header"]
-|===
-| Variable | Purpose
-
-| `MEMORY_API_KEY`
-| NAMS API key. When set and `backend` is unspecified, the backend defaults to NAMS.
-| `MEMORY_ENDPOINT`
-| Override the default endpoint URL.
-| `MEMORY_WORKSPACE_ID`
-| NAMS workspace id, sent as the `X-Workspace-Id` header. Required by
-  header-scoped deployments (staging); harmless on production.
-| `NAM_BACKEND`
-| Force the backend (`bolt` or `nams`). Overrides the env-based default.
-| `NAM_NAMS__*`
-| Per-field overrides on `NamsConfig` (pydantic-settings nested-field syntax — e.g. `NAM_NAMS__TIMEOUT=60`).
-|===
-
-== First request
-
+.Save as `check_nams.py`
 [source,python]
 ----
 import asyncio
-from neo4j_agent_memory import MemoryClient
+from uuid import uuid4
+
+from neo4j_agent_memory import NamsSettings, connect
 
 
-async def main() -> None:
-    async with MemoryClient() as client:
-        conversation = await client.short_term.create_conversation("first-request-demo")
+async def main():
+    client = await connect(NamsSettings())
+    try:
+        conversation = await client.short_term.create_conversation(
+            f"connection-check-{uuid4().hex[:8]}"
+        )
         conversation_id = str(conversation.id)
-
-        # Short-term
-        msg = await client.short_term.add_message(
-            conversation_id, "user", "I love Italian food."
+        content = "Connection check: the workshop starts in Denver."
+        message = await client.short_term.add_message(
+            conversation_id, "user", content
         )
-        print(f"Stored message {msg.id}")
-
-        # Long-term
-        entity = await client.long_term.add_entity(
-            "Alice", "PERSON", description="The user introducing themselves"
-        )
-        print(f"Stored entity {entity.name}")
-
-        # Reasoning
-        trace = await client.reasoning.start_trace(
-            conversation_id, "Recommend a restaurant"
-        )
-        await client.reasoning.complete_trace(
-            trace.id, outcome="Done", success=True
-        )
-
-        # Read-only Cypher
-        rows = await client.query.cypher(
-            "MATCH (e:Entity) RETURN e.name AS name LIMIT 5"
-        )
-        print(rows)
+        history = await client.short_term.get_conversation(conversation_id)
+        assert any(item.id == message.id and item.content == content for item in history.messages)
+        print(f"Verified message {message.id} in conversation {conversation_id}")
+    finally:
+        await client.close()
 
 
 asyncio.run(main())
 ----
 
-== Custom endpoint (private deployments)
+== 3. Run and verify
 
-If you run NAMS on-prem or in a private cloud, override `endpoint`:
+anchor:_verify[]
 
-[source,python]
+[source,bash]
 ----
-settings = MemorySettings(
-    backend="nams",
-    nams=NamsConfig(
-        endpoint="https://nams.internal.example.com/v1",
-        api_key=SecretStr("nams_xxx"),
-    ),
-)
+python check_nams.py
 ----
 
-Or set `MEMORY_ENDPOINT` in the environment.
+Success prints `Verified message` followed by the returned identifiers. Retain the conversation ID to reopen this conversation.
 
-== Multi-tenancy
+[#_common_errors]
+// Retain former section URLs at the current related topic.
+== Resolve a failed check
 
-NAMS scopes data two ways:
+* Authentication failure: confirm the key, endpoint and workspace association.
+* Rate limit or transport failure: inspect the exception and request context. Python retries only its configured status/network set; see xref:reference/rest-api.adoc[REST transport behavior].
+* Unsupported operation while porting code: follow xref:how-to/migrate-to-nams.adoc[the migration procedure].
 
-1. **Workspace** — implicit in the API key. Different keys = different workspaces.
-2. **User** — explicit per-call. Pass `user_identifier=` on `create_conversation`,
-   `add_message`, `start_trace`, `set_entity_feedback`, etc.; it's forwarded to NAMS as `userId`.
+[#_namsconfig_fields]
+[#_env_var_reference]
+[#_custom_endpoint_private_deployments]
+[#_multi_tenancy]
+[#_bring_your_own_database_byod]
+[#_whats_not_available_on_nams]
+[#_observability]
+// Retain former section URLs at the current related topic.
+== Configuration and operational scope
 
-[source,python]
-----
-conversation = await client.short_term.create_conversation(
-    "session-alice",
-    user_identifier="alice-user-id",
-)
-conversation_id = str(conversation.id)
-await client.short_term.add_message(
-    conversation_id,
-    "user",
-    "Hi from Alice.",
-    user_identifier="alice-user-id",
-)
-----
+anchor:_namsconfig_fields[]anchor:_bring_your_own_database_byod[]
 
-== Bring your own database (BYOD)
+The maintained xref:reference/configuration.adoc[NAMS configuration] and xref:reference/environment-variables.adoc[environment reference] describe constructor arguments, aliases and provider wiring. Use xref:reference/backend-capabilities.adoc#scope[the scope reference] before adding user metadata.
 
-By default a NAMS workspace is backed by a managed Neo4j database that NAMS
-provisions and operates for you. You can instead point a workspace at **your own
-Neo4j** (`dbMode: external`): NAMS stores the memory graph in your database while
-still serving the same REST/MCP surface, and external workspaces don't count
-against the managed-workspace cap.
+[#_limits_and_gotchas]
+== Limits and gotchas
 
-Workspace database management — provisioning, switching managed↔external, and
-`.cypher` export/import (`/v1/workspace/database/*`) — is an administrative
-operation (admin-scoped REST or the dashboard), not part of the memory client.
-See the link:https://memory.neo4jlabs.com/openapi.json[OpenAPI spec] for the
-exact endpoints.
+anchor:_whats_not_available_on_nams[]
 
-== What's *not* available on NAMS
+* Configuration alone does not migrate stored data or make all Bolt operations available.
+* The connection check above verifies connection, message storage and readback only — it does not certify entity extraction, long-term search scope or reasoning-trace durability. A conversation's display name and a user ID are not substitutes for its returned ID.
+* Do not replace a workspace key with an admin key merely to bypass a data-plane failure.
+* No service pricing tier is inferred from a rate-limit or transport error.
+* There is no universal `user_identifier` parameter or automatic cross-conversation authorization boundary.
+* Workspace database provisioning and bring-your-own-database management are separate administrative service operations. Verify the deployed service's OpenAPI and workspace permissions before using them; they are not part of this connection check.
+* Client-side extraction, embeddings, resolution, enrichment and geocoding settings do not configure the NAMS extraction service.
 
-These accessors / methods raise `NotSupportedError` because NAMS handles them server-side or doesn't expose them at all:
+[#_recover_from_an_interrupted_tutorial_run]
+== Recover from an interrupted tutorial run
 
-* `client.graph` — use `client.query.cypher` instead.
-* `client.users` (UserMemory).
-* `client.buffered` (BufferedWriter).
-* `client.consolidation` (dedupe / archival).
-* `client.schema.adopt_existing_graph()`.
-* `client.long_term.geocode_locations()`, `search_locations_near()`, `search_locations_in_bounding_box()`.
-* `client.long_term.find_potential_duplicates()`, `merge_duplicate_entities()`, `review_duplicate()`.
-* `client.get_stats()`, `client.get_graph()`, `client.get_locations()`.
+The three hosted Python tutorials — xref:tutorials/nams-quickstart.adoc[Store and read back memory], xref:tutorials/ontology-quickstart.adoc[Activate and restore an ontology] and xref:tutorials/skills-quickstart.adoc[Distil and download a skill] — each keep a private ledger under `.tutorial-state/`. Use its recorded state to decide whether it is safe to start a new run:
 
-If you configure client-side `embedding`, `extraction`, `resolution`, `geocoding`, or `enrichment` alongside `backend="nams"`, you'll see a single `UserWarning` at `connect()` time naming the inactive layers — the configs are otherwise ignored (NAMS manages these server-side).
-
-The `llm` provider config **does** stay active on NAMS — it's still used by `client.short_term.get_conversation_summary()` and any of your own client-side LLM workflows.
-
-For the complete list of NAMS-side methods and their bolt counterparts, see xref:how-to/migrate-to-nams.adoc[Migrate to NAMS].
-
-== Common errors
-
-[cols="2,1,2",options="header"]
+[cols="2,3",options="header"]
 |===
-| Error | When | Fix
-
-| `AuthenticationError: Empty API key`
-| At construction time
-| Set `MEMORY_API_KEY` or pass `api_key=SecretStr(...)`
-| `AuthenticationError: Invalid or missing API key`
-| Probe / first request returns 401
-| Check your key is current; old keys may be revoked
-| `AuthenticationError: Forbidden`
-| 403
-| Key doesn't have access to the workspace
-| `RateLimitError`
-| 429 after retries exhausted
-| Inspect `e.retry_after`; back off; consider higher tier
-| `TransportError`
-| Network errors or 5xx after retries
-| Check connectivity; verify endpoint URL; service status
-| `NotSupportedError: client.graph is not supported on the 'nams' backend`
-| Calling a bolt-only feature
-| Switch to `client.query.cypher` or the appropriate replacement
+|Recorded state |Next action
+|No mutation was attempted |Correct the failed prerequisite, then use the guarded new-run check on the tutorial page.
+|Every recorded resource was verified absent |Keep the ledger as evidence, recheck the lesson prerequisites and use a new run directory.
+|Retained/shared resources or cleanup exit `2` |Have the owner record the actual disposition. This is not an automatic permission to reseed.
+|Pending or uncertain mutation |Use owner reconciliation; do not replay seed or erase the pending operation. The ontology tutorial's own `recover` command handles this case for ontology state specifically.
+|Credential changed |Use the local inspection/handoff procedure in the tutorial's "Inspect locally after a credential change" section; authenticated commands remain blocked.
 |===
 
-== Observability
+Each tutorial's own `check-new-run` command verifies the ledger before you start a fresh lesson directory; it does not by itself change the disposition above.
 
-The NAMS transport emits OpenTelemetry-style spans for every request when a tracer is configured. Span name is `nams.http.request`; attributes include `http.method`, `http.url`, `http.status_code`, `nams.method`, `nams.protocol`, and (when retries fire) `nams.retry_count`. See the observability how-to.
+[#_next_steps]
+[#_runnable_examples]
+// Retain former section URLs at the current related topic.
+== See also
 
-== Next steps
+anchor:_multi_tenancy[]
 
-* xref:tutorials/nams-quickstart.adoc[Tutorial: 5-minute NAMS quickstart].
-* xref:how-to/migrate-to-nams.adoc[Migrate an existing bolt project to NAMS].
-* xref:explanation/backends.adoc[Bolt vs NAMS: when to pick which].
-
-== Runnable examples
-
-* link:https://github.com/neo4j-labs/agent-memory/tree/main/examples/nams-quickstart[`examples/nams-quickstart/`] — the whole
-  flow in one script: a conversation, messages, an entity, a reasoning trace,
-  `wait_for_extraction()` and a read-only Cypher round-trip. The same body runs
-  on bolt by flipping `backend`.
-* link:https://github.com/neo4j-labs/agent-memory/tree/main/examples/nams-fastapi[`examples/nams-fastapi/`] — NAMS memory inside
-  a FastAPI service, with per-user scoping and the error taxonomy mapped onto
-  HTTP status codes.
-* link:https://github.com/neo4j-labs/agent-memory/tree/main/examples/nams-langchain[`examples/nams-langchain/`] — the same
-  LangChain `create_agent` agent as the bolt example, hosted.
-* link:https://github.com/neo4j-labs/agent-memory/tree/main/examples/claude-code-team-memory[`examples/claude-code-team-memory/`] —
-  one workspace shared across a team's editors, with no agent code.
+* xref:tutorials/nams-quickstart.adoc[Store messages and inspect hosted memory]
+* xref:how-to/migrate-to-nams.adoc[Migrate a Bolt application]
+* xref:how-to/use-ontologies.adoc[Configure a workspace ontology]
+* xref:explanation/backends.adoc[Understand backend tradeoffs]

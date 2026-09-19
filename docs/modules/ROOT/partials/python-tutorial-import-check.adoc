@@ -1,0 +1,7 @@
+// tag::intro[]
+Check the copied files before exporting credentials or making a service request:
+// end::intro[]
+
+// tag::expected[]
+Expected: compilation exits without errors, then `Lesson imports verified`{cli-help-suffix}. These checks import the local files without calling their entry points, downloading models, or contacting Aura/providers. Compilation alone does not check imports. If a file or function is missing, recopy its entire source and repeat the checks; leave existing session/state files intact. Provider/framework calls are checked when the lesson runs.
+// end::expected[]

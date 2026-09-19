@@ -1,0 +1,217 @@
+= Extraction pipeline
+:page-product: agent-memory
+:page-pagination:
+:toclevels: 2
+
+Run multiple extraction stages and merge their results, from xref:reference/extractors.adoc[Extractor classes reference]. Import `ExtractionPipeline` from `neo4j_agent_memory.extraction`.
+
+anchor:_constructor_4[]
+anchor:_merge_strategies[]
+anchor:_example_4[]
+
+== ExtractionPipeline
+
+Run stages and merge their results. Import the direct `MergeStrategy` from `neo4j_agent_memory.extraction.pipeline`. Its values are distinct from the smaller settings enum.
+
+// contract: extraction/pipeline.py:ExtractionPipeline.__init__
+[source,python]
+----
+def ExtractionPipeline(
+    stages: list[ExtractionStage | EntityExtractor],
+    merge_strategy: MergeStrategy=MergeStrategy.CONFIDENCE,
+    stop_on_success: bool=False,
+    min_entities_for_success: int=1,
+    fallback_on_error: bool=True,
+): ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `stages` | List of extraction stages or extractors to run
+| `merge_strategy` | Strategy for merging results from stages
+| `stop_on_success` | Stop after first stage that returns entities
+| `min_entities_for_success` | Minimum entities to consider a stage successful
+| `fallback_on_error` | Continue to next stage if current stage errors
+|===
+
+[cols="1,3",options="header"]
+|===
+| Strategy | Behavior
+| `UNION` | Keep unique entities across results.
+| `INTERSECTION` | Keep entities found by multiple results.
+| `CONFIDENCE` | Keep the highest-confidence entity for each matching name/type.
+| `CASCADE` | Keep earlier-stage entities and fill gaps from later results.
+| `FIRST_SUCCESS` | Stop after a stage reaches min_entities_for_success and return the first nonempty successful result.
+|===
+
+`stop_on_success=True` also enables early stopping with the other merge strategies. `FIRST_SUCCESS` is not `FIRST` or `LAST`, and cannot be selected through the config.settings MergeStrategy enum.
+
+[source,python]
+----
+from neo4j_agent_memory.extraction import ExtractionPipeline, SpacyEntityExtractor, GLiNEREntityExtractor
+from neo4j_agent_memory.extraction.pipeline import MergeStrategy
+
+pipeline = ExtractionPipeline(
+    stages=[SpacyEntityExtractor(), GLiNEREntityExtractor.for_schema("podcast")],
+    merge_strategy=MergeStrategy.CONFIDENCE,
+)
+result = await pipeline.extract("John discussed Acme in the podcast")
+----
+
+=== extract
+
+Run extraction through all stages.
+
+// contract: extraction/pipeline.py:ExtractionPipeline.extract
+[source,python]
+----
+async def extract(
+    text: str,
+    *,
+    entity_types: list[str] | None=None,
+    extract_relations: bool=True,
+    extract_preferences: bool=True,
+) -> ExtractionResult: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `text` | Text to extract from
+| `entity_types` | Optional list of entity types to extract
+| `extract_relations` | Whether to extract relations
+| `extract_preferences` | Whether to extract preferences
+|===
+
+=== extract_with_details
+
+Run extraction with detailed stage information.
+
+// contract: extraction/pipeline.py:ExtractionPipeline.extract_with_details
+[source,python]
+----
+async def extract_with_details(
+    text: str,
+    *,
+    entity_types: list[str] | None=None,
+    extract_relations: bool=True,
+    extract_preferences: bool=True,
+) -> PipelineResult: ...
+----
+
+=== extract_batch
+
+Extract entities from multiple texts in parallel.
+
+// contract: extraction/pipeline.py:ExtractionPipeline.extract_batch
+[source,python]
+----
+async def extract_batch(
+    texts: list[str],
+    *,
+    batch_size: int=10,
+    max_concurrency: int=5,
+    entity_types: list[str] | None=None,
+    extract_relations: bool=True,
+    extract_preferences: bool=True,
+    on_progress: ProgressCallback | None=None,
+    fail_fast: bool=False,
+) -> BatchExtractionResult: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `texts` | List of texts to extract from
+| `batch_size` | Number of texts to process in each batch (for memory management)
+| `max_concurrency` | Maximum number of concurrent extractions
+| `entity_types` | Optional list of entity types to extract
+| `extract_relations` | Whether to extract relations
+| `extract_preferences` | Whether to extract preferences
+| `on_progress` | Optional callback called after each text is processed. Receives (completed_count, total_count).
+| `fail_fast` | If True, stop on first error. If False, continue and collect errors.
+|===
+
+=== add_stage
+
+Add a stage to the pipeline.
+
+// contract: extraction/pipeline.py:ExtractionPipeline.add_stage
+[source,python]
+----
+def add_stage(stage: ExtractionStage | EntityExtractor) -> None: ...
+----
+
+=== remove_stage
+
+Remove a stage by name. Returns True if found and removed.
+
+// contract: extraction/pipeline.py:ExtractionPipeline.remove_stage
+[source,python]
+----
+def remove_stage(name: str) -> bool: ...
+----
+
+`stage_names` lists configured stage names. `extract_with_details` returns PipelineResult with merged results and per-stage timing/error details; `extract` returns just ExtractionResult. BatchExtractionResult retains per-item results/errors.
+
+=== StageResult
+
+Fields and defaults:
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `stage_name` | `str` | `required` |
+| `result` | `ExtractionResult` | `required` |
+| `success` | `bool` | `True` |
+| `error` | `str \| None` | `None` |
+| `duration_ms` | `float` | `0.0` |
+|===
+
+=== PipelineResult
+
+Fields and defaults:
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `final_result` | `ExtractionResult` | `required` |
+| `stage_results` | `list[StageResult]` | `field(default_factory=list)` |
+| `merge_strategy` | `MergeStrategy` | `MergeStrategy.CONFIDENCE` |
+| `total_duration_ms` | `float` | `0.0` |
+|===
+
+=== BatchItemResult
+
+Fields and defaults:
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `index` | `int` | `required` |
+| `result` | `ExtractionResult` | `required` |
+| `success` | `bool` | `True` |
+| `error` | `str \| None` | `None` |
+| `duration_ms` | `float` | `0.0` |
+|===
+
+=== BatchExtractionResult
+
+Fields and defaults:
+
+[cols="1,2,1,3",options="header"]
+|===
+| Field | Type | Default | Description
+| `results` | `list[BatchItemResult]` | `field(default_factory=list)` |
+| `total_duration_ms` | `float` | `0.0` |
+|===
+
+BatchExtractionResult exposes `total_items`, `successful_items`, `failed_items`, `success_rate`, `total_entities`, and `total_relations` properties plus `get_extraction_results()`, `get_all_entities()`, and `get_errors()` helpers.
+
+
+== See also
+
+* xref:reference/extractors.adoc[Extractor classes reference]
+* xref:reference/extractor-builder.adoc[Extractor builder]
+* xref:how-to/entity-extraction.adoc[Configure entity extraction]

@@ -1,0 +1,26 @@
+`TutorialRun` and `runTutorialCommand` are local teaching helpers, not exports
+from the published SDK. They keep a private ledger around these public APIs:
+
+[cols="1,2",options="header"]
+|===
+|In this lesson |Public SDK operation underneath
+|`TutorialRun.create(...)`
+|Constructs `new MemoryClient(...)` with REST configuration; saves local run identity.
+|`run.createConversation()`
+|`client.shortTerm.createConversation({ userId, metadata })`; records the returned ID.
+|`run.addMessage(...)` / `run.bulkAddMessages(...)`
+|`client.shortTerm.addMessage(...)` / `bulkAddMessages(...)`; records IDs and content digests.
+|`run.verify()`
+|Reads `getConversationMetadata(...)` and `getConversation(...)` to check ownership and stored messages.
+|`run.addEntity()` in the model lesson
+|`client.longTerm.addEntity(...)`; retains the create result, including merge evidence.
+|`run.trackMiddlewareWrites()` / `run.verifyTurn(...)`
+|Tutorial-only tracking around middleware `addMessage(...)` calls, followed by `getConversation(...)` readback of new IDs, roles and exact content.
+|===
+
+The helper also retains uncertain operations and scopes cleanup to this run.
+When adapting the lesson, use `run.client` to see the actual SDK calls, and keep
+an equivalent ownership and failure policy before removing the teaching
+helpers. See xref:reference/typescript-api.adoc[the TypeScript API reference]
+for public methods and xref:how-to/typescript/vercel-ai.adoc[the middleware guide]
+for `agentMemoryMiddleware` and its best-effort storage behavior.
