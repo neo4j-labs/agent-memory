@@ -42,7 +42,15 @@ class TestRelationStorage:
     def mock_client(self):
         """Create a mock Neo4j client."""
         client = MagicMock()
-        client.execute_write = AsyncMock(return_value=[])
+
+        # Faithful mock: the entity-create query (`... RETURN e`) returns the
+        # node so callers can read back its real id; other writes return [].
+        async def _execute_write(query, params=None):
+            if "RETURN e" in query:
+                return [{"e": {"id": (params or {}).get("id")}}]
+            return []
+
+        client.execute_write = AsyncMock(side_effect=_execute_write)
         client.execute_read = AsyncMock(return_value=[])
         return client
 
@@ -264,7 +272,15 @@ class TestExtractEntitiesFromSessionWithRelations:
     def mock_client(self):
         """Create a mock Neo4j client."""
         client = MagicMock()
-        client.execute_write = AsyncMock(return_value=[])
+
+        # Faithful mock: the entity-create query (`... RETURN e`) returns the
+        # node so callers can read back its real id; other writes return [].
+        async def _execute_write(query, params=None):
+            if "RETURN e" in query:
+                return [{"e": {"id": (params or {}).get("id")}}]
+            return []
+
+        client.execute_write = AsyncMock(side_effect=_execute_write)
         client.execute_read = AsyncMock(return_value=[])
         return client
 
