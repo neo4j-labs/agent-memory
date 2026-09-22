@@ -1,0 +1,431 @@
+= Drive Extraction From an Ontology
+:page-product: agent-memory
+:page-pagination:
+:toclevels: 3
+:sectanchors:
+:icons: font
+:source-highlighter: highlight.js
+
+include::partial$backend-bolt-only.adoc[]
+
+To make extraction produce a predictable, typed graph instead of a pile of
+loosely-labelled nodes, write an ontology and hand it to the client. One
+document drives all of it: the GLiNER2.5 JointIE schema, the LLM extractor's
+prompt, relation validation on ingest, entity resolution, and the strict write
+paths.
+
+[NOTE]
+====
+Ontology *management* (`client.ontology`) works on both backends. This page is
+about the bolt backend, where extraction runs in your process and the ontology
+shapes it locally. On NAMS, extraction runs server-side against the activated
+version — see xref:how-to/use-ontologies.adoc[Use Ontologies].
+====
+
+== 1. Write the Ontology
+
+An ontology is a YAML (or JSON) document with three parts: a `domain`, the
+`entity_types`, and the `relationships` between them.
+
+[source,yaml]
+----
+domain:
+  id: support-desk
+  name: support-desk
+  description: Customer support incidents, the people involved, and the products they affect.
+
+entity_types:
+  - label: Customer
+    pole_type: PERSON
+    subtype: CUSTOMER
+    description: >-
+      A named individual who reports a problem or asks for help. Not the
+      support engineer who answers, and not the company the person works for.
+    aliases:
+      Dana Whitfield: ["Dana W.", "D. Whitfield"]
+
+  - label: Engineer
+    pole_type: PERSON
+    subtype: ENGINEER
+    description: >-
+      A named support or engineering staff member who investigates or resolves
+      an incident. Not the customer, and not a job title on its own
+      ("the on-call engineer" is not an Engineer).
+
+  - label: Organization
+    pole_type: ORGANIZATION
+    subtype: COMPANY
+    description: >-
+      A named company or institution. Not a product it sells, and not an
+      industry or market segment.
+    aliases:
+      Acme Corp: ["Acme", "Acme Corporation", "ACME"]
+
+  - label: Product
+    pole_type: OBJECT
+    subtype: PRODUCT
+    description: >-
+      A named software product or service the company ships. Not a component
+      inside it, and not a generic category ("the database").
+    threshold: 0.45
+
+  - label: Component
+    pole_type: OBJECT
+    subtype: COMPONENT
+    description: >-
+      A named subsystem or module of a product — a service, library or
+      endpoint. Not the product as a whole.
+
+  - label: Incident
+    pole_type: EVENT
+    subtype: INCIDENT
+    description: >-
+      A specific reported failure or outage, identified by a ticket id or a
+      distinct description. Not a recurring class of problem, and not a bare
+      date.
+
+relationships:
+  - type: EMPLOYED_BY
+    source: Customer
+    target: Organization
+    description: The customer is paid to work for this organization. Their current employer only.
+    unique_source: true
+    threshold: 0.35
+
+  - type: REPORTED
+    source: Customer
+    target: Incident
+    description: The customer raised this incident.
+
+  - type: USES
+    source: Customer
+    target: Product
+    description: The customer runs or has deployed this product.
+
+  - type: AFFECTS
+    source: Incident
+    target: Product
+    description: The incident degrades or breaks this product.
+
+  - type: AFFECTS
+    source: Incident
+    target: Component
+    description: The incident degrades or breaks this component.
+
+  - type: PART_OF
+    source: Component
+    target: Product
+    description: The component ships as part of this product.
+    acyclic: true
+----
+
+Three things about this document are load-bearing:
+
+`description` is an annotation guideline, not documentation::
+GLiNER2.5 serialises each description into the encoder input, so it behaves the
+way instructions to a human annotator do. Write the positive case in one
+sentence and then *rule things out* — the negative cases ("Not the support
+engineer who answers") are what stop a label from absorbing everything nearby.
+The same text is rendered into the LLM extractor's prompt.
+
+`source` / `target` are enforced during decoding::
+JointIE checks endpoint types inside its beam search rather than filtering
+afterwards, so a `REPORTED` edge from an `Organization` is never produced in the
+first place. Several entries may share one `type` (`AFFECTS` above): the
+compiler groups them into a single relation with head/tail lists.
+
+Constraints shape the decoder, not just the storage layer::
+`unique_source: true` becomes `unique_head` (at most one `EMPLOYED_BY` per
+customer), `unique_target: true` becomes `unique_tail`, and `acyclic: true`
+forbids cycles. Self-loops are forbidden per relation unless a relationship sets
+`allow_self: true`; the document-level `no_self_loops` (default `true`) is
+applied relation by relation so an explicit `allow_self` still wins. To mirror a
+relationship, use `inverse: OTHER_TYPE` and declare the reverse pattern too
+(`validate_structure()` checks that the pair actually mirrors). Never reach for a
+"symmetric" flag — there is none, because it is broken upstream.
+
+=== How labels reach Neo4j
+
+Each entity type carries a POLE+O `pole_type` and an optional `subtype`. Those
+two properties are what the storage layer turns into PascalCase node labels, so
+`Customer` above lands as:
+
+[source,cypher]
+----
+(:Entity:Person:Customer {name: "Dana Whitfield", type: "PERSON", subtype: "CUSTOMER"})
+----
+
+Declare the `subtype`. Without it, `Customer` and `Engineer` both map to
+`(PERSON, None)` and become plain `:Entity:Person` nodes — the fine-grained
+distinction survives in the extractor's output but not in the graph.
+
+== 2. Validate and Compile It
+
+Check the document before wiring it in. `validate` reports every structural
+problem at once (duplicate labels, an undeclared relationship endpoint, a
+`pole_type` outside POLE+O, an `inverse` that does not mirror) and exits `1` if
+it finds any:
+
+[source,bash]
+----
+neo4j-agent-memory ontology validate ontology.yaml
+----
+
+[source,text]
+----
+✓ Ontology 'support-desk' is valid.
+  Entity types: Customer, Engineer, Organization, Product, Component, Incident
+  Relationship types: EMPLOYED_BY, REPORTED, USES, AFFECTS, PART_OF
+  Relationship patterns: 6
+----
+
+`compile` goes one step further and prints the GLiNER2.5 JointIE schema the
+model will actually decode against, which is the fastest way to see how your
+entries grouped:
+
+[source,bash]
+----
+neo4j-agent-memory ontology compile ontology.yaml
+----
+
+`compile` needs the `gliner2` extra (`pip install "neo4j-agent-memory[gliner2]"`);
+`validate` does not. Both commands accept a legacy `EntitySchemaConfig` file
+too — `load_ontology()` detects the shape and converts it on the way in.
+
+== 3. Point the Client at It
+
+Two equivalent ways in, depending on whether the path belongs in your
+configuration or in your code:
+
+[source,python]
+----
+from neo4j_agent_memory import MemoryClient, MemorySettings
+from neo4j_agent_memory.config.settings import SchemaConfig
+
+settings = MemorySettings(
+    neo4j={"uri": "bolt://localhost:7687", "password": "password"},
+    schema_config=SchemaConfig(ontology_path="ontology.yaml"),
+)
+
+async with MemoryClient(settings) as client:
+    doc = client.ontology_document
+    print(doc.domain.name, doc.labels())
+----
+
+[source,python]
+----
+from neo4j_agent_memory import MemoryClient, load_ontology
+
+doc = load_ontology("ontology.yaml")
+
+async with MemoryClient(settings, ontology=doc) as client:
+    ...
+----
+
+The `ontology=` keyword accepts an `OntologyDocument` *or* a path, and it wins
+over everything in `SchemaConfig`. The full precedence — resolved once per
+connection, before the extractor is built — is:
+
+. `MemoryClient(ontology=...)`
+. `schema_config.ontology_path`
+. `schema_config.custom_schema_path`
+. the active stored `:OntologyVersion`, when `schema_config.use_active_ontology`
+  is `True` and one is bound
+. `schema_config.model=SchemaModel.CUSTOM` plus `entity_types` (an ad-hoc
+  document, one label per name)
+. the built-in template named by `schema_config.ontology_template`
+  (default `poleo`)
+
+`client.ontology_document` reports what was resolved and
+`client.validation_mode` reports how strictly it is enforced. See
+xref:reference/configuration.adoc#schema-configuration[Schema Configuration]
+for every field.
+
+== 4. Store It in the Database Instead
+
+A file is fine for one process. To share one ontology across every client that
+connects to a database, store and activate it — after which
+`use_active_ontology` (on by default) picks it up with no configuration at all:
+
+[source,python]
+----
+from neo4j_agent_memory import load_ontology
+
+doc = load_ontology("ontology.yaml")
+
+async with MemoryClient(settings) as client:
+    version = await client.ontology.create("support-desk", doc, validation_mode="permissive")
+    await client.ontology.activate(version.id)      # exactly one active version
+----
+
+[IMPORTANT]
+====
+The effective ontology is resolved *at connect time*. Activating a version does
+not re-wire the client that activated it — reconnect (or start the next process)
+for it to take effect. And because a file beats the stored version in the
+precedence list, leave `ontology_path` unset on clients that should follow the
+database.
+====
+
+Later revisions are immutable and additive: `update(ontology_id, doc)` appends
+revision n+1, `activate(version.id)` swaps which one is bound, and
+`diff(ontology_id, 1, 2)` shows what changed. See
+xref:reference/ontology-api.adoc[Ontology API] for the whole surface and the
+bolt/NAMS differences.
+
+== 5. Choose Permissive or Strict
+
+[cols="1,3", options="header"]
+|===
+| Mode | Behaviour
+
+| `permissive` (default)
+| Extracted entities whose type the ontology does not declare are stored
+  anyway, mapped through the label map. Relations the ontology forbids are
+  *always* dropped — in either mode — because storing an edge the schema
+  forbids is never what you asked for.
+
+| `strict`
+| Extracted entities whose `(type, subtype)` the ontology does not declare are
+  dropped with a warning during ingestion, and
+  `long_term.add_entity` / `add_relationship` raise `ValidationError` for an
+  undeclared type, an undeclared relationship name, or an endpoint pair the
+  ontology does not permit.
+|===
+
+[source,python]
+----
+from neo4j_agent_memory import MemorySettings
+from neo4j_agent_memory.config.settings import SchemaConfig
+
+settings = MemorySettings(
+    neo4j={"uri": "bolt://localhost:7687", "password": "password"},
+    schema_config=SchemaConfig(
+        ontology_path="ontology.yaml",
+        validation_mode="strict",
+    ),
+)
+----
+
+`validation_mode=None` (the default) defers to the active stored version's mode,
+and then to `strict` if `strict_types=True` else `permissive`. Strict mode
+checks the *base* type when a subtype is not declared, so an entity typed
+`PERSON:CONTRACTOR` still validates against a declared `Customer` (PERSON)
+label; it is the unknown `pole_type` that fails.
+
+Start permissive, watch the warnings to find what your ontology is missing, then
+tighten to strict once ingestion is quiet.
+
+== 6. Verify the Typed Edges
+
+Store a couple of messages and read the graph back. Relations are stored as
+`RELATED_TO` with the relationship name in `r.type`, and the merge key includes
+that name, so one pair of entities can carry several differently-typed edges:
+
+[source,python]
+----
+rows = await client.query.cypher("""
+    MATCH (s:Entity)-[r:RELATED_TO]->(t:Entity)
+    RETURN s.name AS source, r.type AS type, t.name AS target,
+           r.confidence AS confidence, r.support AS support,
+           r.derived AS derived, r.extractor AS extractor,
+           r.source_message_ids AS message_ids
+    ORDER BY r.support DESC, r.confidence DESC
+""")
+for row in rows:
+    print(f"{row['source']} -[{row['type']}]-> {row['target']} "
+          f"support={row['support']} conf={row['confidence']:.2f}")
+----
+
+[cols="1,3", options="header"]
+|===
+| Property | Meaning
+
+| `type`
+| The relationship name (`EMPLOYED_BY`). Canonical — read this one.
+  `relation_type` is a mirror kept for one release.
+
+| `support`
+| How many times this exact `(source, type, target)` has been observed. An
+  edge seen in two messages has `support = 2`.
+
+| `confidence`
+| The highest confidence any observation reported (it never decreases).
+
+| `derived`
+| `true` only while *every* observation was inferred rather than stated. One
+  asserted sighting clears it permanently.
+
+| `extractor`
+| Which stage wrote it (`gliner2`, `llm`, …).
+
+| `source_message_ids`
+| The messages it came from, capped at 25. `evidence` holds up to three
+  sentence windows.
+|===
+
+Entity labels are worth a second query — they are how you confirm that
+`pole_type`/`subtype` landed:
+
+[source,cypher]
+----
+MATCH (e:Entity)
+RETURN labels(e) AS labels, e.type AS type, e.subtype AS subtype, count(*) AS n
+ORDER BY n DESC
+----
+
+An empty relation result with entities present almost always means the ontology
+declares no relationships. A bare `DomainSchema` (the `--gliner-schema` domain
+catalog) is a label catalog with no endpoint typing, so relation decoding is
+skipped entirely; the `poleo`, `podcast` and `news` templates declare
+relationships, the other five do not until you attach some.
+
+== 7. Watch for the Two Quiet Failure Modes
+
+Both look like "the text had nothing in it" if you are not expecting them.
+
+`feasible=False` — warns::
+The decoder could not satisfy the ontology's hard constraints for this input and
+returned an empty assignment. This is *not* "no facts in this text". It usually
+means the constraints are too tight for real language — a `unique_source` on a
+relationship that genuinely repeats, or an `acyclic` flag on something that is
+not a hierarchy. The extractor raises a `RuntimeWarning` and logs a warning;
+relax the constraint the text keeps violating and re-run.
+
+Input longer than about 400 words — silent::
+Relation recall collapses past roughly 400 words. Input above `gliner_max_words`
+(default 384) is windowed automatically through `extract_long`, and relations
+whose endpoints land in *different* windows are dropped with no warning at all.
+Chunk long documents yourself — ideally on paragraph or turn boundaries, so both
+ends of a relation stay in one chunk — rather than relying on the automatic
+window. Nothing in the result distinguishes "this document had no relations"
+from "its relations were split across windows", so check your own input length:
+
+[source,python]
+----
+import warnings
+
+# Turn the feasibility warning into an error so a mis-compiled ontology fails
+# loudly rather than returning an empty result.
+with warnings.catch_warnings():
+    warnings.simplefilter("error", RuntimeWarning)
+    result = await extractor.extract(text)
+
+# The long-input case has no warning to catch - measure it.
+if len(text.split()) > 384:
+    print("windowed: relations spanning chunk boundaries will be missing")
+----
+
+== Next Steps
+
+* xref:how-to/tune-entity-resolution.adoc[Tune Entity Resolution] — the other
+  half of a clean typed graph: one node per real-world entity.
+* link:https://github.com/neo4j-labs/agent-memory/tree/main/examples/ontology-extraction[`examples/ontology-extraction/`]
+  — a keyless end-to-end run of this page: ontology, activation, alias
+  variation across two sessions, typed edges with `support >= 2`.
+* xref:explanation/ontologies.adoc[Explanation: Ontologies] — templates,
+  revisions, validation modes, and what differs between bolt and NAMS.
+* xref:reference/ontology-api.adoc[Reference: Ontology API] — every
+  `client.ontology` method, with its bolt behaviour.
+* xref:how-to/migrate-to-gliner2.adoc[Migrate to GLiNER2.5] — if you are coming
+  from the `gliner` v1 stack.

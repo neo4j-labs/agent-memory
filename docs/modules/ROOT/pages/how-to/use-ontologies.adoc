@@ -1,11 +1,23 @@
 = Use ontologies
-:description: List, clone, customize, activate, and validate against NAMS domain ontologies from the SDK.
+:description: List, clone, customize, activate, and validate against domain ontologies from the SDK, on either backend.
 
-include::partial$backend-nams-only.adoc[]
+include::partial$backend-both.adoc[]
 
-Drive the NAMS ontology engine through the `client.ontology` accessor. This is a
-xref:how-to/use-nams.adoc[NAMS-backend] feature; on bolt the methods raise
-`NotSupportedError`.
+Manage ontologies through the `client.ontology` accessor. The same method
+surface works on both backends: `NamsOntology` on the hosted service, and
+`BoltOntology` (v0.7) against your own Neo4j, where versions are stored as
+`(:Ontology)-[:HAS_VERSION]->(:OntologyVersion)` nodes.
+
+The snippets below are written for NAMS, where the templates are the ~28 system
+ontologies and extraction runs server-side. They work verbatim on bolt with two
+differences worth knowing up front: the templates are the eight local domain
+templates (`poleo`, `podcast`, `news`, `scientific`, `business`,
+`entertainment`, `medical`, `legal`), and a newly activated version is picked up
+on the *next* connection rather than by the client that activated it. For the
+bolt-specific workflow — authoring an ontology and driving local extraction with
+it — see xref:how-to/ontology-driven-extraction.adoc[Drive Extraction From an
+Ontology]. The per-method differences are in
+xref:reference/ontology-api.adoc[Ontology API].
 
 == List the catalog
 
@@ -16,7 +28,7 @@ Python::
 [source,python]
 ----
 async with MemoryClient(settings) as client:
-    catalog = await client.ontology.list()   # ~28 templates + workspace-owned
+    catalog = await client.ontology.list()   # templates + your own ontologies
     for o in catalog:
         flag = " (active)" if o.is_active else ""
         print(f"{o.name}{flag}  rev={o.current_revision}  system={o.is_system}")
@@ -67,27 +79,36 @@ console.log(active.document.domain.name, active.validationMode);
 
 [IMPORTANT]
 ====
-`clone` returns an `OntologyVersion`, so activate `v.id` (a version id, `ov_…`).
-Use `v.ontology_id` (`ont_…`) when calling `update`/`delete`.
+`clone` returns an `OntologyVersion`, so activate `v.id` (a version id — `ov_…`
+on NAMS, a plain uuid on bolt). Use `v.ontology_id` (`ont_…` on NAMS) when
+calling `update`/`delete`.
 ====
 
 == Choose a validation mode
 
 Pass `validation_mode` (Python) / `validationMode` (TS) to `create` or `update`.
-Omit it to inherit the server default (`permissive`). Under `strict`, a
-non-conforming entity write surfaces as `ValidationError` carrying the offending
-detail.
+Omit it to inherit the backend default (`permissive`); on bolt, `update` inherits
+the previous revision's mode instead. Under `strict`, a non-conforming entity
+write surfaces as `ValidationError` carrying the offending detail.
 
 == Verify with `get_active()`
 
 `get_active()` returns the parsed schema *plus* the active version's
 `validation_mode`, `revision`, and `version_id` (composed via a second lookup,
-since the service's active-ontology response carries no version metadata).
+since the service's active-ontology response carries no version metadata). With
+nothing bound it raises `NotSupportedError` on both backends, so one `except`
+clause covers either.
 
-== Await asynchronous extraction
+On bolt, `client.ontology_document` is the companion read: it reports the
+ontology the *client* resolved at connect time, which is the one driving
+extraction and validation. It can differ from `get_active()` — a file passed
+through `ontology_path` or `MemoryClient(ontology=...)` outranks the stored
+version.
 
-Extraction runs in a background pipeline, so entities are not searchable the
-instant a write returns. Await consistency explicitly:
+== Await asynchronous extraction (NAMS)
+
+On NAMS, extraction runs in a background pipeline, so entities are not
+searchable the instant a write returns. Await consistency explicitly:
 
 [source,python]
 ----
@@ -104,7 +125,11 @@ threshold is satisfied almost immediately on a non-empty workspace. Prefer
 `expected_names` (or a `predicate`) to confirm a *specific* extraction landed.
 ====
 
+On bolt, extraction is synchronous with the write, so there is nothing to await
+— and `wait_for_extraction` is a NAMS method.
+
 == See also
 
+* xref:how-to/ontology-driven-extraction.adoc[How-to: Drive extraction from an ontology] (bolt)
 * xref:explanation/ontologies.adoc[Explanation: Ontologies]
 * xref:reference/ontology-api.adoc[Reference: Ontology API]

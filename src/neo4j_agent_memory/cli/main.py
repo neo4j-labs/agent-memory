@@ -26,7 +26,9 @@ from rich.table import Table
 from neo4j_agent_memory.extraction import (
     ExtractionResult,
     ExtractorBuilder,
+    list_schemas,
 )
+from neo4j_agent_memory.ontology import load_ontology
 from neo4j_agent_memory.schema import (
     EntitySchemaConfig,
     EntityTypeConfig,
@@ -179,7 +181,18 @@ def cli() -> None:
 @click.option(
     "--schema",
     type=click.Path(exists=True, path_type=Path),
-    help="Path to a schema YAML file.",
+    help="Path to an EntitySchemaConfig YAML file.",
+)
+@click.option(
+    "--ontology",
+    type=click.Path(exists=True, path_type=Path),
+    help="Path to an ontology document (JSON or YAML) to extract against.",
+)
+@click.option(
+    "--gliner-schema",
+    type=click.Choice(list_schemas()),
+    default=None,
+    help="Built-in domain schema for the GLiNER2.5 extractor.",
 )
 @click.option(
     "--entity-types",
@@ -191,12 +204,13 @@ def cli() -> None:
     "--extractor",
     type=click.Choice(["gliner", "llm", "hybrid"]),
     default="gliner",
-    help="Extractor to use (default: gliner).",
+    help="Extractor to use (default: gliner, i.e. GLiNER2.5).",
 )
 @click.option(
     "--model",
     default=None,
-    help="Model name for GLiNER or LLM extractor.",
+    help="Model name for the GLiNER2.5 or LLM extractor "
+    "(GLiNER2.5 default: fastino/gliner2.5-base-v1).",
 )
 @click.option(
     "--relations/--no-relations",
@@ -225,6 +239,8 @@ def extract(
     file: Path | None,
     format: str,
     schema: Path | None,
+    ontology: Path | None,
+    gliner_schema: str | None,
     entity_types: tuple[str, ...],
     extractor: str,
     model: str | None,
@@ -247,6 +263,10 @@ def extract(
         neo4j-agent-memory extract --file document.txt --format json
 
         neo4j-agent-memory extract "..." --entity-types Person --entity-types Organization
+
+        neo4j-agent-memory extract "..." --gliner-schema podcast
+
+        neo4j-agent-memory extract "..." --ontology my-ontology.yaml
     """
     # Get text from argument, file, or stdin
     if text == "-" or (text is None and file is None and not sys.stdin.isatty()):
@@ -268,10 +288,15 @@ def extract(
     text_str: str = text
 
     async def do_extract() -> ExtractionResult:
-        # Build the extractor
+        # Build the extractor. The schema flags below only say *what* to extract
+        # against; --extractor alone decides which stages run, so
+        # `--extractor llm --ontology x.yaml` is an LLM-only run whose prompt
+        # carries the ontology.
         builder = ExtractorBuilder()
 
-        if schema:
+        if ontology:
+            builder = builder.with_ontology(load_ontology(ontology))
+        elif schema:
             schema_config = load_schema_from_file(schema)
             builder = builder.with_schema(schema_config)
         elif entity_types:
@@ -284,10 +309,10 @@ def extract(
 
         # Configure extractor type
         if extractor == "gliner":
-            if model:
-                builder = builder.with_gliner(model_name=model)
+            if gliner_schema:
+                builder = builder.with_gliner_schema(gliner_schema, model=model)
             else:
-                builder = builder.with_gliner()
+                builder = builder.with_gliner(model_name=model)
         elif extractor == "llm":
             if model:
                 builder = builder.with_llm(model=model)
@@ -302,6 +327,7 @@ def extract(
 
         # Set confidence threshold
         builder = builder.with_confidence_threshold(confidence_threshold)
+        builder = builder.extract_relations(relations)
 
         ext = builder.build()
 
@@ -588,6 +614,76 @@ def schemas_validate(file: Path) -> None:
     except Exception as e:
         error_console.print(f"[red]✗ Invalid schema:[/red] {e}")
         sys.exit(1)
+
+
+@cli.group()
+def ontology() -> None:
+    """Validate and compile ontology documents."""
+    pass
+
+
+@ontology.command("validate")
+@click.argument("file", type=click.Path(exists=True, path_type=Path))
+def ontology_validate(file: Path) -> None:
+    """Validate an ontology document (.json/.yaml).
+
+    Loads the file through ``load_ontology`` — so an ``EntitySchemaConfig``
+    file is accepted and converted — then reports everything
+    ``OntologyDocument.validate_structure()`` finds. Exits 1 on any problem.
+    """
+    try:
+        doc = load_ontology(file)
+    except Exception as e:
+        error_console.print(f"[red]✗ Could not load ontology:[/red] {e}")
+        sys.exit(1)
+
+    problems = doc.validate_structure()
+    if problems:
+        error_console.print(
+            f"[red]✗ Ontology '{doc.domain.name}' has {len(problems)} problem(s):[/red]"
+        )
+        for problem in problems:
+            error_console.print(f"  - {problem}")
+        sys.exit(1)
+
+    console.print(f"[green]✓[/green] Ontology '{doc.domain.name}' is valid.")
+    console.print(f"  Entity types: {', '.join(doc.labels()) or '(none)'}")
+    relation_types = doc.relationship_types()
+    if relation_types:
+        console.print(f"  Relationship types: {', '.join(relation_types)}")
+    console.print(f"  Relationship patterns: {len(doc.relationships)}")
+
+
+@ontology.command("compile")
+@click.argument("file", type=click.Path(exists=True, path_type=Path))
+def ontology_compile(file: Path) -> None:
+    """Compile an ontology into the GLiNER2.5 JointIE schema and print it.
+
+    Useful while authoring: it shows exactly which entity labels and typed
+    relationships the model will decode against. Requires ``gliner2``.
+    """
+    from neo4j_agent_memory.ontology import compile_joint_schema
+
+    try:
+        doc = load_ontology(file)
+    except Exception as e:
+        error_console.print(f"[red]✗ Could not load ontology:[/red] {e}")
+        sys.exit(1)
+
+    try:
+        schema = compile_joint_schema(doc)
+    except ImportError:
+        error_console.print(
+            "[red]✗ gliner2 is not installed.[/red] Install with: "
+            # Escaped: Rich would read the bare brackets as markup and drop them.
+            'pip install "neo4j-agent-memory\\[gliner2]"'
+        )
+        sys.exit(1)
+    except ValueError as e:
+        error_console.print(f"[red]✗ Could not compile ontology:[/red] {e}")
+        sys.exit(1)
+
+    click.echo(json.dumps(schema.to_dict(), indent=2, default=str))
 
 
 @cli.command()

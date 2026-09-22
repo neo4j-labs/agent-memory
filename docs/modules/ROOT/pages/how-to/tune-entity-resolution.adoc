@@ -1,0 +1,441 @@
+= Tune Entity Resolution
+:page-product: agent-memory
+:page-pagination:
+:toclevels: 3
+:sectanchors:
+:icons: font
+:source-highlighter: highlight.js
+
+include::partial$backend-bolt-only.adoc[]
+
+Message ingestion resolves extracted mentions against the entities already in
+the graph, so "Acme", "Acme Corp" and "ACME Corporation" converge on one node
+instead of three. This page covers the knobs, how to measure whether a change
+helped, and how to turn the whole thing off.
+
+[IMPORTANT]
+====
+*This is on by default as of v0.7* (`resolution.resolve_on_ingest=True`). Before
+v0.7 ingestion stored one node per distinct surface form. One setting restores
+that behaviour — see <<turn-it-off>>.
+====
+
+== How It Works
+
+`OntologyResolver` runs five separable stages. Knowing which stage a bad
+decision came from is most of the work of tuning:
+
+[cols="1,4", options="header"]
+|===
+| Stage | What happens
+
+| 1. Normalize
+| `normalize_name(name, entity_type)` reduces the surface form to a comparison
+  key: NFC, casefolded, punctuation and leading determiners stripped,
+  whitespace collapsed. Organizations lose their legal suffix ("Acme Corp" →
+  `acme`); people lose titles and generational suffixes ("Dr. Ada Lovelace Jr."
+  → `ada lovelace`). It also records the head and tail token, the initials, an
+  acronym flag, and the Shannon entropy of the key. Deterministic and
+  model-free, so benchmarks compare names exactly the way the resolver does.
+
+| 2. Block
+| Candidates come from Cypher, and blocking *never crosses the POLE+O type* —
+  "Apple" the company and "Apple" the product embed almost identically. One
+  exact-key query per `(episode, type)` covers the whole message; the wider
+  buckets (head/tail token prefix, then the entity vector index) are only
+  queried when the exact bucket produced no exact match. An oversized
+  token-prefix bucket (more than 60 rows) carries no signal and is discarded.
+
+| 3. Score
+| Deterministic evidence short-circuits: an exact normalized match scores
+  `1.0`, a declared ontology alias `1.0`, an acronym expansion `0.97`
+  (organizations only, and at least three letters — "IT" is not Isabel
+  Turner). Failing those, the whole-token-prefix rule (below) applies to every
+  type, and otherwise the score is
+  `0.45 × fuzzy + 0.40 × embedding + 0.15 × context`, renormalized over
+  whichever components are actually available. A low-entropy pair (below
+  2.5 bits on the *lower*-entropy side — "N600", "Ada") loses 0.25 unless the
+  prefix rule fired, so the penalty does not depend on which name happens to
+  be the mention. When fuzzy similarity is the *only* component and the two
+  names are a substring pair, the score is capped at `review_threshold`:
+  containment is never proof of identity on its own.
+
+| 4. Band
+| At or above `auto_merge_threshold` the mention merges onto the matched entity.
+  At or above `review_threshold` it becomes its own node plus a *pending*
+  `SAME_AS` edge. Below that it is created normally.
+
+| 5. Cluster
+| A second pass clusters the mentions that matched nothing stored *against each
+  other*, anchored on the first one seen. Without it, a message that mentions
+  "Acme" and "Acme Corp" for the first time creates two nodes — neither had a
+  stored entity to anchor to. Two mentions of the *same* message share one
+  context window, so the context component is dropped for that comparison —
+  otherwise "Apple Bank has no relationship with Apple, the phone maker"
+  corroborates itself into a merge.
+|===
+
+The prefix rule is worth spelling out, because it is where most false merges
+would otherwise come from. A whole-token prefix is not an identity, whatever the
+type: "Apple" and "Apple Bank" are different companies, "Kansas" and "Kansas
+City" different places, "Paris" and "Paris Hilton" different people. So the rule
+scores `0.92` only when the embeddings or the surrounding context agree (either
+at 0.60 or above), and `0.88` — the review band — when the prefix is all the
+evidence there is. It *replaces* the weighted blend rather than being combined
+with it, because RapidFuzz rates every whole-token prefix pair at exactly 0.90,
+the default auto-merge line, which would merge exactly the pairs the rule exists
+to hold back.
+
+The alias gazetteer is keyed per canonical, not per surface form. If two
+canonicals declare the same short form — `{"Apple Inc": ["Apple"],
+"Apple Records": ["Apple"]}` — then "Apple" identifies neither of them, and the
+pair falls through to the blend instead of scoring `1.0`.
+
+What lands in the graph per band:
+
+[cols="1,4", options="header"]
+|===
+| Band | Written
+
+| `merged`
+| No new node. The message's `MENTIONS` edge points at the matched entity and
+  the mention's surface form is appended to its `aliases` list.
+
+| `review`
+| The node is created as usual, plus
+  `(new)-[:SAME_AS {status: "pending", confidence, match_type}]->(matched)`, so
+  `find_potential_duplicates()` surfaces the pair.
+
+| `created`
+| A node, exactly as before v0.7.
+|===
+
+Every created node records the decision in its `metadata` blob
+(`resolution.action`, `resolution.score`, `resolution.match_type`), alongside
+the character offsets and the context window — and that stored context is what
+lets a *later* mention be compared on context rather than on name alone.
+
+== Configure the Thresholds
+
+[source,python]
+----
+from neo4j_agent_memory import MemoryClient, MemorySettings
+from neo4j_agent_memory.config.settings import ResolutionConfig, ResolverStrategy
+
+settings = MemorySettings(
+    neo4j={"uri": "bolt://localhost:7687", "password": "password"},
+    resolution=ResolutionConfig(
+        strategy=ResolverStrategy.COMPOSITE,   # OntologyResolver on bolt
+        resolve_on_ingest=True,
+        auto_merge_threshold=0.90,
+        review_threshold=0.85,
+        candidate_limit=12,
+        use_alias_gazetteer=True,
+        use_embedding_blocking=True,
+        context_window_chars=90,
+        scope="global",
+        fuzzy_threshold=0.85,
+    ),
+)
+----
+
+[cols="2,1,4", options="header"]
+|===
+| Field | Default | Effect
+
+| `resolve_on_ingest`
+| `True`
+| Resolve mentions while storing a message. The single opt-out.
+
+| `auto_merge_threshold`
+| `0.90`
+| At or above this score the mention merges onto the match. Raise it if you
+  see wrong merges; the review queue grows instead.
+
+| `review_threshold`
+| `0.85`
+| At or above this score (but below auto-merge) the pair lands in the review
+  queue. Must be `<=` `auto_merge_threshold` — settings validation rejects the
+  inversion rather than silently reordering.
+
+| `candidate_limit`
+| `12`
+| Blocking candidates per mention and per bucket. The exact-key query for an
+  episode is capped at `candidate_limit × mentions`, and never above 200 rows.
+
+| `use_alias_gazetteer`
+| `True`
+| Use `EntityTypeDef.aliases` as blocking keys and as a `1.0` match rule.
+
+| `use_embedding_blocking`
+| `True`
+| Also propose candidates from the entity vector index. Needs an embedder;
+  with none configured the embedding component drops out and the remaining
+  score weights are renormalized.
+
+| `context_window_chars`
+| `90`
+| Half-width of the mention's context window, compared against a candidate's
+  stored context or description.
+
+| `scope`
+| `global`
+| `user` restricts candidates to entities the tenant has mentioned — see
+  <<scope>>.
+
+| `fuzzy_threshold`
+| `0.85`
+| Used by the `FUZZY` strategy and by `DeduplicationConfig.from_resolution_config()`.
+  The `COMPOSITE` blend does not gate on it; the bands do the gating.
+|===
+
+`strategy` still selects the resolver: `NONE`, `EXACT`, `FUZZY` and `SEMANTIC`
+build the simple resolvers they always did, and `COMPOSITE` (the default) builds
+`OntologyResolver` on bolt. Only `OntologyResolver` resolves on the ingestion
+path — any other strategy leaves ingestion exactly as it behaved before v0.7.
+
+=== Per-type overrides
+
+Global thresholds are a blunt instrument: person names are far more ambiguous
+than product ids. Override them per entity type in the ontology, and the
+resolver uses them for any mention that maps onto that label:
+
+[source,yaml]
+----
+entity_types:
+  - label: Customer
+    pole_type: PERSON
+    subtype: CUSTOMER
+    resolution_threshold: 0.95   # merge people only on strong evidence
+    review_threshold: 0.88
+
+  - label: Product
+    pole_type: OBJECT
+    subtype: PRODUCT
+    resolution_threshold: 0.88   # catalog names are distinctive; merge sooner
+----
+
+`threshold` on the same object is a *different* knob — it is the extractor's
+per-label confidence floor, not a resolution band.
+
+=== Alias gazetteer
+
+An `aliases` map is a controlled vocabulary, and it beats any similarity
+computation: it produces a `1.0` match, it works with embeddings switched off,
+and each member is indexed under both its raw and normalized forms, so a stored
+"Acme Corp" and a mention "Acme" land in the same group.
+
+[source,yaml]
+----
+entity_types:
+  - label: Organization
+    pole_type: ORGANIZATION
+    aliases:
+      Acme Corp: ["Acme", "Acme Corporation", "ACME", "Acme Corp."]
+      Northwind Ltd: ["NWL", "Northwind"]
+----
+
+This is the fix for anything the scorer cannot be expected to infer — internal
+project code names, ticker symbols, product SKUs, an acronym whose expansion
+never co-occurs with it in your text.
+
+== Review the Middle Band
+
+The review band is the point of having three outcomes instead of two. Work the
+queue with the same two calls as before:
+
+[source,python]
+----
+pairs = await client.long_term.find_potential_duplicates(limit=50)
+
+for entity1, entity2, confidence in pairs:
+    print(f"{entity1.name} ({entity1.type}) <-> {entity2.name}  {confidence:.2%}")
+    print(f"  {entity1.description or '(no description)'}")
+    print(f"  {entity2.description or '(no description)'}")
+
+    if same_entity(entity1, entity2):      # your judgement, or a rule
+        await client.long_term.review_duplicate(entity1.id, entity2.id, confirm=True)
+    else:
+        await client.long_term.review_duplicate(entity1.id, entity2.id, confirm=False)
+----
+
+`confirm=True` merges the pair (relationships and provenance move to the
+survivor, the name becomes an alias) and marks the `SAME_AS` edge `confirmed`;
+`confirm=False` marks it `rejected` and leaves both nodes alone. A rejected pair
+is a signal, not just a chore — a steady stream of them at high confidence means
+`auto_merge_threshold` is about to start making the same mistake silently.
+
+`get_deduplication_stats()` gives you the queue depth and merge counts:
+
+[source,python]
+----
+stats = await client.long_term.get_deduplication_stats()
+print(stats.total_entities, stats.merged_entities, stats.pending_reviews)
+----
+
+[#scope]
+== Scope Candidates to a Tenant
+
+`scope="user"` restricts blocking to entities the tenant has actually mentioned,
+reached through
+`+(:Conversation {user_identifier})-[:HAS_MESSAGE]->(:Message)-[:MENTIONS]->(:Entity)+`.
+Pass `user_identifier=` on the ingesting call for it to apply. All three buckets
+honour it — the exact-key query, the token-prefix query and the entity vector
+index. The vector index in particular is global, so the tenant filter is applied
+*after* the index returns its `candidate_limit` nearest neighbours: a tenant
+whose entities are a small slice of the graph may see fewer candidates from that
+bucket, and the other two still run.
+
+[source,python]
+----
+resolution=ResolutionConfig(scope="user")
+----
+
+Use it when different tenants talk about different "Apollo"s and you would
+rather have two nodes than one wrong merge.
+
+[WARNING]
+====
+`scope="user"` narrows *candidate generation*, not storage. `:Entity` nodes are
+global and the create path merges on `(name, type)`, so two tenants mentioning
+the *identical* surface form still share one node. Scoping stops fuzzy,
+embedding and alias matches from crossing tenants; it is not tenant isolation.
+For that, see xref:how-to/multi-tenancy.adoc[Multi-Tenant Memory].
+====
+
+[#turn-it-off]
+== Turn It Off
+
+[source,python]
+----
+settings = MemorySettings(
+    neo4j={"uri": "bolt://localhost:7687", "password": "password"},
+    resolution=ResolutionConfig(resolve_on_ingest=False),
+)
+----
+
+Ingestion then behaves exactly as it did before v0.7: one node per distinct
+surface form, no blocking queries, no `SAME_AS` edges from ingest. Everything
+else keeps working — `long_term.add_entity` still deduplicates, and the resolver
+is still available for explicit calls.
+
+Reasons to switch it off: you deduplicate downstream in your own pipeline, you
+are bulk-loading a source you already trust, or you want the extra ~2 ms per
+message back (measured overhead is about +1.7 ms for a two-mention message,
+roughly 8% of that write path — the exact-key blocking query is one round trip
+per message and type, not per mention).
+
+Resolution never gates a write. If a blocking query fails, the failure is logged
+and the mentions are stored unresolved.
+
+== Measure a Change
+
+Do not tune by eyeball. Two tools, depending on what you are changing.
+
+=== Resolution cases in the eval harness
+
+`ResolutionCase` scores predicted clusters against gold clusters with B-cubed
+F1 — the standard entity-resolution metric, which rewards both splitting
+distinct entities and joining variants:
+
+[source,python]
+----
+from neo4j_agent_memory.memory.eval import EvalSuite, ResolutionCase
+
+suite = EvalSuite(
+    resolution=[
+        ResolutionCase(
+            mentions=[
+                ("Acme", "ORGANIZATION"),
+                ("Acme Corp", "ORGANIZATION"),
+                ("ACME Corporation", "ORGANIZATION"),
+                ("Apple Bank", "ORGANIZATION"),
+            ],
+            gold_clusters={
+                "Acme": "acme",
+                "Acme Corp": "acme",
+                "ACME Corporation": "acme",
+                "Apple Bank": "apple-bank",
+            },
+        ),
+    ],
+)
+
+report = await client.eval.run(suite, dimensions=["resolution"])
+print(report.resolution.score)          # B-cubed F1
+print(report.resolution.details[0])     # predicted vs gold clusters, P/R/F1
+----
+
+Run it before and after a threshold change and keep both numbers. The dimension
+is skipped — and named in `report.skipped` — when no resolver is configured.
+
+[IMPORTANT]
+====
+The dimension resolves each mention *independently against the stored graph*
+(`resolve_batch` calls `resolve` per mention; there is no episode pass here), and
+predicted clusters come from each result's `cluster_id`, falling back to
+`canonical_name`. So seed the canonical entities before running a case —
+against an empty database every mention resolves to itself and the score is
+floor-level for reasons that have nothing to do with your thresholds.
+====
+
+See xref:how-to/evaluation.adoc[Evaluating Memory Quality] for wiring a suite
+into CI.
+
+=== Benchmark script
+
+`benchmarks/compare_extractors.py` is the repository-only sweep tool. It reports
+entity and relation P/R/F1, latency, throughput and ontology endpoint-type
+violations per checkpoint, and `benchmarks/data/poleo_resolution_gold.json` plus
+`core.metrics.bcubed` cover the resolution side with the same normalisation the
+resolver uses:
+
+[source,bash]
+----
+uv run python benchmarks/compare_extractors.py \
+    --models fastino/gliner2.5-base-v1 \
+    --ontology ontology.yaml \
+    --relation-thresholds 0.3,0.5 \
+    --output results.json
+----
+
+== Known Limits
+
+Type-scoped blocking misses cross-typed duplicates::
+A mention typed `ORGANIZATION` is never compared against an entity typed
+`OBJECT`, so an extractor that typed the same company both ways produces two
+nodes. Fix the typing (a sharper ontology description usually does it) rather
+than loosening the blocking.
+
+Acronym expansion needs a candidate to score::
+The acronym rule is reliable *once the pair is in the candidate pool*, but
+"NWL" and "Northwind Ltd" share no normalized key and no head token, so exact
+and prefix blocking never propose the pair. It only surfaces when embedding
+blocking finds it (which needs an embedder, and short acronyms embed poorly) or
+when the ontology declares the alias. For acronyms that matter, declare them.
+
+Low-entropy names are penalised, deliberately::
+Short repetitive names ("N600", "Ada") lose 0.25 — the penalty is keyed on the
+*lower*-entropy side of the pair, so it applies whichever of the two is the
+mention — because fuzzy similarity is near-meaningless on them. If those are
+your real identifiers, an alias entry or a per-type `resolution_threshold` is
+the right lever — not disabling the penalty, which is not configurable.
+
+A shared alias surface form identifies nothing::
+The gazetteer is per canonical. Declare `"Apple"` under two canonicals and it
+stops being evidence for either; the pair falls through to the blend. Give each
+canonical a surface form only it uses.
+
+The stored graph is global::
+See the warning under <<scope>>.
+
+== See Also
+
+* xref:how-to/ontology-driven-extraction.adoc[Drive Extraction From an Ontology]
+  — where `aliases` and the per-type thresholds live.
+* xref:how-to/deduplication.adoc[Handle Duplicate Entities] — the
+  `add_entity` path and the review workflow in full.
+* xref:explanation/resolution-deduplication.adoc[Explanation: Resolution &
+  Deduplication] — why resolution matters and what it costs to get wrong.
+* xref:reference/configuration.adoc#resolution-configuration[Resolution
+  Configuration] — every field and environment variable.

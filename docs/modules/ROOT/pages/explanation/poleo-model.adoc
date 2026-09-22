@@ -399,7 +399,21 @@ async with MemoryClient(settings) as memory:
 
 == Custom Schema Models
 
-While POLE+O is the default, you can use alternative schema models:
+While POLE+O is the default, you can refine or replace it. As of v0.7 the
+first-class way to do that is an *ontology*: a typed document that names your
+entity labels (each mapped onto a POLE+O `pole_type` and an optional `subtype`),
+the typed relationships between them, and the extraction and resolution
+constraints that go with them. One document drives the extractors, relation
+validation, entity resolution and the strict write paths — see
+xref:explanation/ontologies.adoc[Ontologies] and
+xref:how-to/ontology-driven-extraction.adoc[Drive Extraction From an Ontology].
+
+The `SchemaModel` options below still work, and they are still how you pick the
+*base* type vocabulary. What changed is that every path now converges on an
+ontology document: `SchemaModel.CUSTOM` plus `entity_types` builds an ad-hoc one
+(each name mapped onto POLE+O through `map_label_to_poleo`), and
+`custom_schema_path` is loaded through `load_ontology()`, so the file may hold
+either an `EntitySchemaConfig` or an `OntologyDocument`.
 
 === SchemaModel Options
 
@@ -421,7 +435,8 @@ While POLE+O is the default, you can use alternative schema models:
 
 [source,python]
 ----
-from neo4j_agent_memory import MemorySettings, SchemaConfig, SchemaModel, ExtractionConfig
+from neo4j_agent_memory import MemorySettings, ExtractionConfig
+from neo4j_agent_memory.config.settings import SchemaConfig, SchemaModel
 
 # E-commerce domain example
 settings = MemorySettings(
@@ -473,7 +488,8 @@ Load it in configuration:
 
 [source,python]
 ----
-from neo4j_agent_memory import MemorySettings, SchemaConfig, SchemaModel
+from neo4j_agent_memory import MemorySettings
+from neo4j_agent_memory.config.settings import SchemaConfig, SchemaModel
 
 settings = MemorySettings(
     schema_config=SchemaConfig(
@@ -482,6 +498,12 @@ settings = MemorySettings(
     )
 )
 ----
+
+The file above is the legacy `EntitySchemaConfig` shape, and it is still
+accepted — `load_ontology()` detects it by its `entity_types[].name` keys and
+converts it. To get the v0.7 features (annotation guidelines, typed relationship
+endpoints, decoding constraints, resolution aliases) write an ontology document
+instead and point `ontology_path` at it, which outranks `custom_schema_path`.
 
 == Working with Entities
 
@@ -512,23 +534,26 @@ async with MemoryClient(settings) as memory:
 
 === Entity Resolution
 
-Entity resolution merges duplicate entities and links aliases:
+Entity resolution merges duplicate entities and links aliases. On bolt it runs
+on the ingestion path *by default* as of v0.7, and it never crosses a POLE+O
+type — "Apple" the ORGANIZATION and "Apple" the OBJECT embed almost
+identically, which is exactly why type-constrained blocking matters:
 
 [source,python]
 ----
-from neo4j_agent_memory import MemorySettings, ResolutionConfig, ResolverStrategy
+from neo4j_agent_memory import MemoryClient, MemorySettings
+from neo4j_agent_memory.config.settings import ResolutionConfig, ResolverStrategy
 
 settings = MemorySettings(
     resolution=ResolutionConfig(
-        strategy=ResolverStrategy.COMPOSITE,
-        exact_threshold=1.0,      # Exact match
-        fuzzy_threshold=0.85,     # Fuzzy match threshold
-        semantic_threshold=0.9,   # Embedding similarity
+        strategy=ResolverStrategy.COMPOSITE,  # OntologyResolver on bolt
+        resolve_on_ingest=True,               # default
+        auto_merge_threshold=0.90,            # merge at or above
+        review_threshold=0.85,                # pending SAME_AS between the two
     )
 )
 
 async with MemoryClient(settings) as memory:
-    # These might resolve to the same entity
     await memory.short_term.add_message(
         session_id="s1", role="user",
         content="I talked to John Smith"
@@ -537,8 +562,15 @@ async with MemoryClient(settings) as memory:
         session_id="s1", role="user",
         content="Johnny Smith called me back"
     )
-    # "John Smith" and "Johnny Smith" may be resolved as the same person
+    # Both mentions are PERSON, so they are compared; "Johnny Smith" either
+    # merges onto "John Smith" (and is recorded as an alias) or lands in the
+    # review band as a pending SAME_AS pair.
 ----
+
+Set `resolve_on_ingest=False` for the pre-v0.7 behaviour: one node per distinct
+surface form. See xref:how-to/tune-entity-resolution.adoc[Tune Entity
+Resolution] for the bands, the alias gazetteer and the per-type overrides that
+an ontology can declare.
 
 == POLE+O in the Extraction Pipeline
 
@@ -563,13 +595,14 @@ SPACY_TO_POLEO = {
 }
 ----
 
-=== GLiNER Labels
+=== Zero-Shot Labels
 
-GLiNER uses lowercase labels that map to POLE+O:
+GLiNER2.5 works from lowercase labels, which map to POLE+O through
+`DEFAULT_LABEL_MAPPING` (an ontology's own labels take precedence):
 
 [source,python]
 ----
-GLINER_LABELS = [
+LABELS = [
     "person",           # → PERSON
     "organization",     # → ORGANIZATION
     "company",          # → ORGANIZATION:COMPANY

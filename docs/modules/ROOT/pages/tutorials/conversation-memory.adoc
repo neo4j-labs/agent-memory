@@ -81,7 +81,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from neo4j_agent_memory import MemoryClient, MemorySettings
-from neo4j_agent_memory.extraction import GLiNEREntityExtractor
+from neo4j_agent_memory.extraction import GLiNER2Extractor
 
 load_dotenv()
 
@@ -101,7 +101,7 @@ async def initialize():
 
     memory_client = MemoryClient(settings)
     await memory_client.connect()
-    extractor = GLiNEREntityExtractor.for_schema("ecommerce")
+    extractor = GLiNER2Extractor.for_schema("business")
 
     print("✓ Memory system initialized!")
 

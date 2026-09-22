@@ -7,7 +7,11 @@ Reference for built-in domain schemas and custom schema creation.
 
 == Overview
 
-Domain schemas define entity types with descriptions that improve GLiNER zero-shot extraction accuracy. Each schema is optimized for a specific domain.
+Domain schemas define entity types with descriptions that improve GLiNER2.5 zero-shot extraction accuracy. Each schema is optimized for a specific domain.
+
+A `DomainSchema` is a *catalog*: labels with descriptions, and no endpoint typing. `DomainSchema.to_ontology()` converts one into an `OntologyDocument`, which is what the extractor actually compiles. Each catalog also has a matching built-in ontology template of the same name (`neo4j_agent_memory.ontology.get_template`) — the same labels, with relationships attached where they exist.
+
+The tables below are generated from `DOMAIN_SCHEMAS` in `neo4j_agent_memory.extraction.domain_schemas`; that module is the source of truth.
 
 == Available Schemas
 
@@ -17,22 +21,93 @@ The POLE+O model for investigations and intelligence analysis.
 
 [cols="1,3", options="header"]
 |===
-| Entity Type | Description
+| Label | Description
 
-| `PERSON`
-| A person, individual, or named human being
+| `person`
+| A human individual, including their name, alias, or persona
 
-| `OBJECT`
-| A physical or digital object, item, vehicle, device, or document
+| `organization`
+| A company, institution, government agency, or group
 
-| `LOCATION`
-| A geographic location, address, place, or area
+| `location`
+| A geographic place, address, city, country, or landmark
 
-| `EVENT`
-| An incident, meeting, transaction, or occurrence in time
+| `event`
+| An incident, meeting, transaction, or notable occurrence
 
-| `ORGANIZATION`
-| A company, agency, institution, or group
+| `object`
+| A physical or digital item like a vehicle, device, or document
+|===
+
+Relationships declared by the matching ontology template:
+
+[cols="1,3,1", options="header"]
+|===
+| Type | Permitted endpoints | Notes
+
+| `KNOWS`
+| `Person` -> `Person`
+| -
+
+| `ALIAS_OF`
+| `Person` -> `Person`
+| acyclic
+
+| `MEMBER_OF`
+| `Person` -> `Organization`
+| -
+
+| `EMPLOYED_BY`
+| `Person` -> `Organization`
+| unique source
+
+| `OWNS`
+| `Person` -> `Object`, `Organization` -> `Object`
+| -
+
+| `USES`
+| `Person` -> `Object`
+| -
+
+| `LOCATED_AT`
+| `Person` -> `Location`, `Object` -> `Location`, `Organization` -> `Location`, `Event` -> `Location`
+| -
+
+| `RESIDES_AT`
+| `Person` -> `Location`
+| unique source
+
+| `HEADQUARTERS_AT`
+| `Organization` -> `Location`
+| unique source
+
+| `PARTICIPATED_IN`
+| `Person` -> `Event`, `Organization` -> `Event`
+| -
+
+| `OCCURRED_AT`
+| `Event` -> `Location`
+| -
+
+| `INVOLVED`
+| `Event` -> `Object`
+| -
+
+| `SUBSIDIARY_OF`
+| `Organization` -> `Organization`
+| acyclic
+
+| `PARTNER_WITH`
+| `Organization` -> `Organization`
+| -
+
+| `RELATED_TO`
+| any label -> any label
+| threshold 0.6
+
+| `MENTIONS`
+| any label -> any label
+| threshold 0.6
 |===
 
 === podcast
@@ -41,49 +116,107 @@ Optimized for podcast transcripts and interviews.
 
 [cols="1,3", options="header"]
 |===
-| Entity Type | Description
+| Label | Description
 
-| `PERSON`
-| A person mentioned or interviewed
+| `person`
+| A person mentioned in the podcast, including hosts, guests, and people discussed
 
-| `COMPANY`
+| `company`
 | A company, startup, or business organization
 
-| `PRODUCT`
-| A product, service, or platform
+| `product`
+| A product, service, app, or software tool
 
-| `CONCEPT`
-| A concept, methodology, or framework
+| `concept`
+| A business concept, methodology, framework, or strategy
 
-| `BOOK`
+| `book`
 | A book, publication, or written work
 
-| `TECHNOLOGY`
-| A technology, programming language, or technical tool
+| `location`
+| A city, country, region, or specific place
+
+| `event`
+| A conference, meeting, milestone, or notable occurrence
+
+| `role`
+| A job title, position, or professional role
+
+| `metric`
+| A business metric, KPI, or measurement
+
+| `technology`
+| A technology, platform, programming language, or technical tool
+|===
+
+Relationships declared by the matching ontology template:
+
+[cols="1,3,1", options="header"]
+|===
+| Type | Permitted endpoints | Notes
+
+| `WORKS_AT`
+| `person` -> `company`
+| -
+
+| `FOUNDED`
+| `person` -> `company`
+| -
+
+| `LOCATED_IN`
+| `company` -> `location`
+| -
+
+| `DISCUSSES`
+| `person` -> `concept`
+| -
 |===
 
 === news
 
-Optimized for news articles.
+Optimized for news articles and journalism.
 
 [cols="1,3", options="header"]
 |===
-| Entity Type | Description
+| Label | Description
 
-| `PERSON`
-| A person mentioned in the news
+| `person`
+| A person mentioned in the news article
 
-| `ORGANIZATION`
-| A company, government agency, or institution
+| `organization`
+| A company, government body, or institution
 
-| `LOCATION`
-| A city, country, or geographic location
+| `location`
+| A geographic location, city, or country
 
-| `EVENT`
+| `event`
 | A news event, incident, or occurrence
 
-| `DATE`
-| A specific date or time reference
+| `date`
+| A date, time period, or temporal reference
+|===
+
+Relationships declared by the matching ontology template:
+
+[cols="1,3,1", options="header"]
+|===
+| Type | Permitted endpoints | Notes
+
+| `WORKS_AT`
+| `person` -> `organization`
+| -
+
+| `LOCATED_IN`
+| `organization` -> `location`
+| -
+
+| `PARTICIPATED_IN`
+| `person` -> `event`
+| -
+
+| `OCCURRED_AT`
+| `event` -> `location`
+| -
 |===
 
 === scientific
@@ -92,77 +225,95 @@ Optimized for research papers and scientific text.
 
 [cols="1,3", options="header"]
 |===
-| Entity Type | Description
+| Label | Description
 
-| `AUTHOR`
-| An author or researcher
+| `author`
+| A researcher or paper author
 
-| `INSTITUTION`
-| A university, research lab, or institution
+| `institution`
+| A university, research lab, or academic organization
 
-| `METHOD`
-| A methodology, algorithm, or technique
+| `method`
+| A scientific method, algorithm, or technique
 
-| `DATASET`
-| A dataset or corpus
+| `dataset`
+| A dataset, corpus, or data collection
 
-| `METRIC`
-| A performance metric or measurement
+| `metric`
+| A performance metric or evaluation measure
 
-| `TOOL`
-| A software tool or framework
+| `concept`
+| A scientific concept, theory, or term
+
+| `tool`
+| A software tool, library, or framework
 |===
+
+The matching ontology template declares no relationships, so an extractor built from it decodes entities only. Attach `RelationshipDef` objects with `to_ontology(relationships=[...])` to get typed relations.
 
 === business
 
-Optimized for business documents.
+Optimized for business documents, earnings calls and deal announcements.
 
 [cols="1,3", options="header"]
 |===
-| Entity Type | Description
+| Label | Description
 
-| `COMPANY`
-| A company or corporation
+| `company`
+| A business, corporation, or startup
 
-| `PERSON`
-| A business person, executive, or employee
+| `person`
+| A business person, executive, or founder
 
-| `PRODUCT`
-| A product or service
+| `product`
+| A product, service, or offering
 
-| `INDUSTRY`
-| An industry or market sector
+| `industry`
+| An industry sector or market
 
-| `FINANCIAL_METRIC`
+| `financial_metric`
 | A financial metric, revenue, or valuation
+
+| `location`
+| A business location, headquarters, or market
 |===
+
+The matching ontology template declares no relationships, so an extractor built from it decodes entities only. Attach `RelationshipDef` objects with `to_ontology(relationships=[...])` to get typed relations.
 
 === entertainment
 
-Optimized for movies, TV, and entertainment.
+Optimized for movies, TV and entertainment coverage.
 
 [cols="1,3", options="header"]
 |===
-| Entity Type | Description
+| Label | Description
 
-| `ACTOR`
-| An actor or performer
+| `actor`
+| An actor, actress, or performer
 
-| `DIRECTOR`
-| A director or filmmaker
+| `director`
+| A film or TV director
 
-| `FILM`
-| A movie or film
+| `film`
+| A movie, documentary, or film
 
-| `TV_SHOW`
-| A television series
+| `tv_show`
+| A television series or show
 
-| `CHARACTER`
+| `character`
 | A fictional character
 
-| `AWARD`
-| An award or recognition
+| `award`
+| An award, nomination, or recognition
+
+| `studio`
+| A production studio or entertainment company
+
+| `genre`
+| A genre or category of entertainment
 |===
+
+The matching ontology template declares no relationships, so an extractor built from it decodes entities only. Attach `RelationshipDef` objects with `to_ontology(relationships=[...])` to get typed relations.
 
 === medical
 
@@ -170,26 +321,31 @@ Optimized for healthcare and medical text.
 
 [cols="1,3", options="header"]
 |===
-| Entity Type | Description
+| Label | Description
 
-| `DISEASE`
+| `disease`
 | A disease, condition, or disorder
 
-| `DRUG`
+| `drug`
 | A medication, drug, or treatment
 
-| `SYMPTOM`
+| `symptom`
 | A symptom or clinical sign
 
-| `PROCEDURE`
-| A medical procedure or surgery
+| `procedure`
+| A medical procedure or intervention
 
-| `BODY_PART`
+| `body_part`
 | An anatomical structure or body part
 
-| `GENE`
-| A gene or genetic marker
+| `gene`
+| A gene, protein, or biomarker
+
+| `organism`
+| A pathogen, virus, or organism
 |===
+
+The matching ontology template declares no relationships, so an extractor built from it decodes entities only. Attach `RelationshipDef` objects with `to_ontology(relationships=[...])` to get typed relations.
 
 === legal
 
@@ -197,41 +353,49 @@ Optimized for legal documents.
 
 [cols="1,3", options="header"]
 |===
-| Entity Type | Description
+| Label | Description
 
-| `CASE`
-| A legal case or proceeding
+| `case`
+| A legal case or lawsuit
 
-| `PERSON`
-| A party, attorney, or judge
+| `person`
+| A party, lawyer, or judge
 
-| `ORGANIZATION`
-| A company, firm, or agency
+| `organization`
+| A law firm, court, or legal entity
 
-| `LAW`
+| `law`
 | A law, statute, or regulation
 
-| `COURT`
-| A court or jurisdiction
+| `court`
+| A court or judicial body
 
-| `MONETARY_AMOUNT`
-| A monetary amount, fine, or award
+| `date`
+| A legal date, filing date, or deadline
+
+| `monetary_amount`
+| A settlement, fine, or monetary value
 |===
+
+The matching ontology template declares no relationships, so an extractor built from it decodes entities only. Attach `RelationshipDef` objects with `to_ontology(relationships=[...])` to get typed relations.
 
 == Using Schemas
 
-=== With GLiNEREntityExtractor
+=== With GLiNER2Extractor
 
 [source,python]
 ----
-from neo4j_agent_memory.extraction import GLiNEREntityExtractor
+from neo4j_agent_memory.extraction import GLiNER2Extractor
 
 # Use named schema
-extractor = GLiNEREntityExtractor.for_schema("podcast")
+extractor = GLiNER2Extractor.for_schema("podcast")
 
 # With custom threshold
-extractor = GLiNEREntityExtractor.for_schema("medical", threshold=0.6)
+extractor = GLiNER2Extractor.for_schema("medical", threshold=0.6)
 ----
+
+`for_schema()` resolves the name through `neo4j_agent_memory.ontology.get_template`,
+so the extractor gets the template's relationships as well as its labels.
 
 === With ExtractorBuilder
 
@@ -262,6 +426,33 @@ for entity_type, description in schema.entity_types.items():
     print(f"{entity_type}: {description}")
 ----
 
+=== Converting a Schema to an Ontology
+
+[source,python]
+----
+from neo4j_agent_memory.extraction import get_schema
+from neo4j_agent_memory.ontology import RelationshipDef
+
+# Labels only
+doc = get_schema("medical").to_ontology()
+
+# Labels plus typed relationships
+doc = get_schema("medical").to_ontology(
+    relationships=[
+        RelationshipDef(
+            type="TREATS",
+            source="drug",
+            target="disease",
+            description="A medication used to treat a condition",
+        ),
+    ],
+)
+----
+
+Each `source` and `target` must name a label the schema declares. A relationship
+with no description picks one up from `DomainSchema.relation_types` when it names
+the same type.
+
 == Creating Custom Schemas
 
 === DomainSchema Class
@@ -282,7 +473,7 @@ real_estate_schema = DomainSchema(
     },
 )
 
-extractor = GLiNEREntityExtractor(schema=real_estate_schema, threshold=0.5)
+extractor = GLiNER2Extractor(ontology=real_estate_schema, threshold=0.5)
 ----
 
 === Schema Best Practices
@@ -312,7 +503,7 @@ config = EntitySchemaConfig(
 )
 
 # Save to Neo4j
-manager = SchemaManager(client._client)
+manager = SchemaManager(client.graph)
 stored = await manager.save_schema(config, created_by="admin")
 
 # Load later
@@ -349,6 +540,11 @@ Map schema types to POLE+O for graph storage:
 |===
 
 Custom types not in POLE+O are stored with `:Entity:\{CustomType\}` labels.
+
+The lookup table is `DEFAULT_LABEL_MAPPING` in
+`neo4j_agent_memory.extraction.label_mapping`; an ontology's own labels take
+precedence over it, and anything unmatched lands on `OBJECT` with the label as
+the subtype.
 
 == See Also
 

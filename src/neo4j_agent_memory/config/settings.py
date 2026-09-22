@@ -208,6 +208,24 @@ class SchemaConfig(BaseModel):
 
     Defines what entity types are valid and how the knowledge graph is structured.
     The default is the POLE+O model (Person, Object, Location, Event, Organization).
+
+    From v0.7 this config is also how a client picks the **ontology** that the
+    whole runtime agrees on — the extractors, relation validation and the write
+    paths. :meth:`MemoryClient._resolve_ontology` resolves one document per
+    connection, in this order:
+
+    1. the explicit ``ontology=`` keyword on :class:`MemoryClient`,
+    2. :attr:`ontology_path`,
+    3. :attr:`custom_schema_path`,
+    4. the active stored ``:OntologyVersion`` when :attr:`use_active_ontology`
+       is ``True`` and one is bound,
+    5. ``model=SchemaModel.CUSTOM`` plus :attr:`entity_types` (an ad-hoc
+       document built from those names),
+    6. the built-in template named by :attr:`ontology_template`.
+
+    Environment variables follow the usual nesting, e.g.
+    ``NAM_SCHEMA_CONFIG__ONTOLOGY_PATH=/etc/ontology.yaml`` and
+    ``NAM_SCHEMA_CONFIG__VALIDATION_MODE=strict``.
     """
 
     model_config = _STRICT_CONFIG
@@ -219,7 +237,54 @@ class SchemaConfig(BaseModel):
     enable_subtypes: bool = Field(default=True, description="Whether to track entity subtypes")
     strict_types: bool = Field(default=False, description="Whether to reject unknown entity types")
     custom_schema_path: str | None = Field(
-        default=None, description="Path to custom schema definition file (.json or .yaml)"
+        default=None,
+        description=(
+            "Path to a schema definition file (.json/.yaml). Loaded through "
+            "neo4j_agent_memory.ontology.load_ontology, so the file may be "
+            "either an EntitySchemaConfig or an OntologyDocument — it is "
+            "converted on the way in. Consulted after ontology_path."
+        ),
+    )
+    ontology_path: str | None = Field(
+        default=None,
+        description=(
+            "Path to an ontology document (.json/.yaml) loaded through "
+            "neo4j_agent_memory.ontology.load_ontology. Highest-priority "
+            "source after the explicit MemoryClient(ontology=...) keyword"
+        ),
+    )
+    use_active_ontology: bool = Field(
+        default=True,
+        description=(
+            "Whether to adopt the ontology version activated in the database "
+            "(client.ontology.activate) when no file or explicit document is given"
+        ),
+    )
+    ontology_template: str = Field(
+        default="poleo",
+        description=(
+            "Built-in ontology template used as the final fallback "
+            "(poleo, podcast, news, scientific, business, entertainment, medical, legal)"
+        ),
+    )
+    validation_mode: Literal["permissive", "strict"] | None = Field(
+        default=None,
+        description=(
+            "Ontology enforcement on the write paths. 'strict' rejects "
+            "undeclared entity types and relationship patterns; 'permissive' "
+            "keeps them with a warning. None defers to the active stored "
+            "version's mode, then to 'strict' if strict_types else 'permissive'"
+        ),
+    )
+    backfill_relation_types: bool = Field(
+        default=True,
+        description=(
+            "Whether connect() may run the one-shot v0.7 backfill that copies "
+            "the legacy RELATED_TO.relation_type onto r.type. It runs once per "
+            "database (recorded on a (:SchemaMigration) marker node); set False "
+            "to skip it entirely and run the equivalent query yourself in "
+            "batches, e.g. via apoc.periodic.iterate on a very large graph"
+        ),
     )
 
 
@@ -228,10 +293,17 @@ class ExtractionConfig(BaseModel):
 
     Supports multiple extraction modes:
     - LLM: Use OpenAI/Anthropic for extraction (most accurate, highest cost)
-    - GLINER: Use GLiNER zero-shot NER (good accuracy, runs locally)
+    - GLINER: GLiNER2.5 joint entity + relation decoding (runs locally)
     - SPACY: Use spaCy NER (fast, basic entity types)
     - PIPELINE: Multi-stage pipeline combining multiple extractors
     - NONE: Disable extraction
+
+    Two fields decide what the GLiNER2.5 stage extracts *against*:
+    ``gliner_schema`` names a built-in domain template and, when set, wins over
+    an ontology passed to the factory; otherwise that ontology is used, and
+    failing both, the built-in POLE+O ontology. The pipeline validates its
+    merged relations against the same document
+    (:func:`~neo4j_agent_memory.extraction.factory.resolve_ontology`).
     """
 
     model_config = _STRICT_CONFIG
@@ -260,18 +332,55 @@ class ExtractionConfig(BaseModel):
         default=0.85, ge=0.0, le=1.0, description="Default confidence score for spaCy extractions"
     )
 
-    # GLiNER settings (GLiNER2 models recommended)
+    # GLiNER settings. "gliner" means GLiNER2.5 (the ``gliner2`` package and
+    # the ``fastino/gliner2.5-*`` checkpoints); the field names are unchanged
+    # so existing configuration and NAM_EXTRACTION__* env vars keep working.
+    # The default mirrors ``extraction.gliner2_extractor.DEFAULT_GLINER2_5_MODEL``,
+    # duplicated as a literal because importing the extractor here would make
+    # config.settings and extraction.factory import each other.
     gliner_model: str = Field(
-        default="gliner-community/gliner_medium-v2.5",
-        description="GLiNER model name (GLiNER2 v2.5 recommended for best accuracy)",
+        default="fastino/gliner2.5-base-v1",
+        description="GLiNER2.5 checkpoint (small/base/multi -v1)",
     )
     gliner_threshold: float = Field(
-        default=0.5, ge=0.0, le=1.0, description="GLiNER confidence threshold"
+        default=0.5, ge=0.0, le=1.0, description="GLiNER entity confidence threshold"
+    )
+    gliner_relation_threshold: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Confidence floor for decoded relations; None keeps whatever the "
+            "ontology's per-relation thresholds selected"
+        ),
     )
     gliner_device: str = Field(default="cpu", description="Device for GLiNER model (cpu/cuda/mps)")
     gliner_schema: str | None = Field(
         default=None,
         description="Domain schema for GLiNER extraction (poleo, podcast, news, scientific, business, entertainment, medical, legal)",
+    )
+    gliner_max_words: int = Field(
+        default=384,
+        gt=0,
+        description="Longest input decoded in one pass; longer text is windowed",
+    )
+    gliner_chunk_overlap: int = Field(
+        default=64, ge=0, description="Word overlap between windows for long input"
+    )
+    gliner_overlap_policy: str | None = Field(
+        default=None,
+        description=(
+            "Span-overlap policy for the attribute pass (flat/nested/allow/longest); "
+            "None keeps the checkpoint default"
+        ),
+    )
+    gliner_extract_attributes: bool = Field(
+        default=False,
+        description="Run the opt-in second pass that recovers enum properties as attributes",
+    )
+    gliner_quantize: bool = Field(default=False, description="Load GLiNER2.5 weights in fp16")
+    gliner_compile: bool = Field(
+        default=False, description="Run GLiNER2.5 weights through torch.compile"
     )
 
     # LLM settings (for LLM extractor or fallback)
@@ -294,12 +403,27 @@ class ExtractionConfig(BaseModel):
         default=0.5,
         ge=0.0,
         le=1.0,
-        description="Minimum confidence threshold for extracted entities",
+        description=(
+            "Confidence floor applied to the pipeline's merged result: entities "
+            "and relations scoring below it are dropped, together with any "
+            "relation left dangling by a dropped endpoint. Distinct from "
+            "gliner_threshold, which is the floor the GLiNER2.5 decoder itself "
+            "applies; this one also covers the stages that have no threshold of "
+            "their own (spaCy, the LLM extractor)."
+        ),
     )
 
 
 class ResolutionConfig(BaseModel):
-    """Entity resolution configuration."""
+    """Entity resolution configuration.
+
+    The ``resolve_on_ingest`` block configures
+    :class:`~neo4j_agent_memory.resolution.ontology.OntologyResolver`, which is
+    what ``strategy=COMPOSITE`` builds on the bolt backend. Resolution on the
+    message-ingestion path is **on by default** as of v0.7; set
+    ``resolve_on_ingest=False`` for the pre-v0.7 behaviour (one node per
+    distinct surface form).
+    """
 
     model_config = _STRICT_CONFIG
 
@@ -314,6 +438,70 @@ class ResolutionConfig(BaseModel):
         default=0.8, ge=0.0, le=1.0, description="Semantic match threshold"
     )
     fuzzy_scorer: str = Field(default="token_sort_ratio", description="Fuzzy matching scorer")
+
+    # -- ontology-aware resolution on the ingestion path (v0.7) --------------
+    resolve_on_ingest: bool = Field(
+        default=True,
+        description=(
+            "Resolve extracted mentions against stored entities while storing "
+            "a message. The single opt-out for v0.7's ingest-time resolution."
+        ),
+    )
+    auto_merge_threshold: float = Field(
+        default=0.90,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Score at or above which a mention merges onto the matched entity. "
+            "Overridable per entity type via EntityTypeDef.resolution_threshold."
+        ),
+    )
+    review_threshold: float = Field(
+        default=0.85,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Score at or above which a mention is stored as its own node with a "
+            "pending SAME_AS edge to the matched entity, for human review. "
+            "Overridable per entity type via EntityTypeDef.review_threshold."
+        ),
+    )
+    candidate_limit: int = Field(
+        default=12,
+        ge=1,
+        description="Maximum blocking candidates fetched per mention and per bucket",
+    )
+    use_alias_gazetteer: bool = Field(
+        default=True,
+        description="Use EntityTypeDef.aliases as blocking keys and as a 1.0 match rule",
+    )
+    use_embedding_blocking: bool = Field(
+        default=True,
+        description="Also generate candidates from the entity vector index (needs an embedder)",
+    )
+    context_window_chars: int = Field(
+        default=90,
+        ge=0,
+        description="Half-width of the mention context window compared during scoring",
+    )
+    scope: Literal["global", "user"] = Field(
+        default="global",
+        description=(
+            "'global' matches against every stored entity (the pre-v0.7 "
+            "behaviour, since :Entity nodes are global); 'user' restricts "
+            "candidates to entities the tenant has mentioned."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _check_resolution_bands(self) -> ResolutionConfig:
+        """Keep the review band below (or at) the auto-merge line."""
+        if self.review_threshold > self.auto_merge_threshold:
+            raise ValueError(
+                "resolution.review_threshold must be <= resolution.auto_merge_threshold "
+                f"(got {self.review_threshold} > {self.auto_merge_threshold})"
+            )
+        return self
 
 
 class MemoryConfig(BaseModel):

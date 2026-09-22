@@ -1,12 +1,11 @@
 = Ontologies
-:description: What a NAMS ontology is, how it extends POLE+O, and how validation modes and versioning work.
+:description: What an ontology is, how it extends POLE+O, how it drives extraction and resolution, and how validation modes and versioning work.
 
-[NOTE]
-====
-Ontologies are a *NAMS (hosted backend)* capability. On the bolt backend the
-`client.ontology` methods raise `NotSupportedError`; define a custom schema with
-`SchemaModel.CUSTOM` instead. See xref:explanation/backends.adoc[Backends].
-====
+Ontologies work on *both* backends. As of v0.7 `client.ontology` is backed by
+`BoltOntology` on bolt (versioned `:Ontology` / `:OntologyVersion` nodes in your
+own Neo4j) and by `NamsOntology` on the hosted service. The two implementations
+satisfy one `OntologyAPI` Protocol, so ontology-management code reads the same
+either way — see <<bolt-vs-nams>> for where the behaviour differs.
 
 == What is an ontology?
 
@@ -27,14 +26,54 @@ NAMS ships ~28 *system templates* (healthcare, legal, cybersecurity,
 financial-services, software-engineering, and more). Activating one makes
 server-side extraction produce a clean, predictable graph — `Patient`,
 `Provider`, `Diagnosis` with enforced fields and enumerations — instead of
-generic, loosely-typed nodes.
+generic, loosely-typed nodes. The bolt store ships the eight local domain
+templates instead (`poleo`, `podcast`, `news`, `scientific`, `business`,
+`entertainment`, `medical`, `legal`), built from the same catalog the extractors
+use.
 
-== Templates vs. workspace-owned ontologies
+== One document, four consumers
 
-System templates are read-only (`is_system = true`). To customize one you
-*clone* it into a workspace-owned copy, which you can then revise. A workspace
-also has exactly one *active* ontology at a time; until you activate one, the
-`nams-default` template is implicitly bound.
+On bolt the ontology is not only a validation schema — it is the single thing
+the extraction and storage pipeline agrees on. The effective document is
+resolved once per connection and handed to:
+
+. **GLiNER2.5's JointIE schema**, compiled from the document. Entity
+  descriptions become zero-shot annotation guidelines, and relationship
+  `source`/`target` labels are enforced *during* beam search rather than
+  filtered afterwards.
+. **The LLM extractor's prompt**, where the same descriptions and the legal
+  `SOURCE -[REL]-> TARGET` catalogue replace a hardcoded POLE+O block.
+. **Relation validation** — `ExtractionResult.validate_relations()` drops
+  relations whose endpoint labels the ontology does not permit, which matters
+  most for the stages that have no endpoint typing of their own.
+. **Entity resolution** — `EntityTypeDef.aliases` is the resolver's gazetteer,
+  and `resolution_threshold` / `review_threshold` are its per-type bands.
+
+Hence the extension fields on the document model: `description` on entity types,
+relationships and properties; `aliases`; `threshold` (a per-label decoding
+floor); `resolution_threshold` and `review_threshold`; and the decoding
+constraints `unique_source`, `unique_target`, `acyclic`, `allow_self`, `inverse`
+and the document-level `no_self_loops`. They are all defaulted, so a document
+written before v0.7 (or fetched from NAMS) still parses.
+
+Two design choices follow from JointIE's flat label space. Fine-grained types
+are declared as *labels* with a `pole_type` and a `subtype` rather than
+recovered by a second pass, and `RelationshipDef.source`/`target` stay single
+labels — several defs may share one `type`, and the compiler groups them into
+one relation with head/tail lists.
+
+== Templates vs. owned ontologies
+
+Templates are read-only (`is_system = true`). To customize one you *clone* it
+into an editable copy, which you can then revise. Exactly one version is active
+at a time: a workspace on NAMS (where `nams-default` is implicitly bound until
+you activate your own), a database on bolt (where nothing is bound until you
+activate something, and the library falls back to the built-in POLE+O ontology).
+
+On bolt, templates are synthesised rather than stored: they carry an id of
+`template:<name>`, have no revision history, and cannot be updated or deleted.
+`clone("podcast")` is what turns one into a real, editable ontology at revision
+1.
 
 == Versioning and immutability
 
@@ -58,17 +97,92 @@ Each version has a `validation_mode`:
 `permissive` favors ingestion tolerance; `strict` favors graph cleanliness. You
 choose per version, and `get_active()` reports the active mode.
 
-== Relationship to server-side extraction
+On bolt the mode is enforced client-side, and one rule holds in *both* modes:
+relations the ontology does not permit are dropped before storage, because
+writing an edge the schema forbids is never the intent. What `strict` adds is
+entity-level enforcement — `long_term.add_entity` and `add_relationship` raise
+`ValidationError` for an undeclared type, an undeclared relationship name or a
+forbidden endpoint pair, and message ingestion drops extracted entities whose
+`(type, subtype)` the ontology does not declare. The mode comes from
+`schema_config.validation_mode`, then the active stored version's mode, then
+`strict` if `strict_types` else `permissive`.
 
-Ontologies shape the *server-side* GraphRAG extraction pipeline. Once a version
-is active, entities extracted from stored messages — and entities you write
-directly with `add_entity` — are validated against the active schema. Extraction
-is asynchronous; use
+[#bolt-vs-nams]
+== Bolt vs NAMS
+
+The method surface is identical; the mechanics behind it are not.
+
+[cols="1,2,2",options="header"]
+|===
+| Concern | Bolt (`BoltOntology`) | NAMS (`NamsOntology`)
+
+| Storage
+| `(:Ontology)-[:HAS_VERSION]->(:OntologyVersion)` in your database, with the
+  document as a JSON string property and a `schema_hash` over its content
+| Server-side, per workspace
+
+| Templates
+| The eight local domain templates, synthesised as `template:<name>` rows
+| ~28 system templates with revision rows
+
+| Active version
+| One per database. Nothing is bound until you `activate()`
+| One per workspace. `nams-default` is bound implicitly
+
+| `get_active()` with nothing bound
+| Raises `NotSupportedError` (it does *not* silently fall back to POLE+O — the
+  runtime ontology resolution applies that fallback itself)
+| Raises `NotSupportedError`
+
+| `import_` formats
+| Converted locally: `json`, `yaml`, `native`, `arrows`, `auto`. The
+  extraction-backed converters (`rdf`, `graphql`, `cypher`, `linkml`,
+  `data-importer`) and any `url=` fetch raise `NotSupportedError`
+| Every format, including server-side URL fetch
+
+| `migrate`
+| Runs **synchronously**, one transaction per label pair, and returns an
+  already-terminal `MigrationJob`. `batch_size` is accepted and ignored
+| Enqueues a background job you poll with `get_migration()`
+
+| Validation
+| Client-side, from `validate_structure()` plus the strict write paths
+| Server-side, at write time
+
+| Extension fields (descriptions, aliases, thresholds, constraints)
+| Drive the local pipeline: the JointIE schema, the LLM prompt and the resolver
+| Client-side concepts. `NamsOntology` sends the document exactly as given, but
+  whether the service persists fields it does not model is not verified for
+  this release — extraction and resolution there run against its own engine
+
+| Drives extraction
+| Yes — locally, once resolved at connect time
+| Yes — server-side, asynchronously after a write
+|===
+
+== Relationship to extraction
+
+On *NAMS*, ontologies shape the server-side GraphRAG extraction pipeline. Once a
+version is active, entities extracted from stored messages — and entities you
+write directly with `add_entity` — are validated against the active schema.
+Extraction is asynchronous; use
 xref:how-to/use-ontologies.adoc[`wait_for_extraction`] when you need to observe
 the result deterministically.
 
+On *bolt*, extraction runs in your process, so the ontology is resolved once at
+connect time and compiled into the extractor before the first message is stored.
+Precedence: the explicit `MemoryClient(ontology=...)` keyword,
+`schema_config.ontology_path`, `schema_config.custom_schema_path`, the active
+stored version (when `use_active_ontology` is on), `SchemaModel.CUSTOM` plus
+`entity_types`, then the built-in template named by `ontology_template`. Because
+that happens at connect time, activating a version affects the *next*
+connection, not the client that activated it. `client.ontology_document` and
+`client.validation_mode` report what was resolved.
+
 == See also
 
+* xref:how-to/ontology-driven-extraction.adoc[How-to: Drive extraction from an ontology]
+* xref:how-to/tune-entity-resolution.adoc[How-to: Tune entity resolution]
 * xref:how-to/use-ontologies.adoc[How-to: Use ontologies]
 * xref:reference/ontology-api.adoc[Reference: Ontology API]
 * xref:tutorials/ontology-quickstart.adoc[Tutorial: Ontology quickstart]

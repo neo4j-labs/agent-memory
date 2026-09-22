@@ -39,8 +39,8 @@ The same `MemoryClient` API runs against two completely different storage backen
 | n/a
 | `workspace_id` → `X-Workspace-Id` header (for header-scoped deployments)
 | Ontologies
-| `NotSupportedError` (use `SchemaModel.CUSTOM`)
-| `client.ontology` — typed, versioned, validated domain schemas
+| `client.ontology` (v0.7) — versioned `:Ontology` / `:OntologyVersion` nodes in your database, and the document drives local extraction and resolution
+| `client.ontology` — typed, versioned, validated domain schemas, enforced server-side
 | Embeddings / extraction
 | Client-side (your config)
 | Server-side (managed)
@@ -102,6 +102,10 @@ This is the canonical capability reference. Backend-sensitive how-to pages link 
 | Yes | No
 | `client.long_term.find_potential_duplicates` / `merge_duplicate_entities`
 | Yes | (handled server-side)
+| `client.ontology` (list / get / get_active / clone / create / update / activate / delete / import_ / diff / migrate / get_migration)
+| Yes (`BoltOntology`, v0.7; local `import_` formats only, synchronous `migrate`) | Yes (`NamsOntology`; every `import_` format, async `migrate` jobs)
+| `client.ontology_document` / `client.validation_mode` (the resolved ontology driving local extraction)
+| Yes | No (extraction and validation run server-side)
 | `client.reasoning.start_trace` / `add_step` / `record_tool_call`
 | Yes | Yes
 | `client.reasoning.get_tool_stats`

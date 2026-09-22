@@ -202,10 +202,7 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 from neo4j_agent_memory import MemoryClient, MemorySettings
-from neo4j_agent_memory.extraction import (
-    GLiNEREntityExtractor,
-    GLiNERWithRelationsExtractor,
-)
+from neo4j_agent_memory.extraction import GLiNER2Extractor
 from neo4j_agent_memory.schema import EntitySchemaConfig, EntityTypeConfig
 
 load_dotenv()
@@ -273,9 +270,10 @@ async def extract_from_documents():
     client = MemoryClient(settings)
     await client.connect()
 
-    # Create extractor with custom schema
+    # Create extractor with custom schema. GLiNER2Extractor decodes entities
+    # and relations in one pass, so no second extractor is needed.
     schema = create_financial_schema()
-    extractor = GLiNERWithRelationsExtractor.for_schema(schema)
+    extractor = GLiNER2Extractor(ontology=schema)
 
     print("✓ Extractor initialized with financial schema")
     print(f"  Entity types: {[t.name for t in schema.entity_types]}")

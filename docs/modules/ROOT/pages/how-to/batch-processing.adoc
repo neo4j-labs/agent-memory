@@ -17,7 +17,7 @@ Batch processing enables efficient extraction of entities and relationships from
 == Prerequisites
 
 * `neo4j-agent-memory` installed
-* Extraction models configured (GLiNER, spaCy, or LLM)
+* Extraction models configured (GLiNER2.5, spaCy, or LLM)
 * Sufficient memory for batch sizes
 
 == Basic Batch Extraction
@@ -26,9 +26,11 @@ Batch processing enables efficient extraction of entities and relationships from
 
 [source,python]
 ----
-from neo4j_agent_memory.extraction import GLiNEREntityExtractor
+from neo4j_agent_memory.extraction import ExtractionPipeline, GLiNER2Extractor
 
-extractor = GLiNEREntityExtractor.for_schema("ecommerce")
+# extract_batch() with progress and per-item error handling lives on the
+# pipeline; GLiNER2Extractor.extract_batch() returns a plain list of results.
+extractor = ExtractionPipeline(stages=[GLiNER2Extractor.for_schema("business")])
 
 # List of documents to process
 documents = [
@@ -72,10 +74,10 @@ result = await extractor.extract_batch(
 ----
 result = await extractor.extract_batch(texts=documents)
 
-for i, item_result in enumerate(result.items):
+for i, item_result in enumerate(result.results):
     if item_result.success:
-        print(f"Doc {i}: {item_result.entity_count} entities")
-        for entity in item_result.entities:
+        print(f"Doc {i}: {item_result.result.entity_count} entities")
+        for entity in item_result.result.entities:
             print(f"  - {entity.name} ({entity.type})")
     else:
         print(f"Doc {i}: Failed - {item_result.error}")
@@ -144,11 +146,11 @@ client = MemoryClient(settings)
 result = await extractor.extract_batch(texts=documents)
 
 # Store all entities
-for item in result.items:
+for item in result.results:
     if not item.success:
         continue
 
-    for entity in item.entities:
+    for entity in item.result.entities:
         await client.long_term.add_entity(
             name=entity.name,
             entity_type=entity.type,
@@ -163,9 +165,10 @@ for item in result.items:
 
 [source,python]
 ----
-from neo4j_agent_memory.memory import DeduplicationConfig
+from neo4j_agent_memory.memory import DeduplicationConfig, LongTermMemory
 
-dedup_config = DeduplicationConfig(
+# DeduplicationConfig is set on the LongTermMemory instance, not per call.
+client.long_term.deduplication = DeduplicationConfig(
     auto_merge_threshold=0.95,
     flag_threshold=0.85,
 )
@@ -173,15 +176,14 @@ dedup_config = DeduplicationConfig(
 stored_count = 0
 merged_count = 0
 
-for item in result.items:
+for item in result.results:
     if not item.success:
         continue
 
-    for entity in item.entities:
+    for entity in item.result.entities:
         stored, dedup_result = await client.long_term.add_entity(
             name=entity.name,
             entity_type=entity.type,
-            deduplication=dedup_config,
         )
 
         if dedup_result.action == "created":
@@ -199,13 +201,13 @@ print(f"Merged with existing: {merged_count}")
 ----
 # Register the extractor for provenance
 await client.long_term.register_extractor(
-    name="GLiNEREntityExtractor",
-    version="1.0",
-    config={"schema": "ecommerce"},
+    "gliner2",
+    version="2.0.0",
+    config={"model": "fastino/gliner2.5-base-v1", "schema": "business"},
 )
 
 # Store with provenance
-for doc_index, item in enumerate(result.items):
+for doc_index, item in enumerate(result.results):
     if not item.success:
         continue
 
@@ -217,7 +219,7 @@ for doc_index, item in enumerate(result.items):
         metadata={"doc_index": doc_index},
     )
 
-    for entity in item.entities:
+    for entity in item.result.entities:
         stored, _ = await client.long_term.add_entity(
             name=entity.name,
             entity_type=entity.type,
@@ -225,17 +227,17 @@ for doc_index, item in enumerate(result.items):
 
         # Link to source document
         await client.long_term.link_entity_to_message(
-            entity=stored,
-            message_id=message.id,
+            stored,
+            message.id,
             confidence=entity.confidence,
-            start_pos=entity.start,
-            end_pos=entity.end,
+            start_pos=entity.start_pos,
+            end_pos=entity.end_pos,
         )
 
         # Link to extractor
         await client.long_term.link_entity_to_extractor(
-            entity=stored,
-            extractor_name="GLiNEREntityExtractor",
+            stored,
+            "gliner2",
             confidence=entity.confidence,
         )
 ----
@@ -246,10 +248,11 @@ Example for processing financial documents:
 
 [source,python]
 ----
-from neo4j_agent_memory.extraction import GLiNEREntityExtractor, ExtractionPipeline
+from neo4j_agent_memory.extraction import ExtractionPipeline, GLiNER2Extractor
 
-# Configure for financial domain
-extractor = GLiNEREntityExtractor.for_schema("financial")
+# Configure for financial domain. There is no built-in "financial" schema —
+# "business" is the closest, or build your own ontology.
+extractor = ExtractionPipeline(stages=[GLiNER2Extractor.for_schema("business")])
 
 async def process_financial_documents(documents: list[dict]):
     """Process financial documents and build context graph."""
@@ -265,7 +268,7 @@ async def process_financial_documents(documents: list[dict]):
     )
 
     # Store in context graph
-    for i, item in enumerate(result.items):
+    for i, item in enumerate(result.results):
         if not item.success:
             print(f"Failed: {documents[i]['id']} - {item.error}")
             continue
@@ -284,7 +287,7 @@ async def process_financial_documents(documents: list[dict]):
         )
 
         # Store extracted entities with relationships
-        for entity in item.entities:
+        for entity in item.result.entities:
             stored, _ = await client.long_term.add_entity(
                 name=entity.name,
                 entity_type=entity.type,
@@ -297,7 +300,7 @@ async def process_financial_documents(documents: list[dict]):
                 relationship_type="MENTIONED_IN",
                 attributes={
                     "confidence": entity.confidence,
-                    "position": entity.start,
+                    "position": entity.start_pos,
                 },
             )
 
@@ -367,7 +370,7 @@ async def import_product_catalog(products: list[dict]):
         texts.append(text)
 
     # Extract additional entities from descriptions
-    extractor = GLiNEREntityExtractor.for_schema("ecommerce")
+    extractor = ExtractionPipeline(stages=[GLiNER2Extractor.for_schema("business")])
     result = await extractor.extract_batch(
         texts=texts,
         batch_size=20,
@@ -414,8 +417,8 @@ async def import_product_catalog(products: list[dict]):
             )
 
         # Link extracted entities to product
-        if result.items[i].success:
-            for entity in result.items[i].entities:
+        if result.results[i].success:
+            for entity in result.results[i].result.entities:
                 if entity.type not in ["PRODUCT", "BRAND"]:  # Avoid duplicates
                     linked, _ = await client.long_term.add_entity(
                         name=entity.name,
@@ -476,12 +479,12 @@ result = await extractor.extract_batch(
 fast_extractor = SpacyEntityExtractor()  # Fastest
 
 # Balanced
-balanced_extractor = GLiNEREntityExtractor.for_schema("ecommerce")
+balanced_extractor = GLiNER2Extractor.for_schema("business")
 
 # High precision, slower
 accurate_pipeline = ExtractionPipeline(
     stages=[
-        GLiNEREntityExtractor.for_schema("ecommerce"),
+        GLiNER2Extractor.for_schema("business"),
         LLMEntityExtractor(model="gpt-4o-mini"),
     ],
 )
@@ -497,7 +500,7 @@ result = await extractor.extract_batch(
 )
 
 # Check for failures
-failed = [item for item in result.items if not item.success]
+failed = [item for item in result.results if not item.success]
 print(f"Failed: {len(failed)}/{result.total_items}")
 
 for item in failed:
@@ -537,7 +540,7 @@ result = await extractor.extract_batch(
     on_progress=on_progress,
 )
 
-for item in result.items:
+for item in result.results:
     if not item.success:
         logger.error(f"Failed doc {item.index}: {item.error}")
 ----

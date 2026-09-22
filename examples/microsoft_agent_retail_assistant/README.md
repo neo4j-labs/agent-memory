@@ -350,7 +350,6 @@ Honest notes about what is *not* demonstrated here, and why:
 
 - **Multi-tenancy is not enabled.** `MemorySettings.memory.multi_tenant=True` makes every short-term write require `user_identifier=`, and `Neo4jContextProvider.after_run()` does not thread one through — so turning it on would silently stop messages being saved. The example creates a `:User` node per shopper (`client.users.upsert_user(...)`) and scopes sessions per user, but tenant-scoped reads await a library change.
 - **`DeduplicationConfig` cannot come from settings.** `MemorySettings` has no `deduplication` field and `MemoryClient` never forwards one to `LongTermMemory`, so `client.long_term` always runs library defaults. `memory_config.create_long_term_memory()` constructs the layer directly to apply this example's thresholds; `/memory/duplicates` uses that instance.
-- **`find_potential_duplicates()` reports both directions of a flagged pair** and a `confidence` of `0.0` even when the `SAME_AS` relationship carries a score — the confidence shown in `GET /memory/duplicates` is therefore not yet meaningful.
 - **Azure OpenAI** goes through the same `OpenAIChatClient` with `azure_endpoint=`; the old `AzureOpenAIResponsesClient` is deprecated and ships in a separate pre-release distribution, so it is not used.
 
 ## Troubleshooting

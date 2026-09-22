@@ -32,240 +32,37 @@ development/staging deployment:
 
 from __future__ import annotations
 
-import json
-from typing import TYPE_CHECKING, Annotated, Any
-
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+from typing import TYPE_CHECKING, Any
 
 from neo4j_agent_memory.core.exceptions import NotSupportedError
 from neo4j_agent_memory.nams.endpoints import EndpointSpec
 
+# The document model moved to ``neo4j_agent_memory.ontology.models`` in 0.7 so
+# both backends share one shape. Everything is re-exported here unchanged —
+# ``from neo4j_agent_memory.nams.ontology import OntologyDocument`` still works,
+# and the wire shapes and class names are identical.
+from neo4j_agent_memory.ontology.models import (
+    ActiveOntology,
+    DomainInfo,
+    EntityTypeDef,
+    ImportWarning,
+    MigrationJob,
+    Ontology,
+    OntologyDiff,
+    OntologyDocument,
+    OntologyImportResult,
+    OntologyRecord,
+    OntologySummary,
+    OntologyVersion,
+    PropertyDef,
+    RelationshipDef,
+    _as_document_dict,
+    _parse_document,
+    _parse_version,
+)
+
 if TYPE_CHECKING:
     from neo4j_agent_memory.nams.transport import HttpTransport
-
-
-def _none_to_list(v: Any) -> Any:
-    """Coerce a ``null`` collection to ``[]`` (the service emits null for empty)."""
-    return [] if v is None else v
-
-
-# -----------------------------------------------------------------------------
-# Models — lenient (extra="ignore") so server additions don't break parsing.
-# -----------------------------------------------------------------------------
-
-
-class _Lenient(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-
-class PropertyDef(_Lenient):
-    """A typed property on an entity type."""
-
-    name: str
-    type: str  # string | datetime | date | float | integer
-    required: bool = False
-    unique: bool = False
-    enum: list[str] | None = None
-
-
-class EntityTypeDef(_Lenient):
-    """A typed entity in the ontology, mapped onto a POLE+O ``pole_type``."""
-
-    label: str
-    pole_type: str  # PERSON | ORGANIZATION | LOCATION | EVENT | OBJECT
-    subtype: str | None = None
-    color: str | None = None
-    icon: str | None = None
-    properties: Annotated[list[PropertyDef], BeforeValidator(_none_to_list)] = Field(
-        default_factory=list
-    )
-
-
-class RelationshipDef(_Lenient):
-    """A typed relationship between two entity labels."""
-
-    type: str  # UPPER_SNAKE
-    source: str
-    target: str
-
-
-class DomainInfo(_Lenient):
-    """Display + identity metadata for an ontology."""
-
-    id: str
-    name: str
-    description: str | None = None
-    tagline: str | None = None
-    emoji: str | None = None
-
-
-class OntologyDocument(_Lenient):
-    """The parsed schema body — domain + entity types + relationships."""
-
-    domain: DomainInfo
-    entity_types: Annotated[list[EntityTypeDef], BeforeValidator(_none_to_list)] = Field(
-        default_factory=list
-    )
-    relationships: Annotated[list[RelationshipDef], BeforeValidator(_none_to_list)] = Field(
-        default_factory=list
-    )
-
-
-class OntologySummary(_Lenient):
-    """One row from ``list()`` — system templates + workspace-owned."""
-
-    id: str
-    name: str
-    display_name: str | None = None
-    description: str | None = None
-    emoji: str | None = None
-    tagline: str | None = None
-    is_system: bool = False
-    current_revision: int | None = None
-    is_active: bool = False
-
-
-class OntologyVersion(_Lenient):
-    """An immutable ontology revision. ``document`` is the parsed schema.
-
-    The field is named ``document`` (not ``schema``) to avoid shadowing
-    Pydantic's reserved ``BaseModel.schema``.
-    """
-
-    id: str
-    ontology_id: str
-    revision: int
-    validation_mode: str  # permissive | strict
-    document: OntologyDocument | None = None
-    schema_hash: str | None = None
-    created_at: str | None = None
-    message: str | None = None
-
-
-class OntologyRecord(_Lenient):
-    """Identity row for a workspace-owned or system ontology."""
-
-    id: str
-    name: str
-    description: str | None = None
-    workspace_id: str | None = None
-    is_system: bool = False
-    created_at: str | None = None
-
-
-class Ontology(_Lenient):
-    """A single ontology with its full revision history."""
-
-    record: OntologyRecord
-    versions: list[OntologyVersion] = Field(default_factory=list)
-
-
-class ActiveOntology(_Lenient):
-    """The currently-bound ontology, with version metadata composed in.
-
-    ``validation_mode`` / ``revision`` / ``version_id`` are populated by a
-    second lookup (the ``/ontologies/active`` response itself carries no
-    version metadata).
-    """
-
-    document: OntologyDocument
-    validation_mode: str | None = None
-    revision: int | None = None
-    ontology_id: str | None = None
-    version_id: str | None = None
-
-
-class _AllowExtra(BaseModel):
-    """Base for shapes we pass through faithfully (server-defined, deep)."""
-
-    model_config = ConfigDict(extra="allow")
-
-
-class ImportWarning(_Lenient):
-    """A non-fatal conversion warning from :meth:`NamsOntology.import_`."""
-
-    code: str | None = None
-    message: str | None = None
-    path: str | None = None
-
-
-class OntologyImportResult(_Lenient):
-    """A *non-persisted* ontology draft converted from an external format.
-
-    Returned by :meth:`NamsOntology.import_`. The service converts an
-    Arrows / Neo4j Data Importer / RDF / GraphQL / Cypher / LinkML / native
-    document into a native ontology body but does **not** save it — persist
-    via :meth:`create` (pass ``result.document``).
-    """
-
-    document: OntologyDocument | None = None
-    warnings: list[ImportWarning] = Field(default_factory=list)
-    detected_format: str | None = None
-    suggested_name: str | None = None
-
-
-class OntologyDiff(_AllowExtra):
-    """Structural diff between two ontology revisions.
-
-    ``entity_types`` and ``relationships`` carry ``added`` / ``removed`` /
-    ``renamed`` / ``modified`` lists; they are passed through as dicts since
-    their leaf shapes mirror the full ontology type system.
-    """
-
-    from_revision: int | None = None
-    to_revision: int | None = None
-    entity_types: dict[str, Any] = Field(default_factory=dict)
-    relationships: dict[str, Any] = Field(default_factory=dict)
-    mode_change: dict[str, Any] | None = None
-
-
-class MigrationJob(_Lenient):
-    """An asynchronous label-rename migration job.
-
-    Enqueued by :meth:`NamsOntology.migrate`; poll :meth:`get_migration`
-    for ``status`` / ``processed`` / ``total`` until it completes.
-    """
-
-    id: str
-    ontology_id: str | None = None
-    workspace_id: str | None = None
-    status: str | None = None  # pending | running | completed | failed | paused
-    total: int | None = None
-    processed: int | None = None
-    errored: int | None = None
-    error_message: str | None = None
-    spec: dict[str, Any] | None = None
-    created_at: str | None = None
-    updated_at: str | None = None
-    started_at: str | None = None
-    completed_at: str | None = None
-    created_by: str | None = None
-
-
-# -----------------------------------------------------------------------------
-# Parsing helpers
-# -----------------------------------------------------------------------------
-
-
-def _parse_document(raw: Any) -> OntologyDocument | None:
-    if raw is None:
-        return None
-    if isinstance(raw, str):
-        try:
-            raw = json.loads(raw)
-        except (ValueError, TypeError):
-            return None
-    if isinstance(raw, dict):
-        return OntologyDocument.model_validate(raw)
-    return None
-
-
-def _parse_version(raw: dict[str, Any]) -> OntologyVersion:
-    data = dict(raw)
-    schema_json = data.pop("schema_json", None)
-    doc = _parse_document(schema_json) if schema_json is not None else None
-    return OntologyVersion.model_validate({**data, "document": doc})
-
 
 # -----------------------------------------------------------------------------
 # Endpoint specs (REST-only — ontology is a hosted-NAMS capability).
@@ -564,26 +361,20 @@ def _current_version(ontology: Ontology, revision: int | None) -> OntologyVersio
     return max(ontology.versions, key=lambda v: v.revision)
 
 
-def _as_document_dict(schema: OntologyDocument | dict[str, Any]) -> dict[str, Any]:
-    if isinstance(schema, OntologyDocument):
-        return schema.model_dump(exclude_none=True)
-    return schema
-
-
 __all__ = [
-    "NamsOntology",
-    "Ontology",
-    "OntologySummary",
-    "OntologyVersion",
-    "OntologyRecord",
-    "OntologyDocument",
     "ActiveOntology",
     "DomainInfo",
     "EntityTypeDef",
+    "ImportWarning",
+    "MigrationJob",
+    "NamsOntology",
+    "Ontology",
+    "OntologyDiff",
+    "OntologyDocument",
+    "OntologyImportResult",
+    "OntologyRecord",
+    "OntologySummary",
+    "OntologyVersion",
     "PropertyDef",
     "RelationshipDef",
-    "OntologyImportResult",
-    "ImportWarning",
-    "OntologyDiff",
-    "MigrationJob",
 ]

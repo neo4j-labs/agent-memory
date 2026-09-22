@@ -29,22 +29,28 @@ async with MemoryClient(settings) as client:
 [source,python]
 ----
 MemoryClient(
-    settings: MemorySettings,
+    settings: MemorySettings | None = None,
+    *,
     embedder: Embedder | None = None,
     extractor: EntityExtractor | None = None,
     resolver: EntityResolver | None = None,
+    geocoder: Geocoder | None = None,
+    enrichment_provider: EnrichmentProvider | None = None,
+    ontology: OntologyDocument | str | Path | None = None,
 )
 ----
 
 === Parameters
+
+Everything after `settings` is keyword-only.
 
 [cols="1,1,3", options="header"]
 |===
 | Parameter | Type | Description
 
 | `settings`
-| `MemorySettings`
-| Configuration settings (required)
+| `MemorySettings \| None`
+| Configuration settings. Defaults to `MemorySettings()`.
 
 | `embedder`
 | `Embedder`
@@ -56,8 +62,50 @@ MemoryClient(
 
 | `resolver`
 | `EntityResolver`
-| Custom resolver (optional, created from settings if not provided)
+| Custom resolver (optional, created from settings if not provided). The
+  settings-built default on bolt is `OntologyResolver`, constructed after the
+  Neo4j client exists because it blocks in Cypher.
+
+| `geocoder`
+| `Geocoder`
+| Custom geocoder for LOCATION entities (optional, created from settings)
+
+| `enrichment_provider`
+| `EnrichmentProvider`
+| Custom enrichment provider (optional, created from settings)
+
+| `ontology`
+| `OntologyDocument \| str \| Path \| None`
+| _v0.7._ The ontology this client extracts and validates against — a document,
+  or a path to a `.json`/`.yaml` file loaded through `load_ontology()` (a legacy
+  `EntitySchemaConfig` file is converted). Highest-priority source; see
+  <<ontology-precedence>>.
 |===
+
+[#ontology-precedence]
+=== Ontology precedence
+
+One document is resolved per connection, *before* the extractor is built, and
+handed to the extractor factory, the resolver, short-term memory and long-term
+memory. First hit wins:
+
+. `MemoryClient(ontology=...)`
+. `settings.schema_config.ontology_path`
+. `settings.schema_config.custom_schema_path`
+. the active stored `:OntologyVersion`, when
+  `settings.schema_config.use_active_ontology` is `True` and one is bound
+. `settings.schema_config.model == SchemaModel.CUSTOM` plus
+  `settings.schema_config.entity_types` (an ad-hoc document, one label per name)
+. the built-in template named by `settings.schema_config.ontology_template`
+  (default `poleo`), falling back to the built-in POLE+O ontology when the name
+  is unknown
+
+Validation mode: `settings.schema_config.validation_mode`, then the stored
+active version's mode (only when that supplied the document), then `strict` if
+`strict_types` else `permissive`.
+
+Because resolution happens at connect time, activating a version affects the
+next connection — not the client that activated it.
 
 == Properties
 
@@ -90,8 +138,16 @@ MemoryClient(
 | Read-only Cypher against the active workspace graph: `await client.query.cypher(...)`
 
 | `ontology`
-| `NamsOntology`
-| Typed, versioned domain ontologies. NAMS only — raises `NotSupportedError` on bolt. See xref:reference/ontology-api.adoc[Ontology API]
+| `OntologyAPI`
+| Ontology lifecycle — available on *both* backends as of v0.7: `NamsOntology` on NAMS, `BoltOntology` on bolt (versioned `:Ontology` / `:OntologyVersion` nodes). Operations a backend cannot honour raise `NotSupportedError`. See xref:reference/ontology-api.adoc[Ontology API]
+
+| `ontology_document`
+| `OntologyDocument \| None`
+| _v0.7._ The effective ontology resolved at connect time — the one driving extraction, relation validation and the write paths. `None` before `connect()` and on NAMS, where both run server-side (use `ontology.get_active()` there). May differ from `ontology.get_active()` when a file or the `ontology=` keyword outranked the stored version.
+
+| `validation_mode`
+| `"permissive" \| "strict"`
+| _v0.7._ How strictly the write paths enforce `ontology_document`. `strict` makes `long_term.add_entity` / `add_relationship` raise `ValidationError` for anything undeclared and makes message ingestion drop undeclared entities; `permissive` (the default) writes them and only drops relations the ontology forbids. `"permissive"` before `connect()`.
 
 | `auth`
 | `NamsAuth`
@@ -345,4 +401,6 @@ async def worker(settings):
 * xref:reference/api/short-term.adoc[ShortTermMemory API]
 * xref:reference/api/long-term.adoc[LongTermMemory API]
 * xref:reference/api/reasoning.adoc[ReasoningMemory API]
+* xref:reference/ontology-api.adoc[Ontology API]
+* xref:how-to/ontology-driven-extraction.adoc[Drive Extraction From an Ontology]
 * xref:reference/configuration.adoc[Configuration Reference]

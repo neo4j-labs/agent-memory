@@ -312,8 +312,13 @@ class TestEntityRelationQueries:
             {
                 "source_id": entity1_id,
                 "target_id": entity2_id,
+                "id": f"test-{uuid4()}",
                 "relation_type": "knows",
                 "confidence": 0.85,
+                "derived": False,
+                "extractor": "test-extractor",
+                "message_id": None,
+                "evidence": None,
             },
         )
         assert results[0]["r"] is not None
@@ -364,8 +369,13 @@ class TestEntityRelationQueries:
             {
                 "source_name": "Jane Smith",
                 "target_name": "Acme Corp",
+                "id": f"test-{uuid4()}",
                 "relation_type": "works_at",
                 "confidence": 0.9,
+                "derived": False,
+                "extractor": "test-extractor",
+                "message_id": None,
+                "evidence": "Jane Smith works at Acme Corp.",
             },
         )
         assert len(results) > 0

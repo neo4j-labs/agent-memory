@@ -12,7 +12,7 @@ How to use `neo4j-agent-memory` with no LLM provider — useful for air-gapped d
 
 == Overview
 
-`MemorySettings.llm` is `Optional[LLMConfig]`. Set it to `None` to opt out of all LLM construction. Combine that with a local embedder (sentence-transformers) and a local extractor (spaCy and/or GLiNER) to get a working `MemoryClient` that never imports `openai`.
+`MemorySettings.llm` is `Optional[LLMConfig]`. Set it to `None` to opt out of all LLM construction. Combine that with a local embedder (sentence-transformers) and a local extractor (spaCy and/or GLiNER2.5) to get a working `MemoryClient` that never imports `openai`.
 
 == Prerequisites
 

@@ -3,7 +3,17 @@
 
 In this tutorial we will clone a domain ontology, activate it, and observe how
 the active schema shapes — and validates — what lands in the graph. We will use
-the hosted NAMS backend throughout.
+the hosted NAMS backend throughout, because its system templates and
+server-side extraction make the effect visible with the least setup.
+
+[NOTE]
+====
+`client.ontology` is not NAMS-only. As of v0.7 the same methods run against your
+own Neo4j, where versions are stored as `:Ontology` / `:OntologyVersion` nodes
+and the active document drives *local* extraction and resolution. For that
+workflow, see
+xref:how-to/ontology-driven-extraction.adoc[Drive Extraction From an Ontology].
+====
 
 == Before you begin
 
@@ -88,7 +98,8 @@ Under `strict`, a write that violates the active schema is rejected:
 * Cloning a system template creates an editable, versioned, workspace-owned copy.
 * `activate` binds a *version*; `get_active()` reports its `validation_mode`.
 * Under `strict`, the service enforces the schema and the SDK raises
-  `ValidationError`.
+  `ValidationError`. On bolt the same mode is enforced client-side, by
+  `long_term.add_entity` / `add_relationship`.
 
 Next: xref:reference/ontology-api.adoc[the full Ontology API reference].
 
@@ -98,5 +109,6 @@ Both SDKs ship the full revision cycle this tutorial stops short of — import a
 Arrows diagram, ingest under the schema, diff two revisions, then migrate the
 already-extracted entities onto a renamed type:
 
-* link:https://github.com/neo4j-labs/agent-memory/tree/main/examples/ontology-lifecycle[`examples/ontology-lifecycle/`] (Python)
-* link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/ontology-lifecycle[`typescript/examples/ontology-lifecycle/`] (TypeScript)
+* link:https://github.com/neo4j-labs/agent-memory/tree/main/examples/ontology-lifecycle[`examples/ontology-lifecycle/`] (Python, NAMS)
+* link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/ontology-lifecycle[`typescript/examples/ontology-lifecycle/`] (TypeScript, NAMS)
+* link:https://github.com/neo4j-labs/agent-memory/tree/main/examples/ontology-extraction[`examples/ontology-extraction/`] (Python, bolt — keyless)

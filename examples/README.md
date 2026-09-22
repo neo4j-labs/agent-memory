@@ -26,6 +26,7 @@ Runnable examples for [`neo4j-agent-memory`](https://github.com/neo4j-labs/agent
 | Gate CI on memory quality like any other regression metric | [`eval-harness/`](#eval-harness) |
 | Run with no LLM at all (air-gapped, offline, deterministic) | [`no_llm/`](#run-without-an-llm) |
 | Tune entity extraction for a specific domain | [`domain-schemas/`](#domain-schemas) |
+| Type your own domain, get typed relations and merged aliases out of extraction | [`ontology-extraction/`](#ontology-driven-extraction) |
 | Resolve duplicate entities | [`entity_resolution.py`](#entity-resolution) |
 | Enrich entities with Wikipedia/Diffbot data | [`enrichment_example.py`](#enrichment) |
 | Use it from a framework | [`langchain_agent.py`](#langchain), [`pydantic_ai_agent.py`](#pydantic-ai), [`google_adk_demo/`](#google-adk-demo), [`microsoft_agent_retail_assistant/`](#microsoft-agent-retail-assistant) |
@@ -115,11 +116,15 @@ These four examples cover the v0.2 feature drop. Each is self-contained, runs wi
 
 ### Run without an LLM
 
-[`no_llm/`](no_llm/) — `llm=None`, `backend="bolt"`, sentence-transformers embedder, spaCy + GLiNER extractor with the LLM fallback disabled. Exercises all three memory layers locally, runs a consolidation dry run, and fails fast at construction time when a local model is missing, so you never get a surprise API call.
+[`no_llm/`](no_llm/) — `llm=None`, `backend="bolt"`, sentence-transformers embedder, spaCy + GLiNER2.5 extractor with the LLM fallback disabled. Exercises all three memory layers locally, runs a consolidation dry run, and fails fast at construction time when a local model is missing, so you never get a surprise API call.
 
 ### Domain schemas
 
-[`domain-schemas/`](domain-schemas/) — eight ready-made GLiNER2 schemas (POLE+O, podcast, news, scientific, business, entertainment, medical, legal), a recipe for your own, and shared sample documents under `samples/`. One runner: `uv run python examples/domain-schemas/run.py --schema <name>` (the eight per-domain scripts remain as thin deprecated wrappers).
+[`domain-schemas/`](domain-schemas/) — eight ready-made GLiNER2.5 schemas (POLE+O, podcast, news, scientific, business, entertainment, medical, legal), a recipe for your own, and shared sample documents under `samples/`. One runner: `uv run python examples/domain-schemas/run.py --schema <name>` (the eight per-domain scripts remain as thin deprecated wrappers).
+
+### Ontology-driven extraction
+
+[`ontology-extraction/`](ontology-extraction/) — the v0.7 ontology surface end to end, from one `ontology.yaml`. Six support-desk labels mapped onto POLE+O with descriptions written as annotation guidelines, five relationship types with explicit source/target plus `unique_source` / `acyclic` / per-relation `threshold` constraints, and an alias gazetteer. Ingesting six messages shows GLiNER2.5 (JointIE) decoding entities and typed relations in one pass, three surface forms of one organization collapsing onto a single node (with the near-miss "Acme Bank" parked in the review band instead), `r.type` / `r.support` provenance on the edges, and `client.ontology` create → activate → update → diff on bolt. Keyless.
 
 ---
 

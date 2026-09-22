@@ -139,7 +139,7 @@ See xref:explanation/multi-agent-sharing.adoc[Cross-Agent Memory Sharing] for th
 |Semantic similarity search, graph traversal, and geospatial queries all in *one database*. No separate vector DB, no Redis, no Postgres. Find entities by meaning, by relationship, or by location.
 
 |icon:cogs[] *Multi-Stage Entity Extraction*
-|Combine *spaCy, GLiNER2, GLiREL, and LLM extractors* in a configurable pipeline. 8 domain schemas (podcast, news, medical, legal...). Streaming extraction for 100K+ token documents.
+|Combine *spaCy, GLiNER2.5, and LLM extractors* in a configurable pipeline, with the ontology's endpoint typing enforced while relations are decoded. 8 domain schemas (podcast, news, medical, legal...). Streaming extraction for 100K+ token documents.
 
 |icon:layers[] *Three Memory Layers, Connected*
 |Short-term conversations inform long-term entity extraction. Reasoning traces link back to triggering messages. The agent understands *what happened, what it knows, and how it solved things*.
@@ -187,7 +187,7 @@ https://github.com/neo4j-labs/agent-memory/tree/main/examples/full-stack-chat-ag
 
 === icon:flask[] Domain Schema Examples
 
-8 specialized extraction schemas for different domains. See how GLiNER2 domain schemas improve entity extraction accuracy with type descriptions and confidence tuning.
+8 specialized extraction schemas for different domains. See how domain schemas improve entity extraction accuracy with type descriptions and confidence tuning.
 
 _Schemas: Podcast · News · Scientific · Business · Medical · Legal · Entertainment · POLE+O_
 
@@ -227,7 +227,7 @@ asyncio.run(main())
 
 == Entity Extraction Pipeline
 
-image::diagrams/extraction-pipeline.png[Multi-stage extraction pipeline: spaCy → GLiNER2 → GLiREL → LLM → Knowledge Graph,width=360,align=left]
+image::diagrams/extraction-pipeline.png[Multi-stage extraction pipeline: spaCy → GLiNER2.5 → LLM → relation validation → Knowledge Graph,width=360,align=left]
 
 Combine extractors in a configurable pipeline. 5 merge strategies. 8 domain schemas. Streaming extraction for 100K+ token documents.
 
@@ -239,18 +239,20 @@ Combine extractors in a configurable pipeline. 5 merge strategies. 8 domain sche
 |Fast rule-based & statistical NER
 |High throughput, no API cost
 
-|icon:crosshairs[] GLiNER2
-|Zero-shot NER with domain schemas
-|Accuracy without LLM cost
-
-|icon:link[] GLiREL
-|Relation extraction between entities
-|Graph edge extraction
+|icon:crosshairs[] GLiNER2.5
+|Zero-shot entities *and* typed relations in one pass, against your ontology
+|Accuracy and graph edges without LLM cost
 
 |icon:magic[] LLM fallback
-|High-accuracy extraction via API
+|High-accuracy extraction via API, plus preferences
 |Complex or ambiguous text
+
+|icon:check[] Relation validation
+|Drops relations the ontology does not permit
+|Keeping merged multi-stage output clean
 |===
+
+Merge strategies: `CONFIDENCE`, `UNION`, `INTERSECTION`, `CASCADE`, `FIRST_SUCCESS`.
 
 == Framework Integrations
 

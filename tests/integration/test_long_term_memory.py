@@ -390,6 +390,105 @@ class TestLongTermMemoryRelationships:
 
 
 @pytest.mark.integration
+class TestMergeTransfersRelationProvenance:
+    """``merge_duplicate_entities`` must not lose (or choke on) edge provenance."""
+
+    @pytest.mark.asyncio
+    async def test_transferred_edge_keeps_its_type_and_support(self, clean_memory_client):
+        """The merge keyed on ``{type: r.type}``, which Neo4j rejects when null.
+
+        A relation written before the v0.7 provenance rework only carries
+        ``relation_type``, so ``r.type`` is null and the whole merge failed --
+        taking the mentions and provenance transfers down with it. The new
+        ``ON CREATE SET`` also has to carry the provenance across instead of
+        dropping it.
+        """
+        client = clean_memory_client
+        source, _ = await client.long_term.add_entity(
+            name="Acme Corporation",
+            entity_type=EntityType.ORGANIZATION,
+            resolve=False,
+            generate_embedding=False,
+        )
+        target, _ = await client.long_term.add_entity(
+            name="Acme Corp",
+            entity_type=EntityType.ORGANIZATION,
+            resolve=False,
+            generate_embedding=False,
+        )
+        neighbour, _ = await client.long_term.add_entity(
+            name="Ada Lovelace",
+            entity_type=EntityType.PERSON,
+            resolve=False,
+            generate_embedding=False,
+        )
+
+        # A typed, provenance-carrying edge...
+        await client._client.execute_write(
+            """
+            MATCH (n:Entity {id: $neighbour}), (s:Entity {id: $source})
+            CREATE (n)-[:RELATED_TO {
+                id: 'rel-typed',
+                type: 'EMPLOYED_BY',
+                relation_type: 'EMPLOYED_BY',
+                confidence: 0.9,
+                support: 3,
+                derived: false,
+                extractor: 'keyword',
+                source_message_ids: ['m1', 'm2'],
+                evidence: ['Ada Lovelace works at Acme Corporation']
+            }]->(s)
+            """,
+            {"neighbour": str(neighbour.id), "source": str(source.id)},
+        )
+        # ...and a pre-v0.7 edge with a null ``type``, which is what broke.
+        await client._client.execute_write(
+            """
+            MATCH (s:Entity {id: $source}), (n:Entity {id: $neighbour})
+            CREATE (s)-[:RELATED_TO {
+                id: 'rel-legacy',
+                relation_type: 'KNOWS',
+                confidence: 0.7
+            }]->(n)
+            """,
+            {"neighbour": str(neighbour.id), "source": str(source.id)},
+        )
+
+        merged = await client.long_term.merge_duplicate_entities(
+            source_id=source.id, target_id=target.id
+        )
+        assert merged is not None
+
+        edges = await client._client.execute_read(
+            """
+            MATCH (a:Entity)-[r:RELATED_TO]-(b:Entity)
+            WHERE $target IN [a.id, b.id]
+            RETURN r.type AS type, r.support AS support, r.derived AS derived,
+                   r.extractor AS extractor,
+                   r.source_message_ids AS source_message_ids,
+                   r.evidence AS evidence, r.migrated_from AS migrated_from
+            ORDER BY type
+            """,
+            {"target": str(target.id)},
+        )
+        by_type = {edge["type"]: edge for edge in edges}
+        assert set(by_type) == {"EMPLOYED_BY", "KNOWS"}, (
+            "both edges must reach the surviving entity, including the null-typed one"
+        )
+
+        employed = by_type["EMPLOYED_BY"]
+        assert employed["support"] == 3, "provenance must survive the transfer"
+        assert employed["derived"] is False
+        assert employed["extractor"] == "keyword"
+        assert employed["source_message_ids"] == ["m1", "m2"]
+        assert employed["evidence"] == ["Ada Lovelace works at Acme Corporation"]
+        assert employed["migrated_from"] == str(source.id)
+
+        # The null-typed edge falls back to relation_type for its merge key.
+        assert by_type["KNOWS"]["support"] == 1
+
+
+@pytest.mark.integration
 class TestLongTermMemoryEdgeCases:
     """Test edge cases and error handling."""
 

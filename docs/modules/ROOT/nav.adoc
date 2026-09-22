@@ -48,7 +48,10 @@
 *** Entity Extraction
 **** xref:how-to/entity-extraction.adoc[Entity Extraction]
 **** xref:how-to/entity-extraction-schemas.adoc[Domain Schemas]
+**** xref:how-to/ontology-driven-extraction.adoc[Ontology-Driven Extraction]
+**** xref:how-to/tune-entity-resolution.adoc[Tune Entity Resolution]
 **** xref:how-to/entity-extraction-batch.adoc[Batch & Streaming]
+**** xref:how-to/migrate-to-gliner2.adoc[Migrate to GLiNER2.5]
 
 *** Reasoning & Audit
 **** xref:how-to/reasoning-traces.adoc[Record Reasoning Traces]

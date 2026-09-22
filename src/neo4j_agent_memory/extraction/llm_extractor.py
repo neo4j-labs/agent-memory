@@ -33,6 +33,7 @@ from neo4j_agent_memory.extraction.base import (
 
 if TYPE_CHECKING:
     from neo4j_agent_memory.llm.protocol import LLMProvider, StructuredExtractor
+    from neo4j_agent_memory.ontology.models import OntologyDocument
 
 
 logger = logging.getLogger(__name__)
@@ -115,6 +116,38 @@ SYSTEM_MESSAGE = (
     "You follow the configured entity-type schema. Always respond with valid JSON."
 )
 
+# Wrapper for the ontology-derived guidance, which replaces the hardcoded
+# POLE+O subtype list in the prompt's ``{subtype_info}`` slot.
+ONTOLOGY_INFO_TEMPLATE = """
+The graph is governed by this ontology. Use only the entity types and
+relationship names it declares; emit the POLE+O type shown in parentheses as
+``type`` and the part after the colon (when present) as ``subtype``. Emit a
+relation only when the ontology declares that exact source/target pair.
+
+{fragment}
+"""
+
+
+def _ontology_entity_types(ontology: OntologyDocument) -> list[str]:
+    """POLE+O type names the ontology declares, in declaration order."""
+    seen: dict[str, None] = {}
+    for entity_type in ontology.entity_types:
+        seen.setdefault(entity_type.pole_type.upper(), None)
+    return list(seen) or list(DEFAULT_ENTITY_TYPES)
+
+
+def _ontology_subtypes(ontology: OntologyDocument) -> dict[str, list[str]]:
+    """Subtypes the ontology declares, grouped by POLE+O type."""
+    subtypes: dict[str, list[str]] = {}
+    for entity_type in ontology.entity_types:
+        if not entity_type.subtype:
+            continue
+        bucket = subtypes.setdefault(entity_type.pole_type.upper(), [])
+        subtype = entity_type.subtype.upper()
+        if subtype not in bucket:
+            bucket.append(subtype)
+    return subtypes
+
 
 class LLMEntityExtractor(EntityExtractor):
     """LLM-based entity, relation, and preference extraction.
@@ -152,7 +185,30 @@ class LLMEntityExtractor(EntityExtractor):
         temperature: float = 0.0,
         extract_relations: bool = True,
         extract_preferences: bool = True,
+        ontology: OntologyDocument | None = None,
     ) -> None:
+        """Initialize the extractor.
+
+        Args:
+            provider: An :class:`LLMProvider` or :class:`StructuredExtractor`.
+                When omitted, one is built from ``model``/``api_key``.
+            model: Legacy model id used to build a default provider.
+            api_key: Legacy API key used to build a default provider.
+            entity_types: Flat type names the model should emit. Defaults to
+                the POLE+O types, or — when ``ontology`` is set — to its
+                declared ``pole_type`` values.
+            subtypes: Per-type subtype hints. Defaults to the POLE+O table,
+                or — when ``ontology`` is set — to the subtypes it declares.
+            extraction_prompt: Override for the prompt template.
+            temperature: Sampling temperature.
+            extract_relations: Whether to request relations.
+            extract_preferences: Whether to request preferences.
+            ontology: Optional ontology. When set, the prompt's type guidance
+                comes from :func:`~neo4j_agent_memory.ontology.compile.prompt_fragment`
+                (annotation guidelines plus the legal
+                ``SOURCE -[REL]-> TARGET`` catalogue) so the model emits
+                declared relationship names rather than inventing its own.
+        """
         # Resolve the provider: explicit > legacy-args > default(gpt-4o-mini)
         if provider is None:
             resolved_model = model or "openai/gpt-4o-mini"
@@ -169,8 +225,13 @@ class LLMEntityExtractor(EntityExtractor):
             provider = from_provider(resolved_model, kind="llm", **kwargs)
         self._provider = provider
         self._model_label = getattr(provider, "model", "unknown")
-        self._entity_types = entity_types or list(DEFAULT_ENTITY_TYPES)
-        self._subtypes = subtypes if subtypes is not None else dict(POLEO_SUBTYPES)
+        self._ontology = ontology
+        if ontology is not None:
+            self._entity_types = entity_types or _ontology_entity_types(ontology)
+            self._subtypes = subtypes if subtypes is not None else _ontology_subtypes(ontology)
+        else:
+            self._entity_types = entity_types or list(DEFAULT_ENTITY_TYPES)
+            self._subtypes = subtypes if subtypes is not None else dict(POLEO_SUBTYPES)
         self._prompt = extraction_prompt or DEFAULT_EXTRACTION_PROMPT
         self._temperature = temperature
         self._extract_relations = extract_relations
@@ -182,7 +243,24 @@ class LLMEntityExtractor(EntityExtractor):
         return "LLMEntityExtractor"
 
     def _build_subtype_info(self, types_to_use: list[str]) -> str:
-        """Build subtype information string for the prompt."""
+        """Build the type guidance block for the prompt.
+
+        With an ontology configured this is the compiled prompt fragment —
+        annotation guidelines per label plus the legal relationship
+        catalogue. Without one it is the historic POLE+O subtype list.
+
+        Args:
+            types_to_use: The entity types this call extracts.
+
+        Returns:
+            The rendered block, or ``""`` when there is nothing to say.
+        """
+        if self._ontology is not None:
+            from neo4j_agent_memory.ontology.compile import prompt_fragment
+
+            fragment = prompt_fragment(self._ontology, include_relations=self._extract_relations)
+            return ONTOLOGY_INFO_TEMPLATE.format(fragment=fragment)
+
         subtype_lines = []
         for entity_type in types_to_use:
             subtypes = self._subtypes.get(entity_type, [])

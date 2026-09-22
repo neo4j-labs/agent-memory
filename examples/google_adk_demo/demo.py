@@ -58,7 +58,7 @@ from pydantic import SecretStr
 
 from neo4j_agent_memory import MemoryClient, MemorySettings, Neo4jConfig
 from neo4j_agent_memory.config.settings import ExtractionConfig, ExtractorType
-from neo4j_agent_memory.extraction import create_extractor, is_gliner_available
+from neo4j_agent_memory.extraction import create_extractor, is_gliner2_available
 from neo4j_agent_memory.integration import MemoryIntegration, SessionStrategy
 from neo4j_agent_memory.integrations.google_adk import Neo4jMemoryService
 
@@ -122,7 +122,7 @@ def _local_extraction() -> ExtractionConfig:
     except ImportError:
         has_spacy = False
 
-    has_gliner = is_gliner_available()
+    has_gliner = is_gliner2_available()
     if not (has_spacy or has_gliner):
         # Nothing local to extract with. NONE is explicit: better a visibly
         # empty knowledge graph than a silent NoOpExtractor fallback.

@@ -19,7 +19,7 @@ A graph-native memory system for AI agents. Store conversations, build knowledge
 | Per-session history | Knowledge graph ([POLE+O model](https://neo4j.com/labs/agent-memory/explanation/poleo-model)) | Learn from past decisions |
 | Vector + text search | Entity resolution & dedup | Similar task retrieval |
 
-**Plus:** multi-stage entity extraction (spaCy / GLiNER / LLM), relationship extraction (GLiREL), background enrichment (Wikipedia / Diffbot), geospatial queries, an MCP server with 16 tools, and integrations with LangChain, Pydantic AI, Google ADK, Strands, CrewAI, and more.
+**Plus:** multi-stage entity extraction (spaCy / GLiNER2.5 / LLM) with typed relations decoded in the same pass, background enrichment (Wikipedia / Diffbot), geospatial queries, an MCP server with 16 tools, and integrations with LangChain, Pydantic AI, Google ADK, Strands, CrewAI, and more.
 
 ## Two backends, one API
 
@@ -101,7 +101,8 @@ pip install "neo4j-agent-memory[sentence-transformers]" # + local HF embeddings
 pip install "neo4j-agent-memory[litellm]"             # + LiteLLM universal fallback (100+ providers)
 pip install "neo4j-agent-memory[mcp]"                 # + MCP server
 pip install "neo4j-agent-memory[all]"                 # Everything except heavy local ML
-pip install "neo4j-agent-memory[full]"                # Everything including spaCy, GLiNER, sentence-transformers
+pip install "neo4j-agent-memory[gliner2]"             # + GLiNER2.5 local entity + relation extraction
+pip install "neo4j-agent-memory[full]"                # Everything including spaCy, GLiNER2.5, sentence-transformers
 ```
 
 ## MCP Server

@@ -50,7 +50,7 @@ class TestNoLLMExample:
             ExtractionConfig,
             ExtractorType,
         )
-        from neo4j_agent_memory.extraction import create_extractor, is_gliner_available
+        from neo4j_agent_memory.extraction import create_extractor, is_gliner2_available
         from neo4j_agent_memory.schema import TraceOutcome
 
         assert MemoryClient is not None
@@ -59,7 +59,7 @@ class TestNoLLMExample:
         assert ExtractionConfig is not None
         assert ExtractorType.PIPELINE is not None
         assert callable(create_extractor)
-        assert callable(is_gliner_available)
+        assert callable(is_gliner2_available)
         assert TraceOutcome is not None
 
     def test_build_settings_produces_llm_none(self, monkeypatch):
@@ -136,7 +136,7 @@ class TestNoLLMExample:
         ``NEO4J_URI``); skips in ``example-tests-quick``, which has no database.
         """
         pytest.importorskip("sentence_transformers")
-        pytest.importorskip("gliner")
+        pytest.importorskip("gliner2")
         spacy = pytest.importorskip("spacy")
         if not spacy.util.is_package("en_core_web_sm"):
             pytest.skip("en_core_web_sm not installed")
