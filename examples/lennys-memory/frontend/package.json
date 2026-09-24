@@ -16,7 +16,7 @@
   "dependencies": {
     "@chakra-ui/react": "^3.37.0",
     "@emotion/react": "^11.14.0",
-    "@neo4j-nvl/base": "^1.2.1",
+    "@neo4j-nvl/base": "^2.0.0",
     "@neo4j-nvl/react": "^1.2.1",
     "@turf/turf": "^7.2.0",
     "@vercel/analytics": "^1.6.1",
