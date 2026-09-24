@@ -24,7 +24,7 @@ neo4j-agent-memory[openai,microsoft-agent,extraction,fuzzy]>=0.6.0,<0.7
 # Web framework
 fastapi>=0.115,<1
 uvicorn[standard]>=0.52.4,<1
-sse-starlette>=3.0,<4
+sse-starlette>=3.4.11,<4
 
 # OpenAI (embeddings + the data loader)
 openai>=2.0,<4
