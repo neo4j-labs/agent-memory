@@ -15,8 +15,8 @@
     "lint:source": "python3 ../scripts/check_docs.py"
   },
   "devDependencies": {
-    "@antora/cli": "^3.1.0",
-    "@antora/site-generator": "^3.1.0",
+    "@antora/cli": "^3.2.0",
+    "@antora/site-generator": "^3.2.0",
     "http-server": "^14.1.1"
   }
 }
