@@ -70,12 +70,17 @@ class TestPlatinumToolExecution:
         client = make_mock_client()
         client.long_term.set_entity_feedback = AsyncMock(return_value=None)
         client.long_term.get_entity_history = AsyncMock(
-            return_value=[{"conversation_id": "c1", "mention_count": 3}]
+            return_value=[
+                {"conversation_id": "c1", "mention_count": 3},
+                {"conversation_id": "c2", "mention_count": 1},
+            ]
         )
         client.long_term.get_entity_provenance = AsyncMock(
             return_value={"sources": [{"message_id": "m1"}], "extractors": []}
         )
-        client.short_term.get_reflections = AsyncMock(return_value=[{"text": "reflection one"}])
+        client.short_term.get_reflections = AsyncMock(
+            return_value=[{"text": "reflection one"}, {"text": "reflection two"}]
+        )
         return client
 
     @pytest.fixture
@@ -95,9 +100,44 @@ class TestPlatinumToolExecution:
         mock_client.long_term.set_entity_feedback.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_platinum_schema_matches_supported_arguments(self, server):
+        async with Client(server) as client:
+            tools = {tool.name: tool for tool in await client.list_tools()}
+
+        feedback_properties = tools["memory_set_entity_feedback"].inputSchema.get("properties", {})
+        assert "user_identifier" not in feedback_properties
+
+        history_limit = tools["memory_get_entity_history"].inputSchema["properties"]["limit"]
+        assert history_limit["default"] == 50
+
+        reflections_limit = tools["memory_get_reflections"].inputSchema["properties"]["limit"]
+        assert reflections_limit["default"] == 20
+
+    @pytest.mark.asyncio
+    async def test_non_positive_limits_are_rejected_before_backend_access(
+        self, server, mock_client
+    ):
+        async with Client(server) as client:
+            history_result = await client.call_tool(
+                "memory_get_entity_history", {"entity_id": "e1", "limit": 0}
+            )
+            reflections_result = await client.call_tool(
+                "memory_get_reflections", {"session_id": "s1", "limit": -1}
+            )
+
+        assert json.loads(history_result.content[0].text) == {"error": "limit must be at least 1"}
+        assert json.loads(reflections_result.content[0].text) == {
+            "error": "limit must be at least 1"
+        }
+        mock_client.long_term.get_entity_history.assert_not_awaited()
+        mock_client.short_term.get_reflections.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_get_entity_history(self, server, mock_client):
         async with Client(server) as client:
-            result = await client.call_tool("memory_get_entity_history", {"entity_id": "e1"})
+            result = await client.call_tool(
+                "memory_get_entity_history", {"entity_id": "e1", "limit": 1}
+            )
             data = json.loads(result.content[0].text)
         assert data["entity_id"] == "e1"
         assert len(data["history"]) == 1
@@ -114,7 +154,9 @@ class TestPlatinumToolExecution:
     @pytest.mark.asyncio
     async def test_get_reflections(self, server, mock_client):
         async with Client(server) as client:
-            result = await client.call_tool("memory_get_reflections", {"session_id": "s1"})
+            result = await client.call_tool(
+                "memory_get_reflections", {"session_id": "s1", "limit": 1}
+            )
             data = json.loads(result.content[0].text)
         assert data["session_id"] == "s1"
         assert len(data["reflections"]) == 1
