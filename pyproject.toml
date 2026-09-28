@@ -98,13 +98,13 @@ sentence-transformers = ["sentence-transformers>=3.0,<7"]
 # declared explicitly because the embedder imports it directly. The 1.x
 # `TextEmbeddingModel` path is still in the code for deployments that pin an
 # older aiplatform, but it is no longer what a fresh install resolves.
-vertex-ai = ["google-cloud-aiplatform>=2.0,<3", "google-genai>=1.66"]
+vertex-ai = ["google-cloud-aiplatform>=2.0,<3", "google-genai>=1.0"]
 bedrock = ["boto3>=1.26.0"]
 litellm = ["litellm>=1.50,<2"]
 instructor = ["instructor>=1.7,<2"]
 
 # Cloud provider bundles
-google = ["google-cloud-aiplatform>=2.0,<3", "google-genai>=1.66"]
+google = ["google-cloud-aiplatform>=2.0,<3", "google-genai>=1.0"]
 aws = ["boto3>=1.26.0"]
 
 # AWS Strands Agents SDK 1.x. The floor is 1.52 because that is the oldest
@@ -245,7 +245,7 @@ dev = [
     "mypy>=1.8.0",
     # ty is pre-1.0 and changes its rule set between releases, so pin it exactly
     # for reproducible CI. Bump deliberately. See the type-safety tracking issue #144.
-    "ty==0.0.13",
+    "ty==0.0.82",
     # yaml ships no inline types; the mypy override block assumes these stubs are
     # present. Pinned so the mypy error count is reproducible in clean CI (an
     # ambient install here silently shifted it). See #144.
