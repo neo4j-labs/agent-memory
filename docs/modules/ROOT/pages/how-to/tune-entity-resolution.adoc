@@ -97,12 +97,15 @@ The prefix rule is worth spelling out, because it is where most false merges
 would otherwise come from. A whole-token prefix is not an identity, whatever the
 type: "Apple" and "Apple Bank" are different companies, "Kansas" and "Kansas
 City" different places, "Paris" and "Paris Hilton" different people. So the rule
-scores `0.92` only when the embeddings or the surrounding context agree (either
-at 0.60 or above), and `0.88`, inside the review band, when the prefix is all
-the evidence there is. It replaces the weighted blend rather than being combined
-with it, because RapidFuzz rates every whole-token prefix pair at exactly 0.90,
-the default auto-merge line, which would merge exactly the pairs the rule exists
-to hold back.
+scores `0.92` only when independent surrounding context agrees (context
+similarity 0.60 or above), and `0.88`, inside the review band, otherwise. Name
+embeddings do not count as agreement: a name and its extension embed alike
+whether or not they are one entity (all-MiniLM-L6-v2 scores "Acme Bank" against
+"Acme Corp" at 0.76, above "Northwind" against "Northwind Logistics" at 0.73).
+The rule replaces the weighted blend rather than being combined with it, because
+RapidFuzz rates every whole-token prefix pair at exactly 0.90, the default
+auto-merge line, which would merge exactly the pairs the rule exists to hold
+back.
 
 The alias gazetteer is keyed per canonical name, not per surface form. If two
 canonicals declare the same short form (`{"Apple Inc": ["Apple"],

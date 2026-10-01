@@ -14,9 +14,12 @@ The design follows the reference implementation measured in
   acronym expansion) short-circuits the weighted score.
 * A whole-token prefix match is *not* an identity, for any type: ``Apple`` /
   ``Apple Bank``, ``Kansas`` / ``Kansas City`` and ``Paris`` / ``Paris
-  Hilton`` only clear the auto-merge line when the surrounding context or the
-  embeddings agree. Fuzzy similarity alone never clears it, because RapidFuzz
-  scores every whole-token prefix pair at exactly the auto-merge line.
+  Hilton`` only clear the auto-merge line when the surrounding context agrees.
+  Fuzzy similarity alone never clears it, because RapidFuzz scores every
+  whole-token prefix pair at exactly the auto-merge line, and neither do name
+  embeddings: a name and its extension embed alike whether or not they are one
+  entity (all-MiniLM-L6-v2 puts "Acme Bank"/"Acme Corp" at 0.76, above
+  "Northwind"/"Northwind Logistics" at 0.73).
 * Low-entropy names ("N600", "Ada") are penalised unless a rule fired.
 * Resolution needs **two passes**. An episode that mentions "Acme" and "Acme
   Corp" for the first time must not create two nodes, and neither had a stored
@@ -1211,9 +1214,11 @@ class OntologyResolver(BaseResolver):
         #    City" different places, "Paris"/"Paris Hilton" different people —
         #    so a bare prefix lands in the review band instead. The rule
         #    *replaces* the blend rather than being max'd with it: RapidFuzz
-        #    scores every whole-token prefix pair at exactly 0.90, which would
-        #    merge precisely the pairs the rule exists to hold back.
-        rule = self._prefix_rule(mention, normalized, embed=embed, context=context)
+        #    scores every whole-token prefix pair at exactly 0.90, and the
+        #    name embeddings of a prefix pair agree whether or not it is one
+        #    entity, so the blend would merge precisely the pairs the rule
+        #    exists to hold back.
+        rule = self._prefix_rule(mention, normalized, context=context)
 
         score = rule if rule > 0.0 else base
         match_type: str | None
@@ -1285,13 +1290,18 @@ class OntologyResolver(BaseResolver):
         mention: _Mention,
         candidate: NormalizedName,
         *,
-        embed: float | None,
         context: float | None,
     ) -> float:
-        """Whole-token prefix rule, for every type. 0.0 when it does not fire."""
+        """Whole-token prefix rule, for every type. 0.0 when it does not fire.
+
+        Only independent context corroborates a prefix. Name-embedding
+        similarity does not: it is high for every prefix pair, so counting it
+        would auto-merge "Acme Bank" into "Acme Corp" as soon as the stored
+        entity carries an embedding, which every ingested entity does.
+        """
         if not _is_token_prefix(mention.normalized, candidate):
             return 0.0
-        corroborated = max(embed or 0.0, context or 0.0) >= PREFIX_CORROBORATION_MIN
+        corroborated = (context or 0.0) >= PREFIX_CORROBORATION_MIN
         return PREFIX_RULE_CORROBORATED if corroborated else PREFIX_RULE_BARE
 
     @staticmethod

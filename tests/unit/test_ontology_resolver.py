@@ -473,8 +473,14 @@ class TestScoringRules:
         assert resolution.score == pytest.approx(0.88)
         assert resolution.matched_entity_id == "e1"
 
-    async def test_corroborated_prefix_merges(self) -> None:
-        """Context (or embedding) agreement is what clears the auto-merge line."""
+    async def test_name_embeddings_do_not_corroborate_a_prefix(self) -> None:
+        """A prefix pair's name embeddings agree whether or not it is one entity.
+
+        Every ingested entity carries a name embedding, so counting embedding
+        agreement as corroboration would auto-merge "Acme Bank" into "Acme
+        Corp". Only independent context clears the line (see
+        ``test_independent_context_still_corroborates``).
+        """
         embedder = MockEmbedder(dimensions=64)
         candidate_embedding = await embedder.embed("Northwind Logistics")
         client = RecordingClient(
@@ -491,8 +497,9 @@ class TestScoringRules:
         resolver = make_resolver(client, embedder=embedder)
         resolution = await resolver.resolve_one("Northwind", "ORGANIZATION")
 
-        assert resolution.action == "merged"
-        assert resolution.score == pytest.approx(0.92)
+        assert resolution.action == "review"
+        assert resolution.match_type == "prefix"
+        assert resolution.score == pytest.approx(PREFIX_RULE_BARE)
 
     @pytest.mark.parametrize(
         ("mention", "stored", "entity_type"),
@@ -543,18 +550,22 @@ class TestScoringRules:
         assert score <= resolver.config.review_threshold
 
     async def test_a_corroborated_prefix_still_merges_for_any_type(self) -> None:
-        """The rule holds prefixes back; evidence still clears the line."""
-        embedder = MockEmbedder(dimensions=64)
-        candidate_embedding = await embedder.embed("Kansas City")
+        """The rule holds prefixes back; independent context still clears the line."""
         client = RecordingClient(
             {
                 queries.FIND_ENTITIES_BY_TOKEN_PREFIX: [
-                    entity_row("Kansas City", entity_id="e1", embedding=candidate_embedding)
+                    entity_row(
+                        "Kansas City",
+                        entity_id="e1",
+                        description="Kansas City hosts the barbecue festival every June.",
+                    )
                 ]
             }
         )
-        resolution = await make_resolver(client, embedder=embedder).resolve_one(
-            "Kansas", "LOCATION"
+        resolution = await make_resolver(client).resolve_one(
+            "Kansas",
+            "LOCATION",
+            context="Every June the barbecue festival in Kansas draws a crowd.",
         )
 
         assert resolution.action == "merged"

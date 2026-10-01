@@ -288,8 +288,10 @@ name.
   up, oversized prefix buckets discarded); **score** (exact normalized match
   1.0, declared ontology alias 1.0, acronym expansion 0.97 — organizations
   only, and at least three letters, since "IT" is not Isabel Turner —
-  whole-token-prefix 0.92 for *any* type when embeddings or context corroborate
-  it and 0.88 — the review band — when they do not, else `0.45·fuzzy +
+  whole-token-prefix 0.92 for *any* type when independent context corroborates
+  it and 0.88 — the review band — when it does not (name embeddings do not
+  corroborate a prefix: a name and its extension embed alike whether or not
+  they are one entity), else `0.45·fuzzy +
   0.40·embedding + 0.15·context` renormalized over the available components,
   minus 0.25 when the *lower*-entropy side of the pair is below 2.5 bits, and
   capped at `review_threshold` when fuzzy similarity is the only component and
