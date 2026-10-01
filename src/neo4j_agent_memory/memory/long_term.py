@@ -20,7 +20,10 @@ from neo4j_agent_memory.core.exceptions import (
 from neo4j_agent_memory.core.memory import BaseMemory, MemoryEntry
 from neo4j_agent_memory.core.protocols import LongTermProtocol
 from neo4j_agent_memory.graph import queries
-from neo4j_agent_memory.graph.query_builder import build_create_entity_query
+from neo4j_agent_memory.graph.query_builder import (
+    build_add_ontology_label_query,
+    build_create_entity_query,
+)
 
 # =============================================================================
 # DEDUPLICATION CONFIGURATION
@@ -734,6 +737,21 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
                         await self._add_alias_to_entity(dedup_result.matched_entity_id, name)
                         existing_entity.aliases.append(name)
                     await self._backfill_embedding(existing_entity, embedding)
+                    # No MERGE runs on this path; add the current ontology's
+                    # label for the requested type, as ON MATCH would.
+                    label_query = build_add_ontology_label_query(
+                        parsed_type,
+                        final_subtype,
+                        (
+                            self._ontology.node_label(parsed_type, final_subtype)
+                            if self._ontology is not None
+                            else None
+                        ),
+                    )
+                    if label_query is not None:
+                        await self._client.execute_write(
+                            label_query, {"id": str(dedup_result.matched_entity_id)}
+                        )
                     return existing_entity, dedup_result
 
         # Geocode if this is a LOCATION entity

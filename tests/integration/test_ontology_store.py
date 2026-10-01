@@ -515,6 +515,19 @@ class TestOntologyMigrate:
                 assert "Ticket" not in row["labels"]
                 assert "Supportcase" not in row["labels"]
                 assert row["subtype"] == "TICKET"
+
+            # This client still runs the Ticket revision. Re-mentioning the
+            # ticket resolves onto the existing node (no MERGE runs on that
+            # path), and the node still gets the label the client's ontology
+            # declares.
+            await client.short_term.add_message(
+                f"labels-{uuid4().hex[:8]}", "user", "Ticket TK-2211 is still open."
+            )
+            relabelled = {
+                row["name"]: row["labels"] for row in await client._client.execute_read(label_rows)
+            }
+            assert "Ticket" in relabelled["TK-2211"]
+            assert "Ticket" not in relabelled["TK-2210"]
         finally:
             await client.close()
 

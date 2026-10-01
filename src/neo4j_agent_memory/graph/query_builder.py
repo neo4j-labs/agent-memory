@@ -277,6 +277,41 @@ def build_label_set_clause(
     return f"SET {label_additions}"
 
 
+def build_add_ontology_label_query(
+    entity_type: str,
+    subtype: str | None,
+    ontology_label: str | None,
+) -> str | None:
+    """Query that adds a mention's ontology label to the node it resolved onto.
+
+    The create path's ``MERGE`` sets labels on match as well as on create. The
+    resolution paths that reuse an existing node instead (an ingest-time
+    merge, an ``add_entity`` dedup merge) write no ``MERGE``, so they run this
+    to give the node the label the current ontology declares — re-mentioning a
+    node written before a revision was activated labels it for that revision.
+
+    Args:
+        entity_type: The mention's entity type.
+        subtype: The mention's subtype.
+        ontology_label: The ontology's declared label for that exact pair.
+
+    Returns:
+        ``MATCH (e:Entity {id: $id}) SET e:<Label> RETURN e.id AS id``, or
+        ``None`` when the label is missing, invalid, or already one of the
+        type/subtype labels (the default POLE+O ontology always lands here, so
+        it costs no extra write).
+    """
+    declared = ontology_node_label(ontology_label)
+    if not declared:
+        return None
+    existing = {validate_entity_type(entity_type)}
+    if subtype:
+        existing.add(validate_subtype(entity_type, subtype))
+    if declared in existing:
+        return None
+    return f"MATCH (e:Entity {{id: $id}})\nSET e:{declared}\nRETURN e.id AS id"
+
+
 def build_create_entity_query(
     entity_type: str,
     subtype: str | None,

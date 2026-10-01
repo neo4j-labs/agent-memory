@@ -99,8 +99,12 @@ name.
   nothing, and a label equal to the type or built-in subtype label is not
   repeated, so the default POLE+O ontology writes exactly the labels it always
   did. `OntologyDocument.node_label()` is the exact-match lookup;
-  `label_for()` keeps its fallbacks for validation. Explicit mentions with a
-  `type` now also get their type label, like every other entity write.
+  `label_for()` keeps its fallbacks for validation. Labels are added on match
+  as well as on create, including when ingest-time resolution or an
+  `add_entity` dedup merge reuses an existing node, so re-mentioning a node
+  written under an earlier revision labels it for the active one. Explicit
+  mentions with a `type` now also get their type label, like every other
+  entity write.
   `BoltOntology.migrate` matches and writes labels in the same form; it used
   `sanitize_label`, which re-cased a rename to `SupportCase` into
   `:Supportcase`.

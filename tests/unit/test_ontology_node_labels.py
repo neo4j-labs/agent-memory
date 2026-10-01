@@ -114,3 +114,81 @@ async def test_an_explicit_mention_gets_the_type_and_declared_labels(mock_client
         if "MERGE (e:Entity" in call.args[0]
     )
     assert "SET e:Organization, e:Vendor" in merge
+
+
+def _label_writes(client) -> list[tuple[str, dict]]:
+    return [
+        (call.args[0], call.args[1])
+        for call in client.execute_write.call_args_list
+        if call.args[0].startswith("MATCH (e:Entity {id: $id})\nSET e:")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_resolved_mention_labels_the_node_it_merged_onto(mock_client):
+    """No MERGE runs on the merge path, so the label must be added explicitly.
+
+    The node may have been written before this ontology revision was active.
+    """
+    from neo4j_agent_memory.resolution.ontology import EntityResolution
+
+    memory = ShortTermMemory(mock_client, ontology=ONTOLOGY)
+    resolution = EntityResolution(
+        action="merged", canonical_name="TK-2210", matched_entity_id="node-1"
+    )
+
+    node_id = await memory._persist_entity(
+        ExtractedEntity(name="TK-2210", type="OBJECT", subtype="TICKET"),
+        resolution,
+        entity_name_to_id={},
+    )
+
+    assert node_id == "node-1"
+    assert _label_writes(mock_client) == [
+        ("MATCH (e:Entity {id: $id})\nSET e:SupportCase\nRETURN e.id AS id", {"id": "node-1"})
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_merge_under_the_default_ontology_costs_no_label_write(mock_client):
+    from neo4j_agent_memory.ontology import POLEO_ONTOLOGY
+    from neo4j_agent_memory.resolution.ontology import EntityResolution
+
+    memory = ShortTermMemory(mock_client, ontology=POLEO_ONTOLOGY)
+    await memory._persist_entity(
+        ExtractedEntity(name="Acme", type="ORGANIZATION"),
+        EntityResolution(action="merged", canonical_name="Acme", matched_entity_id="node-2"),
+        entity_name_to_id={},
+    )
+
+    assert _label_writes(mock_client) == []
+
+
+@pytest.mark.asyncio
+async def test_add_entity_labels_the_entity_it_merged_onto(mock_client):
+    from neo4j_agent_memory.memory.long_term import DeduplicationResult, Entity
+
+    existing_id = uuid4()
+    embedder = MagicMock()
+    embedder.embed = AsyncMock(return_value=[0.1, 0.2, 0.3])
+    # Deduplication only runs with an embedding.
+    memory = LongTermMemory(mock_client, embedder=embedder, ontology=ONTOLOGY)
+    memory._check_for_duplicates = AsyncMock(  # type: ignore[method-assign]
+        return_value=DeduplicationResult(
+            is_duplicate=True, action="merged", matched_entity_id=existing_id
+        )
+    )
+    memory._get_entity_by_id = AsyncMock(  # type: ignore[method-assign]
+        return_value=Entity(id=existing_id, name="TK-2210", type="OBJECT", subtype="TICKET")
+    )
+
+    entity, result = await memory.add_entity("TK-2210", "OBJECT", subtype="TICKET", enrich=False)
+
+    assert result.action == "merged"
+    assert entity.id == existing_id
+    assert _label_writes(mock_client) == [
+        (
+            "MATCH (e:Entity {id: $id})\nSET e:SupportCase\nRETURN e.id AS id",
+            {"id": str(existing_id)},
+        )
+    ]

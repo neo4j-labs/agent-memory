@@ -18,6 +18,7 @@ from neo4j_agent_memory.core.protocols import ShortTermProtocol
 from neo4j_agent_memory.extraction.base import ExtractedEntity, ExtractionResult
 from neo4j_agent_memory.graph import queries
 from neo4j_agent_memory.graph.query_builder import (
+    build_add_ontology_label_query,
     build_create_entity_query,
     build_label_set_clause,
 )
@@ -1760,6 +1761,15 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
                         queries.ADD_ENTITY_ALIAS,
                         {"id": target_id, "alias": surface},
                     )
+                # No MERGE runs on this path, so add the label the current
+                # ontology declares for the mention, as the create path's
+                # ON MATCH would.
+                subtype = getattr(entity, "subtype", None)
+                label_query = build_add_ontology_label_query(
+                    entity.type, subtype, self._node_label(entity.type, subtype)
+                )
+                if label_query is not None:
+                    await self._client.execute_write(label_query, {"id": target_id})
                 if stats is not None:
                     stats["entities_merged"] = stats.get("entities_merged", 0) + 1
                 return target_id
