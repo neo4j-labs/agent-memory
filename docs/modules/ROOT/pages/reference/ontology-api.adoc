@@ -77,7 +77,7 @@ TypeScript: `ontology.getMigration(jobId)`
 
 `dry_run=True` counts matching nodes (`total`) and mutates nothing (`processed = 0`). A failed step is recorded on the job (`errored`, `error_message`, `status = "failed"`) rather than raised. Either way the job is persisted as an `(:OntologyMigration)` node.
 
-`NotFoundError` if either version id is unknown. `ValueError` for a malformed mapping, an invalid Neo4j label, a target label the target version does not declare, or a source label the source version does not declare when the target declares no subtype. On a large graph, prefer a maintenance window, or run the equivalent relabel in batches with `apoc.periodic.iterate`.
+`NotFoundError` if either version id is unknown. `ValueError` for a malformed mapping, an invalid Neo4j label, a target label the target version does not declare, or a source label the source version does not declare when the target declares no subtype. On a large graph, prefer a maintenance window, or run the equivalent relabel in batches with `apoc.periodic.iterate`. For a complete rename-and-migrate run, see xref:how-to/migrate-a-bolt-ontology.adoc[Rename an ontology type and migrate a Bolt graph].
 
 == Return types
 

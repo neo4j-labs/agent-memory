@@ -89,9 +89,9 @@ retrying.
 - Python 3.10+
 - A NAMS API key from <https://memory.neo4jlabs.com>, on an endpoint with a
   `/vN` segment — the ontology routes need the REST transport
-- **No Neo4j, no `OPENAI_API_KEY`, no embedding provider.** `client.ontology` is
-  hosted-only; its bolt-side counterpart is
-  [`client.schema.adopt_existing_graph()`](../existing-graph/)
+- **No Neo4j, no `OPENAI_API_KEY`, no embedding provider.** Extraction and
+  embeddings run server-side. To run the same lifecycle against your own Neo4j,
+  use the bolt twin, [`ontology-lifecycle-bolt/`](../ontology-lifecycle-bolt/)
 
 ## Setup
 

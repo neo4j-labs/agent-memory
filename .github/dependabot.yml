@@ -144,6 +144,7 @@ updates:
       - "/examples/nams-langchain"
       - "/examples/ontology-extraction"
       - "/examples/ontology-lifecycle"
+      - "/examples/ontology-lifecycle-bolt"
       - "/examples/claude-code-team-memory"
     schedule:
       interval: "monthly"

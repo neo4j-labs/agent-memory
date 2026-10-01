@@ -1,0 +1,174 @@
+= Rename an ontology type and migrate a Bolt graph
+:page-product: agent-memory
+:page-pagination:
+:toclevels: 2
+:sectanchors:
+:icons: font
+:source-highlighter: highlight.js
+
+include::partial$backend-bolt-only.adoc[]
+
+Rename an entity type in an ontology that extraction has already used, and relabel the entities already in the graph, without re-ingesting a message. On Bolt the ontology is stored in your database, extraction runs in your process, and `migrate` relabels the nodes inline.
+
+This page runs one complete program: it imports an https://arrows.app[Arrows] diagram as revision 1 of a support-desk ontology, ingests a support transcript under it, renames `Ticket` to `SupportCase` in a strict revision 2, and migrates the extracted tickets. The same program ships in the repository as `examples/ontology-lifecycle-bolt/`.
+
+[NOTE]
+====
+To do this on NAMS, where the service extracts and the migration is a job you poll, see xref:how-to/use-ontologies.adoc[Activate and verify a workspace ontology] and the hosted twin of this program, `examples/ontology-lifecycle/`.
+====
+
+[WARNING]
+====
+The program leaves `support-desk` revision 2 active, in strict mode. Activation is per database: every client that connects to it with `schema_config.use_active_ontology=True`, the default, extracts against `support-desk` from then on. Run it against a dedicated AuraDB instance. <<_restore_the_previous_binding,Step 4>> shows how to put the previous binding back. The program keeps everything it writes.
+====
+
+== Prerequisites
+
+* Install the local extractor and embedder. Quote package extras in shell commands:
++
+[source,bash]
+----
+python -m pip install 'neo4j-agent-memory[gliner2,sentence-transformers]==0.7.0'
+----
++
+The first run downloads the GLiNER2.5 checkpoint `fastino/gliner2.5-base-v1` (about 407 MB) and the `all-MiniLM-L6-v2` embedder (about 90 MB). No API key is needed: the client runs with `llm=None`.
+* Use a dedicated AuraDB instance and export `NEO4J_URI`, `NEO4J_USERNAME`, and `NEO4J_PASSWORD` as shown in xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the Aura connection setup]. The program has no fallback values for them; `NEO4J_DATABASE` defaults to `neo4j`.
+
+== 1. Save the diagram and the program
+
+Create the directories:
+
+[source,bash]
+----
+mkdir -p ontology-lifecycle-bolt/schemas
+----
+
+The diagram declares four node labels and five relationships. `import_` converts it into an ontology draft.
+
+.Complete `ontology-lifecycle-bolt/schemas/support-desk.arrows.json`
+[%collapsible]
+====
+.Save as `ontology-lifecycle-bolt/schemas/support-desk.arrows.json`
+[source,json]
+----
+include::example$ontology-lifecycle-bolt/schemas/support-desk.arrows.json[]
+----
+====
+
+The program walks the whole lifecycle. The steps below explain the parts that differ from NAMS.
+
+.Complete `ontology-lifecycle-bolt/main.py`
+[%collapsible]
+====
+.Save as `ontology-lifecycle-bolt/main.py`
+[source,python]
+----
+include::example$ontology-lifecycle-bolt/main.py[]
+----
+====
+
+== 2. Run the program
+
+Run it from the directory that contains `ontology-lifecycle-bolt/`, with the Aura connection values exported:
+
+[source,bash]
+----
+python ontology-lifecycle-bolt/main.py
+----
+
+What happens, in order:
+
+. *Import and repair.* `import_` converts the diagram locally, and every label falls back to `OBJECT` with a warning. `repair_draft()` sets the POLE+O types (`Customer` to `PERSON`, `Order` and `Ticket` to `EVENT`) and gives every type a description, which GLiNER2.5 reads as an annotation guideline.
+. *Activate, then reconnect.* `create()` stores revision 1 and `activate()` binds it, but the connected client still extracts against the ontology it resolved when it connected. The program prints that, then reconnects, and the new client adopts revision 1.
+. *Ingest.* GLiNER2.5 extracts against revision 1. Each node is written with the label the ontology declares for its exact type and subtype, so the tickets become `:Entity:Event:Ticket`. The program stops with an error if no `:Ticket` node was extracted, rather than running a migration that changes nothing.
+. *Rename and diff.* `update()` stores revision 2 with `Ticket` renamed to `SupportCase` and the mode set to `strict`. On Bolt, `diff()` reports the rename as one entity type removed and one added, plus the mode change.
+. *Migrate.* A dry run counts the `:Ticket` nodes, then the real run relabels them `:SupportCase`. On Bolt, `migrate` runs inline, one transaction per label pair, and returns a finished job, which `get_migration()` reads back.
+. *Read back.* `activate()` binds revision 2 and the program reconnects, so the new client extracts against `SupportCase`, in strict mode.
+
+The run ends like this; ids and the session name differ per run:
+
+[source,text]
+----
+Migrating :Ticket onto revision 2:
+   dry run: 2 node(s) would be relabelled
+   migration 62a72b0761b54289bf5e50569173d12f: completed, 2 relabelled, 0 errored
+   client ontology after activating revision 2: support-desk (strict)
+
+Session ontology-lifecycle-bolt-93a9475d after the migration:
+   ...
+   TK-2210                EVENT:TICKET     :Entity:Event:SupportCase
+   TK-2211                EVENT:TICKET     :Entity:Event:SupportCase
+   ...
+   :Ticket 0, :SupportCase 2
+----
+
+A rerun reuses `support-desk` and stores the next two revisions. The tickets resolve onto the nodes the previous run migrated, get `:Ticket` again under the reactivated revision, and the migration renames them once more.
+
+== 3. Verify the migration
+
+Count the two labels in Neo4j Browser or `cypher-shell`:
+
+[source,cypher]
+----
+MATCH (e:Entity)
+WHERE e:Ticket OR e:SupportCase
+RETURN [label IN labels(e) WHERE label IN ['Ticket', 'SupportCase']] AS label, count(*) AS count
+----
+
+Every ticket appears under `SupportCase`, and none under `Ticket`. The migrated nodes keep `type: "EVENT"` and `subtype: "TICKET"`, because revision 2 declares `SupportCase` with the same POLE+O type and subtype.
+
+[#_restore_the_previous_binding]
+== 4. Restore the previous binding
+
+The last line of the output names the call that restores the binding the run found. With a connected `client`:
+
+* When another version was active before the run, activate it again:
++
+[source,python]
+----
+await client.ontology.activate("<previous version id>")
+----
+* When nothing was active, delete the ontology. That also deletes its revisions and migration records; the entities and their labels stay:
++
+[source,python]
+----
+await client.ontology.delete("<support-desk ontology id>")
+----
+
+Either way, clients that connect afterwards resolve their ontology again.
+
+== Apply this to your own ontology
+
+The program reduces to five calls on a connected Bolt `client`:
+
+[source,python]
+----
+revised = rename_entity_type(current_document, "Ticket", "SupportCase")
+v2 = await client.ontology.update(ontology_id, revised, validation_mode="strict")
+preview = await client.ontology.migrate(
+    ontology_id,
+    from_version_id=v1.id,
+    to_version_id=v2.id,
+    type_mappings=[("Ticket", "SupportCase")],
+    dry_run=True,
+)
+job = await client.ontology.migrate(
+    ontology_id,
+    from_version_id=v1.id,
+    to_version_id=v2.id,
+    type_mappings=[("Ticket", "SupportCase")],
+)
+await client.ontology.activate(v2.id)
+----
+
+* Rename relationship endpoints along with the type, as `rename_entity_type()` does. Otherwise revision 2 declares relationships to a type that no longer exists and fails validation.
+* `type_mappings` takes the ontology labels as you declared them. `migrate` matches and writes the same label the write paths give a node: PascalCase that keeps the label's own capitals.
+* Run the real migration in a maintenance window on a large graph. It holds one transaction per label pair.
+* Reconnect after `activate()`: a running client keeps the ontology it resolved when it connected.
+
+== See also
+
+* xref:how-to/ontology-driven-extraction.adoc[Drive extraction from an ontology], to declare the ontology this page evolves
+* xref:reference/ontology-api.adoc#bolt-migrate[`migrate` on Bolt], for the relabel rules and errors
+* xref:explanation/ontologies.adoc#bolt-vs-nams[Bolt and NAMS mechanics], for how the two backends differ
+* xref:how-to/use-ontologies.adoc[Activate and verify a workspace ontology], for the NAMS workflow

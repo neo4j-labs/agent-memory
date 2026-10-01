@@ -96,6 +96,8 @@ The method surface is the same on both backends; the mechanics behind it are not
 | Server-side and asynchronous after a write.
 |===
 
+The same rename runs on both backends in the repository's two lifecycle examples, `examples/ontology-lifecycle/` (NAMS) and `examples/ontology-lifecycle-bolt/`. xref:how-to/migrate-a-bolt-ontology.adoc[Rename an ontology type and migrate a Bolt graph] walks through the Bolt one.
+
 [[_relationship_to_server_side_extraction]]
 == Relationship to extraction
 

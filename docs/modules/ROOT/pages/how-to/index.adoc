@@ -43,6 +43,7 @@ anchor:_entity_extraction_knowledge_building[]
 * xref:how-to/entity-extraction.adoc[Extract and inspect entity candidates] -- Run the extraction pipeline over text and inspect the entities it finds.
 * xref:how-to/entity-extraction-schemas.adoc[Apply a custom entity extraction schema] -- Swap in a domain-specific GLiNER2.5 schema instead of the default POLE+O types.
 * xref:how-to/ontology-driven-extraction.adoc[Drive extraction from an ontology] -- Write a typed ontology, validate and compile it, activate it in the database, and store typed `RELATED_TO` edges with provenance.
+* xref:how-to/migrate-a-bolt-ontology.adoc[Rename an ontology type and migrate a Bolt graph] -- Rename a type in a stored ontology and relabel the entities already extracted, with an inline `migrate`.
 * xref:how-to/tune-entity-resolution.adoc[Tune entity resolution] -- Adjust the ingest-time resolver's thresholds, per-type overrides, alias gazetteer, review band and tenant scope, then measure the change with B-cubed.
 * xref:how-to/entity-extraction-batch.adoc[Account for batch and chunk extraction results] -- Reconcile entities extracted across batches or streamed document chunks.
 * xref:how-to/migrate-to-gliner2.adoc[Migrate to GLiNER2.5] -- Move off the removed GLiNER v1 and GLiREL stack: extras, model ids, old-to-new code, output shape and the `RELATED_TO` backfill.

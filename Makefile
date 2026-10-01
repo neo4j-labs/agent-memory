@@ -1,4 +1,4 @@
-.PHONY: help install install-all install-dev lint lint-fix format format-check typecheck ty check test test-unit test-integration test-integration-mcp test-e2e test-all test-docker test-ci test-no-docker test-quick test-file test-match test-aws test-nams-unit test-nams-integration test-nams-staging test-nams-sandbox test-nams-local test-nams coverage coverage-all coverage-ci coverage-mcp test-examples test-examples-quick test-examples-no-neo4j test-examples-docker test-examples-ci test-docs test-docs-syntax test-docs-build test-docs-links test-docs-integration test-docs-framework-contracts docs-render-check docs-render-install neo4j-start neo4j-stop neo4j-restart neo4j-logs neo4j-status neo4j-wait neo4j-wait-quiet neo4j-clean neo4j-shell clean build publish publish-test docs docs-install docs-serve docs-lint docs-clean docs-diagrams-list docs-diagrams-status docs-diagrams-missing docs-diagrams-manifest docs-diagrams-add-refs docs-diagrams-generate pre-commit ci ci-no-docker shell watch dev example-hello example-basic example-resolution example-enrichment example-langchain example-pydantic example-no-llm example-domain-schemas example-ontology-extraction example-existing-graph example-buffered-writes example-audit-trail example-eval-harness example-strands-session-manager example-strands-memory-store example-nams-quickstart example-ontology-lifecycle example-team-memory-doctor example-team-memory-seed examples examples-with-keys chat-agent-install chat-agent-backend chat-agent-frontend chat-agent chat-agent-backend-with-neo4j ts-install ts-build ts-test ts-test-unit ts-test-integration ts-lint ts-docs ts-conformance ts-pack ts-clean ts-test-examples
+.PHONY: help install install-all install-dev lint lint-fix format format-check typecheck ty check test test-unit test-integration test-integration-mcp test-e2e test-all test-docker test-ci test-no-docker test-quick test-file test-match test-aws test-nams-unit test-nams-integration test-nams-staging test-nams-sandbox test-nams-local test-nams coverage coverage-all coverage-ci coverage-mcp test-examples test-examples-quick test-examples-no-neo4j test-examples-docker test-examples-ci test-docs test-docs-syntax test-docs-build test-docs-links test-docs-integration test-docs-framework-contracts docs-render-check docs-render-install neo4j-start neo4j-stop neo4j-restart neo4j-logs neo4j-status neo4j-wait neo4j-wait-quiet neo4j-clean neo4j-shell clean build publish publish-test docs docs-install docs-serve docs-lint docs-clean docs-diagrams-list docs-diagrams-status docs-diagrams-missing docs-diagrams-manifest docs-diagrams-add-refs docs-diagrams-generate pre-commit ci ci-no-docker shell watch dev example-hello example-basic example-resolution example-enrichment example-langchain example-pydantic example-no-llm example-domain-schemas example-ontology-extraction example-ontology-lifecycle-bolt example-existing-graph example-buffered-writes example-audit-trail example-eval-harness example-strands-session-manager example-strands-memory-store example-nams-quickstart example-ontology-lifecycle example-team-memory-doctor example-team-memory-seed examples examples-with-keys chat-agent-install chat-agent-backend chat-agent-frontend chat-agent chat-agent-backend-with-neo4j ts-install ts-build ts-test ts-test-unit ts-test-integration ts-lint ts-docs ts-conformance ts-pack ts-clean ts-test-examples
 
 # Default target
 help:
@@ -60,6 +60,9 @@ help:
 	@echo "  make example-pydantic     PydanticAI 2.x agent (keyless)"
 	@echo "  make example-team-memory-doctor  Validate the editor MCP configs offline"
 	@echo "  make examples             Run every key-free example"
+	@echo ""
+	@echo "Examples (key-free, change the database's active ontology; not in 'make examples'):"
+	@echo "  make example-ontology-lifecycle-bolt  Ontology lifecycle on bolt: import, migrate"
 	@echo ""
 	@echo "Examples (need credentials):"
 	@echo "  make example-enrichment        Wikipedia/Diffbot enrichment"
@@ -656,6 +659,13 @@ example-domain-schemas:
 example-ontology-extraction:
 	@echo "Running the ontology-extraction example (typed extraction + resolution)..."
 	$(call run_example,examples/ontology-extraction/main.py)
+
+# Not in `make examples`: the run leaves the support-desk ontology active (and
+# strict) in the database, and every later client that connects with
+# use_active_ontology=True extracts against it.
+example-ontology-lifecycle-bolt:
+	@echo "Running the bolt ontology lifecycle (leaves support-desk active in the database)..."
+	$(call run_example,examples/ontology-lifecycle-bolt/main.py)
 
 # seed.py is idempotent; pass --reset (plus EXISTING_GRAPH_ALLOW_RESET=1) by
 # hand when you want the seed labels wiped first.

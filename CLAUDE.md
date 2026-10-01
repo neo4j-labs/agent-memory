@@ -2206,6 +2206,9 @@ make example-pydantic         # PydanticAI 2.x agent (keyless)
 make example-team-memory-doctor  # Validate the editor MCP configs offline
 make examples                 # Run every key-free example
 
+# Key-free, but leaves `support-desk` (strict) active in the database, so not in `make examples`
+make example-ontology-lifecycle-bolt  # Bolt ontology lifecycle: import, activate, migrate
+
 # Examples that need credentials
 make example-enrichment          # Wikipedia/Diffbot enrichment
 make example-nams-quickstart     # Hosted NAMS (MEMORY_API_KEY)
@@ -2235,6 +2238,7 @@ no README footer, no index row, or no test module. The shape of the tree:
 | Standalone scripts | `hello-memory/` (PEP 723), `basic_usage.py`, `entity_resolution.py`, `enrichment_example.py`, `langchain_agent.py`, `pydantic_ai_agent.py` |
 | v0.2 features | `existing-graph/`, `buffered-writes/`, `audit-trail/`, `eval-harness/` |
 | Runtime + tooling | `no_llm/`, `domain-schemas/` |
+| Ontologies on bolt | `ontology-extraction/`, `ontology-lifecycle-bolt/` (bolt twin of `ontology-lifecycle/`) |
 | Framework integrations | `strands-session-manager/`, `strands-memory-store/`, `google_adk_demo/`, `google_cloud_integration/`, `microsoft_agent_retail_assistant/` |
 | Full-stack apps | `full-stack-chat-agent/`, `lennys-memory/`, `financial-services-advisor/` (AWS Strands + Google ADK twins) |
 | TypeScript | `typescript/examples/` — ten examples, flagship `nextjs-memory-chat/` |

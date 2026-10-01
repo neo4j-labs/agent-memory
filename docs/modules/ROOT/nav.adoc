@@ -50,6 +50,7 @@
 **** xref:how-to/entity-extraction.adoc[Extract and inspect entity candidates]
 **** xref:how-to/entity-extraction-schemas.adoc[Apply a custom entity extraction schema]
 **** xref:how-to/ontology-driven-extraction.adoc[Drive extraction from an ontology]
+**** xref:how-to/migrate-a-bolt-ontology.adoc[Rename an ontology type and migrate a Bolt graph]
 **** xref:how-to/tune-entity-resolution.adoc[Tune entity resolution]
 **** xref:how-to/entity-extraction-batch.adoc[Account for batch and chunk extraction results]
 **** xref:how-to/migrate-to-gliner2.adoc[Migrate to GLiNER2.5]

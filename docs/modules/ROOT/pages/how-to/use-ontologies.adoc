@@ -3,7 +3,7 @@
 
 [IMPORTANT]
 ====
-icon:cloud[] *Available on NAMS: Yes. This procedure targets a NAMS workspace.* Since 0.7.0 a Bolt client has the same `client.ontology` methods, backed by `:Ontology` / `:OntologyVersion` nodes in your own database. On Bolt the templates are the eight built-in domain templates, and an activated version shapes local extraction from the client's next connection. For that workflow, see xref:how-to/ontology-driven-extraction.adoc[drive extraction from an ontology]; the per-method differences are in xref:reference/ontology-api.adoc[the ontology reference].
+icon:cloud[] *Available on NAMS: Yes. This procedure targets a NAMS workspace.* Since 0.7.0 a Bolt client has the same `client.ontology` methods, backed by `:Ontology` / `:OntologyVersion` nodes in your own database. On Bolt the templates are the eight built-in domain templates, and an activated version shapes local extraction from the client's next connection. For that workflow, see xref:how-to/ontology-driven-extraction.adoc[drive extraction from an ontology], and to rename a type and migrate a Bolt graph, xref:how-to/migrate-a-bolt-ontology.adoc[rename an ontology type and migrate a Bolt graph]; the per-method differences are in xref:reference/ontology-api.adoc[the ontology reference].
 ====
 
 To apply a domain schema to future NAMS writes, clone a template, choose the validation mode and activate its version ID.

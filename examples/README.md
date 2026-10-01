@@ -29,6 +29,7 @@ For examples using the Python `bolt` backend, first follow [the shared Aura setu
 | Run local models without an LLM API (Aura requires network access) | [`no_llm/`](#run-without-an-llm) |
 | Tune entity extraction for a specific domain | [`domain-schemas/`](#domain-schemas) |
 | Type your own domain, get typed relations and merged aliases out of extraction | [`ontology-extraction/`](#ontology-driven-extraction) |
+| Rename a type in your own Neo4j graph and migrate the entities already extracted | [`ontology-lifecycle-bolt/`](#ontology-driven-extraction) |
 | Resolve duplicate entities | [`entity_resolution.py`](#entity-resolution) |
 | Enrich entities with Wikipedia/Diffbot data | [`enrichment_example.py`](#enrichment) |
 | Use it from a framework | [`langchain_agent.py`](#langchain), [`pydantic_ai_agent.py`](#pydantic-ai), [`google_adk_demo/`](#google-adk-demo), [`microsoft_agent_retail_assistant/`](#microsoft-agent-retail-assistant) |
@@ -50,7 +51,7 @@ Run against the hosted [NAMS](https://memory.neo4jlabs.com) service — no Neo4j
 | [`nams-quickstart/`](nams-quickstart/) | Minimal end-to-end flow over the unified `MemoryClient` — a conversation, messages, an entity, a reasoning trace, `wait_for_extraction()`, and a read-only `client.query.cypher` round-trip. The same script body runs on bolt by flipping `backend`, so it doubles as the bolt-vs-NAMS diff. |
 | [`nams-fastapi/`](nams-fastapi/) | NAMS-backed memory inside a FastAPI service: one lifespan-managed client, per-user scoping from the authenticated request, the library's error taxonomy mapped onto HTTP status codes, a `/chat` route that reads assembled context before answering, and a `/search` route. |
 | [`nams-langchain/`](nams-langchain/) | The same `create_agent` + middleware agent as [`langchain_agent.py`](#langchain), against hosted NAMS — server-side extraction and embeddings, no Neo4j to run. |
-| [`ontology-lifecycle/`](ontology-lifecycle/) | The full NAMS ontology lifecycle: import an Arrows diagram into a typed schema, activate it, ingest under it, then rename a type and migrate the already-extracted entities — `import_`, `diff`, `migrate` + `get_migration` polling, with a `query.cypher` read-back. Hosted-only; the bolt twin is [`existing-graph/`](#existing-graph). |
+| [`ontology-lifecycle/`](ontology-lifecycle/) | The full NAMS ontology lifecycle: import an Arrows diagram into a typed schema, activate it, ingest under it, then rename a type and migrate the already-extracted entities — `import_`, `diff`, `migrate` + `get_migration` polling, with a `query.cypher` read-back. Runs on NAMS; the bolt twin is [`ontology-lifecycle-bolt/`](#ontology-driven-extraction). |
 | [`claude-code-team-memory/`](claude-code-team-memory/) | Shared memory for Claude Code, Claude Desktop and Cursor with **no agent code** — ready-to-copy `.mcp.json` / `claude_desktop_config.json` / `.cursor/mcp.json` files wiring the hosted NAMS MCP server (scope-dependent tools, OAuth) and the self-hosted `mcp serve` (6 or 16 tools) side by side, plus `provision_keys.py` (one rotatable `client.auth` key per developer), `seed_workspace.py` (`bulk_add_messages` → await extraction → read back) and `doctor.py` (key, config validity, tool surface, reachability, extraction status). |
 
 ```bash
@@ -127,6 +128,8 @@ These four examples cover the v0.2 feature drop. Each is self-contained, runs wi
 ### Ontology-driven extraction
 
 [`ontology-extraction/`](ontology-extraction/) — the v0.7 ontology surface end to end, from one `ontology.yaml`. Six support-desk labels mapped onto POLE+O with descriptions written as annotation guidelines, five relationship types with explicit source/target plus `unique_source` / `acyclic` / per-relation `threshold` constraints, and an alias gazetteer. Ingesting six messages shows GLiNER2.5 (JointIE) decoding entities and typed relations in one pass, three surface forms of one organization collapsing onto a single node (with the near-miss "Acme Bank" parked in the review band instead), `r.type` / `r.support` provenance on the edges, and `client.ontology` create → activate → update → diff on bolt. Keyless.
+
+[`ontology-lifecycle-bolt/`](ontology-lifecycle-bolt/) — the bolt twin of [`ontology-lifecycle/`](ontology-lifecycle/): the same Arrows diagram and support transcript, against your own Neo4j. `import_` converts the diagram locally (the script repairs the POLE+O types the conversion guesses), the client picks the activated revision up at its next connect, GLiNER2.5 writes the extracted tickets as `:Entity:Event:Ticket`, and an inline `migrate` relabels them `:SupportCase` after the rename. Keyless, but it leaves `support-desk` (strict) active in the database, so it runs only through `make example-ontology-lifecycle-bolt`, not `make examples`.
 
 ---
 
