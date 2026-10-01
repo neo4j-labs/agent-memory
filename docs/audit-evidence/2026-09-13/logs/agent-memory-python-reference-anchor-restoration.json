@@ -1,0 +1,417 @@
+[
+  {
+    "file": "docs/modules/ROOT/pages/reference/api/adapters.adoc",
+    "formerly_lost": [],
+    "added_compatibility": [],
+    "restored_inline_or_heading": []
+  },
+  {
+    "file": "docs/modules/ROOT/pages/reference/api/factory.adoc",
+    "formerly_lost": [
+      "_related"
+    ],
+    "added_compatibility": [
+      "_related"
+    ],
+    "restored_inline_or_heading": []
+  },
+  {
+    "file": "docs/modules/ROOT/pages/reference/api/llm-provider.adoc",
+    "formerly_lost": [
+      "_related"
+    ],
+    "added_compatibility": [
+      "_related"
+    ],
+    "restored_inline_or_heading": []
+  },
+  {
+    "file": "docs/modules/ROOT/pages/reference/api/long-term.adoc",
+    "formerly_lost": [
+      "_entity_operations",
+      "_parameters",
+      "_returns",
+      "_get_entity_by_name",
+      "_update_entity",
+      "_preference_operations",
+      "_parameters_2",
+      "_fact_operations",
+      "_deduplication_operations",
+      "_provenance_operations",
+      "_geospatial_operations",
+      "_graph_operations_nams",
+      "_entity_model",
+      "_example"
+    ],
+    "added_compatibility": [
+      "_entity_operations",
+      "_parameters",
+      "_returns",
+      "_preference_operations",
+      "_parameters_2",
+      "_fact_operations",
+      "_deduplication_operations",
+      "_provenance_operations",
+      "_geospatial_operations",
+      "_graph_operations_nams",
+      "_entity_model",
+      "_example"
+    ],
+    "restored_inline_or_heading": [
+      "_get_entity_by_name",
+      "_update_entity"
+    ]
+  },
+  {
+    "file": "docs/modules/ROOT/pages/reference/api/memory-client.adoc",
+    "formerly_lost": [
+      "_parameters",
+      "_graph",
+      "_parameters_2",
+      "_returns",
+      "_example",
+      "_returns_2",
+      "_returns_3",
+      "_context_manager",
+      "_thread_safety"
+    ],
+    "added_compatibility": [
+      "_parameters",
+      "_parameters_2",
+      "_returns",
+      "_example",
+      "_returns_2",
+      "_returns_3",
+      "_context_manager",
+      "_thread_safety"
+    ],
+    "restored_inline_or_heading": [
+      "_graph"
+    ]
+  },
+  {
+    "file": "docs/modules/ROOT/pages/reference/api/reasoning.adoc",
+    "formerly_lost": [
+      "_trace_operations",
+      "_parameters",
+      "_returns",
+      "_get_traces",
+      "_step_operations",
+      "_parameters_2",
+      "_get_steps",
+      "_tool_call_operations",
+      "_parameters_3",
+      "_search_operations",
+      "_search_traces",
+      "_returns_2",
+      "_statistics",
+      "_returns_3",
+      "_message_linking",
+      "_example"
+    ],
+    "added_compatibility": [
+      "_trace_operations",
+      "_parameters",
+      "_returns",
+      "_step_operations",
+      "_parameters_2",
+      "_tool_call_operations",
+      "_parameters_3",
+      "_search_operations",
+      "_returns_2",
+      "_statistics",
+      "_returns_3",
+      "_message_linking",
+      "_example"
+    ],
+    "restored_inline_or_heading": [
+      "_get_traces",
+      "_get_steps",
+      "_search_traces"
+    ]
+  },
+  {
+    "file": "docs/modules/ROOT/pages/reference/api/short-term.adoc",
+    "formerly_lost": [
+      "_message_operations",
+      "_parameters",
+      "_returns",
+      "_get_messages",
+      "_search_operations",
+      "_parameters_2",
+      "_returns_2",
+      "_extraction_status_nams",
+      "_session_operations",
+      "_returns_3",
+      "_get_conversation",
+      "_conversation_summaries",
+      "_generate_summary",
+      "_returns_4",
+      "_message_linking",
+      "_message_model",
+      "_example"
+    ],
+    "added_compatibility": [
+      "_message_operations",
+      "_parameters",
+      "_returns",
+      "_search_operations",
+      "_parameters_2",
+      "_returns_2",
+      "_extraction_status_nams",
+      "_session_operations",
+      "_returns_3",
+      "_conversation_summaries",
+      "_returns_4",
+      "_message_linking",
+      "_message_model",
+      "_example"
+    ],
+    "restored_inline_or_heading": [
+      "_get_messages",
+      "_get_conversation",
+      "_generate_summary"
+    ]
+  },
+  {
+    "file": "docs/modules/ROOT/pages/reference/cli.adoc",
+    "formerly_lost": [],
+    "added_compatibility": [],
+    "restored_inline_or_heading": []
+  },
+  {
+    "file": "docs/modules/ROOT/pages/reference/configuration.adoc",
+    "formerly_lost": [
+      "_configuration_methods",
+      "_memorysettings",
+      "_embedding_and_llm_three_accepted_shapes",
+      "_neo4j_configuration",
+      "_python_configuration",
+      "_environment_variables",
+      "_parameters",
+      "_embedding_configuration",
+      "_python_configuration_2",
+      "_environment_variables_2",
+      "_parameters_2",
+      "_embedding_providers",
+      "_extraction_configuration",
+      "_python_configuration_3",
+      "_environment_variables_3",
+      "_extractor_types",
+      "_merge_strategies",
+      "_schema_configuration",
+      "_python_configuration_4",
+      "_environment_variables_4",
+      "_schema_models",
+      "_resolution_configuration",
+      "_python_configuration_5",
+      "_environment_variables_5",
+      "_resolver_strategies",
+      "_llm_configuration",
+      "_python_configuration_6",
+      "_environment_variables_6",
+      "_memory_configuration",
+      "_python_configuration_7",
+      "_environment_variables_7",
+      "_search_configuration",
+      "_python_configuration_8",
+      "_environment_variables_8",
+      "_geocoding_configuration",
+      "_python_configuration_nominatim_free",
+      "_python_configuration_google_maps_higher_accuracy",
+      "_environment_variables_9",
+      "_parameters_3",
+      "_geocoding_providers",
+      "_usage_example",
+      "_geospatial_queries",
+      "_enrichment_configuration",
+      "_python_configuration_9",
+      "_environment_variables_10",
+      "_parameters_4",
+      "_enrichment_providers",
+      "_deduplication_configuration",
+      "_python_configuration_10",
+      "_environment_variables_11",
+      "_deduplication_strategies",
+      "_observability_configuration",
+      "_python_configuration_opentelemetry",
+      "_python_configuration_opik",
+      "_environment_variables_12",
+      "_parameters_5",
+      "_tracing_providers",
+      "_cli_configuration",
+      "_environment_variables_13",
+      "_configuration_file",
+      "_cli_commands",
+      "_complete_example",
+      "_python_configuration_11",
+      "_environment_variables_env_file",
+      "_configuration_precedence",
+      "_next_steps"
+    ],
+    "added_compatibility": [
+      "_configuration_methods",
+      "_embedding_and_llm_three_accepted_shapes",
+      "_neo4j_configuration",
+      "_python_configuration",
+      "_environment_variables",
+      "_parameters",
+      "_python_configuration_2",
+      "_environment_variables_2",
+      "_parameters_2",
+      "_embedding_providers",
+      "_python_configuration_3",
+      "_environment_variables_3",
+      "_extractor_types",
+      "_merge_strategies",
+      "_schema_configuration",
+      "_python_configuration_4",
+      "_environment_variables_4",
+      "_schema_models",
+      "_python_configuration_5",
+      "_environment_variables_5",
+      "_resolver_strategies",
+      "_python_configuration_6",
+      "_environment_variables_6",
+      "_memory_configuration",
+      "_python_configuration_7",
+      "_environment_variables_7",
+      "_python_configuration_8",
+      "_environment_variables_8",
+      "_python_configuration_nominatim_free",
+      "_python_configuration_google_maps_higher_accuracy",
+      "_environment_variables_9",
+      "_parameters_3",
+      "_geocoding_providers",
+      "_usage_example",
+      "_geospatial_queries",
+      "_python_configuration_9",
+      "_environment_variables_10",
+      "_parameters_4",
+      "_enrichment_providers",
+      "_python_configuration_10",
+      "_environment_variables_11",
+      "_deduplication_strategies",
+      "_python_configuration_opentelemetry",
+      "_python_configuration_opik",
+      "_environment_variables_12",
+      "_parameters_5",
+      "_tracing_providers",
+      "_environment_variables_13",
+      "_configuration_file",
+      "_cli_commands",
+      "_complete_example",
+      "_python_configuration_11",
+      "_environment_variables_env_file",
+      "_configuration_precedence",
+      "_next_steps"
+    ],
+    "restored_inline_or_heading": [
+      "_memorysettings",
+      "_embedding_configuration",
+      "_extraction_configuration",
+      "_resolution_configuration",
+      "_llm_configuration",
+      "_search_configuration",
+      "_geocoding_configuration",
+      "_enrichment_configuration",
+      "_deduplication_configuration",
+      "_observability_configuration",
+      "_cli_configuration"
+    ]
+  },
+  {
+    "file": "docs/modules/ROOT/pages/reference/environment-variables.adoc",
+    "formerly_lost": [
+      "_overview",
+      "_provider_strings",
+      "_aws_configuration",
+      "_deduplication_configuration",
+      "_observability",
+      "_testing",
+      "_example_configuration",
+      "_nams"
+    ],
+    "added_compatibility": [
+      "_overview",
+      "_provider_strings",
+      "_aws_configuration",
+      "_deduplication_configuration",
+      "_observability",
+      "_testing",
+      "_example_configuration",
+      "_nams"
+    ],
+    "restored_inline_or_heading": []
+  },
+  {
+    "file": "docs/modules/ROOT/pages/reference/extractors.adoc",
+    "formerly_lost": [
+      "_constructor",
+      "_parameters",
+      "_default_type_mapping",
+      "_example",
+      "_constructor_2",
+      "_parameters_2",
+      "_factory_methods",
+      "_example_2",
+      "_constructor_3",
+      "_parameters_3",
+      "_example_3",
+      "_constructor_4",
+      "_merge_strategies",
+      "_example_4",
+      "_builder_methods",
+      "_constructor_5",
+      "_example_5"
+    ],
+    "added_compatibility": [
+      "_constructor",
+      "_parameters",
+      "_default_type_mapping",
+      "_example",
+      "_constructor_2",
+      "_parameters_2",
+      "_factory_methods",
+      "_example_2",
+      "_constructor_3",
+      "_parameters_3",
+      "_example_3",
+      "_constructor_4",
+      "_merge_strategies",
+      "_example_4",
+      "_builder_methods",
+      "_constructor_5",
+      "_example_5"
+    ],
+    "restored_inline_or_heading": []
+  },
+  {
+    "file": "docs/modules/ROOT/pages/reference/rest-api.adoc",
+    "formerly_lost": [
+      "_base_url_versioning",
+      "_cypher_and_auth"
+    ],
+    "added_compatibility": [
+      "_base_url_versioning",
+      "_cypher_and_auth"
+    ],
+    "restored_inline_or_heading": []
+  },
+  {
+    "file": "docs/modules/ROOT/pages/reference/schema-objects.adoc",
+    "formerly_lost": [],
+    "added_compatibility": [],
+    "restored_inline_or_heading": []
+  },
+  {
+    "file": "docs/modules/ROOT/pages/reference/schemas.adoc",
+    "formerly_lost": [
+      "_schema_best_practices"
+    ],
+    "added_compatibility": [
+      "_schema_best_practices"
+    ],
+    "restored_inline_or_heading": []
+  }
+]

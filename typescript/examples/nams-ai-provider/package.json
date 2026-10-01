@@ -1,0 +1,30 @@
+{
+  "name": "agent-memory-example-nams-ai-provider",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "provider-mode": "tsx --env-file-if-exists=.env src/provider-mode.ts",
+    "middleware-mode": "tsx --env-file-if-exists=.env src/middleware-mode.ts",
+    "tools-mode": "tsx --env-file-if-exists=.env src/tools-mode.ts",
+    "hooks-mode": "tsx --env-file-if-exists=.env src/hooks-mode.ts",
+    "lint": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "^4.0",
+    "@neo4j-labs/agent-memory": "file:../..",
+    "@neo4j-labs/nams-ai-provider": "file:../../packages/vercel-ai-provider",
+    "ai": "^7.0",
+    "zod": "^4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.0"
+  }
+}

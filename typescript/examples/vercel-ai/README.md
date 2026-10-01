@@ -6,34 +6,34 @@
 
 The minimal wiring for `agentMemoryMiddleware` — the
 [Vercel AI SDK](https://sdk.vercel.ai) (`ai` 7) language-model middleware
-shipped by `@neo4j-labs/agent-memory` — against the hosted
+provided by the `@neo4j-labs/agent-memory` source checkout — against the hosted
 [Neo4j Agent Memory Service](https://memory.neo4jlabs.com).
 
 > ⚠️ **Neo4j Labs Project**
 >
 > This project is part of Neo4j Labs and is actively maintained, but not
-> officially supported. There are no SLAs or guarantees around backwards
-> compatibility and deprecation. For questions and support, please use
+> officially supported. There are no SLAs, backward-compatibility guarantees,
+> or scheduled deprecation commitments. APIs may change without notice. For questions and support, please use
 > the [Neo4j Community Forum](https://community.neo4j.com).
 
 ## What it shows
 
 - **One wrapped model is the whole integration.** `wrapLanguageModel({ model, middleware: agentMemoryMiddleware(client, { conversationId }) })`
-  — after that, every `generateText` / `streamText` call in the file is plain AI
-  SDK code with no memory-specific lines.
+  — non-streaming calls use this wrapper directly. The streaming CLI path also
+  owns its assistant write so it can await storage before exiting.
 - **Nothing is held in process.** Turn two's prompt contains turn one only
   because the middleware read it back out of the graph (specification-v4
   `transformParams`), and the assistant turns are persisted for it by
-  `wrapGenerate` and `wrapStream`.
+  `wrapGenerate`; the streamed assistant write is application-owned.
 - **Streaming is persisted too.** Turn three uses `streamText` and prints tokens
-  as they arrive; `wrapStream` accumulates the deltas and writes one assistant
-  message when the stream finishes.
+  as they arrive. With `persistResponses: false`, the script assembles the deltas
+  and awaits one explicit `addMessage` after a successful stream.
 - **Re-runs resume.** The script resolves a conversation (from
   `CONVERSATION_ID`, else the newest one it created for this user) instead of
   always creating one, so a second run continues the first.
 - **It prints what the graph actually holds** — the reflection, observation and
-  recent-message counts that will be injected on the next call, a preference
-  recalled across sessions, and the entities NAMS extracted in the background.
+  recent-message counts that will be injected on the next call, user messages recalled from the selected conversation, and matching workspace entities. Search matches do not establish which
+  conversation produced an entity.
 
 ## Where this sits
 
@@ -45,15 +45,42 @@ shipped by `@neo4j-labs/agent-memory` — against the hosted
 
 ## Prerequisites
 
-- Node.js 22+ (`ai` 7 requires it; Node 20 is EOL)
+- Node.js 22+ (the declared runtime floor)
 - A `MEMORY_API_KEY` from [memory.neo4jlabs.com](https://memory.neo4jlabs.com)
 - An `OPENAI_API_KEY` (override the model with `OPENAI_MODEL`)
+
+## Build the shared SDK first
+
+This is a source-checkout example. Its `file:../..` dependency and shared
+`../tsconfig.base.json` require the repository layout. From the repository root:
+
+```bash
+cd typescript
+npm ci
+npm run build
+cd examples/vercel-ai
+```
+
+Run the commands below from `typescript/examples/vercel-ai/`. Build **before**
+installing this example; package exports point at `typescript/dist/` and npm does
+not build the local SDK on installation. For standalone copies, follow the
+[copy checklist](../README.md#copying-an-example) and verify the selected npm
+artifact supplies every API used here.
 
 ## Run it
 
 ```bash
-cp .env.example .env       # set MEMORY_API_KEY and OPENAI_API_KEY
-npm install
+if [ ! -e .env ]; then
+  (umask 077; set -C; cat .env.example > .env)
+fi
+chmod 600 .env
+npm ci
+```
+
+Edit the private `.env` with `MEMORY_API_KEY` and `OPENAI_API_KEY` before
+running `npm start`. The commands preserve an existing file.
+
+```bash
 npm start
 ```
 
@@ -82,9 +109,8 @@ Created conversation 9f3c1b7e-… for vercel-ai-demo-user
 [assistant] Build an item-item recommender over euro-style titles first …
 
 Injected on the next call: 0 reflection(s), 1 observation(s), 6 recent message(s)
-Preferences recalled across sessions: 1
-  [games] Prefers euro-style board games with low randomness
-Entities extracted from the conversation: 2
+User messages in this conversation's context: 3
+Matching workspace entities: 2
   Euro-style board games (OBJECT)
   BoardGameGeek (ORGANIZATION)
 
@@ -96,6 +122,21 @@ count keeps climbing. Exact wording varies with the model; the structure does
 not. Reflection and observation counts grow as NAMS processes the conversation
 in the background, and entity extraction is asynchronous — the script waits for
 it with `longTerm.waitForExtraction` rather than racing a fixed delay.
+
+## Follow the maintained tutorials
+
+The programs in `src/tutorials/` have their own first-run and continuation
+instructions. Start with [store and read back hosted memory](../../../docs/modules/ROOT/pages/tutorials/hosted-quickstart-typescript.adoc),
+then continue to the [first agent](../../../docs/modules/ROOT/pages/tutorials/first-agent-memory-typescript.adoc),
+[conversation restart](../../../docs/modules/ROOT/pages/tutorials/conversation-memory-typescript.adoc),
+and [entity inspection](../../../docs/modules/ROOT/pages/tutorials/knowledge-graph-typescript.adoc) lessons.
+
+Use `.env.tutorial.example` for those lessons, creating `.env` only when it is
+missing. It describes `gpt-4o-mini` and the tutorials' explicit conversation
+handling. The `.env.example` template and `npm start` instructions above belong
+to the general demo: it defaults to `gpt-5-mini` and can resume the newest
+conversation for `DEMO_USER_ID`. Keep existing private configuration when
+moving between them; edit only the settings needed by the selected program.
 
 ## Tests
 
@@ -125,5 +166,4 @@ This is a Neo4j Labs project — community supported, no SLA. Ask questions on t
 
 ---
 
-_Verified against @neo4j-labs/agent-memory 0.5.0-dev (in-tree), ai 7.0.97,
-@ai-sdk/openai 4.0.65, @ai-sdk/provider 4.0.13, Node 22+ — 2026-09-10._
+_Compatibility scope: this example targets the current source checkout and its committed package/lock files. Offline tests validate the exercised contracts; they do not establish published-package availability, a live model result, or deployed NAMS behavior. Use the runtime floor above; record the actual package/runtime versions when verifying a release or deployment._

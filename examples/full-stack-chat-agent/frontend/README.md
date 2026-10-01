@@ -23,8 +23,8 @@ in [`typescript/`](../../../typescript) (`@neo4j-labs/agent-memory`).
 
 ## Prerequisites
 
-- **Node.js 22 LTS or newer** (`engines.node: ">=22"`; Node 18 and 20 are EOL,
-  and Next 16 requires ≥ 20.9)
+- **Node.js 22.13+ on the 22 release line, or Node.js 24**, for development and checks.
+  The locked lint/test toolchain sets this floor independently of the TypeScript memory SDK.
 - The backend running and reachable — see [`../README.md`](../README.md)
 
 ## Run it
@@ -163,7 +163,9 @@ are welcome at
 
 ---
 
-_Verified against `neo4j-agent-memory` 0.6.0-dev with Next 16.3.4, React 19.3.0,
-Chakra UI 3.37.0, `@neo4j-nvl/*` 1.2.1, TypeScript 5.9 and Node 25 on
-2026-09-10 (`npm ci && npm run type-check && npm run lint && npm run build`
-all clean; UI verified against a stubbed backend)._
+**Historical verification report — 2026-09-10.** The following records a prior checkout/test report. Its development-version labels, passing counts, and release-availability statements are historical, not evidence of current package compatibility.
+
+> _Verified against `neo4j-agent-memory` 0.6.0-dev with Next 16.3.4, React 19.3.0,
+> Chakra UI 3.37.0, `@neo4j-nvl/*` 1.2.1, TypeScript 5.9 and Node 25 on
+> 2026-09-10 (`npm ci && npm run type-check && npm run lint && npm run build`
+> all clean; UI verified against a stubbed backend)._

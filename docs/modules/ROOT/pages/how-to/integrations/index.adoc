@@ -1,195 +1,74 @@
-= Agent Framework Integrations
+= Agent framework integrations
 :page-product: agent-memory
 :page-pagination:
 :description: Integrate Neo4j Agent Memory with popular AI agent frameworks.
 :keywords: langchain, pydantic-ai, llamaindex, crewai, openai, agents, integration
 
-Neo4j Agent Memory provides official integrations for five popular agent frameworks, enabling persistent memory storage backed by Neo4j's graph database.
+See also xref:how-to/typescript/integrations-overview.adoc[the TypeScript integrations overview] for the equivalent guides in the TypeScript SDK.
 
-== Available Integrations
+Neo4j Agent Memory provides official integrations for eleven popular agent frameworks and cloud providers, enabling persistent memory storage backed by Neo4j's graph database.
 
-[cols="1,2,1", options="header"]
+== Available integrations
+
+// Historical section links: the former Quick start, Quick examples and
+// Integration guides sections are now this table.
+anchor:_quick_start[]anchor:_quick_examples[]anchor:_integration_guides[]
+
+[cols="2,3", options="header"]
 |===
-| Framework | Use Case | Status
+| Framework | Use Case
 
-| xref:how-to/integrations/langchain.adoc[LangChain]
+| anchor:_langchain[]xref:how-to/integrations/langchain.adoc[Use with LangChain]
 | Chains and agents with conversation memory
-| ✅ Production Ready
 
-| xref:how-to/integrations/pydantic-ai.adoc[PydanticAI]
-| Modern type-safe agents with automatic tracing
-| ✅ Production Ready
-
-| xref:how-to/integrations/llamaindex.adoc[LlamaIndex]
+| anchor:_llamaindex[]xref:how-to/integrations/llamaindex.adoc[Use with LlamaIndex]
 | RAG applications with document + graph retrieval
-| ✅ Production Ready
 
-| xref:how-to/integrations/crewai.adoc[CrewAI]
+| anchor:_pydanticai[]xref:how-to/integrations/pydantic-ai.adoc[Use with PydanticAI]
+| Modern type-safe agents with automatic tracing
+
+| anchor:_crewai[]xref:how-to/integrations/crewai.adoc[Use with CrewAI]
 | Multi-agent systems with shared memory
-| ✅ Production Ready
 
-| xref:how-to/integrations/openai-agents.adoc[OpenAI Agents SDK]
+| anchor:_openai_agents_sdk[]xref:how-to/integrations/openai-agents.adoc[Use with the OpenAI Agents SDK]
 | OpenAI function calling with persistent memory
-| ✅ Production Ready
 
-| xref:how-to/integrations/google-cloud.adoc[Google Cloud]
-| Vertex AI embeddings, ADK agents, MCP server
-| ✅ Production Ready
+| xref:how-to/integrations/google-cloud.adoc[Use Vertex AI embeddings with Neo4j]
+| Vertex AI embeddings for a Neo4j-backed client, with links to the ADK and MCP guides
 
-| xref:how-to/integrations/aws-strands.adoc[AWS Strands Agents]
+| anchor:_google_adk[]xref:how-to/integrations/google-adk.adoc[Use with Google ADK]
+| Memory service for ADK `Runner` agents
+
+| anchor:_aws_strands_agents[]xref:how-to/integrations/aws-strands.adoc[Use with Strands agents]
 | AWS Strands SDK with Bedrock and Context Graph tools
-| ✅ Production Ready
 
-| xref:how-to/integrations/aws-bedrock-embeddings.adoc[Amazon Bedrock Embeddings]
+| xref:how-to/integrations/aws-bedrock-embeddings.adoc[Use Amazon Bedrock embeddings]
 | Titan and Cohere embeddings via Bedrock
-| ✅ Production Ready
 
-| xref:how-to/integrations/aws-hybrid-memory.adoc[AWS Hybrid Memory]
-| AgentCore + Context Graphs combined
-| ✅ Production Ready
+| xref:how-to/integrations/aws-hybrid-memory.adoc[Route memory searches with the hybrid provider]
+| Route message, entity and preference searches inside one Neo4j-backed client
 
-| xref:how-to/integrations/microsoft-agent.adoc[Microsoft Agent Framework]
+| anchor:_microsoft_agent_framework[]xref:how-to/integrations/microsoft-agent.adoc[Use with Microsoft Agent Framework]
 | Context providers, GDS algorithms, and graph-enhanced memory
-| ✅ Production Ready
 |===
 
-== Quick Start
+All of the integrations above are experimental and community-supported.
 
-Choose your framework and install:
+== Choosing a framework
 
-[source,bash]
-----
-# LangChain
-pip install neo4j-agent-memory[langchain]
+Not sure which integration to use? See the xref:explanation/framework-comparison.adoc[framework comparison guide] for a detailed comparison of features, performance, and use cases.
 
-# PydanticAI
-pip install neo4j-agent-memory[pydantic-ai]
-
-# LlamaIndex
-pip install neo4j-agent-memory[llamaindex]
-
-# CrewAI
-pip install neo4j-agent-memory[crewai]
-
-# OpenAI Agents SDK
-pip install neo4j-agent-memory[openai-agents]
-
-# Google Cloud (Vertex AI + ADK + MCP)
-pip install neo4j-agent-memory[google,mcp]
-
-# AWS Strands Agents
-pip install neo4j-agent-memory[aws,strands]
-
-# All frameworks
-pip install neo4j-agent-memory[all]
-----
-
-== Quick Examples
-
-=== LangChain
-
-[source,python]
-----
-from neo4j_agent_memory.integrations.langchain import Neo4jAgentMemory
-
-memory = Neo4jAgentMemory(memory_client=client, session_id="user-123")
-context = memory.load_memory_variables({"input": "query"})
-memory.save_context({"input": "Hello"}, {"output": "Hi!"})
-----
-
-=== PydanticAI
-
-[source,python]
-----
-from neo4j_agent_memory.integrations.pydantic_ai import MemoryDependency
-
-deps = MemoryDependency(memory_client=client, session_id="user-123")
-context = await deps.get_context("query")
-----
-
-=== LlamaIndex
-
-[source,python]
-----
-from neo4j_agent_memory.integrations.llamaindex import Neo4jLlamaIndexMemory
-
-memory = Neo4jLlamaIndexMemory(memory_client=client, session_id="user-123")
-nodes = memory.get(input="query")
-----
-
-=== CrewAI
-
-[source,python]
-----
-from neo4j_agent_memory.integrations.crewai import Neo4jCrewMemory
-
-memory = Neo4jCrewMemory(memory_client=client, crew_id="my-crew")
-memory.remember("Important fact", metadata={"type": "fact"})
-----
-
-=== OpenAI Agents SDK
-
-[source,python]
-----
-from neo4j_agent_memory.integrations.openai_agents import Neo4jOpenAIMemory
-
-memory = Neo4jOpenAIMemory(memory_client=client, session_id="user-123")
-messages = await memory.get_conversation()
-----
-
-=== Google ADK
-
-[source,python]
-----
-from neo4j_agent_memory.integrations.google_adk import Neo4jMemoryService
-
-memory_service = Neo4jMemoryService(memory_client=client, user_id="user-123")
-await memory_service.add_session_to_memory(session)
-results = await memory_service.search_memory("query")
-----
-
-=== AWS Strands Agents
-
-[source,python]
-----
-from strands import Agent
-from neo4j_agent_memory.integrations.strands import context_graph_tools
-
-tools = context_graph_tools(
-    neo4j_uri="neo4j+s://...",
-    neo4j_password="...",
-    embedding_provider="bedrock",
-)
-
-agent = Agent(model="anthropic.claude-sonnet-4-20250514-v1:0", tools=tools)
-----
-
-=== Microsoft Agent Framework
-
-[source,python]
-----
-from neo4j_agent_memory.integrations.microsoft_agent import Neo4jMicrosoftMemory
-
-memory = Neo4jMicrosoftMemory(memory_client=client, session_id="user-123")
-# Use context provider with Agent
-agent = chat_client.as_agent(context_providers=[memory.context_provider])
-----
-
-== Choosing a Framework
-
-Not sure which integration to use? See the xref:explanation/framework-comparison.adoc[Framework Comparison Guide] for a detailed comparison of features, performance, and use cases.
-
-== Common Patterns
+== Common patterns
 
 All integrations share these common capabilities:
 
-=== Three-Layer Memory
+=== Three-layer memory
 
 * **Short-Term**: Conversation history within a session
 * **Long-Term**: Entities, preferences, and facts across sessions
 * **Reasoning**: Task traces and tool usage patterns
 
-=== Semantic Search
+=== Semantic search
 
 All integrations support semantic search via embeddings:
 
@@ -197,23 +76,10 @@ All integrations support semantic search via embeddings:
 * Find related entities
 * Discover relevant preferences
 
-=== Entity Extraction
+=== Entity extraction
 
 Automatically extract entities from conversations:
 
 * People, organizations, locations
 * Events and concepts
 * Custom entity types
-
-== Integration Guides
-
-* xref:how-to/integrations/langchain.adoc[LangChain Integration] - Memory and retriever for chains
-* xref:how-to/integrations/pydantic-ai.adoc[PydanticAI Integration] - Type-safe agents with tracing
-* xref:how-to/integrations/llamaindex.adoc[LlamaIndex Integration] - RAG with TextNode support
-* xref:how-to/integrations/crewai.adoc[CrewAI Integration] - Multi-agent shared memory
-* xref:how-to/integrations/openai-agents.adoc[OpenAI Agents Integration] - Function tools for OpenAI
-* xref:how-to/integrations/google-cloud.adoc[Google Cloud Integration] - Vertex AI, ADK, MCP server
-* xref:how-to/integrations/aws-strands.adoc[AWS Strands Integration] - Bedrock-powered agents with Context Graph
-* xref:how-to/integrations/aws-bedrock-embeddings.adoc[AWS Bedrock Embeddings] - Titan embedding configuration
-* xref:how-to/integrations/aws-hybrid-memory.adoc[AWS Hybrid Memory] - Combined memory providers
-* xref:how-to/integrations/microsoft-agent.adoc[Microsoft Agent Framework] - Context providers with GDS

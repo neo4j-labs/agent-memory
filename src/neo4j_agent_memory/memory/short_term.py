@@ -88,6 +88,22 @@ def _deserialize_metadata(metadata_str: str | None) -> dict[str, Any]:
         return {}
 
 
+def _stored_entity_id(rows: Any, generated_id: str) -> str:
+    """Return the id of the entity an extracted-entity MERGE wrote to.
+
+    ``build_create_entity_query`` MERGEs on ``(name, type)`` and sets ``id``
+    only ON CREATE, so when the entity already exists the freshly generated id
+    names no node. Links and relations must use the id the query returned.
+    Falls back to ``generated_id`` when the write returned no row.
+    """
+    if isinstance(rows, list) and rows:
+        node = rows[0].get("e") if isinstance(rows[0], dict) else None
+        stored = node.get("id") if isinstance(node, dict) else None
+        if stored is not None:
+            return str(stored)
+    return generated_id
+
+
 def _to_python_datetime(neo4j_datetime: Any) -> datetime:
     """Convert Neo4j DateTime to Python datetime."""
     if neo4j_datetime is None:
@@ -589,11 +605,18 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         Args:
             session_id: Session identifier
             messages: List of message dicts with 'role' and 'content' keys.
-                     Optional keys: 'metadata', 'timestamp' (ISO format string)
+                     Optional keys: 'metadata', 'timestamp' (ISO format string).
+                     Messages without a timestamp are stamped in list order,
+                     after the conversation's last message.
             batch_size: Number of messages per transaction batch
-            generate_embeddings: Whether to generate embeddings for messages.
-                                Can be set to False and called separately with
-                                generate_embeddings_batch() for deferred processing.
+            generate_embeddings: Whether to generate embeddings for messages and,
+                                with ``extract_entities=True``, for the names of the
+                                entities extracted from them. Can be set to False
+                                and called separately with generate_embeddings_batch()
+                                for deferred processing; the embedder is then never
+                                called. Extracted entities are stored without an
+                                embedding until a later extraction (for example
+                                extract_entities_from_session()) embeds them.
             extract_entities: Whether to extract entities (disabled by default for
                             performance - can use extract_entities_from_session() later)
             extract_relations: Whether to extract and store relations between entities
@@ -618,10 +641,6 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
 
         total = len(messages)
         all_created: list[Message] = []
-
-        # Get existing last message before any inserts (for linking)
-        existing_last_id = await self._get_last_message_id(conv_id)
-        previous_last_id: str | None = existing_last_id
 
         # Process in batches
         for batch_num, i in enumerate(range(0, total, batch_size)):
@@ -671,7 +690,9 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
                     batch_data[j]["embedding"] = emb
                     batch_messages[j].embedding = emb
 
-            # Insert batch into database
+            # Insert and link the batch in one transaction: the query locks the
+            # conversation, reads its tail, creates the messages in input order
+            # with increasing timestamps, and chains them after the tail.
             await self._client.execute_write(
                 queries.CREATE_MESSAGES_BATCH,
                 {
@@ -679,19 +700,6 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
                     "messages": batch_data,
                 },
             )
-
-            # Create message links for this batch
-            msg_ids = [bd["id"] for bd in batch_data]
-            is_first_batch = batch_num == 0 and existing_last_id is None
-            await self._create_message_links(
-                conv_id,
-                msg_ids,
-                previous_last_id,
-                create_first_message=is_first_batch,
-            )
-
-            # Update previous_last_id for next batch
-            previous_last_id = msg_ids[-1] if msg_ids else previous_last_id
 
             all_created.extend(batch_messages)
 
@@ -709,6 +717,7 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
                     msg,
                     extract_relations=extract_relations,
                     user_identifier=user_identifier,
+                    embed_entities=generate_embeddings,
                 )
 
         return all_created
@@ -896,7 +905,9 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
             extract_entities: Whether to extract entities from content. Has
                 no effect when ``extraction_mode != 'auto'``.
             extract_relations: Whether to extract and store relations between entities
-            generate_embedding: Whether to generate embedding
+            generate_embedding: Whether to embed the message and, when entities
+                are extracted, their names. With False the embedder is never
+                called and extracted entities are stored without an embedding.
             metadata: Optional metadata
             extraction_mode: How to populate MENTIONS edges for this message.
                 ``'auto'`` (default): run the configured extractor pipeline.
@@ -965,6 +976,7 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
                     message,
                     extract_relations=extract_relations,
                     user_identifier=user_identifier,
+                    embed_entities=generate_embedding,
                 )
 
         return message
@@ -1225,9 +1237,21 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         message linking was implemented. New messages automatically have these
         relationships created.
 
-        The migration:
-        - Creates FIRST_MESSAGE relationship from each Conversation to its first message
-        - Creates NEXT_MESSAGE relationships between messages based on timestamp order
+        The migration links each conversation's messages into one chain:
+        - FIRST_MESSAGE from the Conversation to its earliest message
+        - NEXT_MESSAGE between consecutive messages in timestamp order. Messages
+          that share a timestamp, as every batch written by
+          ``add_messages_batch`` in 0.6.0 does, keep the order of the single
+          chain that already links them; tied messages that no chain start
+          reaches, or that are not linked at all, fall back to message id
+          order. On a batch where the 0.6.0 migration overlaid its id-ordered
+          links, the tied messages still end up in one chain, but their order
+          can mix input and id order.
+        - Every other FIRST_MESSAGE or NEXT_MESSAGE link in the conversation is
+          removed, which repairs a chain forked by concurrent appends.
+
+        Links that are already correct are left alone, so running it again is
+        safe.
 
         Returns:
             Dictionary mapping conversation_id to number of messages linked
@@ -1499,36 +1523,16 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
             },
         )
 
-    async def _get_last_message_id(self, conversation_id: UUID) -> str | None:
-        """Get the ID of the last message in a conversation (one without outgoing NEXT_MESSAGE)."""
-        results = await self._client.execute_read(
-            queries.GET_LAST_MESSAGE,
-            {"conversation_id": str(conversation_id)},
-        )
-        if not results:
-            return None
-        return cast(str, results[0]["m"]["id"])
+    async def _embed_entity_names(self, names: list[str]) -> list[list[float] | None]:
+        """Embed extracted entity names in one call, as ``add_entity`` embeds a name.
 
-    async def _create_message_links(
-        self,
-        conversation_id: UUID,
-        message_ids: list[str],
-        previous_last_id: str | None,
-        create_first_message: bool,
-    ) -> None:
-        """Create NEXT_MESSAGE links for a batch of messages."""
-        if not message_ids:
-            return
-
-        await self._client.execute_write(
-            queries.CREATE_MESSAGE_LINKS,
-            {
-                "conversation_id": str(conversation_id),
-                "message_ids": message_ids,
-                "previous_last_id": previous_last_id,
-                "create_first_message": create_first_message,
-            },
-        )
+        Without an embedder every entity is stored with no embedding, which
+        leaves it out of ``long_term.search_entities``.
+        """
+        if not names or self._embedder is None:
+            return [None] * len(names)
+        embeddings = await self._embedder.embed_batch(names)
+        return list(embeddings)
 
     def _ingest_resolver(self) -> Any | None:
         """The resolver to use on the ingestion path, or ``None``.
@@ -1596,6 +1600,7 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         *,
         user_identifier: str | None = None,
         stats: dict[str, int] | None = None,
+        embed_entities: bool = True,
     ) -> tuple[dict[str, str], dict[str, str]]:
         """Resolve, store and link every entity extracted from one message.
 
@@ -1622,6 +1627,11 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
                 ``"entities_merged"`` are incremented per mention, so callers
                 can report how many *nodes* an ingest produced rather than how
                 many mentions it saw.
+            embed_entities: Whether to embed the mention names. They are
+                embedded in one ``embed_batch`` call, which resolution reuses.
+                False (the caller turned embeddings off) never calls the
+                embedder: new entities are stored without an embedding and
+                resolution runs without its embedding component.
 
         Returns:
             ``(entity_name_to_id, mention_id_to_node_id)`` — the lowercased
@@ -1635,12 +1645,21 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         if not result.entities:
             return entity_name_to_id, mention_id_to_node_id
 
+        names = [entity.name for entity in result.entities]
+        entity_embeddings: list[list[float] | None] = (
+            await self._embed_entity_names(names) if embed_entities else [None] * len(names)
+        )
+
         resolutions: list[EntityResolution | None] = [None] * len(result.entities)
         resolver = self._ingest_resolver()
         if resolver is not None:
             try:
                 resolutions = list(
-                    await resolver.resolve_episode(result.entities, user_identifier=user_identifier)
+                    await resolver.resolve_episode(
+                        result.entities,
+                        user_identifier=user_identifier,
+                        embeddings=entity_embeddings,
+                    )
                 )
             except Exception:
                 # Resolution is an enhancement, never a gate on storing the
@@ -1652,9 +1671,15 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
                 )
                 resolutions = [None] * len(result.entities)
 
-        for entity, resolution in zip(result.entities, resolutions):
+        for entity, resolution, entity_embedding in zip(
+            result.entities, resolutions, entity_embeddings, strict=True
+        ):
             node_id = await self._persist_entity(
-                entity, resolution, entity_name_to_id=entity_name_to_id, stats=stats
+                entity,
+                resolution,
+                entity_name_to_id=entity_name_to_id,
+                stats=stats,
+                embedding=entity_embedding,
             )
             if node_id is None:
                 continue
@@ -1683,6 +1708,7 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         *,
         entity_name_to_id: dict[str, str],
         stats: dict[str, int] | None = None,
+        embedding: list[float] | None = None,
     ) -> str | None:
         """Write (or reuse) the node for one mention and return its id.
 
@@ -1695,6 +1721,9 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
             stats: Optional counter dict, incremented under
                 ``"entities_merged"`` or ``"entities_created"`` according to
                 what this mention actually did.
+            embedding: Embedding of the mention name, written with the node.
+                ``None`` stores a new node without one and leaves an existing
+                node's embedding unchanged.
 
         Returns:
             The node id the message should be linked to, or ``None`` when
@@ -1738,7 +1767,7 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
                 )
                 or entity.name,
                 "description": None,
-                "embedding": None,
+                "embedding": embedding,
                 "confidence": entity.confidence,
                 "metadata": self._entity_metadata(entity, resolution),
                 "location": None,  # Required for LOCATION entities
@@ -1748,8 +1777,7 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         # ON MATCH keeps its original id and the freshly minted one is
         # discarded. Adopt what the database actually holds, otherwise every
         # later write keyed on the generated id silently does nothing.
-        if rows and rows[0].get("e") and rows[0]["e"].get("id"):
-            entity_id = str(rows[0]["e"]["id"])
+        entity_id = _stored_entity_id(rows, entity_id)
 
         if stats is not None:
             stats["entities_created"] = stats.get("entities_created", 0) + 1
@@ -1787,14 +1815,22 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         *,
         extract_relations: bool = True,
         user_identifier: str | None = None,
+        embed_entities: bool = True,
     ) -> None:
         """Extract entities from message and link them.
+
+        Runs after the message is stored, so an extractor or embedder error
+        raises with the message already written.
 
         Args:
             message: The message to extract entities from
             extract_relations: Whether to also extract and store relations between entities
             user_identifier: Tenant this message belongs to, used to scope
                 resolution candidates when ``resolution.scope="user"``.
+            embed_entities: Whether to embed the extracted entity names. False
+                (the caller turned embeddings off) never calls the embedder and
+                stores new entities without an embedding; an existing entity
+                keeps the embedding it has.
         """
         if self._extractor is None:
             return
@@ -1809,7 +1845,10 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         result = self._apply_ontology(result)
 
         entity_name_to_id, mention_id_to_node_id = await self._persist_entities(
-            result, str(message.id), user_identifier=user_identifier
+            result,
+            str(message.id),
+            user_identifier=user_identifier,
+            embed_entities=embed_entities,
         )
 
         # Store extracted relations

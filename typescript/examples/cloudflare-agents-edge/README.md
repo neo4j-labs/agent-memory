@@ -12,8 +12,8 @@ hosted [Neo4j Agent Memory Service](https://memory.neo4jlabs.com) reached over
 > ⚠️ **Neo4j Labs Project**
 >
 > This project is part of Neo4j Labs and is actively maintained, but not
-> officially supported. There are no SLAs or guarantees around backwards
-> compatibility and deprecation. For questions and support, please use the
+> officially supported. There are no SLAs, backward-compatibility guarantees,
+> or scheduled deprecation commitments. APIs may change without notice. For questions and support, please use the
 > [Neo4j Community Forum](https://community.neo4j.com).
 
 ## What it shows
@@ -33,11 +33,12 @@ hosted [Neo4j Agent Memory Service](https://memory.neo4jlabs.com) reached over
   here is built per request from `env`, and a missing secret fails with a message
   naming `wrangler secret put`, not a NAMS 401 you have to reverse-engineer.
 - **`waitUntil`, not fire-and-forget.** `agentMemoryMiddleware` persists the
-  assistant turn without awaiting it, which is right on a long-lived Node process
-  and a coin flip on Workers. This example sets `persistResponses: false`, writes
+  assistant turn without exposing a completion promise, so a runtime can stop
+  before that write finishes. This example sets `persistResponses: false`, writes
   the turn in `streamText`'s `onEnd`, and hands that promise to
-  `ctx.waitUntil` — the one genuinely edge-specific change in the file, and the
-  one the test suite asserts.
+  `ctx.waitUntil`. If the client disconnects mid-stream it settles without
+  storing a partial response; if the model fails it settles and logs the
+  failure. The suite checks all three endings.
 - **Memory costs are measured, not guessed.** Each response carries a
   `Server-Timing: nams;dur=…;desc="N requests"` header, summed from the SDK's own
   `logger` events. You can see what context assembly costs per turn without
@@ -78,10 +79,28 @@ conversation-scoped. To ask "which conversations mentioned this entity", use
 - An `OPENAI_API_KEY` (override the model with the `OPENAI_MODEL` var in
   `wrangler.jsonc`)
 
+## Build the shared SDK first
+
+This is a source-checkout example. Its `file:../..` dependency and shared
+`../tsconfig.base.json` require the repository layout. From the repository root:
+
+```bash
+cd typescript
+npm ci
+npm run build
+cd examples/cloudflare-agents-edge
+```
+
+Run the commands below from `typescript/examples/cloudflare-agents-edge/`. Build **before**
+installing this example; package exports point at `typescript/dist/` and npm does
+not build the local SDK on installation. For standalone copies, follow the
+[copy checklist](../README.md#copying-an-example) and verify the selected npm
+artifact supplies every API used here.
+
 ## Run it
 
 ```bash
-npm install
+npm ci
 cp .dev.vars.example .dev.vars    # then put your real keys in .dev.vars
 npm run dev                       # wrangler dev on http://localhost:8787
 ```
@@ -236,7 +255,7 @@ with no `nodejs_compat` flag.)
 npm test          # vitest, running inside workerd
 ```
 
-19 tests, no API key, no network, no Neo4j. They run in the real Workers runtime
+22 tests, no API key, no network, no Neo4j. They run in the real Workers runtime
 via `@cloudflare/vitest-pool-workers`, so loading the SDK at all is part of the
 assertion. `test/fake-nams.ts` stubs `globalThis.fetch` and answers the hosted
 REST API's own routes — deliberately *not* a fake `Transport`, because the
@@ -248,7 +267,8 @@ The assertions that fail if memory stops working:
 - turn two's prompt carries turn one's text and NAMS's observation, neither of
   which the request body contained;
 - nothing at all is written to memory before the handler returns — so the single
-  `waitUntil` promise is what makes the turn durable;
+  `waitUntil` promise owns the writes and settles on completion, on a client
+  disconnect and on a model error, with no partial answer stored;
 - the exact NAMS request trace, each call bearing `Authorization: Bearer nams_…`;
 - no `node:` import and no Node global anywhere under `src/`.
 
@@ -276,7 +296,4 @@ This is a Neo4j Labs project — community supported, no SLA. Ask questions on t
 
 ---
 
-_Verified against @neo4j-labs/agent-memory 0.6.0-dev (in-tree), ai 7.0.97,
-@ai-sdk/openai 4.0.65, @ai-sdk/provider 4.0.13, wrangler 4.131.0,
-@cloudflare/workers-types 5.20260911.1, @cloudflare/vitest-pool-workers 0.22.0,
-vitest 4.1.11, TypeScript 5.9.3, Node 22+ — 2026-09-10._
+_Compatibility scope: this example targets the current source checkout and its committed package/lock files. Offline tests validate the exercised contracts; they do not establish published-package availability, a live model result, or deployed NAMS behavior. Use the runtime floor above; record the actual package/runtime versions when verifying a release or deployment._

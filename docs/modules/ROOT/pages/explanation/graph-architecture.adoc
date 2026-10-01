@@ -1,4 +1,4 @@
-= Why Neo4j? Graph-Native Memory Architecture
+= Why Neo4j? Graph memory architecture
 :page-product: agent-memory
 :page-pagination:
 :toclevels: 3
@@ -12,392 +12,94 @@
 :page-ad-underline-role: button
 :page-ad-underline: Enroll now
 
-Understanding why graph databases are the optimal choice for agent memory systems.
+A graph represents stored memory as connected records. This is useful when the application needs to follow relationships between conversations, entities, and recorded actions as well as search their contents.
 
-== The Problem with Traditional Storage
+Graph storage is a design choice with tradeoffs. It does not make every query constant-time or establish that another database cannot express the same question.
 
-Most AI agent memory implementations use one of two approaches:
+[[_the_problem_with_traditional_storage]]
+== The storage problem
 
-1. **Vector databases only** - Good for semantic search, but lose relationships
-2. **Relational databases** - Structured storage, but expensive joins for connected queries
+anchor:_enterprise_memory_challenges[]
 
-Neither approach handles the fundamental nature of memory: **relationships between concepts**.
+Memory retrieval often combines several questions: which records resemble the current query, which entity they describe, when they were recorded, and what other records are connected to them.
 
-=== Enterprise Memory Challenges
+Relational databases can represent these relationships through keys and joins. A dedicated vector store can retrieve similar content and apply supported metadata filters. A graph makes the relationships explicit and traversable within the same data model. The choice depends on the application's actual queries and operating requirements, rather than a universal database ranking.
 
-Consider a financial services agent that needs to answer: "What transactions has John Smith made with companies where his colleagues also invested?"
+[[_graph_native_advantages]]
+== What a graph makes explicit
 
-.With a Relational Database
-[source,sql]
-----
-SELECT t.*
-FROM transactions t
-JOIN customers c ON t.customer_id = c.id
-JOIN colleagues col ON c.id = col.customer_id
-JOIN investments inv ON col.colleague_id = inv.investor_id
-JOIN companies comp ON t.merchant_id = comp.id AND inv.company_id = comp.id
-WHERE c.name = 'John Smith';
-----
+anchor:_1_natural_relationship_modeling[]anchor:_2_traversal_performance[]anchor:_3_vector_search_integration[]anchor:_4_temporal_queries[]anchor:_5_schema_flexibility[]
 
-This query requires:
-- 5 table joins
-- Complex query planning
-- Performance degrades exponentially with data size
-- Schema changes require query rewrites
+Relationships are part of the data model. A conversation can contain messages; messages can mention entities; traces can point back to the messages that triggered them. This helps an application retain provenance instead of reducing everything to disconnected text fragments.
 
-.With Neo4j Graph Database
-[source,cypher]
-----
-MATCH (john:Person {name: 'John Smith'})-[:COLLEAGUE_OF]->(colleague)
-      -[:INVESTED_IN]->(company)<-[:TRANSACTION_WITH]-(john)
-RETURN john, company, colleague
-----
-
-This query:
-- Naturally expresses the relationship pattern
-- Performs in constant time per result
-- Self-documents the business logic
-- Adapts easily to schema evolution
-
-== Graph-Native Advantages
-
-=== 1. Natural Relationship Modeling
-
-Memory is inherently about connections. In an ecommerce retail agent:
-
-[source]
-----
-(Customer)-[:PURCHASED]->(Product)
-(Product)-[:IN_CATEGORY]->(Category)
-(Customer)-[:VIEWED]->(Product)
-(Product)-[:FREQUENTLY_BOUGHT_WITH]->(Product)
-(Customer)-[:HAS_PREFERENCE]->(Brand)
-----
-
-These relationships are first-class citizens in Neo4j, not afterthoughts requiring join tables.
-
-=== 2. Traversal Performance
-
-Graph databases use index-free adjacency—each node directly references its neighbors. This means:
-
-[cols="1,1,1"]
-|===
-|Query Type |Relational |Graph
-
-|Find direct connections
-|O(log n)
-|O(1)
-
-|2-hop traversal
-|O(n × log n)
-|O(k)
-
-|6-hop traversal (e.g., fraud detection)
-|Often infeasible
-|O(k^6)
-|===
-
-Where `n` is table size and `k` is average connections per node.
-
-.Financial Services Example: Fraud Ring Detection
-[source,cypher]
-----
-// Find accounts connected through suspicious transaction patterns
-MATCH path = (account:Account)-[:TRANSFERRED_TO*2..5]-(other:Account)
-WHERE account.flagged = true
-  AND all(r IN relationships(path) WHERE r.amount > 10000)
-RETURN path
-----
-
-This multi-hop fraud detection query runs in milliseconds on Neo4j but would be impractical in a relational database.
-
-=== 3. Vector Search Integration
-
-Neo4j combines graph traversal with vector similarity search:
+Here is a conceptual read-only query for the Bolt memory schema (see xref:explanation/backends.adoc[Bolt and NAMS]). It requires stored messages with `:MENTIONS` edges and the parameter `$entityName`:
 
 [source,cypher]
 ----
-// Find semantically similar products that the customer's network also purchased
-MATCH (customer:Customer {id: $customerId})-[:KNOWS]->(friend)
-      -[:PURCHASED]->(product:Product)
-WITH collect(DISTINCT product) as friendProducts
-CALL db.index.vector.queryNodes('product_embeddings', 10, $queryEmbedding)
-YIELD node as similarProduct, score
-WHERE similarProduct IN friendProducts
-RETURN similarProduct, score
-ORDER BY score DESC
+MATCH (conversation:Conversation)-[:HAS_MESSAGE]->(message:Message)
+MATCH (message)-[:MENTIONS]->(entity:Entity {name: $entityName})
+RETURN conversation.session_id, message.content, message.timestamp
+ORDER BY message.timestamp DESC
+LIMIT 20
 ----
 
-This combines:
-- **Graph traversal**: Customer's social network
-- **Vector search**: Semantic similarity to query
-- **Filtering**: Intersection of both result sets
+The pattern states the relationship being followed. Its cost still depends on the starting lookup, indexes, record counts, node degree, filters, and query plan. Bounding a traversal helps control work; high-degree nodes and long paths can still produce many candidates.
 
-=== 4. Temporal Queries
+Neo4j also supports vector and temporal data, so an application can combine content similarity with relationships and dates. A schema change may still require validation, index changes, data migration, and updated queries; flexible labels do not remove those responsibilities.
 
-Memory systems need to reason about time. Neo4j handles temporal data naturally:
+[[_the_three_layer_memory_architecture]]
+== One graph for three memory layers
 
-[source,cypher]
-----
-// Find customer behavior patterns before large purchases
-MATCH (customer:Customer)-[v:VIEWED]->(product:Product)
-      -[:IN_CATEGORY]->(cat:Category {name: 'Luxury'})
-WHERE v.timestamp > datetime() - duration('P30D')
-WITH customer, count(v) as viewCount
-MATCH (customer)-[p:PURCHASED]->(item)
-WHERE p.amount > 1000
-  AND p.timestamp > datetime() - duration('P7D')
-RETURN customer, viewCount, sum(p.amount) as totalSpent
-----
+anchor:_why_one_database[]
 
-=== 5. Schema Flexibility
+.MemoryClient with three memory layers backed by Neo4j
+image::diagrams/memory-architecture.svg["Memory architecture: MemoryClient with three memory layers backed by Neo4j",width=100%,align=left,link=self]
 
-Enterprise agents often need to handle evolving data models:
+A single graph can hold conversation history, entities, and task records together. Keeping cross-layer links in one store reduces the need for application-managed joins across separate systems. It also concentrates operational concerns such as indexing, capacity, backup, and access control in that store.
 
-.Adding a New Entity Type (No Migration Required)
-[source,cypher]
-----
-// Existing: Customers and Products
-// New requirement: Track loyalty program membership
+Graph analytics may require an additional capability such as Neo4j Graph Data Science; it is not a guarantee that every Neo4j installation or NAMS endpoint exposes every algorithm. See xref:reference/backend-capabilities.adoc[Backend capabilities].
 
-// Simply create new nodes and relationships
-CREATE (customer)-[:MEMBER_OF {since: date(), tier: 'Gold'}]->(program:LoyaltyProgram {name: 'Rewards+'})
-----
+[[_enterprise_use_case_financial_services]]
+== Example domain: financial services
 
-No schema migrations, no downtime, no breaking existing queries.
+anchor:_data_model[]anchor:_example_queries[]
 
-== The Three-Layer Memory Architecture
+A financial application may connect a customer to accounts, transactions, and documents, while linking a recommendation to its recorded inputs and tools. The value is the ability to inspect those connections and their provenance.
 
-Neo4j enables a unified storage layer for all three memory types:
+This is an application-owned domain model, not a set of financial nodes automatically created by the memory library. Legal entities, account holders, and subsidiaries need distinct identities where appropriate. The application remains responsible for authorization and for interpreting the evidence returned by a query.
 
-image::diagrams/memory-architecture.png[Memory architecture: MemoryClient with three layers backed by Neo4j graph database,width=600,align=left]
+[[_enterprise_use_case_ecommerce_retail]]
+== Example domain: retail
 
-=== Why One Database?
+anchor:_data_model_2[]anchor:_example_queries_2[]
 
-Using separate databases for vectors, entities, and relationships creates:
+A retail application may connect a product to its variants, inventory locations, and mentions in conversations. A recommendation can then consider both relevant conversational context and application-owned catalog facts.
 
-- **Consistency issues**: Data can become out of sync
-- **Query complexity**: Cross-database joins are expensive
-- **Operational overhead**: Multiple systems to manage
+A product family is not interchangeable with a specific SKU. Keep variant identity and inventory ownership explicit rather than merging similar names. The library's extraction output does not create a complete product catalog or guarantee that a recommendation meets stock and delivery constraints.
 
-Neo4j provides all capabilities in one system:
+[[_performance_characteristics]]
+== Evaluating performance and capacity
 
-[cols="2,3"]
-|===
-|Capability |Neo4j Feature
+anchor:_benchmark_multi_hop_queries[]anchor:_memory_footprint[]
 
-|Semantic search
-|Vector indexes with HNSW algorithm
+This documentation does not provide a reproducible PostgreSQL-versus-Neo4j benchmark for the proposed workloads. No measured latency, storage estimate, or universal asymptotic comparison is implied here.
 
-|Entity relationships
-|Native graph storage and traversal
+Evaluate the queries the application will actually run against representative data. Record database versions, schema and indexes, node and relationship distributions, vector dimensions, concurrency, cache state, and the exact query. Compare equivalent outputs and report latency together with resource use.
 
-|Conversation history
-|Linked list pattern with Message nodes
+Capacity planning must include properties, embeddings, indexes, transaction logs, and operational headroom. Base record sizes alone do not predict a deployment's disk or memory requirements.
 
-|Location queries
-|Point type with spatial indexes
+[[_when_to_consider_alternatives]]
+== When another storage design fits
 
-|Full-text search
-|Lucene-based full-text indexes
+A key-value store may be sufficient when memory is only keyed session state. A relational design can fit an existing transactional model with known joins. A dedicated vector store may fit retrieval dominated by similarity search with few graph relationships.
 
-|Graph analytics
-|Built-in algorithms (PageRank, community detection)
-|===
+A graph becomes more useful as the application needs to retain and query connections across records. Consider that benefit alongside operational experience, query complexity, and the backend features actually available.
 
-== Enterprise Use Case: Financial Services
+[[_see_also]]
+== See also
 
-Consider a wealth management agent that helps advisors serve clients:
-
-=== Data Model
-
-[source,cypher]
-----
-// Client and account structure
-(Client:Person)-[:HAS_ACCOUNT]->(Account)
-(Account)-[:HOLDS]->(Position)-[:IN]->(Security)
-(Client)-[:ADVISED_BY]->(Advisor:Person)
-
-// Transaction history
-(Account)-[:EXECUTED]->(Transaction)-[:INVOLVED]->(Security)
-(Transaction)-[:ON_DATE]->(Date)
-
-// Relationships and preferences
-(Client)-[:RELATED_TO {type: 'spouse'}]->(Client)
-(Client)-[:HAS_PREFERENCE]->(Preference)
-(Client)-[:MENTIONED_IN]->(Message)-[:IN_SESSION]->(Conversation)
-
-// Compliance and risk
-(Transaction)-[:FLAGGED_BY]->(ComplianceRule)
-(Client)-[:HAS_RISK_PROFILE]->(RiskProfile)
-----
-
-=== Example Queries
-
-.Cross-Account Family View
-[source,cypher]
-----
-// Get complete household financial picture
-MATCH (client:Client {id: $clientId})-[:RELATED_TO*0..2]-(family:Client)
-      -[:HAS_ACCOUNT]->(account)-[:HOLDS]->(position)
-RETURN family.name, account.type, sum(position.value) as totalValue
-ORDER BY totalValue DESC
-----
-
-.Preference-Aware Recommendations
-[source,cypher]
-----
-// Find securities matching client preferences mentioned in conversations
-MATCH (client:Client {id: $clientId})-[:HAS_PREFERENCE]->(pref)
-WHERE pref.category = 'investment_style'
-WITH client, collect(pref.value) as preferences
-
-MATCH (security:Security)
-WHERE any(p IN preferences WHERE security.style CONTAINS p)
-  AND NOT exists((client)-[:HAS_ACCOUNT]->()-[:HOLDS]->()-[:IN]->(security))
-
-CALL db.index.vector.queryNodes('security_embeddings', 20, $queryEmbedding)
-YIELD node, score
-WHERE node = security
-RETURN security, score
-----
-
-== Enterprise Use Case: Ecommerce Retail
-
-An AI shopping assistant needs to understand customer behavior and preferences:
-
-=== Data Model
-
-[source,cypher]
-----
-// Customer journey
-(Customer)-[:VIEWED {timestamp, duration}]->(Product)
-(Customer)-[:ADDED_TO_CART {timestamp}]->(Product)
-(Customer)-[:PURCHASED {timestamp, price}]->(Product)
-(Customer)-[:RETURNED {reason}]->(Product)
-
-// Product catalog
-(Product)-[:IN_CATEGORY]->(Category)-[:CHILD_OF]->(Category)
-(Product)-[:HAS_ATTRIBUTE]->(Attribute)
-(Product)-[:SOLD_BY]->(Seller)
-(Product)-[:FREQUENTLY_BOUGHT_WITH]->(Product)
-
-// Customer knowledge
-(Customer)-[:HAS_PREFERENCE]->(Preference)
-(Customer)-[:MENTIONED_IN]->(Message)
-(Customer)-[:IN_SEGMENT]->(CustomerSegment)
-
-// Inventory and fulfillment
-(Product)-[:AVAILABLE_AT]->(Warehouse)-[:LOCATED_IN]->(Region)
-(Order)-[:SHIPS_TO]->(Address)-[:IN]->(Region)
-----
-
-=== Example Queries
-
-.Personalized Product Discovery
-[source,cypher]
-----
-// Find products based on behavior patterns and stated preferences
-MATCH (customer:Customer {id: $customerId})
-
-// Get viewing patterns
-OPTIONAL MATCH (customer)-[v:VIEWED]->(viewed:Product)
-WHERE v.timestamp > datetime() - duration('P30D')
-WITH customer, collect(viewed) as recentlyViewed
-
-// Get stated preferences from conversations
-OPTIONAL MATCH (customer)-[:HAS_PREFERENCE]->(pref)
-WHERE pref.category IN ['brand', 'style', 'price_range']
-WITH customer, recentlyViewed, collect(pref) as preferences
-
-// Find similar products not yet viewed
-UNWIND recentlyViewed as viewed
-MATCH (viewed)-[:FREQUENTLY_BOUGHT_WITH]->(recommended:Product)
-WHERE NOT recommended IN recentlyViewed
-RETURN DISTINCT recommended, count(*) as relevanceScore
-ORDER BY relevanceScore DESC
-LIMIT 10
-----
-
-.Inventory-Aware Recommendations
-[source,cypher]
-----
-// Recommend products available for fast shipping to customer location
-MATCH (customer:Customer {id: $customerId})-[:SHIPS_TO]->(addr:Address)
-      -[:IN]->(region:Region)
-MATCH (product:Product)-[:AVAILABLE_AT]->(warehouse)-[:LOCATED_IN]->(region)
-WHERE product.category = $category
-  AND warehouse.stock > 0
-
-// Boost products matching preferences
-OPTIONAL MATCH (customer)-[:HAS_PREFERENCE]->(pref)
-WHERE product.brand = pref.value OR product.style = pref.value
-WITH product, warehouse, count(pref) as prefMatch
-RETURN product, warehouse.estimated_delivery, prefMatch
-ORDER BY prefMatch DESC, warehouse.estimated_delivery ASC
-----
-
-== Performance Characteristics
-
-=== Benchmark: Multi-Hop Queries
-
-Testing traversal of customer networks to find shared purchasing patterns:
-
-[cols="1,1,1,1"]
-|===
-|Hops |Records |PostgreSQL |Neo4j
-
-|2
-|10K
-|45ms
-|2ms
-
-|3
-|100K
-|1.2s
-|8ms
-
-|4
-|1M
-|28s
-|35ms
-
-|5
-|10M
-|Timeout
-|180ms
-|===
-
-=== Memory Footprint
-
-Neo4j's native storage is optimized for graph data:
-
-- **Node**: ~15 bytes base + properties
-- **Relationship**: ~34 bytes base + properties
-- **Vector index**: Configurable dimensions (typically 384-1536 floats)
-
-For a typical enterprise deployment with:
-- 10M entities
-- 50M relationships
-- 10M message embeddings (384 dimensions)
-
-Estimated storage: ~50GB
-
-== When to Consider Alternatives
-
-While Neo4j excels for agent memory, consider alternatives when:
-
-1. **Pure vector search only**: If you only need semantic search without relationships, a dedicated vector database may be simpler
-2. **Simple key-value access**: If memory is just session state, Redis or similar may suffice
-3. **Massive scale analytics**: For petabyte-scale batch analytics, data warehouses may be more appropriate
-
-However, most enterprise agent use cases benefit from the combination of graph, vector, and transactional capabilities that Neo4j provides.
-
-== See Also
-
-* xref:explanation/memory-types.adoc[Understanding the Three Memory Types]
-* xref:explanation/poleo-model.adoc[The POLE+O Data Model]
-* xref:reference/configuration.adoc[Configuration Reference]
-* xref:reference/rest-api.adoc[NAMS REST API] - The hosted-service surface both SDKs target
-* xref:how-to/entity-extraction.adoc[Configure Entity Extraction]
-* link:https://github.com/neo4j-labs/agent-memory-tck/blob/main/docs/explanation/architecture.adoc[Architecture in the TCK spec] - The cross-language spec author's framing
+* xref:explanation/memory-types.adoc[The three memory types]
+* xref:explanation/poleo-model.adoc[Entity classification]
+* xref:reference/backend-capabilities.adoc[Backend capabilities]
+* xref:reference/schema-objects.adoc[Schema objects]
+* xref:how-to/adopt-existing-graph.adoc[Connect an existing graph]

@@ -1,0 +1,3 @@
+* A connection or authentication failure: confirm the Aura instance is Running, check the exported connection settings, and rerun the readiness command from step 2.
+* An OpenAI access or quota error: correct the account/model configuration and rerun on a fresh tutorial database if the prior write stopped midway.
+* Missing readback data: verify that the write command completed against this Aura instance. The program stops on missing data rather than treating an empty result as success.

@@ -1,10 +1,4 @@
-/**
- * Tools mode — model-driven memory.
- *
- * createNamsMemoryTools() returns { query_memory, store_memory } AI SDK tools.
- * createNamsTools() is the async variant that can also merge in MCP tools
- * (an optional extension of tools mode, not a separate mode).
- */
+/** Tools mode: the model decides when to read and write memory. */
 
 import {
   tool,
@@ -31,7 +25,7 @@ import {
 } from './vercel-ai-provider-client';
 import { createGraphExtractor, type GraphExtractorOptions } from './vercel-ai-provider-extract';
 
-//Schemas
+// Schemas
 
 const querySchema = z.object({
   query: z.string().describe('Keywords or phrase to search in memory'),
@@ -55,24 +49,22 @@ export type StoreInput = z.infer<typeof storeSchema>;
 export type QueryOutput = { found: boolean; count?: number; message?: string; memories: MemoryHit[] };
 export type StoreOutput = { stored: boolean; type: string; preview: string; message: string };
 
-/**
- * AI SDK v7 added a third `CONTEXT` generic to `tool<INPUT, OUTPUT, CONTEXT>`.
- */
+/** The third generic of `tool()`, added in AI SDK v7. */
 type ToolContext = Record<string, unknown>;
 
-//Options
+// Options
 
 export interface NamsToolsOptions extends NamsConfig, NamsScope {
   extractionModel?: LanguageModel;
-  /** Tunes the extractor built from `extractionModel` (e.g. override the self-referential guard). */
+  /** Extractor options, e.g. a custom `skipEntity` filter. */
   extractionOptions?: GraphExtractorOptions;
 }
 
-/** MCP server connection config. Headers are sent on every request (e.g. Authorization). */
+/** MCP server connection. `headers` are sent on every request. */
 export interface McpConfig {
   url: string;
   headers?: Record<string, string> | (() => Record<string, string> | Promise<Record<string, string>>);
-  /** Prepended to every MCP tool name (e.g. `'mcp_'`), namespacing them away from `query_memory`/`store_memory`. */
+  /** Added to each MCP tool name (e.g. `'mcp_'`) to avoid name clashes. */
   toolPrefix?: string;
   optional?: boolean;
 }
@@ -83,28 +75,21 @@ export interface NamsToolsWithMcpOptions extends NamsToolsOptions {
 
 export interface McpConnectionStatus {
   connected: boolean;
-  /** Tool names as exposed to the model, i.e. after `toolPrefix` is applied. */
+  /** Tool names the model sees, with `toolPrefix` applied. */
   toolNames: string[];
-  /** Set when `mcp.optional` swallowed a connection failure. */
+  /** Set when `mcp.optional` hid a connection failure. */
   error?: NamsMcpConnectionError;
 }
 
 export interface NamsToolsResult {
-  /** Merged NAMS + MCP tools, ready to pass to ToolLoopAgent `tools:`. */
+  /** NAMS and MCP tools together. */
   tools: ToolSet;
-  /** Close the MCP connection (no-op when MCP was not configured). Call in `onFinish`. */
+  /** Close the MCP connection (no-op without MCP). */
   close: () => Promise<void>;
   mcp?: McpConnectionStatus;
 }
 
-/**
- * Raised when an MCP server cannot be reached or refuses the connection.
- *
- * `@ai-sdk/mcp` reports transport failures as a bare message string, so on a
- * 401 we re-probe the endpoint to read its `WWW-Authenticate` challenge and
- * surface the scheme the server actually wants — the difference between
- * "HTTP 401" and "it wants Bearer, you sent Basic".
- */
+/** An MCP server could not be reached. On a 401 the message names the auth it wants. */
 export class NamsMcpConnectionError extends Error {
   readonly url: string;
   readonly status?: number;
@@ -152,12 +137,16 @@ export function createNamsMemoryTools(options: NamsToolsOptions) {
   const query_memory = tool<QueryInput, QueryOutput, ToolContext>({
     description:
       'Search NAMS (Neo4j Agent Memory System) for context relevant to the current message. ' +
-      'Call this before answering, every turn.',
+      'Call this before answering, every turn. A result whose source is "graph" is a stored ' +
+      'relationship, written (subject)-[RELATIONSHIP]->(object).',
     inputSchema: zodSchema(querySchema),
     execute: async ({ query, limit }) => {
       try {
         const convId = await getConvId();
-        const memories = await retrieveMemories(client, scope, convId, query, limit);
+        const memories = await retrieveMemories(
+          client, scope, convId, query, limit,
+          { crossSessionLimit: options.crossSessionLimit, graphExpansionLimit: options.graphExpansionLimit },
+        );
         if (memories.length === 0)
           return { found: false, message: 'No relevant memories found.', memories: [] };
         return { found: true, count: memories.length, memories };
@@ -202,25 +191,22 @@ export function createNamsMemoryTools(options: NamsToolsOptions) {
 export interface FinishedTurn {
   /** Assistant text from the final step. */
   text?: string;
-  /** Tool calls across all steps, as the AI SDK aggregates them. */
+  /** Tool calls from all steps. */
   toolCalls?: ReadonlyArray<{ toolName: string }>;
-  /** Per-step tool calls, used when the aggregate is absent. */
+  /** Per-step tool calls, used if `toolCalls` is missing. */
   steps?: ReadonlyArray<{ toolCalls?: ReadonlyArray<{ toolName: string }> }>;
 }
 
-/** The turn as handed to a custom `fallback`, once it is known nothing was stored. */
+/** The turn passed to `fallback` when nothing was stored. */
 export interface UnstoredTurn {
-  /** Final assistant text, or `''` when the model produced none. */
+  /** Final assistant text, or `''`. */
   text: string;
-  /** Every tool the model called this turn, deduplicated. */
+  /** Tools called this turn, without duplicates. */
   toolNames: string[];
 }
 
 export interface EnsureMemoryStoredOptions {
-  /**
-   * What to persist when the model never called `store_memory`. Return `null`
-   * to store nothing. Default: the assistant's final text as an `interaction`.
-   */
+  /** What to save if the model never stored anything. `null` saves nothing. */
   fallback?: (turn: UnstoredTurn) => MemoryStoreInput | null;
 }
 
@@ -228,13 +214,7 @@ export type EnsureMemoryStoredResult =
   | { stored: true; input: MemoryStoreInput }
   | { stored: false; reason: 'already-stored' | 'nothing-to-store' | 'failed' };
 
-/**
- * `interaction` routes to short-term conversation memory, which mirrors what
- * middleware mode guarantees. Storing the assistant's own text as a `fact`
- * instead would feed it to the graph extractor — and an agent summarising what
- * it remembers is precisely the self-referential input the extractor's skip
- * guard exists to reject. Callers who do want facts pass their own `fallback`.
- */
+/** Save the final text as a conversation message, never as a graph fact. */
 const defaultFallback = (turn: UnstoredTurn): MemoryStoreInput | null =>
   turn.text ? { content: turn.text, type: 'interaction' } : null;
 
@@ -279,36 +259,11 @@ export function ensureMemoryStored(
 }
 
 export interface EnforceQueryMemoryOptions {
-  /**
-   * How many steps the model may spend on other tools before `query_memory`
-   * is forced directly. During the grace window a text-only answer is blocked
-   * (`toolChoice: 'required'`) but the model picks which tools to call; once
-   * the window is exhausted the next step forces `query_memory` itself, so
-   * the loop can never end without the query having run. `0` forces
-   * `query_memory` as the very first step. Default: 3.
-   *
-   * Keep this at least two below the agent's `stopWhen` step budget so the
-   * forced query and the final answer both still fit.
-   */
+  /** Steps allowed before `query_memory` is forced (default: 3). Keep it 2 below your step limit. */
   graceSteps?: number;
 }
 
-/**
- * prepareStep hook that guarantees `query_memory` runs before the final
- * answer, without dictating tool order. While `query_memory` is absent from
- * the executed tool calls, each step requires *some* tool call (the model may
- * read files, hit MCP tools, etc.), so it cannot finish with a text-only
- * answer; after `graceSteps` steps it is forced to call `query_memory`
- * directly. Once `query_memory` has run, all constraints drop.
- *
- * ```ts
- * const agent = new ToolLoopAgent({
- *   model, tools,
- *   prepareStep: enforceQueryMemory(),
- *   stopWhen: stepCountIs(10),
- * });
- * ```
- */
+/** A `prepareStep` hook that makes the model call `query_memory` before it answers. */
 export function enforceQueryMemory<
   TOOLS extends ToolSet & { query_memory: Tool },
 >(options: EnforceQueryMemoryOptions = {}): PrepareStepFunction<TOOLS> {
@@ -323,10 +278,7 @@ export function enforceQueryMemory<
   };
 }
 
-/**
- * Reads the HTTP status out of an @ai-sdk/mcp transport error, which formats it
- * into the message ("...(HTTP 401):") rather than exposing it as a field.
- */
+/** Read the HTTP status from an @ai-sdk/mcp error message ("...(HTTP 401):"). */
 function statusFromTransportError(err: unknown): number | undefined {
   const match = /\bHTTP (\d{3})\b/.exec(err instanceof Error ? err.message : String(err));
   return match ? Number(match[1]) : undefined;
@@ -345,10 +297,7 @@ async function readAuthChallenge(url: string): Promise<string | undefined> {
   }
 }
 
-/**
- * Async variant of createNamsMemoryTools. Optionally connects to an MCP
- * server and merges its tools with the NAMS memory tools.
- */
+/** Async version of createNamsMemoryTools that can also add MCP tools. */
 export async function createNamsTools(options: NamsToolsWithMcpOptions): Promise<NamsToolsResult> {
   const namsTools = createNamsMemoryTools(options);
 
@@ -412,12 +361,12 @@ export async function createNamsTools(options: NamsToolsWithMcpOptions): Promise
 export class NamsMemoryTools {
   constructor(private readonly base: Omit<NamsToolsOptions, 'userId' | 'conversationId'>) { }
 
-  /** Synchronous — returns NAMS memory tools only. */
+  /** NAMS memory tools only. */
   forUser(userId: string, conversationId?: string) {
     return createNamsMemoryTools({ ...this.base, userId, conversationId });
   }
 
-  /** Async — returns NAMS + optional MCP tools merged, plus a close() handle. */
+  /** NAMS tools plus optional MCP tools, with a close() handle. */
   async forUserWithMcp(
     userId: string,
     mcp?: McpConfig,

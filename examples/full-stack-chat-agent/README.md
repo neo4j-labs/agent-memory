@@ -42,22 +42,25 @@ A complete example demonstrating `neo4j-agent-memory` integration with a Pydanti
 ## Prerequisites
 
 - Python 3.10+ and [uv](https://docs.astral.sh/uv/)
-- Node.js 18+
-- Docker (for Neo4j)
+- Node.js 22.13+ on the 22 release line, or Node.js 24, for the frontend development toolchain
+- A Neo4j Aura account for a dedicated empty example instance
 - An OpenAI API key (or another provider — see [Bring Your Own Model](https://neo4j.com/labs/agent-memory/how-to/bring-your-own-model.html))
 
 ## Quick Start
 
-### 1. Start Neo4j
+### 1. Configure AuraDB
+
+Follow [Aura setup and cleanup](../AURA_SETUP.md), then keep those variables exported. This small example stores its memory nodes and sample news nodes in the same dedicated Aura database. The news connection has separate setting names, so map it explicitly:
 
 ```bash
 cd examples/full-stack-chat-agent
-docker compose up -d
+export NEWS_GRAPH_URI="$NEO4J_URI"
+export NEWS_GRAPH_USERNAME="$NEO4J_USERNAME"
+export NEWS_GRAPH_PASSWORD="$NEO4J_PASSWORD"
+export NEWS_GRAPH_DATABASE="$NEO4J_DATABASE"
 ```
 
-This starts Neo4j 5.26 LTS with APOC on `bolt://localhost:7687`, user `neo4j`, password `password`. Wait for http://localhost:7474 to answer.
-
-> The compose password, `backend/.env.example` and the table below all say `password`. If you change it, change it in all three places — otherwise the backend boots with memory **disabled** and `/health` reports `memory_connected: false`.
+The application also calls APOC schema procedures; confirm their availability for the selected Aura configuration before using the schema-inspection tool. An incorrect memory connection leaves `/health` reporting `memory_connected: false`; check both graph connections before chatting.
 
 ### 2. Set up the backend
 
@@ -65,7 +68,7 @@ This starts Neo4j 5.26 LTS with APOC on `bolt://localhost:7687`, user `neo4j`, p
 cd backend
 
 cp .env.example .env
-# Edit .env and set OPENAI_API_KEY
+# Set OPENAI_API_KEY and replace local NEO4J_* and NEWS_GRAPH_* template values with Aura settings.
 
 uv sync
 
@@ -124,14 +127,14 @@ RETURN rt.task, s.action, collect(e.name) AS touched
 
 ### Backend environment variables
 
-| Variable | Description | Default |
+| Variable | Description | Example setting or application default |
 |----------|-------------|---------|
-| `NEO4J_URI` | Memory graph Neo4j URI | `bolt://localhost:7687` |
+| `NEO4J_URI` | Memory graph Neo4j URI | Required Aura `neo4j+s://…` URI |
 | `NEO4J_USERNAME` | Memory graph username | `neo4j` |
-| `NEO4J_PASSWORD` | Memory graph password (must match `docker-compose.yml`) | `password` |
-| `NEWS_GRAPH_URI` | News graph Neo4j URI | `bolt://localhost:7687` |
+| `NEO4J_PASSWORD` | Memory graph password | Required generated Aura password |
+| `NEWS_GRAPH_URI` | News graph Neo4j URI | Same dedicated Aura URI for this example |
 | `NEWS_GRAPH_USERNAME` | News graph username — use a **read-only** user for a real graph | `neo4j` |
-| `NEWS_GRAPH_PASSWORD` | News graph password | `password` |
+| `NEWS_GRAPH_PASSWORD` | News graph password | Generated Aura password for this example |
 | `NEWS_GRAPH_DATABASE` | News graph database name | `neo4j` |
 | `NEWS_EMBEDDING_MODEL` | Embedding model for news vector search; must match the `article_embeddings` index | `text-embedding-3-small` |
 | `OPENAI_API_KEY` | OpenAI API key | (required) |
@@ -317,13 +320,13 @@ uv run mypy src                        # strict type check
 uv run ruff format src && uv run ruff check src
 ```
 
-The route smoke tests live in the repository root:
+The route smoke tests live in the repository root. In a separate shell, follow [the shared Aura setup](../AURA_SETUP.md) for a fresh dedicated test instance and export its URI, username and password. Keep it separate from the application instance; the tests write synthetic records to the `neo4j` database. From the repository root:
 
 ```bash
-# from the repo root, against a throwaway Neo4j
-NEO4J_URI=bolt://localhost:7688 NEO4J_PASSWORD=test-password \
-  uv run pytest tests/examples/test_full_stack_apps.py
+uv run pytest tests/examples/test_full_stack_apps.py
 ```
+
+After the run, follow the shared guide's cleanup for that test instance.
 
 They build the real FastAPI app, drive `POST /threads → POST /chat → GET /threads/{id}` over `httpx.ASGITransport` with PydanticAI's `test` model, and assert the graph state afterwards — no API key needed.
 
@@ -352,4 +355,6 @@ Apache 2.0 — see the main `neo4j-agent-memory` repository for details.
 
 ---
 
-_Verified against `neo4j-agent-memory` 0.5.0 (editable `0.6.0-dev` surface in-repo), PydanticAI 2.42, FastAPI 0.128, neo4j driver 6.1, Neo4j 5.26 on 2026-09-10. Backend lint, strict mypy and the route smoke tests pass; the frontend is covered by the frontend agent's pass._
+**Historical verification report — 2026-09-10.** The following records a prior checkout/test report. Its development-version labels, passing counts, and release-availability statements are historical, not evidence of current package compatibility.
+
+> _Verified against `neo4j-agent-memory` 0.5.0 (editable `0.6.0-dev` surface in-repo), PydanticAI 2.42, FastAPI 0.128, neo4j driver 6.1, Neo4j 5.26 on 2026-09-10. Backend lint, strict mypy and the route smoke tests pass; the frontend is covered by the frontend agent's pass._

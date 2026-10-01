@@ -219,30 +219,43 @@ ASCII art representation here
 # List all placeholder diagrams
 make docs-diagrams-list
 
-# Show status (which have Excalidraw files)
+# Check active image provenance, source bindings and export freshness
 make docs-diagrams-status
 
-# Show only missing diagrams
+# Show missing or stale published diagrams and draft sources
 make docs-diagrams-missing
 
 # Add image references after generating diagrams
+# (review the inserted caption and alt text, and add the manifest entry)
 make docs-diagrams-add-refs
 ```
 
 ### File Locations
 
-- **Excalidraw JSON**: `docs/assets/images/diagrams/excalidraw/{slug}.excalidraw`
-- **Exported PNG**: `docs/assets/images/diagrams/{slug}.png`
+- **Excalidraw JSON**: `docs/assets/diagrams/excalidraw/{slug}.excalidraw`
+- **Exported SVG**: `docs/modules/ROOT/images/diagrams/{slug}.svg` (diagram exports are SVG; only literal UI screenshots stay PNG)
+- **Diagram manifest**: `docs/diagrams/manifest.json`
 - **Management script**: `scripts/manage_diagrams.py`
 
-### Generating a Diagram
+### Generating or updating a diagram
 
-1. Run `make docs-diagrams-missing` to see what's needed
-2. Read the ASCII art from the placeholder table
-3. Generate Excalidraw JSON following this skill's patterns
-4. Save to `docs/assets/images/diagrams/excalidraw/{slug}.excalidraw`
-5. Export to PNG using Excalidraw (https://excalidraw.com)
-6. Run `make docs-diagrams-add-refs` to update AsciiDoc files
+1. Read `docs/MAINTAINING.md` and run `make docs-diagrams-status` to inspect active image mappings. A matching filename alone is not provenance.
+2. Verify every schema name, operation, threshold and caption against current source. Distinguish application examples, the Python Bolt backend and NAMS.
+3. Save editable JSON to `docs/assets/diagrams/excalidraw/{slug}.excalidraw`; preserve IDs and update both ends of bindings.
+4. Install optional tools with `npm ci --prefix docs/diagrams` and `npx --prefix docs/diagrams playwright install chromium`.
+5. Export a new or changed diagram with `node scripts/export_diagrams.mjs <source.excalidraw> docs/modules/ROOT/images/diagrams/{slug}.svg`, then record it in `docs/diagrams/manifest.json` (step 7). `node scripts/export_diagrams.mjs --all` only re-exports the SVGs the manifest already records, so it never exports a brand-new diagram. Add `--png` to also write a sibling PNG; that PNG then needs its own manifest record. The exporter renders through Excalidraw itself; pages embed the SVG.
+6. Inspect the full image and its rendered page at desktop and narrow widths. Check legibility, clipping, arrow endpoints, labels and full alt text. The exporter does not certify semantic correctness.
+7. Record source/output SHA-256 values, referring pages, owner and visual review date in `docs/diagrams/manifest.json` only after review. Every export needs a manifest entry in the same change, even before a page embeds it (`"status": "pending-placement"`); `make docs-diagrams-status` fails on an untracked published image. A captured screenshot can have no editable source if its provenance exception is explained.
+8. Embed the SVG with a caption line directly above the image macro, then update the relevant page and run `make docs-lint`:
+
+   ```asciidoc
+   .Caption sentence that titles the diagram
+   image::diagrams/{slug}.svg["Complete alt text that describes the diagram, with commas quoted",width=100%,link=self]
+   ```
+
+   The caption is the visible figure title; the alt text describes what the diagram shows and does not repeat the caption.
+
+Do not edit generated OpenWiki diagrams or generated API pages. Preserve historical editable scenes in the canonical directory; the active manifest identifies current published uses. See `docs/diagrams/source-migrations.json` for the migration from former directories.
 
 ### Diagram Style Guidelines for This Project
 
@@ -255,3 +268,5 @@ make docs-diagrams-add-refs
 - **Pipeline stages**: Use vertical flow with colored boxes
 - **Graph schemas**: Use ellipses for nodes, labeled arrows for relationships
 - **Architecture**: Use rectangles with hierarchy (top-level → components → storage)
+
+The official Neo4j Labs UI takes precedence over a generic palette or font suggestion. Use the project policy in `docs/MAINTAINING.md`; do not replace it with a custom product logo.

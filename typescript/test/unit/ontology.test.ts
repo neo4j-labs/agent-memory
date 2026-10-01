@@ -63,25 +63,97 @@ describe("OntologyClient", () => {
     expect(result.versions[0].document?.entityTypes[0].properties[0].unique).toBe(true);
   });
 
-  it("getActive composes validationMode via second lookup", async () => {
+  it("getActive uses the bound version even when a newer revision exists", async () => {
     const t = mockTransport((method) => {
-      if (method === "get_active_ontology") return { ontology: DOC, version: null };
+      if (method === "get_active_ontology") return { ontology: DOC, version: version(1) };
       if (method === "list_ontologies")
-        return {
-          ontologies: [
-            { id: "ont_1", name: "legal-clone", current_revision: 2, is_active: true },
-          ],
-        };
+        return { ontologies: [{ id: "ont_1", name: "legal-clone", current_revision: 2, is_active: true }] };
       if (method === "get_ontology")
         return { record: { id: "ont_1", name: "legal-clone" }, versions: [version(1), version(2, "strict")] };
-      return {};
+      throw new Error(`Unexpected method: ${method}`);
     });
-    const o = new OntologyClient(t as never);
-    const active = await o.getActive();
+    const active = await new OntologyClient(t as never).getActive();
     expect(active.document.domain.id).toBe("legal-clone");
-    expect(active.validationMode).toBe("strict");
-    expect(active.revision).toBe(2);
-    expect(active.versionId).toBe("ov_2");
+    expect(active.validationMode).toBe("permissive");
+    expect(active.revision).toBe(1);
+    expect(active.versionId).toBe("ov_1");
+    expect(active.ontologyId).toBe("ont_1");
+    expect(active.schemaHash).toBe("abc");
+    expect(t.request.mock.calls).toEqual([["get_active_ontology", {}]]);
+  });
+
+  it.each([{ ontology: DOC }, { ontology: DOC, version: null }])(
+    "getActive preserves a legacy document without inferring a binding: %j", async (response) => {
+      const t = mockTransport(() => response);
+      const active = await new OntologyClient(t as never).getActive();
+      expect(active.document.domain.id).toBe("legal-clone");
+      expect(active.versionId).toBeUndefined();
+      expect(active.ontologyId).toBeUndefined();
+      expect(active.revision).toBeUndefined();
+      expect(active.validationMode).toBeUndefined();
+      expect(active.schemaHash).toBeUndefined();
+      expect(t.request.mock.calls).toEqual([["get_active_ontology", {}]]);
+    },
+  );
+
+  it.each([undefined, null])("getActive accepts optional schema_json=%j", async (schemaJson) => {
+    const t = mockTransport(() => ({
+      ontology: DOC,
+      version: { ...version(), schema_json: schemaJson },
+      server_extension: 1,
+    }));
+    expect((await new OntologyClient(t as never).getActive()).versionId).toBe("ov_1");
+  });
+
+  it.each([
+    {}, [], "ov_1", 0,
+    { ...version(), id: "" },
+    { ...version(), ontology_id: " " },
+    { ...version(), revision: undefined },
+    { ...version(), revision: "1" },
+    { ...version(), revision: true },
+    { ...version(), revision: 1.5 },
+    { ...version(), revision: 0 },
+    { ...version(), validation_mode: "unexpected" },
+    { ...version(), schema_json: "not json" },
+    { ...version(), schema_json: "null" },
+    { ...version(), schema_json: "{}" },
+    { ...version(), schema_hash: 7 },
+  ])("getActive rejects invalid supplied version metadata: %j", async (invalidVersion) => {
+    const t = mockTransport(() => ({ ontology: DOC, version: invalidVersion }));
+    await expect(new OntologyClient(t as never).getActive()).rejects.toThrow();
+    expect(t.request.mock.calls).toEqual([["get_active_ontology", {}]]);
+  });
+
+  it("getActive rejects conflicting schema documents", async () => {
+    const t = mockTransport(() => ({
+      ontology: DOC,
+      version: {
+        ...version(),
+        schema_json: JSON.stringify({ ...DOC, domain: { id: "other", name: "Other" } }),
+      },
+    }));
+    await expect(new OntologyClient(t as never).getActive()).rejects.toThrow(/conflicts/);
+  });
+
+  it("getActive normalizes null collections and ignores extra server fields", async () => {
+    const t = mockTransport(() => ({
+      ontology: { domain: { id: "schema-domain", name: "Schema" } },
+      version: {
+        ...version(),
+        schema_json: JSON.stringify({
+          relationships: null,
+          entity_types: [],
+          domain: { name: "Schema", id: "schema-domain", new_field: true },
+          new_field: "ignored",
+        }),
+        new_field: 1,
+      },
+    }));
+    const active = await new OntologyClient(t as never).getActive();
+    expect(active.ontologyId).toBe("ont_1"); // Opaque ID is not the schema domain ID.
+    expect(active.document.entityTypes).toEqual([]);
+    expect(active.document.relationships).toEqual([]);
   });
 
   it("create sends snake_case body wrapped under ontology", async () => {

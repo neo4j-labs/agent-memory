@@ -1,0 +1,44 @@
+# Python integration how-to implementation
+
+Completed all 11 Python integration leaves assigned to W09. The integration index, library source, shared configuration and diagram assets remained with their respective owners. Maintained fixtures are new files under `docs/modules/ROOT/examples/integrations/`; the Microsoft and Strands guides reuse the complete tutorial programs. No live model calls, service writes, real crew kickoff, Docker operations, telemetry submission or deployment was performed.
+
+## Findings and concrete changes
+
+- **ED05 / ED06: task structure and complete assembly.** All 11 pages have a concrete goal, explicit backend/provider prerequisites, numbered setup/read/run steps, observable readback, failure handling, cleanup and adaptation links. The old long, incompatible financial/product sketches were replaced with executable maintained programs and a concise account of which domain services an application must supply. Source includes show the exact files the commands execute. Legacy routes and all 258 original heading IDs remain. Conceptual comparisons, deployment files and API catalogs are linked to maintained destinations instead of duplicated.
+- **PY09: framework API accuracy.** PydanticAI uses `Agent`, `MemoryDependency`, `create_memory_tools` and `result.output`. CrewAI uses a worker only for `Crew.kickoff()`; all operations on the async memory client remain on the owner loop. LlamaIndex uses the actual `Neo4jLlamaIndexMemory` async ChatMessage API. LangChain uses actual 1.x `create_agent`/async middleware and one message writer. OpenAI uses the actual Agents SDK Runner, with explicit adapter persistence, and distinguishes its function-tool API from Chat Completions schema dictionaries. ADK uses Runner-level memory, an iterated async generator, awaited sessions and the actual SearchMemoryResponse envelope.
+- **PY09: current Microsoft client.** A fresh dependency resolution found that the supported GA packages expose `OpenAIChatClient(model=...)` for Responses, not the old preview `OpenAIResponsesClient(model_id=...)`. Both the tutorial and integration now install the separate `agent-framework-openai>=1.13,<2` distribution and use the actual GA constructor. The unified context provider owns writes; the program verifies its hook's persisted user turn and explicitly recorded trace. Current framework bases are `ContextProvider` / `HistoryProvider`.
+- **PY09: concrete hybrid-provider repair.** The guide no longer claims that HybridMemoryProvider connects/synchronizes independent AWS AgentCore and Neo4j stores. It routes `message`/`entity`/`preference` retrieval inside the same client. `store_memory` accepts message/preference/fact, extraction is a constructor option, and `sync_entities` does not implement cross-store synchronization. Verification uses exact returned message IDs plus `filters_applied`, not an invented MemoryType.EPISODIC store or search ranking as evidence of persistence.
+- **PY09: embeddings and setup.** The cloud recipes check actual vector count and size before persisting one message. Titan V2 uses 1024 dimensions; the chosen Vertex configuration explicitly requests 768. The Bedrock page no longer claims a 25-text Titan request or a CPU-bound Lambda workload. The Google page routes ADK/MCP/Cloud Run to the separate maintained guides/assets. The shared settings helper uses the actual `neo4j_agent_memory.llm.from_provider(..., kind="embedding")`; a direct construction test guards its import and dimensions.
+- **G08 / G04 / PY01: lifecycle and captions.** Strands explicitly separates transcript persistence, Strands extraction triggers and backend entity readiness, and assigns one writer when composing adapters. It no longer promises that all other agents immediately retrieve every fact or that user/session IDs universally isolate graph records. Its two figures are labeled as application patterns, with persistence/readiness before dependent retrieval. Microsoft uses the canonical regenerated editable architecture; the retained TfL screenshot is expressly a separate application with no recorded capture date. All active comma-containing alt text is quoted. Canonical backend-capabilities links delimit hosted/Bolt scoping on every page.
+
+## Maintained programs and tests
+
+New programs: `integrations/common.py`, `pydantic_ai_recipe.py`, `crewai_recipe.py`, `llamaindex_recipe.py`, `langchain_recipe.py`, `openai_agents_recipe.py`, `google_adk_recipe.py`, `hybrid_recipe.py`, `cloud_embeddings_recipe.py`.
+
+`tests/docs/test_python_integration_contracts.py` executes real framework/adaptor types against fake provider/storage boundaries. It covers message readback, returned trace IDs, unsuccessful runs without fabricated replies, CrewAI worker ownership and actual constructor shape, PydanticAI TestModel execution, LlamaIndex ChatMessage roundtrip/storage failure, actual LangChain middleware success/model failure, OpenAI adapter success/failure trace outcomes, ADK sessions/events/result attribution with a fake Runner stream, hybrid routing, Bedrock request shape, returned vector dimensions, actual common settings construction and the current Microsoft client/agent constructor. No integration is silently skipped.
+
+## Validation and environment
+
+- Temporary interpreter: `/tmp/agent-memory-docs-integrations/bin/python`. It was created with `--system-site-packages` from the existing .venv, then all relevant declared extras were freshly resolved/installed into the temporary environment. The shared .venv was not changed. This is explicit local runtime evidence, not an isolated lockfile/release-wheel claim.
+- `pytest tests/docs/test_python_integration_contracts.py tests/docs/test_hosted_tutorial_contracts.py tests/examples/test_ontology_lifecycle_example.py -q`: **83 passed** (29 integration contracts +54 tutorial/ontology checks). The tutorial compile parametrization also includes six new root-owned fixture files now present in the shared example resource directory.
+- Selected existing adapter suites for Microsoft, Strands session manager/coexistence, LangChain, hybrid and Google ADK: **197 passed**, one ADK experimental-feature warning. No external APIs were called.
+- Versions and full logs: `logs/agent-memory-framework-versions.json`, `logs/agent-memory-framework-install.log`, `logs/agent-memory-framework-extra-install.log`, `logs/agent-memory-integration-final-contracts.log`, `logs/agent-memory-integration-adapter-regressions.log`. Earlier failures are retained in the existing-env/current-framework logs; they exposed stale environment assumptions and the corrected Microsoft/factory setup.
+- Required CI extras for the new 29-test integration file: `pydantic-ai`, `llamaindex`, `langchain-agents`, `google-adk`, `crewai`, `microsoft-agent`, `openai`, `bedrock`, `vertex-ai`, plus the separate `agent-framework-openai>=1.13,<2` distribution and pytest. Importing/executing all displayed entrypoints also needs `strands`, `langchain-openai`, and the separate `openai-agents` distribution. Root owns workflow placement in an environment that installs these explicitly.
+- Ruff format/check and targeted `git diff --check` passed.
+- Asciidoctor rendered all 11 pages after expanding maintained includes: all 258 old heading IDs preserved, no duplicate HTML IDs, no missing local xref files, zero diagnostics. Full original HTML IDs also checked. Evidence `logs/integrations-before.json`, `logs/integrations-render-validation.json`, `/tmp/integrations-rendered/`. Root's fresh Antora/site check remains the final cross-site gate.
+
+## Active image manifest input
+
+Only these images remain referenced from this batch:
+- `diagrams/multi-agent-architecture-aws-neo4j.png`
+- `diagrams/shared-memory-data-flow-kyc-graph-credit.png`
+- `diagrams/microsoft-agent-architecture.png`
+- `diagrams/tfl-explorer-app-screenshot.png`
+
+The unsupported TfL full-stack architecture image was removed from the Microsoft page. Root regenerated the Microsoft scene and owns its exports/manifest.
+
+## Remaining boundaries
+
+- The CrewAI synchronous bridge and query-augmented LlamaIndex unscoped retrieval are source limitations, described honestly and avoided by the selected recipes. No product-source workaround or new isolation promise was introduced.
+- Semantic search candidate count is not a truth, entity provenance or performance assertion. Cloud model access, extraction outcomes, a fresh real database run and deployment remain environment-specific and are not claimed from offline checks.
+- The complete ontology lifecycle example additionally now bounds each polling request by the remaining deadline and stops before later operations on a timeout, failure or errored nodes. Its standalone example intentionally retains/migrates data; the smaller tutorial restores its prior active version.

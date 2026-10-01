@@ -1,4 +1,4 @@
 [IMPORTANT]
 ====
-icon:plug[] *Available on NAMS: No.* The APIs on this page are *bolt-only* — calling them against the hosted NAMS backend raises `NotSupportedError`. See the xref:explanation/backends.adoc#capability-matrix[capability matrix] for what NAMS provides instead.
+icon:plug[] *Available on NAMS: No.* The procedure on this page needs the Bolt backend. With the hosted NAMS backend its operations are unavailable: depending on the call, the client raises `NotSupportedError`, `AttributeError` or `TypeError`, or ignores a Bolt-only setting or argument (NAMS manages embedding and extraction server-side). See the xref:reference/backend-capabilities.adoc[backend capabilities reference] for what NAMS provides instead.
 ====

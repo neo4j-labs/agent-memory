@@ -1,11 +1,18 @@
-= How to: enable request logging
-:toc: left
+= Enable request logging
 :source-highlighter: rouge
 
 The TypeScript client emits a typed event stream around every HTTP
 exchange via the `logger` constructor option. Hook this into your
 favourite logger (Pino, Winston, console) for tracing, request-id
 correlation, and ops dashboards.
+
+Prerequisites: a configured `MemoryClient` and an application logger.
+
+== Procedure
+
+. Pass a `logger` callback when constructing the client.
+. Make a supported read and inspect the emitted event fields below.
+. Redact query values and service error text before exporting logs; retain a request id when supplied.
 
 == Basic usage
 
@@ -29,7 +36,7 @@ You'll see two events per successful call:
   "requestId": "req-abc", "durationMs": 142 }
 ----
 
-Failures emit `request` then `error`:
+Recognized HTTP failures emit `request` then `error`:
 
 [source,json]
 ----
@@ -56,8 +63,10 @@ is the HTTP verb (`POST`, `GET`, …).
 
 == Bodies are never logged by default
 
-To avoid leaking PII, the logger never receives request or response
-bodies. If you need bodies during development, log them yourself by
+The logger does not receive separate request or response body fields. URLs
+can contain search query values, and error messages can include server-provided
+text. Apply redaction before exporting events; absence of body fields is not
+a guarantee that events contain no sensitive data. If you need bodies during development, log them yourself by
 wrapping the call:
 
 [source,typescript]
@@ -76,7 +85,7 @@ logger in your own try/catch if you care.
 == User-Agent customization
 
 The client sends a default `User-Agent` like
-`@neo4j-labs/agent-memory/0.4.0 (node/22.5.0; darwin)`. To override,
+`@neo4j-labs/agent-memory/0.5.0 (node/22.5.0; darwin)`. To override,
 pass your own:
 
 [source,typescript]
@@ -87,11 +96,21 @@ new MemoryClient({
 ----
 
 Wrapping SDKs should append their own identifier (e.g.,
-`@neo4j-labs/agent-memory/0.4.0 my-wrapper/1.0`) so server-side metrics
+`@neo4j-labs/agent-memory/0.5.0 my-wrapper/1.0`) so server-side metrics
 can break the population down.
 
 == Request-id correlation
 
-Every error carries `error.requestId`. Use it to find the failing
-request in service-side logs. See
-link:handle-errors.adoc[How-to: handle errors].
+SDK errors built from a response may carry `error.requestId`. It is absent
+when the service supplied no recognized header or no response was captured.
+Pre-request validation/unsupported operations do not emit an HTTP event pair;
+raw aborts, parsing or token-provider failures may also lack an `error` event.
+See xref:how-to/typescript/handle-errors.adoc[handle errors].
+
+== Verify the integration
+
+Make one successful read and inspect its `request`/`response` pair. With an
+offline HTTP stub returning 500, check the `request`/`error` pair and optional
+request id. Also test a client-side validation failure: it need not emit HTTP
+events. The SDK's observability and docs-contract integration tests cover these
+contracts without sending data to an external logging service.

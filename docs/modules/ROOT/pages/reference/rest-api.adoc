@@ -1,10 +1,9 @@
-= REST API Reference
+= REST API reference
 :description: Hosted-service REST endpoints mapped to client SDK methods in each language.
 
 The hosted service at `+https://memory.neo4jlabs.com/v1+` exposes a REST API.
 This page is a curated companion to the machine-readable contract — it maps
-every endpoint to its bridge-protocol equivalent and the corresponding method
-on each language client.
+selected endpoints to protocol operation names and client accessors. A protocol operation is not necessarily exposed as a public method in every SDK.
 
 [TIP]
 ====
@@ -15,15 +14,15 @@ cross-cutting rules — auth, versioning, errors, pagination — and the
 SDK-method mapping the spec doesn't show.
 ====
 
-Bridge-method names are what the link:https://github.com/neo4j-labs/agent-memory-tck[agent-memory-tck]
-cross-language conformance suite uses. SDK methods take language-idiomatic
-casing.
+The protocol-operation column uses conformance names from the link:https://github.com/neo4j-labs/agent-memory-tck[agent-memory-tck]
+cross-language conformance suite. Check the client accessor column rather than converting a protocol name to another casing. Python endpoint registry names can differ (for example, its message-list route uses `list_messages`, while its public method is `short_term.get_conversation`).
 
-== Base URL & versioning
+anchor:_base_url_versioning[]
 
-All endpoints are served under a major-version prefix: the production base URL
-is `+https://memory.neo4jlabs.com/v1+`. The SDK appends paths to the configured
-`MEMORY_ENDPOINT` (default the URL above). The `/v{n}` prefix also selects the
+== Base URL and protocol version
+
+NAMS is an unversioned, continuously shipped service. `/v1` identifies its REST protocol; it is independent of Python/TypeScript package versions. The production base URL is `+https://memory.neo4jlabs.com/v1+`. The SDK appends paths to the configured
+`MEMORY_ENDPOINT` (default the URL above). The `/v\{n}` prefix also selects the
 REST transport; endpoints without it use the TCK bridge protocol (see
 xref:explanation/backends.adoc[Bolt vs NAMS]).
 
@@ -44,58 +43,105 @@ your API key (`nams_...`) used directly, or a short-lived JWT obtained from the
 Auth0 exchange endpoints (`POST /v1/auth/exchange`, `POST /v1/auth/refresh`).
 
 The target workspace depends on the key's category (see
-xref:reference/authentication.adoc[Authentication & API Keys]): a **workspace
+xref:reference/authentication.adoc[Authentication and API keys]): a **workspace
 key** is already bound to one workspace, so `X-Workspace-Id` is optional (and a
 _different_ value is rejected with `403`); an **admin key** names the workspace
 per request with `X-Workspace-Id: <workspace_id>`. The SDK sends the header
 automatically when `workspace_id` / `workspaceId` (or `MEMORY_WORKSPACE_ID`) is
-configured. See xref:how-to/use-nams.adoc[Use NAMS].
+configured. Python's default transport sends its configured API key directly; calling a token-refresh wrapper does not install automatic token refresh. See xref:how-to/use-nams.adoc[Use NAMS].
 
 == Conversations
 
-[cols="2,3,1,1,1,1,1"]
+[cols="2,3,2,2,1"]
 |===
-| HTTP | Path | Bridge | TS | Go | Py | C#
+| HTTP | Path | Protocol operation | Python accessor | TS
 
-| `GET` | `/conversations` | `list_conversations` | `listConversations` | `ListConversations` | `list_conversations` | `ListConversationsAsync`
-| `POST` | `/conversations` | `create_conversation` | `createConversation` | `CreateConversation` | `create_conversation` | `CreateConversationAsync`
-| `GET` | `/conversations/{id}` | `get_conversation_metadata` | `getConversationMetadata` | `GetConversationMetadata` | `get_conversation_metadata` | `GetConversationMetadataAsync`
-| `DELETE` | `/conversations/{id}` | `delete_conversation` | `deleteConversation` | `DeleteConversation` | `delete_conversation` | `DeleteConversationAsync`
-| `GET` | `/conversations/{id}/messages` | `get_conversation` | `getConversation` | `GetConversation` | `get_conversation` | `GetConversationAsync`
-| `POST` | `/conversations/{id}/messages` | `add_message` | `addMessage` | `AddMessage` | `add_message` | `AddMessageAsync`
-| `POST` | `/conversations/{id}/messages/bulk` | `bulk_add_messages` | `bulkAddMessages` | `BulkAddMessages` | `bulk_add_messages` | `BulkAddMessagesAsync`
-| `POST` | `/conversations/{id}/search` | `search_messages` | `searchMessages` | `SearchMessages` | `search_messages` | `SearchMessagesAsync`
-| `GET` | `/conversations/{id}/context` | `get_context` | `getContext` | `GetContext` | `get_context` | `GetContextAsync`
-| `GET` | `/conversations/{id}/observations` | `get_observations` | `getObservations` | `GetObservations` | `get_observations` | `GetObservationsAsync`
-| `GET` | `/conversations/{id}/reflections` | `get_reflections` | `getReflections` | `GetReflections` | `get_reflections` | `GetReflectionsAsync`
-| `GET` | `/conversations/{id}/extraction-status` | `get_extraction_status` | `getExtractionStatus` | `GetExtractionStatus` | `get_extraction_status` | `GetExtractionStatusAsync`
+| `GET` | `/conversations` | `list_conversations` | `short_term.list_conversations` | `listConversations`
+| `POST` | `/conversations` | `create_conversation` | `short_term.create_conversation` | `createConversation`
+| `GET` | `/conversations/\{id}` | `get_conversation_metadata` | short_term.get_conversation (combined metadata/messages) | `getConversationMetadata`
+| `DELETE` | `/conversations/\{id}` | `delete_conversation` | `short_term.clear_session` | `deleteConversation`
+| `GET` | `/conversations/\{id}/messages` | `get_conversation` | `short_term.get_conversation` | `getConversation`
+| `POST` | `/conversations/\{id}/messages` | `add_message` | `short_term.add_message` | `addMessage`
+| `POST` | `/conversations/\{id}/messages/bulk` | `bulk_add_messages` | `short_term.bulk_add_messages` | `bulkAddMessages`
+| `POST` | `/conversations/\{id}/search` | `search_messages` | `short_term.search_messages` | `searchMessages`
+| `GET` | `/conversations/\{id}/context` | `get_context` | `short_term.get_context` | `getContext`
+| `GET` | `/conversations/\{id}/observations` | `get_observations` | `short_term.get_observations` | `getObservations`
+| `GET` | `/conversations/\{id}/reflections` | `get_reflections` | `short_term.get_reflections` | `getReflections`
+| `GET` | `/conversations/\{id}/extraction-status` | `get_extraction_status` | `short_term.get_extraction_status` | No public wrapper
 |===
 
-Because extraction runs asynchronously on NAMS, `get_extraction_status` (short-term
-memory) is the authoritative "has the pipeline finished?" signal for a
-conversation — `long_term.wait_for_extraction(session_id=...)` polls it for you.
+Go and C# clients are not part of this repository; their method names for this
+table are collapsed below for reference.
+
+[%collapsible]
+====
+[cols="3,2,2"]
+|===
+| Path | Go | C#
+
+| `/conversations` | `ListConversations` | `ListConversationsAsync`
+| `/conversations` | `CreateConversation` | `CreateConversationAsync`
+| `/conversations/\{id}` | `GetConversationMetadata` | `GetConversationMetadataAsync`
+| `/conversations/\{id}` | `DeleteConversation` | `DeleteConversationAsync`
+| `/conversations/\{id}/messages` | `GetConversation` | `GetConversationAsync`
+| `/conversations/\{id}/messages` | `AddMessage` | `AddMessageAsync`
+| `/conversations/\{id}/messages/bulk` | `BulkAddMessages` | `BulkAddMessagesAsync`
+| `/conversations/\{id}/search` | `SearchMessages` | `SearchMessagesAsync`
+| `/conversations/\{id}/context` | `GetContext` | `GetContextAsync`
+| `/conversations/\{id}/observations` | `GetObservations` | `GetObservationsAsync`
+| `/conversations/\{id}/reflections` | `GetReflections` | `GetReflectionsAsync`
+| `/conversations/\{id}/extraction-status` | `GetExtractionStatus` | `GetExtractionStatusAsync`
+|===
+====
+
+Because extraction runs asynchronously on NAMS, Python `short_term.get_extraction_status` reads the conversation pipeline status; `long_term.wait_for_extraction(session_id=...)` polls it for you. TypeScript has no public extraction-status wrapper in this checkout: its `longTerm.waitForExtraction` polls entity search using expected names, a predicate, or result count. Entity search counts alone can match unrelated existing workspace entities.
+
+On Python, `get_conversation` makes both metadata and message requests. There is no public `get_conversation_metadata` or `delete_conversation`; use `clear_session` for whole-conversation deletion.
 
 == Entities
 
-[cols="2,3,1,1,1,1,1"]
+[cols="2,3,2,2,1"]
 |===
-| HTTP | Path | Bridge | TS | Go | Py | C#
+| HTTP | Path | Protocol operation | Python accessor | TS
 
-| `GET` | `/entities` | `list_entities` | `listEntities` | `ListEntities` | `list_entities` | `ListEntitiesAsync`
-| `POST` | `/entities` | `add_entity` | `addEntity` | `AddEntity` | `add_entity` | `AddEntityAsync`
-| `GET` | `/entities/{id}` | `get_entity` | `getEntity` | `GetEntity` | `get_entity` | `GetEntityAsync`
-| `PUT` | `/entities/{id}` | `update_entity` | `updateEntity` | `UpdateEntity` | `update_entity` | `UpdateEntityAsync`
-| `DELETE` | `/entities/{id}` | `delete_entity` | `deleteEntity` | `DeleteEntity` | `delete_entity` | `DeleteEntityAsync`
-| `PUT` | `/entities/{id}/feedback` | `set_entity_feedback` | `setEntityFeedback` | `SetEntityFeedback` | `set_entity_feedback` | `SetEntityFeedbackAsync`
-| `GET` | `/entities/{id}/history` | `get_entity_history` | `getEntityHistory` | `GetEntityHistory` | `get_entity_history` | `GetEntityHistoryAsync`
-| `POST` | `/entities/{id}/merge` | `merge_entities` | `mergeEntities` | `MergeEntities` | `merge_entities` | `MergeEntitiesAsync`
-| `GET` | `/entities/graph` | `get_entity_graph` | `getEntityGraph` | `GetEntityGraph` | `get_entity_graph` | `GetEntityGraphAsync`
-| `POST` | `/entities/search` | `search_entities` | `searchEntities` | `SearchEntities` | `search_entities` | `SearchEntitiesAsync`
-| `POST` | `/graph/expand` | `expand_graph` | `expandGraph` | `ExpandGraph` | `expand_graph` | `ExpandGraphAsync`
+| `GET` | `/entities` | `list_entities` | No public wrapper | `listEntities`
+| `POST` | `/entities` | `add_entity` | `long_term.add_entity` | `addEntity`
+| `GET` | `/entities/\{id}` | `get_entity` | long_term.get_related_entities / get_entity_relationships (relationships only) | `getEntity`
+| `PUT` | `/entities/\{id}` | `update_entity` | No public wrapper | `updateEntity`
+| `DELETE` | `/entities/\{id}` | `delete_entity` | No public wrapper | `deleteEntity`
+| `PUT` | `/entities/\{id}/feedback` | `set_entity_feedback` | `long_term.set_entity_feedback` | `setEntityFeedback`
+| `GET` | `/entities/\{id}/history` | `get_entity_history` | `long_term.get_entity_history` | `getEntityHistory`
+| `POST` | `/entities/\{id}/merge` | `merge_entities` | No public wrapper | `mergeEntities`
+| `GET` | `/entities/graph` | `get_entity_graph` | No public wrapper | `getEntityGraph`
+| `POST` | `/entities/search` | `search_entities` | `long_term.search_entities` | `searchEntities`
+| `POST` | `/graph/expand` | `expand_graph` | `long_term.expand_graph` | `expandGraph`
 |===
+
+Go and C# clients are not part of this repository; their method names for this
+table are collapsed below for reference.
+
+[%collapsible]
+====
+[cols="3,2,2"]
+|===
+| Path | Go | C#
+
+| `/entities` | `ListEntities` | `ListEntitiesAsync`
+| `/entities` | `AddEntity` | `AddEntityAsync`
+| `/entities/\{id}` | `GetEntity` | `GetEntityAsync`
+| `/entities/\{id}` | `UpdateEntity` | `UpdateEntityAsync`
+| `/entities/\{id}` | `DeleteEntity` | `DeleteEntityAsync`
+| `/entities/\{id}/feedback` | `SetEntityFeedback` | `SetEntityFeedbackAsync`
+| `/entities/\{id}/history` | `GetEntityHistory` | `GetEntityHistoryAsync`
+| `/entities/\{id}/merge` | `MergeEntities` | `MergeEntitiesAsync`
+| `/entities/graph` | `GetEntityGraph` | `GetEntityGraphAsync`
+| `/entities/search` | `SearchEntities` | `SearchEntitiesAsync`
+| `/graph/expand` | `ExpandGraph` | `ExpandGraphAsync`
+|===
+====
 
 `POST /graph/expand` returns the 1-hop neighbourhood of a node (`{nodes, edges}`),
-excluding any `loaded_ids` you already have — it backs incremental
+excluding any IDs you already have (`loadedIds` on the wire; Python argument `loaded_ids`) — it backs incremental
 graph-visualization ("expand this node"). Exposed as `long_term.expand_graph` /
 `longTerm.expandGraph`.
 
@@ -138,47 +184,86 @@ without a follow-up GET.
 
 == Reasoning
 
-[cols="2,3,1,1,1,1,1"]
+[cols="2,3,2,2,1"]
 |===
-| HTTP | Path | Bridge | TS | Go | Py | C#
+| HTTP | Path | Protocol operation | Python accessor | TS
 
-| `POST` | `/reasoning/steps` | `record_step` | `recordStep` | `RecordStep` | `record_step` | `RecordStepAsync`
-| `GET` | `/reasoning/steps` | `list_steps` | `listSteps` | `ListSteps` | `list_steps` | `ListStepsAsync`
-| `GET` | `/reasoning/explain/{step}` | `explain_step` | `explainStep` | `ExplainStep` | `explain_step` | `ExplainStepAsync`
-| `POST` | `/reasoning/tool-calls` | `record_tool_call` | `recordToolCall` | `RecordToolCall` | `record_tool_call` | `RecordToolCallAsync`
-| `GET` | `/reasoning/trace/{conv}` | `get_trace_by_conversation` | `getTraceByConversation` | `GetTraceByConversation` | `get_trace_by_conversation` | `GetTraceByConversationAsync`
-| `GET` | `/reasoning/provenance/{entity}` | `get_entity_provenance` | `getEntityProvenance` | `GetEntityProvenance` | `get_entity_provenance` | `GetEntityProvenanceAsync`
+| `POST` | `/reasoning/steps` | `record_step` | `reasoning.add_step` | `recordStep`
+| `GET` | `/reasoning/steps` | `list_steps` | No public wrapper | `listSteps`
+| `GET` | `/reasoning/explain/\{step}` | `explain_step` | No public wrapper | `explainStep`
+| `POST` | `/reasoning/tool-calls` | `record_tool_call` | `reasoning.record_tool_call` | `recordToolCall`
+| `GET` | `/reasoning/trace/\{conv}` | `get_trace_by_conversation` | reasoning.get_session_traces / get_trace_with_steps | `getTraceByConversation`
+| `GET` | `/reasoning/provenance/\{entity}` | `get_entity_provenance` | `long_term.get_entity_provenance` | `getEntityProvenance`
 |===
 
-== Cypher and Auth
+Go and C# clients are not part of this repository; their method names for this
+table are collapsed below for reference.
 
-[cols="2,3,1,1,1,1,1"]
+[%collapsible]
+====
+[cols="3,2,2"]
 |===
-| HTTP | Path | Bridge | TS | Go | Py | C#
+| Path | Go | C#
 
-| `POST` | `/query` | `cypher_query` | `query.cypher` | `Query.Cypher` | `query.cypher` | `Query.CypherAsync`
-| `GET` | `/auth/api-keys` | `list_api_keys` | `auth.listApiKeys` | `Auth.ListAPIKeys` | `auth.list_api_keys` | `Auth.ListApiKeysAsync`
-| `POST` | `/auth/api-keys` | `create_api_key` | `auth.createApiKey` | `Auth.CreateAPIKey` | `auth.create_api_key` | `Auth.CreateApiKeyAsync`
-| `DELETE` | `/auth/api-keys/{id}` | `revoke_api_key` | `auth.revokeApiKey` | `Auth.RevokeAPIKey` | `auth.revoke_api_key` | `Auth.RevokeApiKeyAsync`
-| `GET` | `/auth/api-keys/{id}/reveal` | `reveal_api_key` | `auth.revealApiKey` | `Auth.RevealAPIKey` | `auth.reveal_api_key` | `Auth.RevealApiKeyAsync`
-| `POST` | `/auth/api-keys/{id}/rotate` | `rotate_api_key` | `auth.rotateApiKey` | `Auth.RotateAPIKey` | `auth.rotate_api_key` | `Auth.RotateApiKeyAsync`
-| `POST` | `/auth/refresh` | `refresh_access_token` | `auth.refreshAccessToken` | `Auth.RefreshAccessToken` | `auth.refresh_access_token` | `Auth.RefreshAccessTokenAsync`
+| `/reasoning/steps` | `RecordStep` | `RecordStepAsync`
+| `/reasoning/steps` | `ListSteps` | `ListStepsAsync`
+| `/reasoning/explain/\{step}` | `ExplainStep` | `ExplainStepAsync`
+| `/reasoning/tool-calls` | `RecordToolCall` | `RecordToolCallAsync`
+| `/reasoning/trace/\{conv}` | `GetTraceByConversation` | `GetTraceByConversationAsync`
+| `/reasoning/provenance/\{entity}` | `GetEntityProvenance` | `GetEntityProvenanceAsync`
 |===
+====
+
+Python reasoning uses a local synthetic trace lifecycle over conversation-level server steps. `complete_trace` does not persist a server trace/outcome. See xref:reference/api/reasoning.adoc[Reasoning API] for lifetime and retrieval limits.
+
+anchor:_cypher_and_auth[]
+
+== Cypher and authentication
+
+[cols="2,3,2,2,1"]
+|===
+| HTTP | Path | Protocol operation | Python accessor | TS
+
+| `POST` | `/query` | `cypher_query` | `query.cypher` | `query.cypher`
+| `GET` | `/auth/api-keys` | `list_api_keys` | `auth.list_api_keys` | `auth.listApiKeys`
+| `POST` | `/auth/api-keys` | `create_api_key` | `auth.create_api_key` | `auth.createApiKey`
+| `DELETE` | `/auth/api-keys/\{id}` | `revoke_api_key` | `auth.revoke_api_key` | `auth.revokeApiKey`
+| `GET` | `/auth/api-keys/\{id}/reveal` | `reveal_api_key` | `auth.reveal_api_key` | `auth.revealApiKey`
+| `POST` | `/auth/api-keys/\{id}/rotate` | `rotate_api_key` | `auth.rotate_api_key` | `auth.rotateApiKey`
+| `POST` | `/auth/refresh` | `refresh_access_token` | `auth.refresh_access_token` | `auth.refreshAccessToken`
+|===
+
+Go and C# clients are not part of this repository; their method names for this
+table are collapsed below for reference.
+
+[%collapsible]
+====
+[cols="3,2,2"]
+|===
+| Path | Go | C#
+
+| `/query` | `Query.Cypher` | `Query.CypherAsync`
+| `/auth/api-keys` | `Auth.ListAPIKeys` | `Auth.ListApiKeysAsync`
+| `/auth/api-keys` | `Auth.CreateAPIKey` | `Auth.CreateApiKeyAsync`
+| `/auth/api-keys/\{id}` | `Auth.RevokeAPIKey` | `Auth.RevokeApiKeyAsync`
+| `/auth/api-keys/\{id}/reveal` | `Auth.RevealAPIKey` | `Auth.RevealApiKeyAsync`
+| `/auth/api-keys/\{id}/rotate` | `Auth.RotateAPIKey` | `Auth.RotateApiKeyAsync`
+| `/auth/refresh` | `Auth.RefreshAccessToken` | `Auth.RefreshAccessTokenAsync`
+|===
+====
 
 [NOTE]
 ====
-The per-language method names above follow the bridge-protocol/conformance
-naming. Both SDKs expose these on a `client.auth` accessor (Python `NamsAuth`,
+The Python and TypeScript SDKs expose authentication operations on `client.auth` (Python `NamsAuth`,
 TypeScript `AuthClient`): `list_api_keys` / `create_api_key` / `reveal_api_key` /
 `rotate_api_key` / `revoke_api_key` / `refresh_access_token`. On the bolt backend
-`client.auth` is a `NotSupportedError` sentinel (bolt uses `NEO4J_PASSWORD`, not
-a NAMS key). You can also manage keys from the dashboard. See
-xref:reference/authentication.adoc[Authentication & API Keys].
+`client.auth` is a `NotSupportedError` sentinel (bolt uses Neo4j credentials). You can also manage keys from the dashboard. See
+xref:reference/authentication.adoc[Authentication and API keys].
 ====
 
 == Ontologies
 
-Typed, versioned domain schemas. Workspace-scoped via `X-Workspace-Id`. Request
+Typed, versioned domain schemas. The workspace is selected by credentials and the configured workspace header. Request
 bodies are snake_case. See xref:reference/ontology-api.adoc[Ontology API] for the
 document schema and validation modes.
 
@@ -187,17 +272,17 @@ document schema and validation modes.
 | HTTP | Path | Python | TypeScript
 
 | `GET` | `/ontologies` | `ontology.list` | `ontology.list`
-| `GET` | `/ontologies/{id}` | `ontology.get` | `ontology.get`
+| `GET` | `/ontologies/\{id}` | `ontology.get` | `ontology.get`
 | `GET` | `/ontologies/active` | `ontology.get_active` | `ontology.getActive`
-| `POST` | `/ontologies/{name}/clone` | `ontology.clone` | `ontology.clone`
+| `POST` | `/ontologies/\{name}/clone` | `ontology.clone` | `ontology.clone`
 | `POST` | `/ontologies` | `ontology.create` | `ontology.create`
-| `PUT` | `/ontologies/{id}` | `ontology.update` | `ontology.update`
+| `PUT` | `/ontologies/\{id}` | `ontology.update` | `ontology.update`
 | `POST` | `/ontologies/active` | `ontology.activate` | `ontology.activate`
-| `DELETE` | `/ontologies/{id}` | `ontology.delete` | `ontology.delete`
+| `DELETE` | `/ontologies/\{id}` | `ontology.delete` | `ontology.delete`
 | `POST` | `/ontologies/import` | `ontology.import_` | `ontology.import`
-| `GET` | `/ontologies/{id}/diff` | `ontology.diff` | `ontology.diff`
-| `POST` | `/ontologies/{id}/migrate` | `ontology.migrate` | `ontology.migrate`
-| `GET` | `/ontologies/migrations/{job_id}` | `ontology.get_migration` | `ontology.getMigration`
+| `GET` | `/ontologies/\{id}/diff` | `ontology.diff` | `ontology.diff`
+| `POST` | `/ontologies/\{id}/migrate` | `ontology.migrate` | `ontology.migrate`
+| `GET` | `/ontologies/migrations/\{job_id}` | `ontology.get_migration` | `ontology.getMigration`
 |===
 
 [NOTE]
@@ -205,9 +290,7 @@ document schema and validation modes.
 `import`, `diff`, and `migrate` are exposed on the `client.ontology` accessor in
 both SDKs (Python `import_` — trailing underscore, since `import` is a keyword).
 `migrate` is asynchronous: it returns a `MigrationJob` you poll with
-`get_migration()`. The preview/dry-run path of `import` is rate-limited to 30
-requests/hour/workspace (see xref:reference/nams-limits.adoc[NAMS Limits &
-Behavior]). See xref:reference/ontology-api.adoc[Ontology API] for method
+`get_migration()`. Consult xref:reference/nams-limits.adoc[NAMS limits and behavior] and the current service contract for hosted request limits. See xref:reference/ontology-api.adoc[Ontology API] for method
 signatures and the accepted import formats.
 ====
 
@@ -231,8 +314,7 @@ Error responses use standard HTTP status codes with a JSON body of the shape
 | Other 4xx (e.g. `409`, `410`, `413`, `422`) | Conflict, gone, payload too large, semantic validation | `TransportError`
 |===
 
-All SDK exceptions subclass `MemoryError`. The SDK retries `429`, `5xx`, and
-network errors with exponential backoff, honoring any `Retry-After` header. See xref:reference/nams-limits.adoc[NAMS Limits & Behavior]
+All SDK exceptions subclass `MemoryError`. The Python transport retries `429`, `500`, `502`, `503`, `504`, and connection/timeout/remote-protocol errors with exponential backoff. It honors numeric `Retry-After` seconds; HTTP-date Retry-After values are not parsed. See xref:reference/nams-limits.adoc[NAMS limits and behavior]
 for rate-limit and quota specifics.
 
 The TypeScript REST transport reports 404 as `TransportError` with
@@ -240,9 +322,7 @@ The TypeScript REST transport reports 404 as `TransportError` with
 
 == Pagination
 
-List endpoints accept `limit` and `offset` query parameters for offset-based
-pagination (e.g. `GET /v1/conversations?limit=50&offset=100`). Defaults are
-service-configured; pass an explicit `limit` for deterministic page sizes.
+Pagination is endpoint- and client-specific; inspect the OpenAPI schema for the endpoint you call. Python `short_term.list_conversations` forwards `limit` and `user_identifier` (as userId), but does not forward `offset`. Do not infer that an accepted `**kwargs` name becomes a request parameter. Other Python accessors may implement their own pagination controls. Pass supported limits explicitly when deterministic page sizes are needed.
 
 == Wire format differences
 
@@ -250,6 +330,13 @@ service-configured; pass an explicit `limit` for deterministic page sizes.
 * Bridge protocol: snake_case fields (`user_id`, `conversation_id`,
   `created_at`).
 
-The clients translate transparently. If you're writing a custom transport,
+The wrappers translate their supported fields; NAMS ontologies use snake_case request documents. Python may synthesize model fields where hosted responses do not carry bolt equivalents; see the API references. If you're writing a custom transport,
 see the link:https://github.com/neo4j-labs/agent-memory-tck/blob/main/docs/reference/bridge-protocol.adoc[bridge-protocol reference]
 and the language-specific `casing` modules in the TCK repo.
+
+== See also
+
+* xref:reference/authentication.adoc[Authentication and API keys] — how these endpoints authenticate requests.
+* xref:reference/nams-limits.adoc[NAMS limits and behavior] — quotas and runtime behavior for this API.
+* xref:reference/api/memory-client.adoc[MemoryClient API reference] — the Python client that wraps this API.
+* xref:reference/typescript-api.adoc[TypeScript SDK API reference] — the TypeScript client that wraps this API.

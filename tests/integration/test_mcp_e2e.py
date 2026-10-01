@@ -49,11 +49,14 @@ class TestFullConversationFlow:
             data = json.loads(result.content[0].text)
             assert data["session_id"] == session_id
 
-            # 2. Store user message
+            # 2. Store user message. Auto-extraction stores and embeds each
+            # capitalized word; the mock extractor keeps trailing punctuation, so
+            # "at Neo4j." would store "Neo4j." and tie with step 6's "Neo4j" in
+            # the lookup in step 10.
             result = await client.call_tool(
                 "memory_store_message",
                 {
-                    "content": "I'm a software engineer working on graph databases at Neo4j.",
+                    "content": "I'm a software engineer at Neo4j working on graph databases.",
                     "session_id": session_id,
                     "role": "user",
                 },

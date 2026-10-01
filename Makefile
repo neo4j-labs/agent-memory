@@ -1,4 +1,4 @@
-.PHONY: help install install-all install-dev lint lint-fix format format-check typecheck ty check test test-unit test-integration test-integration-mcp test-e2e test-all test-docker test-ci test-no-docker test-quick test-file test-match test-aws test-nams-unit test-nams-integration test-nams-staging test-nams-sandbox test-nams-local test-nams coverage coverage-all coverage-ci coverage-mcp test-examples test-examples-quick test-examples-no-neo4j test-examples-docker test-examples-ci test-docs test-docs-syntax test-docs-build test-docs-links test-docs-integration neo4j-start neo4j-stop neo4j-restart neo4j-logs neo4j-status neo4j-wait neo4j-wait-quiet neo4j-clean neo4j-shell clean build publish publish-test docs docs-install docs-serve docs-watch docs-clean docs-diagrams-list docs-diagrams-status docs-diagrams-missing docs-diagrams-manifest docs-diagrams-add-refs docs-diagrams-generate pre-commit ci ci-no-docker shell watch dev example-hello example-basic example-resolution example-enrichment example-langchain example-pydantic example-no-llm example-domain-schemas example-ontology-extraction example-existing-graph example-buffered-writes example-audit-trail example-eval-harness example-strands-session-manager example-strands-memory-store example-nams-quickstart example-ontology-lifecycle example-team-memory-doctor example-team-memory-seed examples examples-with-keys chat-agent-install chat-agent-backend chat-agent-frontend chat-agent chat-agent-backend-with-neo4j ts-install ts-build ts-test ts-test-unit ts-test-integration ts-lint ts-docs ts-conformance ts-pack ts-clean ts-test-examples
+.PHONY: help install install-all install-dev lint lint-fix format format-check typecheck ty check test test-unit test-integration test-integration-mcp test-e2e test-all test-docker test-ci test-no-docker test-quick test-file test-match test-aws test-nams-unit test-nams-integration test-nams-staging test-nams-sandbox test-nams-local test-nams coverage coverage-all coverage-ci coverage-mcp test-examples test-examples-quick test-examples-no-neo4j test-examples-docker test-examples-ci test-docs test-docs-syntax test-docs-build test-docs-links test-docs-integration test-docs-framework-contracts docs-render-check docs-render-install neo4j-start neo4j-stop neo4j-restart neo4j-logs neo4j-status neo4j-wait neo4j-wait-quiet neo4j-clean neo4j-shell clean build publish publish-test docs docs-install docs-serve docs-lint docs-clean docs-diagrams-list docs-diagrams-status docs-diagrams-missing docs-diagrams-manifest docs-diagrams-add-refs docs-diagrams-generate pre-commit ci ci-no-docker shell watch dev example-hello example-basic example-resolution example-enrichment example-langchain example-pydantic example-no-llm example-domain-schemas example-ontology-extraction example-existing-graph example-buffered-writes example-audit-trail example-eval-harness example-strands-session-manager example-strands-memory-store example-nams-quickstart example-ontology-lifecycle example-team-memory-doctor example-team-memory-seed examples examples-with-keys chat-agent-install chat-agent-backend chat-agent-frontend chat-agent chat-agent-backend-with-neo4j ts-install ts-build ts-test ts-test-unit ts-test-integration ts-lint ts-docs ts-conformance ts-pack ts-clean ts-test-examples
 
 # Default target
 help:
@@ -40,6 +40,8 @@ help:
 	@echo "  make test-docs-syntax      Run syntax validation for code snippets (fast)"
 	@echo "  make test-docs-build       Run documentation build pipeline tests"
 	@echo "  make test-docs-links       Run internal link validation tests"
+	@echo "  make test-docs-integration Run the tutorial and how-to programs against Neo4j"
+	@echo "  make test-docs-framework-contracts Run the framework recipe contracts (all extras)"
 	@echo ""
 	@echo "Examples (key-free):"
 	@echo "  make example-hello        Smallest round trip (PEP 723, one file)"
@@ -100,15 +102,17 @@ help:
 	@echo "  make clean            Remove build artifacts"
 	@echo ""
 	@echo "Documentation:"
-	@echo "  make docs-install     Install documentation build dependencies"
-	@echo "  make docs             Build documentation to HTML"
-	@echo "  make docs-serve       Build and serve with live reload (http://localhost:8080)"
-	@echo "  make docs-watch       Watch for changes and rebuild"
-	@echo "  make docs-clean       Remove built documentation"
+	@echo "  make docs-install        Install documentation build dependencies"
+	@echo "  make docs                Build documentation to HTML"
+	@echo "  make docs-serve          Build once and serve a static preview (http://localhost:8080)"
+	@echo "  make docs-lint           Check sources and a fresh build (links, images, diagrams, layout)"
+	@echo "  make docs-render-install Install Playwright and Chromium for the rendered-layout checks"
+	@echo "  make docs-render-check   Build, then check rendered layout at desktop and mobile widths"
+	@echo "  make docs-clean          Remove built documentation"
 	@echo ""
 	@echo "Diagram Management:"
-	@echo "  make docs-diagrams-status   Show status of all diagram placeholders"
-	@echo "  make docs-diagrams-missing  Show diagrams missing Excalidraw files"
+	@echo "  make docs-diagrams-status   Check published diagram sources and exports"
+	@echo "  make docs-diagrams-missing  Show missing or stale diagram sources/exports"
 	@echo "  make docs-diagrams-generate Instructions for generating diagrams"
 	@echo "  make docs-diagrams-add-refs Add image references to AsciiDoc files"
 
@@ -133,7 +137,7 @@ install-dev:
 # TODO(#144): the AWS FSA Lambda shim imports `src.main`, which ruff's isort
 # sorts into the first-party block; drop this once that file grows a
 # `# isort: skip` or the backend is made a real package.
-RUFF_PATHS := src tests examples
+RUFF_PATHS := src tests examples docs/modules/ROOT/examples
 RUFF_EXTEND_IGNORES := \
 	--extend-per-file-ignores 'examples/financial-services-advisor/aws-financial-services-advisor/backend/handler.py:I001'
 
@@ -346,7 +350,16 @@ test-docs:
 	uv run pytest tests/docs -v \
 		--ignore=tests/docs/test_tutorial_examples.py \
 		--ignore=tests/docs/test_howto_examples.py \
+		--ignore=tests/docs/test_python_integration_contracts.py \
 		--timeout=120
+
+# Run the framework recipe contracts. They need every framework extra plus the
+# separately published agent-framework-openai client (see docs/MAINTAINING.md).
+test-docs-framework-contracts:
+	@echo "Running framework recipe contracts (needs all extras and agent-framework-openai)..."
+	uv sync --group dev --all-extras
+	uv pip install 'agent-framework-openai>=1.13,<2'
+	uv run --no-sync pytest tests/docs/test_python_integration_contracts.py -q --timeout=60
 
 # Run only syntax validation tests (fast, no external dependencies)
 test-docs-syntax:
@@ -363,7 +376,7 @@ test-docs-links:
 	@echo "Running documentation link validation..."
 	uv run pytest tests/docs/test_links.py -v --timeout=60
 
-# Run documentation integration tests (requires Neo4j)
+# Run the maintained tutorial and how-to programs against Neo4j (NEO4J_URI or testcontainers)
 test-docs-integration:
 	@echo "Running documentation integration tests with testcontainers..."
 	uv run pytest tests/docs/test_tutorial_examples.py tests/docs/test_howto_examples.py -v --timeout=300
@@ -453,25 +466,44 @@ publish-test: build
 # Install docs dependencies
 docs-install:
 	@echo "Installing documentation dependencies..."
-	cd docs && npm install
+	cd docs && npm ci
 
 # Build documentation to HTML
 docs:
 	@echo "Building documentation..."
 	cd docs && npm run build
 	@echo ""
-	@echo "Documentation built to docs/_site/"
-	@echo "Open docs/_site/index.html in your browser"
+	@echo "Documentation built to docs/build/site/"
+	@echo "Open docs/build/site/index.html in your browser"
 
-# Build and serve with live reload
+# Build once and serve a static preview
 docs-serve:
-	@echo "Starting documentation server with live reload..."
+	@echo "Building documentation and starting the static preview server..."
 	cd docs && npm run serve
 
-# Watch for changes and rebuild
-docs-watch:
-	@echo "Watching for documentation changes..."
-	cd docs && npm run watch
+# Check source and a fresh rendered build. Runs the Playwright-based
+# rendered-site checks first (docs-render-check, which builds docs/build/site),
+# so inline TOC, undersized images (downscale below 0.45), mobile overflow,
+# Title Case headings and scaffolding headings fail this target, not just a
+# separate one. `npm run lint` then builds a second time into a temporary
+# directory. Needs `make docs-render-install` once.
+docs-lint: docs-render-check
+	cd docs && npm run lint
+
+# Install the optional Playwright toolchain (docs/diagrams, shared with the
+# diagram exporter) and its Chromium browser for docs-render-check.
+docs-render-install:
+	npm ci --prefix docs/diagrams
+	cd docs/diagrams && npx playwright install chromium
+
+# Build the docs, then render every page at desktop/mobile widths with
+# Playwright and check the resulting layout facts (inline TOC, undersized
+# images, mobile overflow, diagram captions, heading case, closing
+# sections). See scripts/render_docs.mjs and tests/docs/test_rendered_site.py.
+# DOCS_RENDER_CHECK_REQUIRED=1 makes a missing Playwright install fail the
+# target instead of skipping every check.
+docs-render-check: docs
+	DOCS_RENDER_CHECK_REQUIRED=1 uv run pytest tests/docs/test_rendered_site.py -v --timeout=300
 
 # Clean built documentation
 docs-clean:
@@ -484,23 +516,23 @@ docs-clean:
 
 # List all diagram placeholders in documentation
 docs-diagrams-list:
-	@python scripts/manage_diagrams.py list
+	@python3 scripts/manage_diagrams.py list
 
 # Show status of all diagrams (which have Excalidraw files)
 docs-diagrams-status:
-	@python scripts/manage_diagrams.py status
+	@python3 scripts/manage_diagrams.py status
 
 # Show only diagrams missing Excalidraw files
 docs-diagrams-missing:
-	@python scripts/manage_diagrams.py missing
+	@python3 scripts/manage_diagrams.py missing
 
 # Generate manifest JSON of all diagrams
 docs-diagrams-manifest:
-	@python scripts/manage_diagrams.py manifest
+	@python3 scripts/manage_diagrams.py manifest
 
 # Add image references to AsciiDoc files for diagrams that have Excalidraw files
 docs-diagrams-add-refs:
-	@python scripts/manage_diagrams.py add-refs
+	@python3 scripts/manage_diagrams.py add-refs
 
 # Generate diagrams using Claude with Excalidraw skill
 # Usage: make docs-diagrams-generate
@@ -514,10 +546,12 @@ docs-diagrams-generate:
 	@echo "1. Run: make docs-diagrams-missing"
 	@echo "2. For each missing diagram, ask Claude:"
 	@echo "   'Generate an Excalidraw diagram for [TITLE] based on this ASCII art: ...'"
-	@echo "3. Save the JSON to: docs/assets/images/diagrams/excalidraw/[slug].excalidraw"
-	@echo "4. Run: make docs-diagrams-add-refs"
+	@echo "3. Save the JSON to: docs/assets/diagrams/excalidraw/[slug].excalidraw"
+	@echo "4. Export: node scripts/export_diagrams.mjs docs/assets/diagrams/excalidraw/[slug].excalidraw docs/modules/ROOT/images/diagrams/[slug].svg"
+	@echo "   (node scripts/export_diagrams.mjs --all re-exports every SVG the manifest records)"
+	@echo "5. Inspect exports, record them in docs/diagrams/manifest.json, run make docs-lint"
 	@echo ""
-	@python scripts/manage_diagrams.py missing --json 2>/dev/null || python scripts/manage_diagrams.py status
+	@python3 scripts/manage_diagrams.py missing --json 2>/dev/null || python3 scripts/manage_diagrams.py status
 
 # =============================================================================
 # Development Shortcuts
@@ -556,8 +590,11 @@ dev: format lint test-unit
 #
 # `set -a` exports everything examples/.env defines so the values actually
 # reach the `uv run` child process (the old `. examples/.env` set shell
-# variables only). When NEO4J_URI is still unset afterwards, start the
-# throwaway docker-compose Neo4j and use its password.
+# variables only). With NEO4J_URI set (for example to the dedicated Aura
+# instance examples/AURA_SETUP.md describes), the example runs against it.
+# When NEO4J_URI is still unset afterwards, the local alternative applies:
+# start the throwaway docker-compose Neo4j and export its URI, username and
+# password, so `make examples` stays key-free.
 define run_example
 	@set -a; \
 	if [ -f examples/.env ]; then . examples/.env 2>/dev/null || true; fi; \
@@ -565,7 +602,8 @@ define run_example
 	if [ -z "$$NEO4J_URI" ]; then \
 		echo "NEO4J_URI not set, starting Docker Neo4j..."; \
 		$(MAKE) neo4j-start neo4j-wait-quiet; \
-		NEO4J_PASSWORD=test-password uv run python $(1) $(2); \
+		NEO4J_URI=bolt://localhost:7687 NEO4J_USERNAME=neo4j NEO4J_PASSWORD=test-password \
+			uv run python $(1) $(2); \
 	else \
 		echo "Using configured Neo4j at $$NEO4J_URI"; \
 		uv run python $(1) $(2); \
@@ -805,7 +843,7 @@ ts-test-integration:
 ts-lint:
 	cd $(TS_DIR) && npm run lint
 
-# Build TypeDoc API reference (outputs to typescript/docs-api/)
+# Build TypeDoc API reference (outputs to docs/modules/ROOT/attachments/api/typescript/)
 ts-docs:
 	cd $(TS_DIR) && npm run docs:api
 
@@ -825,16 +863,23 @@ ts-clean:
 # API drift between examples and the SDK without needing API keys.
 # Mirrors the ci-typescript.yml type-check-examples matrix. Every directory
 # under typescript/examples/ is iterated, so a new example is covered the
-# moment it lands (no list to keep in step).
+# moment it lands (no list to keep in step). The local nams-ai-provider package
+# (typescript/packages/vercel-ai-provider, dist/ gitignored) is built before the
+# first example whose package.json links it, as CI does.
 #
 # `npm ci` where a lockfile is committed, `npm install` otherwise — see the
 # lockfile policy in typescript/examples/README.md.
 ts-test-examples:
 	cd $(TS_DIR) && npm ci && npm run build
-	@for dir in $(TS_DIR)/examples/*/; do \
+	@provider_built=; \
+	for dir in $(TS_DIR)/examples/*/; do \
 		ex=$$(basename $$dir); \
 		[ -f "$$dir/package.json" ] || continue; \
 		echo "=== $$ex ==="; \
+		if [ -z "$$provider_built" ] && grep -q 'packages/vercel-ai-provider' "$$dir/package.json"; then \
+			(cd $(TS_DIR)/packages/vercel-ai-provider && npm ci && npm run build) || exit 1; \
+			provider_built=1; \
+		fi; \
 		if [ -f "$$dir/package-lock.json" ]; then \
 			(cd $$dir && npm ci) || exit 1; \
 		else \

@@ -109,7 +109,7 @@ Cypher question from Demo 1 Turn 4 now works.
 - **`core`** — day-to-day coding. You want recall, not a graph console.
 - **`extended`** — investigating memory itself: ad-hoc Cypher, trace review,
   exporting a subgraph to visualise.
-- **Hosted NAMS** — a third, larger surface (47 scope-gated tools: ontology
+- **Hosted NAMS** — a third, larger surface (scope-dependent tools: ontology
   editing, entity review, Skills, workspace administration). Scopes, not a
   profile flag, decide what a key sees. See [`README.md`](README.md#two-servers-two-tool-surfaces--said-once-here).
 
@@ -125,8 +125,9 @@ Cypher question from Demo 1 Turn 4 now works.
 The script stages `deploy/mcpb/manifest.json` — the repository's single
 definition of the server command — and zips it. Install it in Claude Desktop via
 Settings → Extensions → Install from file. Desktop prompts for the manifest's
-`env_required` values (`NEO4J_PASSWORD`), which is why the bundle path needs no
-hand-edited JSON and no key in a file.
+`user_config` fields (Neo4j URI, username, password, database and OpenAI API
+key; the password and key are stored as sensitive values), which is why the
+bundle path needs no hand-edited JSON and no key in a file.
 
 ---
 

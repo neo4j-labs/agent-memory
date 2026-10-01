@@ -1,0 +1,166 @@
+= Models and structured outcomes
+:page-product: agent-memory
+:page-pagination:
+:toclevels: 2
+
+Pydantic models and the structured-outcome/entity-reference types for xref:reference/api/reasoning.adoc[ReasoningMemory API reference].
+
+== Models
+
+These are Pydantic models, not dataclasses. Inherited fields include UUID IDs and `created_at`; there is no `timestamp` alias. `ReasoningStep` uses `step_number`, and `ToolCall` uses `status` rather than `success`.
+
+=== ReasoningTrace
+
+Pydantic model; inherited memory-entry fields are included.
+
+[cols="2,3,2,4",options="header"]
+|===
+| Field | Type | Default | Description
+| `id` | `UUID` | `new UUID` | Unique identifier.
+| `created_at` | `datetime` | `current UTC time` | Creation time.
+| `updated_at` | `datetime \| None` | `None` | Last update time, if updated.
+| `embedding` | `list[float] \| None` | `None` | Embedding vector, if one was generated.
+| `metadata` | `dict[str, Any]` | `{}` | Arbitrary key-value metadata, stored as JSON.
+| `session_id` | `str` | `required` | Session identifier
+| `task` | `str` | `required` | Task description
+| `task_embedding` | `list[float] \| None` | `None` | Task embedding
+| `steps` | `list[ReasoningStep]` | `[]` | Reasoning steps
+| `outcome` | `str \| None` | `None` | Final outcome
+| `success` | `bool \| None` | `None` | Whether task succeeded
+| `started_at` | `datetime` | `current UTC time` | Start time
+| `completed_at` | `datetime \| None` | `None` | Completion time
+|===
+
+=== ReasoningStep
+
+Pydantic model; inherited memory-entry fields are included.
+
+[cols="2,3,2,4",options="header"]
+|===
+| Field | Type | Default | Description
+| `id` | `UUID` | `new UUID` | Unique identifier.
+| `created_at` | `datetime` | `current UTC time` | Creation time.
+| `updated_at` | `datetime \| None` | `None` | Last update time, if updated.
+| `embedding` | `list[float] \| None` | `None` | Embedding vector, if one was generated.
+| `metadata` | `dict[str, Any]` | `{}` | Arbitrary key-value metadata, stored as JSON.
+| `trace_id` | `UUID \| str` | `required` | Parent trace ID
+| `step_number` | `int` | `required` | Step number in sequence
+| `thought` | `str \| None` | `None` | Agent's thought/reasoning
+| `action` | `str \| None` | `None` | Action taken
+| `observation` | `str \| None` | `None` | Observation from action
+| `tool_calls` | `list[ToolCall]` | `[]` | Tool calls in this step
+|===
+
+=== ToolCall
+
+Pydantic model; inherited memory-entry fields are included.
+
+[cols="2,3,2,4",options="header"]
+|===
+| Field | Type | Default | Description
+| `id` | `UUID` | `new UUID` | Unique identifier.
+| `created_at` | `datetime` | `current UTC time` | Creation time.
+| `updated_at` | `datetime \| None` | `None` | Last update time, if updated.
+| `embedding` | `list[float] \| None` | `None` | Embedding vector, if one was generated.
+| `metadata` | `dict[str, Any]` | `{}` | Arbitrary key-value metadata.
+| `tool_name` | `str` | `required` | Name of the tool
+| `arguments` | `dict[str, Any]` | `{}` | Tool arguments
+| `result` | `Any \| None` | `None` | Tool result
+| `status` | `ToolCallStatus` | `ToolCallStatus.PENDING` | Call status
+| `duration_ms` | `int \| None` | `None` | Duration in milliseconds
+| `error` | `str \| None` | `None` | Error message if failed
+| `step_id` | `UUID \| None` | `None` | Parent reasoning step ID
+|===
+
+=== Tool
+
+Fields and defaults:
+
+[cols="2,3,2,4",options="header"]
+|===
+| Field | Type | Default | Description
+| `name` | `str` | `required` | Unique tool name
+|===
+
+=== ToolStats
+
+Fields and defaults:
+
+[cols="2,3,2,4",options="header"]
+|===
+| Field | Type | Default | Description
+| `name` | `str` | `required` | Tool name
+| `description` | `str \| None` | `None` | Tool description
+| `total_calls` | `int` | `0` | Total number of calls
+| `successful_calls` | `int` | `0` | Number of successful calls
+| `failed_calls` | `int` | `0` | Number of failed calls (error/timeout)
+| `success_rate` | `float` | `0.0` | Success rate (0.0 to 1.0)
+| `avg_duration_ms` | `float \| None` | `None` | Average duration in ms
+| `last_used_at` | `datetime \| None` | `None` | Last time tool was used
+|===
+
+=== ReasoningStepWithContext
+
+Fields and defaults:
+
+[cols="2,3,2,4",options="header"]
+|===
+| Field | Type | Default | Description
+| `step` | `ReasoningStep` | `required` | The matching reasoning step
+| `similarity` | `float` | `required` | Cosine similarity to the query (0-1)
+| `parent_task` | `str` | `required` | Task of the parent ReasoningTrace
+| `parent_outcome` | `str \| None` | `None` | Outcome of the parent ReasoningTrace, if completed
+| `parent_success` | `bool \| None` | `None` | Success flag of the parent ReasoningTrace
+|===
+
+
+== Structured outcomes and entity references (bolt)
+
+Import `TraceOutcome` and `EntityRef` from `neo4j_agent_memory.schema.models`. A structured outcome overrides a separate `success=` argument. EntityRef requires at least a name or ID; the operation using the reference determines how it resolves identity. NAMS does not persist these trace outcome fields through its compatibility lifecycle.
+
+[source,python]
+----
+from neo4j_agent_memory.schema.models import EntityRef, TraceOutcome
+
+outcome = TraceOutcome(
+    success=True,
+    summary="Recommended La Trattoria",
+    related_entities=[EntityRef(name="La Trattoria", type="ORGANIZATION")],
+    metrics={"latency_ms": 812.0, "tools_called": 1},
+)
+await client.reasoning.complete_trace(trace.id, outcome=outcome)
+----
+
+=== EntityRef
+
+Fields and defaults:
+
+[cols="2,3,2,4",options="header"]
+|===
+| Field | Type | Default | Description
+| `label` | `str \| None` | `None` | Optional source domain label (e.g. 'Client'). Used when adopting an existing graph and the caller wants to disambiguate by label.
+| `name` | `str \| None` | `None` | Entity display name (matches Entity.name)
+| `type` | `str \| None` | `None` | POLE+O or custom entity type (matches Entity.type)
+| `id` | `str \| None` | `None` | Optional explicit entity id. When set, the reference identifies exactly one entity regardless of name/type.
+|===
+
+=== TraceOutcome
+
+Fields and defaults:
+
+[cols="2,3,2,4",options="header"]
+|===
+| Field | Type | Default | Description
+| `success` | `bool` | `required` | Whether the task succeeded
+| `summary` | `str` | `required` | Human-readable outcome summary
+| `error_kind` | `str \| None` | `None` | Indexed error category, e.g. 'timeout', 'no_results', 'user_aborted'. Stored on the ReasoningTrace for fast filtering.
+| `related_entities` | `list[EntityRef]` | `[]` | Entities the trace touched (for case-based retrieval)
+| `metrics` | `dict[str, float]` | `{}` | Arbitrary numeric metrics keyed by name (e.g. 'latency_ms', 'tools_called')
+|===
+
+
+== See also
+
+* xref:reference/api/reasoning.adoc[ReasoningMemory API reference]
+* xref:reference/api/reasoning-steps.adoc[Step, tool-call, and streaming operations]
+* xref:explanation/memory-types.adoc[Memory types]

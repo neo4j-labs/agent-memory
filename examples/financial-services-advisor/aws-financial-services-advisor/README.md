@@ -14,7 +14,7 @@ An intelligent compliance assistant powered by **AWS Strands Agents** and **Neo4
 
 ## Overview
 
-This example application showcases the AWS-Neo4j partnership through a production-ready architecture for financial services compliance. It demonstrates how AI agents can leverage graph-based memory for explainable, auditable decision-making.
+This example application showcases the AWS-Neo4j partnership through an example architecture for financial services compliance. It demonstrates how AI agents can use graph memory for explainable, auditable decision-making.
 
 ### Key Features
 
@@ -69,9 +69,9 @@ This example application showcases the AWS-Neo4j partnership through a productio
 ### Prerequisites
 
 - Python 3.11+ and [uv](https://docs.astral.sh/uv/)
-- Node.js 18+
+- Node.js 22.13+ on the 22 release line, or Node.js 24, for the frontend development toolchain
 - AWS CLI configured with Bedrock access (a current Claude Sonnet inference profile + Titan Embed V2)
-- Neo4j Aura account (or local Neo4j via Docker)
+- Neo4j Aura account and a dedicated example instance; follow [Aura setup and cleanup](../../AURA_SETUP.md) and configure the application's `NEO4J_USER` field as shown below
 
 ### Local Development
 
@@ -257,4 +257,6 @@ This example is part of the neo4j-agent-memory project and is licensed under the
 
 ---
 
-_Verified against `neo4j-agent-memory` v0.5.0, strands-agents 1.55.1, fastapi 0.141.1, aws-cdk-lib 2.269.0 on 2026-09-10 — 151 backend tests pass (124 unit, 27 integration against Neo4j 5.26), `cdk synth` succeeds with no AWS credentials, and the domain API was exercised end to end. A full chat run additionally needs AWS Bedrock credentials._
+**Historical verification report — 2026-09-10.** The following records a prior checkout/test report. Its development-version labels, passing counts, and release-availability statements are historical, not evidence of current package compatibility.
+
+> _Verified against `neo4j-agent-memory` v0.5.0, strands-agents 1.55.1, fastapi 0.141.1, aws-cdk-lib 2.269.0 on 2026-09-10 — 151 backend tests pass (124 unit, 27 integration against Neo4j 5.26), `cdk synth` succeeds with no AWS credentials, and the domain API was exercised end to end. A full chat run additionally needs AWS Bedrock credentials._

@@ -13,7 +13,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The tag is the only thing that names the version being released, but
       # `uv build` reads the version out of `pyproject.toml`. When the two
@@ -72,7 +72,7 @@ jobs:
     needs: publish-pypi
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download distributions
         uses: actions/download-artifact@v4

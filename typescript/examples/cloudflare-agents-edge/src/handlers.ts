@@ -131,6 +131,7 @@ export async function handleChat(deps: MemoryDeps, request: Request): Promise<Re
   });
 
   const startedAt = Date.now();
+  let failed = false;
   let settle!: (error?: unknown) => void;
   const persisted = new Promise<void>((resolve, reject) => {
     settle = (error?: unknown) => (error === undefined ? resolve() : reject(error));
@@ -141,6 +142,9 @@ export async function handleChat(deps: MemoryDeps, request: Request): Promise<Re
     instructions: INSTRUCTIONS,
     prompt: message,
     onEnd: async ({ text, usage }) => {
+      // A stream that reported an error part still ends; do not store its
+      // partial answer.
+      if (failed) return;
       try {
         await recordTurn(deps, {
           conversationId,
@@ -157,7 +161,10 @@ export async function handleChat(deps: MemoryDeps, request: Request): Promise<Re
     // A client that disconnects mid-stream, or a provider error, must still
     // release `waitUntil` — otherwise the Worker sits out its whole budget.
     onAbort: () => settle(),
-    onError: ({ error }) => settle(error),
+    onError: ({ error }) => {
+      failed = true;
+      settle(error);
+    },
   });
 
   // `waitUntil` keeps the isolate alive until the memory write lands. Without
@@ -168,10 +175,41 @@ export async function handleChat(deps: MemoryDeps, request: Request): Promise<Re
     }),
   );
 
-  return result.toTextStreamResponse({
+  const response = result.toTextStreamResponse({
     headers: {
       "X-Conversation-Id": conversationId,
       "Server-Timing": deps.nams.header(),
+    },
+  });
+  // `onAbort` fires only for an abort signal and `onError` only for an error
+  // part, so the response body also settles when the client cancels it or it
+  // fails outright.
+  return new Response(settleOnClose(response.body!, settle), {
+    status: response.status,
+    headers: response.headers,
+  });
+}
+
+/** Pass a stream through unchanged, settling if the reader cancels it or it errors. */
+function settleOnClose(
+  body: ReadableStream<Uint8Array>,
+  settle: (error?: unknown) => void,
+): ReadableStream<Uint8Array> {
+  const reader = body.getReader();
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (done) controller.close();
+        else controller.enqueue(value);
+      } catch (error) {
+        settle(error);
+        controller.error(error);
+      }
+    },
+    async cancel(reason) {
+      settle();
+      await reader.cancel(reason);
     },
   });
 }

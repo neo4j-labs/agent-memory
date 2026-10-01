@@ -1,0 +1,159 @@
+= Trace operations
+:page-product: agent-memory
+:page-pagination:
+:toclevels: 2
+
+Reasoning trace lifecycle operations from xref:reference/api/reasoning.adoc[ReasoningMemory API reference]. The signatures and behavior here are for bolt. On NAMS, `start_trace`, `complete_trace`, `get_trace`, and `get_trace_with_steps` work on synthetic traces held by the client instance; `get_session_traces` returns the conversation's server-stored steps as one aggregate trace; `list_traces` raises `NotSupportedError`. See xref:reference/api/reasoning-search-stats.adoc#_nams_lifecycle_and_operations[NAMS lifecycle and operations] for hosted behavior. Signatures show types, keyword-only arguments (`*`), and defaults; they are reference declarations, not calls to execute directly.
+
+anchor:_trace_operations[]
+anchor:_parameters[]
+anchor:_returns[]
+
+== Trace operations (bolt)
+
+=== start_trace
+
+Start a new reasoning trace.
+
+// contract: memory/reasoning.py:ReasoningMemory.start_trace
+[source,python]
+----
+async def start_trace(
+    session_id: str,
+    task: str,
+    *,
+    generate_embedding: bool=True,
+    metadata: dict[str, Any] | None=None,
+    triggered_by_message_id: UUID | str | None=None,
+    user_identifier: str | None=None,
+) -> ReasoningTrace: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `session_id` | Session identifier
+| `task` | Task description
+| `generate_embedding` | Whether to generate task embedding
+| `metadata` | Optional metadata
+| `triggered_by_message_id` | Optional message ID that initiated this trace. Creates an `:INITIATED_BY` relationship from ReasoningTrace to Message.
+| `user_identifier` | When provided, scopes the trace to a :User node via `(:User)-[:HAS_TRACE]->(:ReasoningTrace)` and denormalizes `user_identifier` onto the trace node for fast filtering. Required when `MemorySettings.memory.multi_tenant=True`.
+|===
+
+=== complete_trace
+
+Complete a reasoning trace.
+
+// contract: memory/reasoning.py:ReasoningMemory.complete_trace
+[source,python]
+----
+async def complete_trace(
+    trace_id: UUID | str,
+    *,
+    outcome: str | TraceOutcome | None=None,
+    success: bool | None=None,
+    generate_step_embeddings: bool=False,
+) -> ReasoningTrace: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `trace_id` | Trace ID to complete
+| `outcome` | Final outcome. Either a free-text string (legacy) or a `TraceOutcome` for structured outcomes with `error_kind`, `related_entities`, and metrics. A `TraceOutcome` overrides any `success=` argument.
+| `success` | Whether the task succeeded. Ignored when `outcome` is a `TraceOutcome`.
+| `generate_step_embeddings` | If True, batch generate embeddings for all steps that don't have them yet. Useful when steps were recorded with generate_embedding=False during streaming.
+|===
+
+=== get_trace
+
+Get a trace by ID (alias for get_trace_with_steps).
+
+// contract: memory/reasoning.py:ReasoningMemory.get_trace
+[source,python]
+----
+async def get_trace(trace_id: UUID | str) -> ReasoningTrace | None: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `trace_id` | Trace ID to retrieve (UUID or string)
+|===
+
+=== get_trace_with_steps
+
+Get a complete trace with all steps and tool calls.
+
+// contract: memory/reasoning.py:ReasoningMemory.get_trace_with_steps
+[source,python]
+----
+async def get_trace_with_steps(trace_id: UUID) -> ReasoningTrace | None: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `trace_id` | Trace ID to retrieve
+|===
+
+=== get_session_traces
+
+Get all traces for a session.
+
+// contract: memory/reasoning.py:ReasoningMemory.get_session_traces
+[source,python]
+----
+async def get_session_traces(session_id: str, *, limit: int=100) -> list[ReasoningTrace]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `session_id` | Session identifier
+| `limit` | Maximum traces to return
+|===
+
+=== list_traces
+
+List reasoning traces with filtering and pagination.
+
+// contract: memory/reasoning.py:ReasoningMemory.list_traces
+[source,python]
+----
+async def list_traces(
+    *,
+    session_id: str | None=None,
+    success_only: bool | None=None,
+    since: datetime | None=None,
+    until: datetime | None=None,
+    limit: int=100,
+    offset: int=0,
+    order_by: Literal['started_at', 'completed_at']='started_at',
+    order_dir: Literal['asc', 'desc']='desc',
+) -> list[ReasoningTrace]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `session_id` | Filter by session (optional)
+| `success_only` | Filter by success status (None for all, True for successful, False for failed)
+| `since` | Only traces started after this time
+| `until` | Only traces started before this time
+| `limit` | Maximum traces to return
+| `offset` | Number of traces to skip (for pagination)
+| `order_by` | Field to order by ('started_at' or 'completed_at')
+| `order_dir` | Sort direction ('asc' or 'desc')
+|===
+
+anchor:_get_traces[]
+anchor:_delete_trace[]
+There are no public `get_traces` or `delete_trace` methods. Use `get_session_traces` or `list_traces` to list traces. `get_trace_with_steps` loads steps and their tool calls; `list_traces` returns trace metadata without loading steps. Clearing a bolt session with `clear_session` does not delete its traces; see xref:reference/api/short-term-sessions.adoc#_clear_session[`clear_session`] for a query that removes a session's traces, steps, and tool calls.
+
+
+== See also
+
+* xref:reference/api/reasoning.adoc[ReasoningMemory API reference]
+* xref:reference/api/reasoning-steps.adoc[Step, tool-call, and streaming operations]
+* xref:how-to/reasoning-traces.adoc[Record and verify a failed tool call]

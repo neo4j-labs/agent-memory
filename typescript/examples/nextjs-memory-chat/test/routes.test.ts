@@ -4,10 +4,15 @@
  * The NAMS side is a mock REST service (msw) driven through the real
  * `MemoryClient`/`RestTransport`; the model side is the AI SDK's own
  * `MockLanguageModelV4` from `ai/test`, which records every call it receives.
+ * `/api/chat` also drives a real `createNamsProvider(...)` from
+ * `@neo4j-labs/nams-ai-provider` against the same mock service, so its
+ * retrieval (conversation search, entity search, graph expansion, reasoning
+ * steps, cross-session listing) and persistence run for real too.
  *
  * The assertions are the ones that fail if memory stops working:
  *   - the chat route persists both sides of a turn,
- *   - the prompt the model sees carries history the request never sent,
+ *   - the prompt the model sees carries memory the request never sent —
+ *     conversation history, entities, and graph relationships,
  *   - `expandGraph` receives the ids already on the canvas,
  *   - the extraction probe waits for a *new* entity before the rail refetches,
  *   - the answered turn lands in the reasoning trace.
@@ -113,6 +118,7 @@ beforeEach(() => {
     searches: 0,
     graph: fresh.graph,
     neighbours: new Map(),
+    relationships: new Map(),
   });
   state.conversations.clear();
   state.steps.length = 0;
@@ -124,13 +130,21 @@ afterEach(() => server.resetHandlers());
 
 const deps = () => ({ client, userId: "traveller@example.com" });
 
+/** `ChatDeps` for `handleChat` — same mock endpoint and key as `makeClient`. */
+const chatDeps = (model: MockLanguageModelV4) => ({
+  client,
+  memory: { apiKey: API_KEY, endpoint: ENDPOINT },
+  model,
+  userId: "traveller@example.com",
+});
+
 describe("POST /api/chat", () => {
   it("persists the user turn and the streamed assistant turn", async () => {
     const conversationId = state.seedConversation("traveller@example.com", []);
     const model = mockModel();
 
     const response = await handleChat(
-      { client, model, userId: "traveller@example.com" },
+      chatDeps(model),
       post("http://app.test/api/chat", {
         conversationId,
         messages: [
@@ -151,7 +165,7 @@ describe("POST /api/chat", () => {
     ]);
   });
 
-  it("injects history the request never sent", async () => {
+  it("injects conversation history the request never sent", async () => {
     const conversationId = state.seedConversation("traveller@example.com", [
       { role: "user", content: "I'm vegetarian and I can't do long bus rides." },
       { role: "assistant", content: "Noted — vegetarian, trains only." },
@@ -161,7 +175,7 @@ describe("POST /api/chat", () => {
     const model = mockModel();
 
     const response = await handleChat(
-      { client, model, userId: "traveller@example.com" },
+      chatDeps(model),
       post("http://app.test/api/chat", {
         conversationId,
         messages: [
@@ -174,20 +188,48 @@ describe("POST /api/chat", () => {
     expect(model.doStreamCalls).toHaveLength(1);
     const prompt = promptText(model.doStreamCalls[0]!);
 
-    // None of this was in the request body — the middleware read it back out of
-    // the graph in `transformParams`.
+    // None of this was in the request body — the NAMS provider read it back
+    // out of the conversation in `transformParams`, via a search call the mock
+    // answers with the conversation's own messages.
     expect(prompt).toContain("can't do long bus rides");
     expect(prompt).toContain("Budget is £3,000");
-    // The observation tier is injected as a system note.
-    expect(prompt).toContain("avoids buses");
-    // Replayed turns are part-array shaped, which is what spec v4 requires.
+    // The memory block's own header, so this is provably retrieved memory and
+    // not a message the request happened to send.
+    expect(prompt).toContain("Relevant long-term memory about this user");
+    // The retrieved turns are prepended to the last user message as its first
+    // text part, which is the shape spec v4 requires.
     expect(prompt).toContain('"type":"text"');
+
+    expect(state.callsTo("/conversations/:id/search")).not.toHaveLength(0);
+  });
+
+  it("surfaces a matching entity's graph relationship in the prompt", async () => {
+    const conversationId = state.seedConversation("traveller@example.com", []);
+    state.entities = [{ id: "e1", name: "Kyoto", type: "LOCATION" }];
+    state.relationships.set("e1", [{ type: "SERVED_BY", targetName: "Japan Railways" }]);
+    const model = mockModel();
+
+    const response = await handleChat(
+      chatDeps(model),
+      post("http://app.test/api/chat", {
+        conversationId,
+        messages: [{ id: "m1", role: "user", parts: [{ type: "text", text: "Tell me about Kyoto." }] }],
+      }),
+    );
+    await response.text();
+
+    const prompt = promptText(model.doStreamCalls[0]!);
+    // The entity itself, from `/entities/search` …
+    expect(prompt).toContain("Kyoto");
+    // … and the relationship the provider read via `GET /entities/e1`.
+    expect(prompt).toContain("(Kyoto)-[SERVED_BY]->(Japan Railways)");
+    expect(state.callsTo("/entities/:id")).toHaveLength(1);
   });
 
   it("records the answered turn as a reasoning step", async () => {
     const conversationId = state.seedConversation("traveller@example.com", []);
     const response = await handleChat(
-      { client, model: mockModel(), userId: "traveller@example.com" },
+      chatDeps(mockModel()),
       post("http://app.test/api/chat", {
         conversationId,
         messages: [{ id: "m1", role: "user", parts: [{ type: "text", text: "Plan day one." }] }],
@@ -210,7 +252,7 @@ describe("POST /api/chat", () => {
 
   it("rejects a request with no conversation id", async () => {
     const response = await handleChat(
-      { client, model: mockModel(), userId: "traveller@example.com" },
+      chatDeps(mockModel()),
       post("http://app.test/api/chat", {
         messages: [{ id: "m1", role: "user", parts: [{ type: "text", text: "hi" }] }],
       }),
@@ -222,7 +264,7 @@ describe("POST /api/chat", () => {
   it("rejects a request with no user message", async () => {
     const conversationId = state.seedConversation("traveller@example.com", []);
     const response = await handleChat(
-      { client, model: mockModel(), userId: "traveller@example.com" },
+      chatDeps(mockModel()),
       post("http://app.test/api/chat", { conversationId, messages: [] }),
     );
     expect(response.status).toBe(400);
@@ -230,7 +272,7 @@ describe("POST /api/chat", () => {
 });
 
 describe("GET /api/memory/context", () => {
-  it("returns the three tiers the middleware will inject", async () => {
+  it("returns the three tiers stored for the conversation", async () => {
     const conversationId = state.seedConversation("traveller@example.com", [
       { role: "user", content: "one" },
       { role: "assistant", content: "two" },

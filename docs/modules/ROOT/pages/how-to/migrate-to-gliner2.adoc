@@ -6,6 +6,8 @@
 :icons: font
 :source-highlighter: highlight.js
 
+include::partial$backend-client-side.adoc[]
+
 Release 0.7 replaced the local extraction stack. The `gliner` v1 package and the
 separate GLiREL relation model are gone; `GLiNER2Extractor` on GLiNER2.5 does
 both jobs in one pass. This guide covers what to change in your install, your
@@ -19,11 +21,11 @@ checkpoints. "GLiNER2.5" means the `fastino/gliner2.5-++*++` checkpoints on the
 retired to avoid the collision.
 ====
 
-== 1. Update the Install
+== 1. Update the install
 
 [source,bash]
 ----
-pip install "neo4j-agent-memory[gliner2]"
+python -m pip install 'neo4j-agent-memory[gliner2]==0.7.0'
 ----
 
 [cols="2,3", options="header"]
@@ -49,7 +51,7 @@ pip install "neo4j-agent-memory[gliner2]"
 You can uninstall `gliner` and `glirel`: nothing in the library imports them any
 more.
 
-== 2. Change the Model Id
+== 2. Change the model id
 
 [cols="2,1,1,2", options="header"]
 |===
@@ -83,71 +85,64 @@ GLiNER2.5 checkpoint such as 'fastino/gliner2.5-base-v1',
 ----
 
 Settings validation does not reject them, so a stale
-`NAM_EXTRACTION__GLINER_MODEL` surfaces at first extraction rather than at
-startup.
+`NAM_EXTRACTION__GLINER_MODEL` surfaces when the client connects and builds its
+extractor, not when the settings load.
 
-== 3. Update Your Code
+== 3. Update your code
 
-=== Entity Extraction
+=== Entity extraction
 
-[source,python]
+The diffs in this section show the 0.6 code being removed (`-`) and its 0.7
+replacement (`+`).
+
+[source,diff]
 ----
-# Before
-from neo4j_agent_memory.extraction import GLiNEREntityExtractor
+-from neo4j_agent_memory.extraction import GLiNEREntityExtractor
++from neo4j_agent_memory.extraction import GLiNER2Extractor
 
-extractor = GLiNEREntityExtractor.for_schema("podcast")
-extractor = GLiNEREntityExtractor.for_poleo()
-extractor = GLiNEREntityExtractor(entity_labels=["person", "company"])
-
-# After
-from neo4j_agent_memory.extraction import GLiNER2Extractor
-
-extractor = GLiNER2Extractor.for_schema("podcast")
-extractor = GLiNER2Extractor.for_poleo()
-extractor = GLiNER2Extractor(entity_labels=["person", "company"])
+-extractor = GLiNEREntityExtractor.for_schema("podcast")
+-extractor = GLiNEREntityExtractor.for_poleo()
+-extractor = GLiNEREntityExtractor(entity_labels=["person", "company"])
++extractor = GLiNER2Extractor.for_schema("podcast")
++extractor = GLiNER2Extractor.for_poleo()
++extractor = GLiNER2Extractor(entity_labels=["person", "company"])
 ----
 
 `schema=` became `ontology=`, and it accepts more: an `OntologyDocument`, a
 `DomainSchema`, an `EntitySchemaConfig`, or anything else with a `to_ontology()`
-method.
+method. An `EntitySchemaConfig` converts cleanly only when its type names are
+POLE+O types; any other name fails the ontology's structural validation on the
+first extraction.
 
-[source,python]
+[source,diff]
 ----
-# Before
-extractor = GLiNEREntityExtractor(schema=my_domain_schema)
-
-# After
-extractor = GLiNER2Extractor(ontology=my_domain_schema)
-extractor = GLiNER2Extractor.for_ontology(my_ontology_document)
+-extractor = GLiNEREntityExtractor(schema=my_domain_schema)
++extractor = GLiNER2Extractor(ontology=my_domain_schema)
++extractor = GLiNER2Extractor.for_ontology(my_ontology_document)
 ----
 
-=== Relation Extraction
+=== Relation extraction
 
 Relations now come from the *same* pass as the entities. There is no second
 model, no second install and no second call.
 
-[source,python]
+[source,diff]
 ----
-# Before
-from neo4j_agent_memory.extraction import (
-    GLiNEREntityExtractor,
-    GLiRELExtractor,
-    GLiNERWithRelationsExtractor,
-)
+-from neo4j_agent_memory.extraction import (
+-    GLiNEREntityExtractor,
+-    GLiRELExtractor,
+-    GLiNERWithRelationsExtractor,
+-)
++from neo4j_agent_memory.extraction import GLiNER2Extractor
 
-entity_result = await GLiNEREntityExtractor.for_poleo().extract(text)
-relations = await GLiRELExtractor().extract_relations(text, entities=entity_result.entities)
-
-# or
-extractor = GLiNERWithRelationsExtractor.for_poleo()
-
-# After
-from neo4j_agent_memory.extraction import GLiNER2Extractor
-
-extractor = GLiNER2Extractor.for_poleo()
-result = await extractor.extract(text)
-result.entities
-result.relations
+-entity_result = await GLiNEREntityExtractor.for_poleo().extract(text)
+-relations = await GLiRELExtractor().extract_relations(text, entities=entity_result.entities)
+-# or
+-extractor = GLiNERWithRelationsExtractor.for_poleo()
++extractor = GLiNER2Extractor.for_poleo()
++result = await extractor.extract(text)
++result.entities
++result.relations
 ----
 
 Relations are decoded when three things hold: the call passes
@@ -158,13 +153,15 @@ with no endpoint typing, so `GLiNER2Extractor(ontology=some_domain_schema)`
 returns entities only. The `poleo`, `podcast` and `news` templates declare
 relationships; the other five do not until you attach some.
 
-=== The Builder
+=== The builder
 
 The builder keeps its spelling. `with_gliner()` now means GLiNER2.5 and takes
 new keyword arguments:
 
 [source,python]
 ----
+from neo4j_agent_memory.extraction import ExtractorBuilder
+
 extractor = (
     ExtractorBuilder()
     .with_spacy()
@@ -183,9 +180,10 @@ ExtractorBuilder().with_ontology(doc).with_gliner().build()
 `with_gliner_relations()` is gone — it had no replacement because it has no job
 left to do.
 
-=== Removed Names
+=== Removed names
 
-Every one of these raises an `ImportError` naming its replacement:
+Importing any of these from `neo4j_agent_memory.extraction` raises an
+`ImportError` naming its replacement:
 
 [cols="2,3", options="header"]
 |===
@@ -222,7 +220,7 @@ Every one of these raises an `ImportError` naming its replacement:
   `extraction/domain_schemas.py`
 |===
 
-== 4. Output Shape Changes
+== 4. Output shape changes
 
 [cols="2,3", options="header"]
 |===
@@ -254,7 +252,7 @@ Every one of these raises an `ImportError` naming its replacement:
 Code that read `entity.attributes["gliner_label"]` or matched
 `extractor == "gliner"` needs updating.
 
-== 5. Configuration Changes
+== 5. Configuration changes
 
 The `ExtractionConfig` field names keep the `gliner_` prefix, so existing
 `NAM_EXTRACTION__GLINER_*` environment variables keep working. What changed:
@@ -299,7 +297,7 @@ The `ExtractionConfig` field names keep the `gliner_` prefix, so existing
 `ExtractionConfig` uses `extra="forbid"`, so a misspelled field raises at
 construction rather than being silently dropped.
 
-== 6. Stored Data: the `RELATED_TO` Backfill
+== 6. Stored data: the `RELATED_TO` backfill
 
 Extracted relationships are still `RELATED_TO` edges, but the merge key now
 includes the relationship name:
@@ -344,14 +342,24 @@ MATCH (m:SchemaMigration {name: "relation_type_backfill"}) DELETE m
 ----
 
 To skip it entirely and run the equivalent yourself in batches
-(`apoc.periodic.iterate`), turn it off:
+(`apoc.periodic.iterate`), turn it off. The settings read the `NEO4J_*`
+variables exported for your AuraDB instance, as shown in
+xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the Aura connection setup]:
 
 [source,python]
 ----
+import os
+
 from neo4j_agent_memory import MemorySettings
 
 settings = MemorySettings(
-    neo4j={"uri": "bolt://localhost:7687", "password": "password"},
+    backend="bolt",
+    neo4j={
+        "uri": os.environ["NEO4J_URI"],
+        "username": os.environ["NEO4J_USERNAME"],
+        "password": os.environ["NEO4J_PASSWORD"],
+        "database": os.getenv("NEO4J_DATABASE", "neo4j"),
+    },
     schema_config={"backfill_relation_types": False},
 )
 ----
@@ -363,7 +371,7 @@ Because the merge key changed, one pair of entities can now carry several
 differently-typed edges where before a second type would overwrite the first.
 Expect the edge count to grow on re-ingestion.
 
-== 7. What to Expect from the New Model
+== 7. What to expect from the new model
 
 GLiNER2.5 is an architecture change, not an accuracy jump. Measured on the
 POLE+O gold set in `benchmarks/data/` with `benchmarks/compare_extractors.py`
@@ -400,7 +408,7 @@ What you do not gain: entity F1 is roughly flat against the previous stack.
 End-to-end zero-shot relation extraction is weak for every model in this class;
 treat relation F1 as a floor to improve with per-relation thresholds.
 
-=== Two Quiet Failure Modes
+=== Two quiet failure modes
 
 * **Relation recall past ~400 words.** It degrades sharply and can reach zero
   while entity recall stays fine, with no error raised. Input longer than
@@ -430,17 +438,18 @@ assert all(e.id for e in result.entities)
 assert all(r.source_id and r.target_id for r in result.relations)
 ----
 
-From the command line:
+From the command line, with the `cli` extra installed:
 
 [source,bash]
 ----
 neo4j-agent-memory extract "Brian Chesky founded Airbnb in San Francisco." --format json
 ----
 
-== See Also
+== See also
 
-* xref:reference/extractors.adoc#gliner2extractor[GLiNER2Extractor Reference] - Full parameter list
-* xref:how-to/entity-extraction.adoc[Configure Entity Extraction] - Pipeline setup
-* xref:reference/schemas.adoc[Domain Schemas Reference] - The eight catalogs and their relationships
-* xref:explanation/extraction-pipeline.adoc[How Entity Extraction Works] - Stage design and merge strategies
-* xref:reference/configuration.adoc[Configuration Reference] - Every extraction field
+* xref:reference/extractor-classes.adoc[Built-in extractor classes] — the full `GLiNER2Extractor` parameter list
+* xref:how-to/entity-extraction.adoc[Extract and inspect entity candidates] — a complete local extraction program
+* xref:how-to/ontology-driven-extraction.adoc[Drive extraction from an ontology] — typed entities and relations from one document
+* xref:reference/schemas.adoc[Domain schemas reference] — the eight catalogs and their relationships
+* xref:explanation/extraction-pipeline.adoc[Understanding the extraction pipeline] — stage design and merge strategies
+* xref:reference/configuration-providers.adoc#extraction[Extraction configuration] — every extraction field

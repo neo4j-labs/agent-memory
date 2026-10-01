@@ -6,8 +6,10 @@
  * Two details carry the demo:
  *
  *  - **The transport sends `conversationId` in the body**, and the route handler
- *    forwards only the newest user turn to the model. History comes from memory,
- *    so this component never has to replay it.
+ *    forwards only the newest user turn to the model. Earlier context reaches
+ *    the model only through the NAMS provider's memory retrieval (searched
+ *    messages, entities and graph relationships, plus `'direct response'`
+ *    reasoning steps), so this component never has to replay it.
  *  - **On mount the panel hydrates from `/api/memory/context`.** Reload the tab
  *    (or open the same `/c/<id>` URL on another device) and the thread is intact,
  *    because the transcript was never client state in the first place.

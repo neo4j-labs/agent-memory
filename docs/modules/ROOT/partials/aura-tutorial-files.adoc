@@ -1,0 +1,5 @@
+The manifest above names this lesson's entry point and its helpers. Save every file it lists, then run the offline assembly checks that follow the sources before the lesson commands.
+
+include::partial$python-aura-connection-file.adoc[]
+
+include::partial$python-aura-readiness-file.adoc[]

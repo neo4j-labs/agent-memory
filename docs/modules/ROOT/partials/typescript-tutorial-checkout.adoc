@@ -1,0 +1,39 @@
+Use Git, Node.js 22.9 or later with npm, and a POSIX shell. The lesson
+commands load `.env` with Node's `--env-file-if-exists` flag, added in
+Node.js 22.9; the SDK itself supports Node.js 22. These lessons
+share one repository checkout. The example-based lessons build the SDK from
+source so they run against current source; application code, including the
+MCP lesson's standalone `my-memory-mcp` project, installs the published
+`@neo4j-labs/agent-memory@0.5.0` package from npm. Keep this checkout for the
+remaining TypeScript lessons.
+
+*For your first lesson*, clone and build the SDK:
+
+[source,bash]
+----
+git clone https://github.com/neo4j-labs/agent-memory.git
+cd agent-memory
+export AGENT_MEMORY_TUTORIAL_ROOT="$PWD"
+cd typescript
+npm ci
+npm run build
+cd "$AGENT_MEMORY_TUTORIAL_ROOT"
+----
+
+Expected: the build finishes without errors and `typescript/dist/index.js`
+exists. The example-based lessons use this built SDK; installing an example
+does not build it. The MCP lesson's project uses the npm package instead, so
+it does not depend on this build.
+
+*Continuing from another lesson*, keep your existing checkout and skip the
+clone/build block above. From any directory inside that checkout, run:
+
+[source,bash]
+----
+cd "$(git rev-parse --show-toplevel)"
+export AGENT_MEMORY_TUTORIAL_ROOT="$PWD"
+----
+
+Both entry paths finish at the repository root. If you changed the SDK source
+since the preceding lesson, rebuild it before continuing with an example-based
+lesson.

@@ -1,15 +1,12 @@
 /**
- * Hooks mode demo — runtime-controlled (deterministic) session memory.
+ * Hooks mode demo. The model gets no memory tools. `loadSession` restores the
+ * transcript before each generation, and `onFinish` saves every turn after.
  *
- * No memory tools are exposed to the LLM. Instead the runtime restores the
- * transcript before every generation (`loadSession` inside `prepareCall`) and
- * persists every user, assistant, and tool turn after it (`onFinish`) —
- * exactly once per generation, regardless of what the model decides.
  * Run with:
  *
  *   MEMORY_API_KEY=sk-nams-... OPENAI_API_KEY=sk-... npx tsx examples/hooks-chat.ts
  *
- * Expected output (assistant wording will vary):
+ * Expected output (wording varies):
  *
  *   ─── Turn 1 — teach it something
  *   user:      Hi! My name is Alex and I live in Oslo.
@@ -19,9 +16,8 @@
  *   user:      What is my name, and what is the weather where I live?
  *   assistant: Your name is Alex. In Oslo it is currently sunny at 21°C.
  *
- * Turn 2 knows the name because prepareCall replayed the turn-1 transcript,
- * and the get_weather tool call from this turn is persisted as an audit
- * record in NAMS — the runtime captured it, not the model.
+ * Turn 2 knows the name from the restored transcript. The get_weather call is
+ * saved to NAMS as a tool record.
  */
 
 import { openai } from '@ai-sdk/openai';
@@ -32,8 +28,7 @@ import { createNams } from '../src/index';
 const userId = process.env.NAMS_DEMO_USER ?? 'demo-user-hooks-chat';
 const model = process.env.NAMS_DEMO_MODEL ?? 'gpt-5.4-mini';
 
-// One factory per process: loadSession and onFinish share a client, so both
-// resolve the same conversation.
+// One factory, so loadSession and onFinish use the same conversation.
 const nams = createNams({ apiKey: process.env.MEMORY_API_KEY! });
 const session = nams.hooks({ userId });
 
@@ -53,20 +48,19 @@ const agent = new ToolLoopAgent({
     prompt: z.string(),
   }),
 
-  // PRE hook: replace prompt/messages with restored history + the new turn.
-  // The AI SDK enforces prompt XOR messages, so both incoming fields are
-  // stripped before the rebuilt messages array goes in.
+  // Before: history plus the new message. The AI SDK takes prompt or
+  // messages, not both, so the incoming ones are dropped.
   prepareCall: async ({ options, prompt: _p, messages: _m, ...settings }) => ({
     ...settings,
     messages: [
       ...(await session.loadSession(options)),
       { role: 'user' as const, content: options!.prompt },
     ],
-    // Per-call scope flows to the construction-time onFinish below.
+    // Passes the scope to onFinish.
     runtimeContext: options,
   }),
 
-  // POST hook: persist every turn of the finished generation exactly once.
+  // After: save every turn once.
   onFinish: session.onFinish(),
 
   stopWhen: stepCountIs(5),

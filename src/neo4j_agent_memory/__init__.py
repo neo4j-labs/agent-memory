@@ -662,7 +662,7 @@ class MemoryClient(Generic[_ST, _LT, _RT]):
 
         self._query = BoltCypherQuery(self._client)
 
-        from neo4j_agent_memory.nams._unsupported import _NamsUnsupported
+        from neo4j_agent_memory.core._unsupported import _NamsUnsupported
 
         self._auth = _NamsUnsupported(
             accessor="auth",
@@ -808,7 +808,7 @@ class MemoryClient(Generic[_ST, _LT, _RT]):
         self._warn_inactive_layers_on_nams()
 
         # Lazy import — httpx is only required on the NAMS path.
-        from neo4j_agent_memory.nams._unsupported import _NamsUnsupported
+        from neo4j_agent_memory.core._unsupported import _NamsUnsupported
         from neo4j_agent_memory.nams.client import NamsBackend
 
         self._nams_backend = NamsBackend.from_config(self._settings.nams)
@@ -1081,7 +1081,7 @@ class MemoryClient(Generic[_ST, _LT, _RT]):
             NotConnectedError: If client is not connected (bolt path).
         """
         if self._settings.backend == "nams":
-            from neo4j_agent_memory.nams._unsupported import _NamsUnsupported
+            from neo4j_agent_memory.core._unsupported import _NamsUnsupported
 
             # NAMS shim stands in for SchemaManager and raises on use; the
             # accessor's declared type is the bolt SchemaManager.

@@ -1,0 +1,233 @@
+= Wrap a model in provider mode
+:source-highlighter: rouge
+
+The `@neo4j-labs/nams-ai-provider` package talks only to the hosted Neo4j
+Agent Memory Service (NAMS) at https://memory.neo4jlabs.com — it has no Bolt
+equivalent for a self-managed Neo4j database.
+
+Provider mode is the simplest way to add memory to a Vercel AI SDK
+application: swap the model you pass to `ToolLoopAgent` (or
+`generateText`/`streamText`) for one returned by a NAMS-wrapped provider, and
+every call gets relevant memories retrieved before the model runs and the
+exchange persisted after it returns — no tool calls, no system-prompt
+changes, and no per-request wiring. This page walks through a complete,
+runnable program that teaches the agent a fact in one session and recalls it
+in a fresh session for the same user.
+
+A runnable copy of this program, alongside the other three modes, lives at
+link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/nams-ai-provider[`typescript/examples/nams-ai-provider`].
+
+Prerequisites:
+
+* Node.js 22 or newer (the package's declared floor).
+* A `MEMORY_API_KEY` from https://memory.neo4jlabs.com[memory.neo4jlabs.com].
+* An `OPENAI_API_KEY`. The program uses `@ai-sdk/openai` by default; to use
+  another provider, pass its model factory to the `providerModeDemo()` call at the
+  bottom of the file.
+* A Node.js project set up as an ES module, with the packages installed:
++
+[source,bash]
+----
+npm init -y   # only if the directory has no package.json yet
+npm pkg set type=module
+npm install @neo4j-labs/nams-ai-provider@0.3.0 @neo4j-labs/agent-memory@0.5.0 ai@^7 @ai-sdk/openai@^4 zod@^4
+npm install --save-dev tsx
+----
+
+== The program
+
+.Save as `provider-mode.ts`
+[source,typescript]
+----
+/**
+ * Provider mode: swap your model for a NAMS-wrapped one and memory comes for
+ * free on every call -- no tools, no system-prompt changes. Session 1 teaches
+ * the agent a fact. Session 2 is a brand-new agent for the same user, so the
+ * only way it can answer is by recalling what NAMS stored.
+ *
+ * Run with:
+ *
+ *   MEMORY_API_KEY=nams_... OPENAI_API_KEY=sk-... npx tsx src/provider-mode.ts
+ *
+ * Expected output (wording varies):
+ *
+ *   --- Session 1 -- teach it something
+ *   user:      Hi! My name is Alex and I work at TechCorp on the graph platform team.
+ *   assistant: Nice to meet you, Alex! How can I help you today? ...
+ *
+ *   --- Session 2 -- fresh session, same user
+ *   user:      Where do I work, and what team am I on?
+ *   assistant: You work at TechCorp, on the graph platform team.
+ */
+
+import { realpathSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
+import { createNamsProvider, type NamsProviderOptions } from '@neo4j-labs/nams-ai-provider';
+import { openai } from '@ai-sdk/openai';
+import { ToolLoopAgent, stepCountIs } from 'ai';
+
+const userId = process.env.NAMS_DEMO_USER ?? 'demo-user-provider-mode';
+const modelId = process.env.NAMS_DEMO_MODEL ?? 'gpt-5.4-mini';
+
+/**
+ * Run the teach-then-recall demo. `baseProvider` defaults to OpenAI; tests
+ * pass a mock model here so the demo can run without a real API call.
+ */
+export async function providerModeDemo(
+  baseProvider: NamsProviderOptions['baseProvider'] = openai,
+): Promise<{ taught: string; recalled: string }> {
+  const rawApiKey = process.env.MEMORY_API_KEY;
+  if (!rawApiKey) {
+    throw new Error(
+      'Set MEMORY_API_KEY before running this example. Get a free key at https://memory.neo4jlabs.com',
+    );
+  }
+  const apiKey: string = rawApiKey; // narrowed here so the closure below sees `string`, not `string | undefined`
+
+  async function session(label: string, message: string): Promise<string> {
+    // One provider per user session. `maxMemories` caps how many memories
+    // are added to the prompt each turn (the package itself caps it at 12);
+    // `persistInteractions` (default: true) saves the turn back to NAMS.
+    const nams = createNamsProvider({
+      apiKey,
+      baseProvider,
+      scope: { userId },
+      endpoint: process.env.MEMORY_ENDPOINT,
+      workspaceId: process.env.MEMORY_WORKSPACE_ID,
+      maxMemories: 6,
+      persistInteractions: true,
+    });
+
+    const agent = new ToolLoopAgent({
+      model: nams.languageModel(modelId),
+      instructions: 'You are a helpful assistant.',
+      stopWhen: stepCountIs(1), // no tools needed in provider mode
+    });
+
+    const { text } = await agent.generate({ prompt: message });
+
+    console.log(`\n--- ${label}`);
+    console.log(`user:      ${message}`);
+    console.log(`assistant: ${text}`);
+    return text;
+  }
+
+  const taught = await session(
+    'Session 1 -- teach it something',
+    'Hi! My name is Alex and I work at TechCorp on the graph platform team.',
+  );
+  console.log('Stored: the user message and the assistant reply, saved to NAMS automatically.');
+
+  // A new agent has no history, so the answer must come from NAMS.
+  const recalled = await session('Session 2 -- fresh session, same user', 'Where do I work, and what team am I on?');
+  console.log('Recalled: NAMS retrieved the session 1 fact and injected it into this prompt.');
+
+  return { taught, recalled };
+}
+
+// Run only when executed directly, not when a test imports this file.
+const entry = process.argv[1];
+if (entry && import.meta.url === pathToFileURL(realpathSync(entry)).href) {
+  providerModeDemo().catch(err => {
+    console.error(err);
+    process.exit(1);
+  });
+}
+----
+
+== How the program works
+
+. Read the demo `userId` and model id from the environment, falling back to
+  `demo-user-provider-mode` and `gpt-5.4-mini`.
+. Require `MEMORY_API_KEY`. `providerModeDemo` throws immediately with a link
+  to get a key if it's unset, then narrows the value to `string` so the
+  closure below doesn't have to keep checking for `undefined`.
+. Define a `session(label, message)` helper that builds a fresh provider and
+  runs one turn:
++
+--
+* `createNamsProvider({ apiKey, baseProvider, scope: { userId }, endpoint,
+  workspaceId, maxMemories: 6, persistInteractions: true })` — `apiKey`,
+  `baseProvider` and `scope` are required. `baseProvider` defaults to a real
+  provider (here `openai`); the demo function accepts it as a parameter so
+  the test suite can pass a mock model instead. `endpoint` and `workspaceId`
+  come from optional environment variables and are `undefined` unless you set
+  them, in which case the client falls back to its own defaults (the hosted
+  endpoint, no workspace scoping). `maxMemories: 6` matches the package
+  default — the number of memories added to the prompt each turn — and the
+  package caps the effective total at 12 regardless of what you pass.
+  `persistInteractions: true` also matches the default and saves the turn
+  back to NAMS.
+* `nams.languageModel(modelId)` wraps `baseProvider(modelId)` with the same
+  memory middleware that middleware mode uses directly, and returns an
+  ordinary AI SDK model.
+* `new ToolLoopAgent({ model: nams.languageModel(modelId), instructions,
+  stopWhen: stepCountIs(1) })` — `stepCountIs(1)` because provider mode needs
+  no tool-calling loop; retrieval and persistence happen inside the wrapped
+  model itself, not as a visible tool call.
+* `agent.generate({ prompt: message })` runs the call. Retrieval happens
+  before the model sees the prompt and persistence happens after it answers,
+  both transparently to this code.
+--
+. Call `session()` twice:
++
+--
+* Session 1 ("teach it something") sends a message stating the user's name,
+  employer and team. The reply is persisted automatically.
+* Session 2 ("fresh session, same user") constructs a **new**
+  `createNamsProvider` — no JavaScript object is shared with session 1 — for
+  the same `userId`, then asks a question whose answer only exists in what
+  NAMS stored from session 1.
+--
++
+"Fresh session" means a fresh provider object, not a new NAMS conversation.
+Neither session passes a `conversationId`, so both continue the user's most
+recent NAMS conversation (session 1 creates it on the first run) and write to
+the same conversation. To give each session its own conversation, create one and
+pass its id in `scope`; see
+xref:how-to/typescript/nams-ai-provider.adoc#choose-conversation[Choose the
+conversation each instance writes to].
+. Return `{ taught, recalled }` so a caller (here, the offline test suite) can
+  assert on both answers. The `import.meta.url` check at the bottom runs the
+  demo only when the file is executed directly, not when it's imported.
+
+== Run and verify
+
+Run the saved file with both keys set:
+
+[source,bash]
+----
+MEMORY_API_KEY=nams_... OPENAI_API_KEY=sk-... npx tsx provider-mode.ts
+----
+
+To run the copy in the repository instead, follow the setup in the
+link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/nams-ai-provider[example's
+README], then run `npm run provider-mode` from
+`typescript/examples/nams-ai-provider/`. The `Run with` comment at the top of
+the program shows the path of that copy.
+
+Expected output (wording varies with the model):
+
+[source,text]
+----
+--- Session 1 -- teach it something
+user:      Hi! My name is Alex and I work at TechCorp on the graph platform team.
+assistant: Nice to meet you, Alex! How can I help you today? ...
+Stored: the user message and the assistant reply, saved to NAMS automatically.
+
+--- Session 2 -- fresh session, same user
+user:      Where do I work, and what team am I on?
+assistant: You work at TechCorp, on the graph platform team.
+Recalled: NAMS retrieved the session 1 fact and injected it into this prompt.
+----
+
+The second answer is the actual check: nothing in the script passes
+"TechCorp" or "graph platform team" to session 2 directly, so the model can
+only have gotten it from what NAMS stored and re-injected.
+
+== See also
+
+* xref:how-to/typescript/nams-ai-provider.adoc[Choose a NAMS AI provider mode]
+* xref:reference/nams-ai-provider.adoc[NAMS AI provider API reference]
+* xref:explanation/nams-ai-provider-retrieval.adoc[How the NAMS AI provider retrieves memory]
+* xref:how-to/typescript/vercel-ai.adoc[Integrate with the Vercel AI SDK] — the SDK's own built-in middleware, for comparison

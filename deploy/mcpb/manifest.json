@@ -1,43 +1,103 @@
 {
+  "manifest_version": "0.3",
   "name": "neo4j-agent-memory",
   "display_name": "Neo4j Agent Memory",
+  "version": "0.7.0",
   "description": "Persistent graph memory for Claude with three memory types (short-term, long-term, reasoning), POLE+O entity extraction, and knowledge graph backed by Neo4j.",
-  "version": "0.1.0",
-  "author": "Neo4j Labs",
+  "author": {
+    "name": "Neo4j Labs",
+    "url": "https://neo4j.com/labs/"
+  },
   "license": "Apache-2.0",
-  "repository": "https://github.com/neo4j-labs/agent-memory",
-  "keywords": ["memory", "neo4j", "knowledge-graph", "entity-extraction", "agent"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/neo4j-labs/agent-memory"
+  },
+  "homepage": "https://github.com/neo4j-labs/agent-memory",
+  "documentation": "https://neo4j.com/labs/agent-memory",
+  "keywords": [
+    "memory",
+    "neo4j",
+    "knowledge-graph",
+    "entity-extraction",
+    "agent"
+  ],
   "server": {
-    "command": "uvx",
-    "args": [
-      "neo4j-agent-memory[mcp]",
-      "mcp",
-      "serve"
-    ],
-    "env_required": [
-      "NEO4J_PASSWORD"
-    ],
-    "env_optional": [
-      "NEO4J_URI",
-      "NEO4J_USER",
-      "NEO4J_DATABASE",
-      "OPENAI_API_KEY",
-      "MCP_USER_ID"
-    ]
-  },
-  "capabilities": {
-    "tools": true,
-    "resources": true,
-    "prompts": true
-  },
-  "tool_profiles": {
-    "core": {
-      "tool_count": 6,
-      "description": "Essential read/write cycle: search, context, store message, add entity/preference/fact"
-    },
-    "extended": {
-      "tool_count": 16,
-      "description": "Full surface including reasoning traces, entity management, graph export, and Cypher queries"
+    "type": "binary",
+    "entry_point": "uvx",
+    "mcp_config": {
+      "command": "uvx",
+      "args": [
+        "neo4j-agent-memory[mcp,openai]==0.7.0",
+        "mcp",
+        "serve",
+        "--backend",
+        "bolt"
+      ],
+      "env": {
+        "NEO4J_URI": "${user_config.neo4j_uri}",
+        "NEO4J_USER": "${user_config.neo4j_user}",
+        "NEO4J_PASSWORD": "${user_config.neo4j_password}",
+        "NEO4J_DATABASE": "${user_config.neo4j_database}",
+        "OPENAI_API_KEY": "${user_config.openai_api_key}"
+      }
     }
+  },
+  "user_config": {
+    "neo4j_uri": {
+      "type": "string",
+      "title": "Neo4j URI",
+      "description": "Connection URI of your AuraDB instance, for example neo4j+s://<instance-id>.databases.neo4j.io",
+      "required": true
+    },
+    "neo4j_user": {
+      "type": "string",
+      "title": "Neo4j username",
+      "description": "The username from your Aura credentials file (NEO4J_USERNAME).",
+      "default": "neo4j",
+      "required": true
+    },
+    "neo4j_password": {
+      "type": "string",
+      "title": "Neo4j password",
+      "description": "The password from your Aura credentials file.",
+      "sensitive": true,
+      "required": true
+    },
+    "neo4j_database": {
+      "type": "string",
+      "title": "Neo4j database",
+      "description": "Database name. Aura instances use neo4j.",
+      "default": "neo4j",
+      "required": true
+    },
+    "openai_api_key": {
+      "type": "string",
+      "title": "OpenAI API key",
+      "description": "Used by the default OpenAI embedding provider.",
+      "sensitive": true,
+      "required": true
+    }
+  },
+  "tools": [
+    {"name": "memory_search", "description": "Hybrid vector + graph search across all memory types"},
+    {"name": "memory_get_context", "description": "Assembled context for a session"},
+    {"name": "memory_store_message", "description": "Store message with auto entity extraction"},
+    {"name": "memory_add_entity", "description": "Create/update entity with POLE+O typing"},
+    {"name": "memory_add_preference", "description": "Record user preference"},
+    {"name": "memory_add_fact", "description": "Store subject-predicate-object triple"},
+    {"name": "memory_get_conversation", "description": "Full conversation history"},
+    {"name": "memory_list_sessions", "description": "Browse stored sessions"},
+    {"name": "memory_get_entity", "description": "Entity details with graph relationships"},
+    {"name": "memory_export_graph", "description": "Subgraph export for visualization"},
+    {"name": "memory_create_relationship", "description": "Link entities together"},
+    {"name": "memory_start_trace", "description": "Begin reasoning trace"},
+    {"name": "memory_record_step", "description": "Record reasoning step"},
+    {"name": "memory_complete_trace", "description": "Complete reasoning trace"},
+    {"name": "memory_get_observations", "description": "Session observations and insights"},
+    {"name": "graph_query", "description": "Read-only Cypher queries"}
+  ],
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"]
   }
 }

@@ -6,8 +6,8 @@
  * The assertions are the ones that fail if memory stops working:
  *   - turn two's prompt carries turn one, and the example never passed it in —
  *     it came back out of the graph through `transformParams`,
- *   - the streamed turn is persisted, which only `wrapStream` can do,
- *   - a second run resumes the first conversation and recalls its preference.
+ *   - the application awaits its streaming assistant write,
+ *   - a second run resumes the first conversation and recalls its stored messages.
  */
 
 import type {
@@ -135,7 +135,7 @@ describe("vercel-ai example", () => {
     expect(result.context.recentMessages).toBe(6);
   });
 
-  it("persists the streamed turn via wrapStream", async () => {
+  it("awaits the application-owned streamed assistant write", async () => {
     const { result, transport, model, chunks } = await run();
 
     expect(model.doStreamCalls).toHaveLength(1);
@@ -166,24 +166,20 @@ describe("vercel-ai example", () => {
     expect(promptText(second.model.doGenerateCalls[0]!)).toContain(ANSWER);
   });
 
-  it("writes the preference once and recalls it on every run", async () => {
+  it("uses stored conversation messages and never bridge-only preferences", async () => {
     const transport = new FakeNamsTransport();
-
     const first = await run(transport);
-    expect(first.result.recalledPreferences).toEqual([
-      "Prefers euro-style board games with low randomness",
-    ]);
-
+    expect(first.result.recalledMessages.join(" ")).toContain("euro-style");
     const second = await run(transport);
-    expect(transport.preferences).toHaveLength(1);
-    expect(second.result.recalledPreferences).toEqual(first.result.recalledPreferences);
+    expect(second.result.recalledMessages.join(" ")).toContain("euro-style");
+    expect(transport.calls.some((call) => /preference|add_fact/.test(call.method))).toBe(false);
   });
 
   it("reports the extracted entities", async () => {
     const { result, lines } = await run();
 
     expect(result.extractedEntities).toEqual(["Euro-style board games"]);
-    expect(lines.join("\n")).toContain("Entities extracted from the conversation: 1");
+    expect(lines.join("\n")).toContain("Matching workspace entities: 1");
   });
 
   it("fails with a named error when MEMORY_API_KEY is missing", async () => {

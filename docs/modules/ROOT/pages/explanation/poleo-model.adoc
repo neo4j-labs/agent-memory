@@ -1,4 +1,4 @@
-= POLE+O Data Model
+= The POLE+O data model
 :page-product: agent-memory
 :page-pagination:
 :toclevels: 3
@@ -6,659 +6,128 @@
 :icons: font
 :source-highlighter: highlight.js
 
-The POLE+O data model is the default entity classification system in neo4j-agent-memory. It provides a structured, extensible framework for categorizing entities extracted from text.
+POLE+O is the default entity classification in Neo4j Agent Memory. Its broad categories provide a common vocabulary for extracted knowledge while leaving room for domain-specific detail.
 
-NOTE: POLE+O applies to both backends. On the bolt backend you can also define custom schemas (`SchemaModel.CUSTOM`); on NAMS, typed domain ontologies are managed server-side via xref:how-to/use-ontologies.adoc[`client.ontology`].
+NOTE: The shared categories do not make configuration identical across backends. Both backends refine POLE+O with versioned ontologies, but a Bolt client applies its ontology to local extraction and resolution, while NAMS applies the workspace's active ontology server-side. See xref:reference/backend-capabilities.adoc[Backend capabilities] and xref:explanation/backends.adoc[Bolt and NAMS].
 
-image::diagrams/poleo-model.png[POLE+O entity model: Person, Object, Location, Event, and Organization node types with their subtypes,width=600,align=left]
+.POLE+O entity model: Person, Object, Location, Event, and Organization categories with example subtypes
+image::diagrams/poleo-model.svg["POLE+O entity model: Person, Object, Location, Event, and Organization categories with example subtypes",width=100%,align=left,link=self]
 
+[[_what_is_poleo]]
 == What is POLE+O?
 
-POLE+O stands for **Person, Object, Location, Event + Organization**. Originally developed for law enforcement and intelligence analysis, it has been adapted for general-purpose entity extraction in AI applications.
+POLE+O stands for *Person, Object, Location, Event, and Organization*. It separates who or what a statement concerns from the statement itself.
 
-[source]
-----
-┌─────────────────────────────────────────────────────────────┐
-│                      POLE+O Model                           │
-├─────────────┬─────────────┬─────────────┬─────────────┬─────┤
-│   PERSON    │   OBJECT    │  LOCATION   │    EVENT    │ ORG │
-├─────────────┼─────────────┼─────────────┼─────────────┼─────┤
-│ Individuals │ Physical/   │ Places &    │ Things that │ Com-│
-│ & people    │ digital     │ geographic  │ happen or   │ pan-│
-│ mentioned   │ items       │ areas       │ occurred    │ ies │
-└─────────────┴─────────────┴─────────────┴─────────────┴─────┘
-----
+For a fictional example, Maya Chen (`PERSON`) attends a robotics workshop (`EVENT`) at a Denver laboratory (`LOCATION`) hosted by Northstar Robotics (`ORGANIZATION`), bringing a sensor prototype (`OBJECT`). The categories make these records comparable without forcing every application to use the same domain vocabulary.
 
-== Entity Types & Subtypes
+[[_entity_types_subtypes]]
+== Entity types and subtypes
 
-=== PERSON
+anchor:_person[]anchor:_object[]anchor:_location[]anchor:_event[]anchor:_organization[]
 
-Individuals mentioned by name, role, or description.
+* `PERSON` describes people or identified personas. A name or role alone may still be ambiguous.
+* `OBJECT` covers physical and digital items, such as a device or document.
+* `LOCATION` covers places and geographic areas. Coordinates are additional data, not a prerequisite for identifying a place.
+* `EVENT` describes something that happens, such as a meeting or transaction.
+* `ORGANIZATION` describes companies, institutions, and groups.
 
-[cols="1,3"]
-|===
-|Subtype |Description
+A subtype refines the broad category. For example, `OBJECT` with subtype `VEHICLE` retains its object classification while allowing more specific queries. A subtype is classification, not proof that two entities are identical.
 
-|`INDIVIDUAL`
-|A specific named person
+A domain may need distinctions beyond these defaults; that is a reason to model the domain explicitly, not to overload a name field.
 
-|`ALIAS`
-|An alternative name or identity
+[[_poleo_subtypes]]
+=== Subtypes that become labels
 
-|`PERSONA`
-|A role or character
-
-|`SUSPECT`
-|Person of interest (law enforcement context)
-
-|`WITNESS`
-|Someone who observed an event
-
-|`VICTIM`
-|Someone affected by an event
-|===
-
-**Examples:**
-[source]
-----
-"John Smith"          → PERSON
-"CEO"                 → PERSON (role)
-"@johndoe"           → PERSON:ALIAS
-"Dr. Jane Wilson"    → PERSON:INDIVIDUAL
-----
-
-=== OBJECT
-
-Physical or digital items, artifacts, or things.
+On Bolt, the query builder turns a subtype into a node label only when it is a known subtype of the POLE+O type. The known subtypes are:
 
 [cols="1,3"]
 |===
-|Subtype |Description
+|Type |Subtypes
 
-|`VEHICLE`
-|Cars, trucks, boats, aircraft
+|`PERSON`
+|`INDIVIDUAL`, `ALIAS`, `PERSONA`, `SUSPECT`, `WITNESS`, `VICTIM`
 
-|`PHONE`
-|Phone numbers and devices
+|`OBJECT`
+|`VEHICLE`, `PHONE`, `EMAIL`, `DOCUMENT`, `DEVICE`, `WEAPON`, `MONEY`, `DRUG`, `EVIDENCE`, `SOFTWARE`, `PRODUCT`
 
-|`EMAIL`
-|Email addresses
+|`LOCATION`
+|`ADDRESS`, `CITY`, `REGION`, `COUNTRY`, `LANDMARK`, `FACILITY`, `COORDINATES`, `GEOPOLITICAL`, `GEOGRAPHIC`
 
-|`DOCUMENT`
-|Papers, files, records
+|`EVENT`
+|`INCIDENT`, `MEETING`, `TRANSACTION`, `COMMUNICATION`, `CRIME`, `TRAVEL`, `EMPLOYMENT`, `OBSERVATION`, `DATE`, `TIME`
 
-|`DEVICE`
-|Electronic devices
-
-|`WEAPON`
-|Weapons and armaments
-
-|`MONEY`
-|Currency and financial instruments
-
-|`DRUG`
-|Controlled substances
-
-|`SOFTWARE`
-|Applications and programs
-
-|`PRODUCT`
-|Commercial products
+|`ORGANIZATION`
+|`COMPANY`, `NONPROFIT`, `GOVERNMENT`, `EDUCATIONAL`, `CRIMINAL`, `POLITICAL`, `RELIGIOUS`, `MILITARY`, `GROUP`
 |===
 
-**Examples:**
-[source]
-----
-"Tesla Model 3"       → OBJECT:VEHICLE
-"555-123-4567"        → OBJECT:PHONE
-"john@example.com"    → OBJECT:EMAIL
-"passport"            → OBJECT:DOCUMENT
-"iPhone 15"           → OBJECT:DEVICE
-----
+Any other subtype on a POLE+O type is still stored in the entity's `subtype` property, but it adds no label: `ORGANIZATION` with subtype `RESTAURANT` gets `:Entity:Organization`, not `:Entity:Organization:Restaurant`. Custom (non-POLE+O) types accept any valid label identifier as a subtype. An extractor can propose a subtype outside this list; check the table before relying on a subtype label in a query.
 
-=== LOCATION
+The same rule applies to ontology labels, because every ontology entity type maps onto a POLE+O `pole_type`. A `Product` label declared with `pole_type: OBJECT` and `subtype: PRODUCT` is stored as `:Entity:Object:Product`. A `Customer` label declared with `pole_type: PERSON` and `subtype: CUSTOMER` is stored with `subtype: "CUSTOMER"` but labeled only `:Entity:Person`, because `CUSTOMER` is not in the table.
 
-Places, addresses, and geographic areas.
+[[_neo4j_schema]]
+== Classification in the graph
 
-[cols="1,3"]
-|===
-|Subtype |Description
+anchor:_label_structure[]anchor:_custom_entity_types[]anchor:_relationships[]anchor:_message_links[]
 
-|`ADDRESS`
-|Street addresses
+On Bolt, a managed entity carries the `:Entity` label and a `type` property, with type and <<_poleo_subtypes,known subtype>> labels added for querying. For example, an `OBJECT` with subtype `VEHICLE` can carry `:Entity:Object:Vehicle`.
 
-|`CITY`
-|Cities and towns
+The labels describe the node; relationships describe how it connects to other nodes. Message extraction links `:Message` to `:Entity` with `:MENTIONS`. Extracted relationships can be represented as `:RELATED_TO` with a property identifying the relation. Do not assume that a conceptual employment relation is always stored as a physical `:WORKS_AT` edge.
 
-|`REGION`
-|States, provinces, regions
+See xref:reference/schema-objects.adoc[Schema objects] and xref:reference/api/long-term.adoc[Long-term memory API] for the stored shapes and operations. Existing domain graphs can retain their own labels and relationships through xref:how-to/adopt-existing-graph.adoc[graph adoption].
 
-|`COUNTRY`
-|Countries and nations
+[[_configuring_poleo]]
+== Choosing the classification scope
 
-|`LANDMARK`
-|Notable places and monuments
+anchor:_using_default_poleo[]anchor:_selecting_specific_poleo_types[]anchor:_using_subtypes[]
 
-|`FACILITY`
-|Buildings and structures
-|===
+A narrow extraction vocabulary reduces irrelevant candidates, while a broader vocabulary can preserve unexpected entities. The appropriate scope depends on what the application needs to retrieve later.
 
-**Examples:**
-[source]
-----
-"123 Main Street"     → LOCATION:ADDRESS
-"San Francisco"       → LOCATION:CITY
-"California"          → LOCATION:REGION
-"United States"       → LOCATION:COUNTRY
-"Eiffel Tower"        → LOCATION:LANDMARK
-"JFK Airport"         → LOCATION:FACILITY
-----
+Keep configuration separate from this conceptual choice. Follow xref:how-to/entity-extraction.adoc[Configure extraction] and xref:how-to/ontology-driven-extraction.adoc[drive extraction from an ontology] for the Bolt procedures, and xref:how-to/use-ontologies.adoc[Use ontologies] for NAMS. The xref:reference/configuration.adoc[configuration reference] defines the actual settings and defaults.
 
-=== EVENT
+[[_custom_schema_models]]
+== When the defaults are insufficient
 
-Things that happened, meetings, transactions, or temporal occurrences.
+anchor:_schemamodel_options[]anchor:_using_custom_entity_types[]anchor:_loading_schema_from_file[]
 
-[cols="1,3"]
-|===
-|Subtype |Description
+A domain schema may need types such as a research study or a device fault, with properties and relationships that the five categories do not fully describe. A custom model makes those distinctions explicit.
 
-|`INCIDENT`
-|Accidents, crimes, occurrences
+On Bolt, every schema configuration path converges on one ontology document that the client resolves when it connects. `SchemaModel.CUSTOM` with `entity_types` builds an ad hoc document, mapping each name onto POLE+O. `custom_schema_path` and `ontology_path` load a file that can hold either a legacy `EntitySchemaConfig` or an ontology document. A version activated through `client.ontology` is stored in your own database. The resolved document drives the extractors, relation validation, entity resolution and the strict write paths. On NAMS, an ontology refines the common categories through versioned workspace definitions and validation modes applied server-side. These mechanisms have different ownership and validation behavior; activating an ontology on one backend does not activate it on the other.
 
-|`MEETING`
-|Scheduled gatherings
+See xref:explanation/ontologies.adoc[Ontologies], xref:reference/configuration.adoc[Schema configuration], and xref:how-to/entity-extraction-schemas.adoc[Use extraction schemas].
 
-|`TRANSACTION`
-|Financial or business exchanges
+[[_working_with_entities]]
+== Classification and identity are different
 
-|`COMMUNICATION`
-|Calls, messages, correspondence
+anchor:_searching_entities[]anchor:_entity_resolution[]
 
-|`DATE`
-|Calendar dates
+Type filters help retrieve the right class of entity. Identity resolution asks whether two records denote the same individual thing. Both are needed: two `PERSON` records named Maya Chen are not necessarily duplicates.
 
-|`TIME`
-|Times of day
-|===
+The two interact on Bolt. Since 0.7.0, message ingestion resolves extracted mentions by default, and resolution never compares entities across POLE+O types: "Apple" as an `ORGANIZATION` and "Apple" as an `OBJECT` stay separate even when their names and embeddings match. A wrong type therefore produces a duplicate that resolution cannot find.
 
-**Examples:**
-[source]
-----
-"car accident"        → EVENT:INCIDENT
-"board meeting"       → EVENT:MEETING
-"wire transfer"       → EVENT:TRANSACTION
-"January 15, 2024"    → EVENT:DATE
-"3:30 PM"             → EVENT:TIME
-----
+Stable identifiers and provenance can resolve ambiguity that names and types cannot. xref:explanation/resolution-deduplication.adoc[Resolution and deduplication] explains those decisions; xref:how-to/entities.adoc[Work with entities] provides the storage and retrieval procedure.
 
-=== ORGANIZATION
+[[_poleo_in_the_extraction_pipeline]]
+== How extraction reaches the common vocabulary
 
-Companies, institutions, groups, and collective entities.
+anchor:_spacy_mapping[]anchor:_gliner_labels[]anchor:_llm_prompt[]
 
-[cols="1,3"]
-|===
-|Subtype |Description
+Extractors start with different representations. A spaCy model has trained labels, GLiNER2.5 reads configurable labels together with their descriptions as zero-shot annotation guidelines, and an LLM uses a response schema and prompts. Mappings translate the relevant output into the entity vocabulary. An ontology label carries its own `pole_type` and `subtype`, so it maps directly; bare lowercase labels such as `company` fall back to a built-in label mapping.
 
-|`COMPANY`
-|Businesses and corporations
+A mapping is not semantic validation. A model can assign the wrong label, and a broad fallback category can hide a missing domain distinction. Inspect representative output when changing schemas. See xref:reference/extractors.adoc[Extractors], xref:reference/schemas.adoc[Domain schemas], and xref:explanation/extraction-pipeline.adoc[the extraction pipeline].
 
-|`NONPROFIT`
-|Charitable organizations
+[[_best_practices]]
+== Keeping a useful vocabulary
 
-|`GOVERNMENT`
-|Government agencies
+anchor:_choosing_entity_types[]anchor:_entity_naming[]anchor:_performance[]
 
-|`EDUCATIONAL`
-|Schools and universities
+Use consistent names and keep the source of an assertion. Add subtypes or custom types when they express a meaningful distinction needed by the application. Avoid treating product variants, subsidiaries, or same-name people as aliases solely to simplify the graph.
 
-|`GROUP`
-|Informal groups and associations
-|===
+The model should follow retrieval needs: a distinction that matters for a query must survive ingestion. No general performance advantage follows merely from choosing a subtype over a custom type.
 
-**Examples:**
-[source]
-----
-"Apple Inc."          → ORGANIZATION:COMPANY
-"Red Cross"           → ORGANIZATION:NONPROFIT
-"FBI"                 → ORGANIZATION:GOVERNMENT
-"MIT"                 → ORGANIZATION:EDUCATIONAL
-"Book Club"           → ORGANIZATION:GROUP
-----
+[[_next_steps]]
+== See also
 
-== Neo4j Schema
-
-Entities are stored as nodes in Neo4j with multiple labels for efficient querying.
-Each entity has the base `:Entity` label plus the type and subtype as additional labels.
-
-[source,cypher]
-----
-(:Entity:Person:Individual {
-    id: "uuid",
-    name: "John Smith",
-    type: "PERSON",                    // POLE+O type (stored as uppercase)
-    subtype: "INDIVIDUAL",             // Optional subtype (stored as uppercase)
-    canonical_name: "John Smith",      // Resolved name
-    description: "CEO of Acme Corp",
-    confidence: 0.92,
-    embedding: [0.1, 0.2, ...],       // Vector for search
-    created_at: datetime(),
-    metadata: "{...}"                  // JSON metadata
-})
-----
-
-NOTE: Entity types and subtypes are stored as uppercase properties (e.g., `type: "PERSON"`) but labels use PascalCase (e.g., `:Person`) following Neo4j naming conventions.
-
-=== Label Structure
-
-Each entity has:
-
-* `:Entity` - Base label (always present)
-* `:<Type>` - Entity type as PascalCase label (e.g., `:Person`, `:Object`, `:Location`, `:Event`, `:Organization`)
-* `:<Subtype>` - Subtype as PascalCase label when present (e.g., `:Vehicle`, `:Address`, `:Company`)
-
-Both POLE+O types and custom types are added as PascalCase labels, as long as they are valid Neo4j label identifiers (start with a letter, contain only letters, numbers, and underscores).
-
-This enables efficient queries like:
-
-[source,cypher]
-----
-// Find all people
-MATCH (p:Person) RETURN p
-
-// Find all vehicles (regardless of whether they're Object type)
-MATCH (v:Vehicle) RETURN v
-
-// Find all entities (any type)
-MATCH (e:Entity) RETURN e
-
-// Find people who are individuals
-MATCH (p:Person:Individual) RETURN p
-
-// Combine with relationship traversal
-MATCH (p:Person)-[:WORKS_AT]->(o:Organization:Company)
-RETURN p.name, o.name
-----
-
-==== Custom Entity Types
-
-Custom entity types outside the POLE+O model also become PascalCase labels:
-
-[source,python]
-----
-# Custom types become PascalCase labels
-entity, _ = await client.long_term.add_entity(
-    name="Widget Pro",
-    entity_type="PRODUCT",
-    subtype="ELECTRONICS",
-)
-
-# Creates: (:Entity:Product:Electronics {name: "Widget Pro", ...})
-----
-
-Query by custom type:
-
-[source,cypher]
-----
-MATCH (p:Product) RETURN p
-MATCH (e:Electronics) RETURN e
-----
-
-NOTE: For POLE+O types, subtypes are validated against the known subtypes for that type. For custom types, any valid Neo4j label identifier can be used as a subtype.
-
-=== Relationships
-
-Entities can have relationships to other entities:
-
-[source,cypher]
-----
-// Person works at organization
-(:Person)-[:WORKS_AT]->(:Organization)
-
-// Person lives at location
-(:Person)-[:LIVES_IN]->(:Location)
-
-// Organization located at location
-(:Organization)-[:LOCATED_AT]->(:Location)
-
-// Person owns object
-(:Person)-[:OWNS]->(:Object)
-
-// Person participated in event
-(:Person)-[:PARTICIPATED_IN]->(:Event)
-----
-
-=== Message Links
-
-Entities are linked to the messages that mention them:
-
-[source,cypher]
-----
-(:Message)-[:MENTIONS {
-    confidence: 0.85,
-    start_pos: 10,
-    end_pos: 20
-}]->(:Entity)
-----
-
-== Configuring POLE+O
-
-=== Using Default POLE+O
-
-[source,python]
-----
-from neo4j_agent_memory import MemoryClient, MemorySettings
-
-# Default configuration uses POLE+O
-settings = MemorySettings()
-
-async with MemoryClient(settings) as memory:
-    # Entities extracted using POLE+O types
-    await memory.short_term.add_message(
-        session_id="session-1",
-        role="user",
-        content="I work at Acme Corp in San Francisco"
-    )
-    # Extracts: "Acme Corp" (ORGANIZATION), "San Francisco" (LOCATION)
-----
-
-=== Selecting Specific POLE+O Types
-
-[source,python]
-----
-from neo4j_agent_memory import MemorySettings, ExtractionConfig
-
-# Only extract people and organizations
-settings = MemorySettings(
-    extraction=ExtractionConfig(
-        entity_types=["PERSON", "ORGANIZATION"]
-    )
-)
-----
-
-=== Using Subtypes
-
-Subtypes are automatically extracted by the LLM extractor and can be specified when manually adding entities:
-
-[source,python]
-----
-async with MemoryClient(settings) as memory:
-    # Add entity with subtype
-    entity, _ = await memory.long_term.add_entity(
-        name="Tesla Model 3",
-        entity_type="OBJECT",
-        subtype="VEHICLE",
-        description="Electric sedan"
-    )
-
-    # Query by type and subtype
-    vehicles = await memory.long_term.search_entities(
-        query="cars",
-        entity_types=["OBJECT"]
-    )
-----
-
-== Custom Schema Models
-
-While POLE+O is the default, you can refine or replace it. As of v0.7 the
-first-class way to do that is an *ontology*: a typed document that names your
-entity labels (each mapped onto a POLE+O `pole_type` and an optional `subtype`),
-the typed relationships between them, and the extraction and resolution
-constraints that go with them. One document drives the extractors, relation
-validation, entity resolution and the strict write paths — see
-xref:explanation/ontologies.adoc[Ontologies] and
-xref:how-to/ontology-driven-extraction.adoc[Drive Extraction From an Ontology].
-
-The `SchemaModel` options below still work, and they are still how you pick the
-*base* type vocabulary. What changed is that every path now converges on an
-ontology document: `SchemaModel.CUSTOM` plus `entity_types` builds an ad-hoc one
-(each name mapped onto POLE+O through `map_label_to_poleo`), and
-`custom_schema_path` is loaded through `load_ontology()`, so the file may hold
-either an `EntitySchemaConfig` or an `OntologyDocument`.
-
-=== SchemaModel Options
-
-[cols="1,3"]
-|===
-|Model |Description
-
-|`POLEO`
-|Default POLE+O model with all subtypes
-
-|`LEGACY`
-|Backward-compatible with older EntityType enum
-
-|`CUSTOM`
-|User-defined entity types
-|===
-
-=== Using Custom Entity Types
-
-[source,python]
-----
-from neo4j_agent_memory import MemorySettings, ExtractionConfig
-from neo4j_agent_memory.config.settings import SchemaConfig, SchemaModel
-
-# E-commerce domain example
-settings = MemorySettings(
-    schema_config=SchemaConfig(
-        model=SchemaModel.CUSTOM,
-        entity_types=["CUSTOMER", "PRODUCT", "ORDER", "STORE", "REVIEW"],
-        strict_types=True  # Reject unknown types
-    ),
-    extraction=ExtractionConfig(
-        entity_types=["CUSTOMER", "PRODUCT", "ORDER", "STORE", "REVIEW"]
-    )
-)
-----
-
-=== Loading Schema from File
-
-Create a JSON schema file:
-
-[source,json]
-----
-{
-    "name": "ecommerce_schema",
-    "version": "1.0",
-    "entity_types": [
-        {
-            "name": "CUSTOMER",
-            "description": "A person who purchases products",
-            "subtypes": ["PREMIUM", "REGULAR", "NEW"],
-            "attributes": ["name", "email", "tier"]
-        },
-        {
-            "name": "PRODUCT",
-            "description": "An item available for purchase",
-            "subtypes": ["ELECTRONICS", "CLOTHING", "FOOD"],
-            "attributes": ["sku", "price", "category"]
-        }
-    ],
-    "relationship_types": [
-        {
-            "name": "PURCHASED",
-            "source": "CUSTOMER",
-            "target": "PRODUCT"
-        }
-    ]
-}
-----
-
-Load it in configuration:
-
-[source,python]
-----
-from neo4j_agent_memory import MemorySettings
-from neo4j_agent_memory.config.settings import SchemaConfig, SchemaModel
-
-settings = MemorySettings(
-    schema_config=SchemaConfig(
-        model=SchemaModel.CUSTOM,
-        custom_schema_path="./ecommerce_schema.json"
-    )
-)
-----
-
-The file above is the legacy `EntitySchemaConfig` shape, and it is still
-accepted — `load_ontology()` detects it by its `entity_types[].name` keys and
-converts it. To get the v0.7 features (annotation guidelines, typed relationship
-endpoints, decoding constraints, resolution aliases) write an ontology document
-instead and point `ontology_path` at it, which outranks `custom_schema_path`.
-
-== Working with Entities
-
-=== Searching Entities
-
-[source,python]
-----
-async with MemoryClient(settings) as memory:
-    # Semantic search across all entities
-    entities = await memory.long_term.search_entities(
-        query="companies in technology",
-        limit=10
-    )
-
-    # Filter by type
-    people = await memory.long_term.search_entities(
-        query="engineers",
-        entity_types=["PERSON"],
-        limit=10
-    )
-
-    # Get entity by name
-    entity = await memory.long_term.get_entity_by_name(
-        name="Acme Corp",
-        entity_type="ORGANIZATION"
-    )
-----
-
-=== Entity Resolution
-
-Entity resolution merges duplicate entities and links aliases. On bolt it runs
-on the ingestion path *by default* as of v0.7, and it never crosses a POLE+O
-type — "Apple" the ORGANIZATION and "Apple" the OBJECT embed almost
-identically, which is exactly why type-constrained blocking matters:
-
-[source,python]
-----
-from neo4j_agent_memory import MemoryClient, MemorySettings
-from neo4j_agent_memory.config.settings import ResolutionConfig, ResolverStrategy
-
-settings = MemorySettings(
-    resolution=ResolutionConfig(
-        strategy=ResolverStrategy.COMPOSITE,  # OntologyResolver on bolt
-        resolve_on_ingest=True,               # default
-        auto_merge_threshold=0.90,            # merge at or above
-        review_threshold=0.85,                # pending SAME_AS between the two
-    )
-)
-
-async with MemoryClient(settings) as memory:
-    await memory.short_term.add_message(
-        session_id="s1", role="user",
-        content="I talked to John Smith"
-    )
-    await memory.short_term.add_message(
-        session_id="s1", role="user",
-        content="Johnny Smith called me back"
-    )
-    # Both mentions are PERSON, so they are compared; "Johnny Smith" either
-    # merges onto "John Smith" (and is recorded as an alias) or lands in the
-    # review band as a pending SAME_AS pair.
-----
-
-Set `resolve_on_ingest=False` for the pre-v0.7 behaviour: one node per distinct
-surface form. See xref:how-to/tune-entity-resolution.adoc[Tune Entity
-Resolution] for the bands, the alias gazetteer and the per-type overrides that
-an ontology can declare.
-
-== POLE+O in the Extraction Pipeline
-
-Each extractor maps to POLE+O types differently:
-
-=== spaCy Mapping
-
-[source,python]
-----
-SPACY_TO_POLEO = {
-    "PERSON": "PERSON",
-    "ORG": "ORGANIZATION",
-    "GPE": "LOCATION",     # Geopolitical entities
-    "LOC": "LOCATION",     # Other locations
-    "FAC": "LOCATION",     # Facilities
-    "EVENT": "EVENT",
-    "PRODUCT": "OBJECT",
-    "WORK_OF_ART": "OBJECT",
-    "DATE": "EVENT",
-    "TIME": "EVENT",
-    "MONEY": "OBJECT",
-}
-----
-
-=== Zero-Shot Labels
-
-GLiNER2.5 works from lowercase labels, which map to POLE+O through
-`DEFAULT_LABEL_MAPPING` (an ontology's own labels take precedence):
-
-[source,python]
-----
-LABELS = [
-    "person",           # → PERSON
-    "organization",     # → ORGANIZATION
-    "company",          # → ORGANIZATION:COMPANY
-    "location",         # → LOCATION
-    "city",             # → LOCATION:CITY
-    "country",          # → LOCATION:COUNTRY
-    "event",            # → EVENT
-    "meeting",          # → EVENT:MEETING
-    "object",           # → OBJECT
-    "vehicle",          # → OBJECT:VEHICLE
-    "document",         # → OBJECT:DOCUMENT
-]
-----
-
-=== LLM Prompt
-
-The LLM extractor uses explicit POLE+O instructions:
-
-[source]
-----
-Extract entities using the POLE+O model:
-
-- PERSON: Individuals, people mentioned by name or role
-- OBJECT: Physical or digital items (vehicles, phones, documents)
-- LOCATION: Places, addresses, geographic areas
-- EVENT: Incidents, meetings, transactions, things that happened
-- ORGANIZATION: Companies, groups, institutions
-
-For each entity, also identify:
-- Subtype (e.g., VEHICLE for OBJECT, COMPANY for ORGANIZATION)
-- Confidence score (0.0 to 1.0)
-- Description (brief context)
-----
-
-== Best Practices
-
-=== Choosing Entity Types
-
-1. **Start with POLE+O** - The default types cover most use cases
-2. **Add subtypes** - Use subtypes for finer classification without changing core types
-3. **Custom types** - Only create custom types for domain-specific needs
-
-=== Entity Naming
-
-1. **Canonical names** - Use full, proper names when possible
-2. **Consistency** - Use consistent capitalization and formatting
-3. **Aliases** - Store alternative names as separate entities with ALIAS_OF relationships
-
-=== Performance
-
-1. **Limit types** - Extract only the types you need
-2. **Use subtypes** - Subtypes are more efficient than many custom types
-3. **Index entities** - Neo4j indexes are created automatically for name+type
-
-== Next Steps
-
-* xref:how-to/entity-extraction.adoc[Configure the extraction pipeline]
-* xref:explanation/memory-types.adoc[Work with entities in long-term memory]
-* xref:reference/configuration.adoc[Full configuration reference]
+* xref:reference/schemas.adoc[Domain schemas]
+* xref:reference/schema-objects.adoc[Graph schema objects]
+* xref:how-to/entities.adoc[Store and retrieve entities]
+* xref:explanation/ontologies.adoc[Ontologies]

@@ -1,94 +1,92 @@
 = Ontology API reference
 :description: The client.ontology method surface on both backends, document schema, REST endpoints, and templates.
 
-`client.ontology` is available on *both* backends as of v0.7: `NamsOntology`
-(hosted, REST) and `BoltOntology` (your own Neo4j, stored as
-`(:Ontology)-[:HAS_VERSION]->(:OntologyVersion)`). Both satisfy the
-`neo4j_agent_memory.ontology.OntologyAPI` Protocol, so the Python and TypeScript
-signatures below are backend-independent; the *Bolt* column records where the
-behaviour differs. The TypeScript SDK targets NAMS only (it has no bolt
-transport).
+`client.ontology` is available on both backends since 0.7.0: `NamsOntology` (hosted, REST) and `BoltOntology` (your own Neo4j, stored as `(:Ontology)-[:HAS_VERSION]->(:OntologyVersion)`). Both satisfy the `neo4j_agent_memory.ontology.OntologyAPI` protocol, so the signatures below are backend-independent; the *Bolt* column records where the behavior differs. The TypeScript SDK targets NAMS only; it has no Bolt transport.
 
 == Methods
 
-[cols="1,1,2,2",options="header"]
+[cols="3,3,3",options="header"]
 |===
-| Python | TypeScript | Semantics | Bolt
+| Method | Semantics | Bolt
 
-| `ontology.list()` | `ontology.list()`
-| Templates + owned ontologies; the active one is flagged (`is_active`).
-| Same. The eight local domain templates come first as `is_system=true` rows with an id of `template:<name>` and no `current_revision`; stored ontologies follow.
+| Python: `ontology.list()` +
+TypeScript: `ontology.list()`
+| System templates + workspace-owned ontologies; the active one is flagged (`is_active`).
+| The eight built-in domain templates come first, as `is_system=True` rows with an id of `template:<name>` and no `current_revision`; stored ontologies follow.
 
-| `ontology.get(id)` | `ontology.get(id)`
-| One ontology with its full revision history (`{record, versions[]}`), versions sorted by ascending revision.
-| Same. A `template:<name>` id returns a synthetic, read-only record with a single revision.
+| Python: `ontology.get(id)` +
+TypeScript: `ontology.get(id)`
+| One ontology with its full revision history (`{record, versions[]}`).
+| Versions sorted by ascending revision. A `template:<name>` id returns a synthetic, read-only record with a single revision.
 
-| `ontology.get_active()` | `ontology.getActive()`
-| Active version's parsed document + composed `validation_mode` / `revision` / `version_id`. Raises `NotSupportedError` when nothing is bound.
-| Same, per *database*. It never falls back to the built-in POLE+O ontology — the runtime ontology resolution applies that fallback itself. `SchemaError` if the stored document is unreadable.
+| Python: `ontology.get_active()` +
+TypeScript: `ontology.getActive()`
+| Parsed active document plus binding metadata. Raises `NotSupportedError` when nothing is bound. Python 0.6.0 and TypeScript 0.5.0 can report the wrong revision; see <<python-0-6-active-binding>> before restoration.
+| Per database. Never falls back to the built-in POLE+O ontology; the client's connect-time resolution applies that fallback itself. `SchemaError` if the stored document is unreadable.
 
-| `ontology.clone(template_name)` | `ontology.clone(templateName)`
-| Editable copy of a template; returns the rev-1 version, not activated.
-| Same. Name collisions become `<name>-copy-N`, and `domain.id`/`domain.name` are rewritten to match. `NotFoundError` for an unknown template.
+| Python: `ontology.clone(template_name)` +
+TypeScript: `ontology.clone(templateName)`
+| Editable workspace copy of a system template; returns the rev-1 version.
+| The copy takes the template's name, or `<name>-copy-N` when that name is taken, and `domain.id` / `domain.name` are rewritten to match. Not activated. `NotFoundError` for an unknown template.
 
-| `ontology.create(name, schema, validation_mode=None)` | `ontology.create({name, schema, validationMode?})`
-| New ontology from a schema document; returns the rev-1 version. Identity comes from `schema.domain` (`id`, then `name`), with `name` as the fallback.
-| Same, plus `validate_structure()` runs first: a structurally invalid document raises `ValueError` listing every problem. Default mode `permissive`.
+| Python: `ontology.create(name, schema, validation_mode=None)` +
+TypeScript: `ontology.create({name, schema, validationMode?})`
+| New workspace ontology from a schema document; returns the rev-1 version. Identity comes from `schema.domain` (`id`, then `name`); `name` is the fallback.
+| `validate_structure()` runs first: a structurally invalid document raises `ValueError` listing every problem. Default mode `permissive`.
 
-| `ontology.update(id, schema, validation_mode=None)` | `ontology.update({id, schema, validationMode?})`
+| Python: `ontology.update(id, schema, validation_mode=None)` +
+TypeScript: `ontology.update({id, schema, validationMode?})`
 | New immutable revision (n+1); returns it. Does not change which version is active.
-| Same, plus `validate_structure()`. An omitted `validation_mode` inherits the previous revision's. `ValueError` for a `template:` id; `NotFoundError` for an unknown ontology.
+| `validate_structure()` runs first. An omitted `validation_mode` inherits the previous revision's. `ValueError` for a `template:` id; `NotFoundError` for an unknown ontology.
 
-| `ontology.activate(version_id)` | `ontology.activate(versionId)`
-| Bind a version; subsequent entity writes validate against it.
-| Same, in a single write, so "exactly one active version per database" holds under concurrent activation. Takes effect for clients that connect *after* it.
+| Python: `ontology.activate(version_id)` +
+TypeScript: `ontology.activate(versionId)`
+| Bind the specified version to the workspace. Validation enforcement is a service behavior, separate from successful activation.
+| Swaps the active flag in a single write, so exactly one version per database is active even under concurrent activation. Takes effect for clients that connect after it.
 
-| `ontology.delete(id)` | `ontology.delete(id)`
-| Delete an ontology and its revisions.
-| Same, plus its `(:OntologyMigration)` records. `ValueError` for a `template:` id.
+| Python: `ontology.delete(id)` +
+TypeScript: `ontology.delete(id)`
+| Delete a workspace-owned ontology.
+| Also deletes its revisions and `(:OntologyMigration)` records. `ValueError` for a `template:` id.
 
-| `ontology.import_(content=/url=, format=)` | `ontology.import({content?, url?, format?})`
+| Python: `ontology.import_(content=/url=, format=)` +
+TypeScript: `ontology.import({content?, url?, format?})`
 | Convert an external graph/ontology document into a *non-persisted* draft (`OntologyImportResult`). Nothing is saved until you `create()` / `update()` from the returned document. Note the trailing underscore on the Python name (`import` is a keyword).
-| Converts locally: `json`, `yaml`, `native`, `arrows`, `auto`. `url=` and the extraction-backed formats raise `NotSupportedError`. Each `validate_structure()` problem comes back as an `invalid_structure` warning rather than an exception.
+| Converts locally: `json`, `yaml`, `native`, `arrows`, `auto`. `url=` and the extraction-backed formats raise `NotSupportedError`. Each `validate_structure()` problem is returned as an `invalid_structure` warning rather than raised.
 
-| `ontology.diff(id, from_revision, to_revision)` | `ontology.diff(id, fromRevision, toRevision)`
+| Python: `ontology.diff(id, from_revision, to_revision)` +
+TypeScript: `ontology.diff(id, fromRevision, toRevision)`
 | Structural diff between two revisions of an ontology (`OntologyDiff`).
 | Same shape, computed locally by `diff_documents()`.
 
-| `ontology.migrate(id, from_version_id=, to_version_id=, type_mappings=, dry_run=False)` | `ontology.migrate(id, {fromVersionId, toVersionId, typeMappings, dryRun?})`
-| Label-rename migration from one version to another; returns a `MigrationJob`. Pass `dry_run=True` to preview without writing.
-| Runs **synchronously** (see <<bolt-migrate>>) and returns an already-terminal job. `batch_size` is accepted and ignored.
+| Python: `ontology.migrate(id, from_version_id=, to_version_id=, type_mappings=, dry_run=False)` +
+TypeScript: `ontology.migrate(id, {fromVersionId, toVersionId, typeMappings, dryRun?})`
+| Enqueue an *async* label-rename migration from one version to another; returns a `MigrationJob`. Pass `dry_run=True` to preview without writing.
+| Runs synchronously (see <<bolt-migrate>>) and returns a finished job. `batch_size` is accepted and ignored.
 
-| `ontology.get_migration(job_id)` | `ontology.getMigration(jobId)`
+| Python: `ontology.get_migration(job_id)` +
+TypeScript: `ontology.getMigration(jobId)`
 | Poll a migration job's status and progress (`MigrationJob`).
-| Reads back the persisted `(:OntologyMigration)` row. Terminal on arrival, so there is nothing to poll.
+| Reads back the persisted `(:OntologyMigration)` node. The job is already finished, so there is nothing to poll.
 |===
 
 [#bolt-migrate]
-=== `migrate` on bolt
+=== `migrate` on Bolt
 
-One transaction per `(from_label, to_label)` pair, executed inline. For each
-pair the `from` label is removed, the `to` label added, `e.subtype` is set from
-the target version's entity type, and `e.type` is rewritten when the target
-label maps onto a different `pole_type`. Labels are sanitised to their
-PascalCase form. `type_mappings` accepts `(from, to)` tuples or
-`{"from": ..., "to": ...}` dicts.
+`migrate` executes one transaction per `(from_label, to_label)` pair, inline. For each pair it removes the `from` label, adds the `to` label, sets `e.subtype` from the target version's entity type, and rewrites `e.type` when the target label maps onto a different `pole_type`. When the target entity type declares no subtype, the subtype labels the source version could have written are removed too. Labels are sanitized to their PascalCase form. `type_mappings` accepts `(from, to)` tuples or `{"from": ..., "to": ...}` dicts.
 
-`dry_run=True` counts matching nodes (`total`) and mutates nothing
-(`processed = 0`). A failed step is recorded on the job (`errored`,
-`error_message`, `status = "failed"`) rather than raising. Either way the job is
-persisted as an `(:OntologyMigration)` node.
+`dry_run=True` counts matching nodes (`total`) and mutates nothing (`processed = 0`). A failed step is recorded on the job (`errored`, `error_message`, `status = "failed"`) rather than raised. Either way the job is persisted as an `(:OntologyMigration)` node.
 
-`NotFoundError` if either version id is unknown; `ValueError` for a malformed
-mapping, an invalid Neo4j label, or a target label the target version does not
-declare. On a large graph prefer a maintenance window, or run the equivalent
-relabel in batches with `apoc.periodic.iterate`.
+`NotFoundError` if either version id is unknown. `ValueError` for a malformed mapping, an invalid Neo4j label, a target label the target version does not declare, or a source label the source version does not declare when the target declares no subtype. On a large graph, prefer a maintenance window, or run the equivalent relabel in batches with `apoc.periodic.iterate`.
 
 == Return types
 
 `list()` returns `OntologySummary[]`. `get()` returns `Ontology` (`{record,
-versions[]}`). `get_active()` returns `ActiveOntology`. `clone` / `create` /
-`update` / `activate` return an `OntologyVersion`.
+versions[]}`). `get_active()` returns `ActiveOntology` (`{document,
+validation_mode?, revision?, ontology_id?, version_id?, schema_hash?}`;
+TypeScript uses the camelCase names, and its 0.5.0 release has no
+`schemaHash`). `clone` / `create` / `update` / `activate` return an
+`OntologyVersion`.
 
 `import_()` returns an `OntologyImportResult` (`{document?, warnings[]
 (ImportWarning), detected_format?, suggested_name?}`). `diff()` returns an
@@ -97,30 +95,80 @@ mode_change?}`). `migrate()` and `get_migration()` return a `MigrationJob`
 (`{id, status (pending|running|completed|failed|paused), total, processed,
 errored, …}`).
 
+[#python-0-6-active-binding]
+=== Active binding in the released SDKs
+
+The `GET /ontologies/active` response carries a `version` object (`id`,
+`ontology_id`, `revision`, `validation_mode`, …) that identifies the bound
+revision, which can be older than the ontology's latest revision.
+
+Python `neo4j-agent-memory==0.7.0` reads that object. The `ActiveOntology`
+returned by `get_active()` takes `version_id`, `ontology_id`, `revision`,
+`validation_mode` and `schema_hash` from it, so they name the bound revision.
+When a response carries no `version` object, those fields are `None`: the
+binding is unknown, and the SDK never substitutes the latest revision.
+Version metadata that is present but malformed, or whose `schema_json`
+differs from the active document, raises `ValueError`. On Bolt, `get_active()`
+reads the active `(:OntologyVersion)` node directly.
+
+Python 0.6.0 and TypeScript `@neo4j-labs/agent-memory@0.5.0` ignore the
+`version` object: `get_active()` / `getActive()` compose the version metadata
+from a second `list()` / `get()` lookup, which picks the ontology's current
+(latest) revision rather than the bound one. When an older revision is active,
+the returned `version_id` / `versionId`, `revision` and `validation_mode` /
+`validationMode` describe the latest revision instead. With those releases, do
+not use them to capture a rollback target or certify restoration.
+
+The hosted Python lessons read `GET /ontologies/active` themselves:
+
+* Python: the self-contained xref:tutorials/ontology-quickstart.adoc[ontology
+  lesson] uses `read_active_binding(http)` from `hosted_tutorial_helpers.py`. It
+  uses the same resolved NAMS settings as the SDK, validates the authoritative
+  `version` and schema, and stops before mutation if the binding is incomplete
+  or missing. See xref:how-to/use-ontologies.adoc[the activation recipe] for
+  its imports and client lifecycle. The helper is example code displayed on
+  those pages, not an SDK method.
+* TypeScript 0.5.0: send the same request with the workspace API key and read
+  `version` from the JSON body. The response's `version` uses the snake_case
+  wire names.
++
+[source,typescript]
+----
+const response = await fetch("https://memory.neo4jlabs.com/v1/ontologies/active", {
+  headers: { Authorization: `Bearer ${process.env.MEMORY_API_KEY}` },
+});
+if (!response.ok) throw new Error(`GET /ontologies/active: ${response.status}`);
+const { version } = (await response.json()) as {
+  ontology: unknown;
+  version?: { id: string; ontology_id: string; revision: number; validation_mode: string };
+};
+// version.id, version.revision and version.validation_mode name the bound revision.
+----
+
+The TypeScript repository source also reads the authoritative `version` (and
+adds `schemaHash` to `ActiveOntology`); that change is not in the 0.5.0
+release.
+
 == Import formats
 
 `import_()` accepts these `format` ids (or `auto` / omit to detect from content):
 
-[cols="1,2,1",options="header"]
+[cols="1,3,1",options="header"]
 |===
 | `format` | Source | Bolt
 
 | `arrows` | link:https://arrows.app[Arrows.app] JSON | Yes
-| `native` | The library's own ontology JSON/YAML (NAMS also aliases `yaml` / `yml` here; bolt accepts `json` and `yaml` as explicit parsers) | Yes
-| `auto` | Detect from content (the default when `format` is omitted) | Yes
 | `data-importer` | Neo4j Data Importer model | `NotSupportedError`
 | `cypher` | Cypher DDL (`CREATE CONSTRAINT` / schema statements) | `NotSupportedError`
 | `graphql` | GraphQL SDL type definitions | `NotSupportedError`
 | `linkml` | LinkML schema | `NotSupportedError`
 | `rdf` | RDF / OWL (parsed server-side; the extraction service must be reachable) | `NotSupportedError`
+| `native` | The library's own ontology JSON/YAML (NAMS aliases `yaml` / `yml` to `native`) | Yes
+| `json`, `yaml` | Explicit parsers for a native or arrows body | Yes (Bolt only)
+| `auto` | Detect from content (the default when `format` is omitted) | Yes
 |===
 
-On bolt, `auto` picks the arrows converter when the parsed body has top-level
-`nodes` and `relationships` keys, and the native path otherwise; the native path
-also accepts a legacy `EntitySchemaConfig` body and converts it. `url=` raises
-`NotSupportedError` on bolt (the server-side fetch is SSRF-guarded and
-size-capped, which a local converter cannot promise) — download the document and
-pass it as `content=`.
+On Bolt, `auto`, `json` and `yaml` pick the arrows converter when the parsed body has top-level `nodes` and `relationships` keys, and the native path otherwise; the native path also accepts a legacy `EntitySchemaConfig` body and converts it. `url=` raises `NotSupportedError` on Bolt, because the service's fetch is SSRF-guarded and size-capped and a local converter cannot promise the same; download the document and pass it as `content=`.
 
 == Ontology document schema
 
@@ -135,14 +183,11 @@ pass it as `content=`.
 | `no_self_loops` | `bool` (default `true`) | Applied per relation, so an explicit `allow_self: true` still wins.
 |===
 
-Parsing is deliberately lenient (`extra="ignore"`, every extension field
-defaulted), so any document that parsed before v0.7 still parses.
+Parsing is deliberately lenient (unknown fields are ignored and every extension field has a default), so any document that parsed before 0.7.0 still parses.
 
-=== Extension fields (v0.7)
+=== Extension fields
 
-These drive the local extraction and resolution pipeline on bolt. They are
-declarative data on the document, so a NAMS-bound document carries them too,
-but on NAMS extraction and resolution run server-side against its own engine.
+These fields, added in 0.7.0, drive the local extraction and resolution pipeline on Bolt, where the stored document keeps all of them. `NamsOntology.create` / `update` send an extension field only when it differs from its default, so a document without extensions keeps its pre-0.7.0 request shape. Whether the service keeps fields it does not model is not verified for this release, and on NAMS extraction and resolution run server-side against the service's own engine.
 
 [cols="1,1,3",options="header"]
 |===
@@ -150,14 +195,11 @@ but on NAMS extraction and resolution run server-side against its own engine.
 
 | `description`
 | entity type / relationship / property
-| Serialised into the GLiNER2.5 encoder input as a zero-shot annotation
-  guideline, and rendered into the LLM extractor's prompt. Write negative cases
-  into it ("Not a job title.").
+| Serialized into the GLiNER2.5 encoder input as a zero-shot annotation guideline, and rendered into the LLM extractor's prompt. Write negative cases into it ("Not a job title.").
 
 | `aliases`
 | entity type
-| Canonical name → known surface forms. The resolver's gazetteer: a blocking
-  key and a `1.0` match rule.
+| Canonical name → known surface forms. The resolver's gazetteer: a blocking key and a `1.0` match rule.
 
 | `threshold`
 | entity type
@@ -165,18 +207,15 @@ but on NAMS extraction and resolution run server-side against its own engine.
 
 | `resolution_threshold` / `review_threshold`
 | entity type
-| Per-type overrides of `resolution.auto_merge_threshold` /
-  `resolution.review_threshold`.
+| Per-type overrides of `resolution.auto_merge_threshold` / `resolution.review_threshold`.
 
 | `threshold`
 | relationship
-| Per-relation confidence floor for JointIE (the model cards suggest ~0.6;
-  0.15–0.35 measured better on crowded relations).
+| Per-relation confidence floor for JointIE (the model cards suggest about 0.6; 0.15–0.35 measured better on crowded relations).
 
 | `unique_source` / `unique_target`
 | relationship
-| Compile to JointIE's `unique_head` / `unique_tail` — at most one edge of this
-  type per source / per target.
+| Compile to JointIE's `unique_head` / `unique_tail`: at most one edge of this type per source / per target.
 
 | `acyclic`
 | relationship
@@ -188,27 +227,18 @@ but on NAMS extraction and resolution run server-side against its own engine.
 
 | `inverse`
 | relationship
-| Names the mirror relationship. `validate_structure()` checks that the pair
-  actually mirrors each other's source/target. There is no "symmetric" flag —
-  it is broken upstream in `gliner2` 2.0.0.
+| Names the mirror relationship. `validate_structure()` checks that the pair mirrors each other's source and target. There is no "symmetric" flag; it is broken upstream in `gliner2` 2.0.0.
 |===
 
-`validate_structure()` is the single validator: it returns a list of
-human-readable problems (duplicate labels, a `pole_type` outside POLE+O, an
-undeclared relationship endpoint, a duplicate relationship triple, a bad
-`allow_self`, a non-mirroring `inverse`) and is called — raising `ValueError` —
-by `BoltOntology.create` / `update` and by `compile_joint_schema`.
-`content_key()` returns a deterministic content-addressed key used to cache
-compiled schemas by content rather than by name.
+`validate_structure()` is the single validator. It returns a list of human-readable problems (duplicate labels, a `pole_type` outside POLE+O, an undeclared relationship endpoint, a duplicate relationship triple, a bad `allow_self`, a non-mirroring `inverse`), and `BoltOntology.create` / `update` and `compile_joint_schema` call it and raise `ValueError` when it reports any. `content_key()` returns a deterministic content-addressed key used to cache compiled schemas by content rather than by name.
 
 The `OntologyVersion` carries `id`, `ontology_id`, `revision`,
 `validation_mode` (`permissive` | `strict`), the parsed `document`,
 `schema_hash`, `created_at`, and `message`.
 
-== REST endpoints (NAMS)
+== REST endpoints
 
-These apply to the hosted backend only; `BoltOntology` issues Cypher instead.
-The SDK targets these workspace-scoped endpoints (under the versioned base, e.g.
+These apply to NAMS only; `BoltOntology` issues Cypher instead. The SDK targets these workspace-scoped endpoints (under the versioned base, e.g.
 `/v1`). Request bodies use snake_case. See
 link:https://memory.neo4jlabs.com/openapi.json[the OpenAPI spec] for exact
 request/response shapes.
@@ -218,26 +248,26 @@ request/response shapes.
 | Method | Path | Maps to
 
 | GET | `/ontologies` | `list()`
-| GET | `/ontologies/{id}` | `get()`
+| GET | `/ontologies/\{id}` | `get()`
 | GET | `/ontologies/active` | `get_active()`
-| POST | `/ontologies/{name}/clone` | `clone()`
+| POST | `/ontologies/\{name}/clone` | `clone()`
 | POST | `/ontologies` — body `{ontology, validation_mode?}` | `create()`
-| PUT | `/ontologies/{id}` — body `{ontology, validation_mode?}` | `update()`
-| POST | `/ontologies/active` — body `{version_id}` | `activate()`
-| DELETE | `/ontologies/{id}` | `delete()`
+| PUT | `/ontologies/\{id}` — body `{ontology, validation_mode?}` | `update()`
+| POST | `/ontologies/active` — body `\{version_id}` | `activate()`
+| DELETE | `/ontologies/\{id}` | `delete()`
 | POST | `/ontologies/import` — body `{content?, url?, format?}` | `import_()` / `import()`
-| GET | `/ontologies/{id}/diff?from={n}&to={m}` | `diff()`
-| POST | `/ontologies/{id}/migrate` | `migrate()`
-| GET | `/ontologies/migrations/{job_id}` | `get_migration()`
+| GET | `/ontologies/\{id}/diff?from=\{n}&to=\{m}` | `diff()`
+| POST | `/ontologies/\{id}/migrate` | `migrate()`
+| GET | `/ontologies/migrations/\{job_id}` | `get_migration()`
 |===
 
 [NOTE]
 ====
-`migrate` runs *asynchronously*: `POST /ontologies/{id}/migrate` returns a
+`migrate` runs *asynchronously*: `POST /ontologies/\{id}/migrate` returns a
 `MigrationJob` you poll with `get_migration()` (the service also exposes
-`/migrations/{job_id}/pause` and `/resume`). The preview/dry-run path of `import`
+`/migrations/\{job_id}/pause` and `/resume`). The preview/dry-run path of `import`
 is rate-limited to 30 requests/hour/workspace (see
-xref:reference/nams-limits.adoc[NAMS Limits & Behavior]).
+xref:reference/nams-limits.adoc[NAMS limits and behavior]).
 ====
 
 == Errors
@@ -247,20 +277,15 @@ xref:reference/nams-limits.adoc[NAMS Limits & Behavior]).
 | Condition | Exception
 | Strict-mode validation rejection | `ValidationError` (carries the offending detail)
 | No active ontology bound | `NotSupportedError` (both backends)
-| Structurally invalid document passed to bolt `create`/`update` | `ValueError` listing every problem
-| `import_(url=...)`, or a format only the hosted converter runs, on bolt | `NotSupportedError` naming NAMS
-| `update`/`delete` against a `template:<name>` id on bolt | `ValueError`
-| Unknown ontology, version, template or migration id | `NotFoundError`
-| Stored document unreadable, or the migration row could not be written | `SchemaError`
+| Active version metadata malformed, or its schema differs from the active document (NAMS) | `ValueError`
+| Structurally invalid document passed to Bolt `create` / `update` | `ValueError` listing every problem
+| `import_(url=...)`, or a format only the hosted converter runs, on Bolt | `NotSupportedError` naming NAMS
+| `update` / `delete` against a `template:<name>` id on Bolt | `ValueError`
+| Unknown ontology, version, template or migration id on Bolt | `NotFoundError`
+| Stored document unreadable, or the migration record could not be written (Bolt) | `SchemaError`
 |===
 
-== Templates
-
-On bolt the templates are the eight local domain templates — `poleo`,
-`podcast`, `news`, `scientific`, `business`, `entertainment`, `medical`,
-`legal` — surfaced with an id of `template:<name>`. `poleo` is the curated POLE+O
-ontology (5 labels, 16 relationship types, annotation guidelines and decoding
-constraints) and is the library default.
+== System templates
 
 ~28 system templates ship on the service (each `is_system = true`, revision 1).
 `nams-default` is bound until a workspace activates its own:
@@ -273,13 +298,22 @@ constraints) and is the library default.
 `scientific-research`, `software-engineering`, `trip-planning`,
 `vacation-industry`, `wildlife-management`.
 
+On Bolt the templates are the eight built-in domain templates (`poleo`, `podcast`, `news`, `scientific`, `business`, `entertainment`, `medical`, `legal`), listed with an id of `template:<name>`. `poleo` is the curated POLE+O ontology (5 labels, 16 relationship types, annotation guidelines and decoding constraints) and is the library default.
+
 == Runnable examples
 
-* link:https://github.com/neo4j-labs/agent-memory/tree/main/examples/ontology-extraction[`examples/ontology-extraction/`] — bolt,
-  keyless: author an ontology, `create`/`activate` it, ingest with alias
-  variation, read the typed edges back, then `update` and `diff`.
-* link:https://github.com/neo4j-labs/agent-memory/tree/main/examples/ontology-lifecycle[`examples/ontology-lifecycle/`] — Python:
+* link:https://github.com/neo4j-labs/agent-memory/tree/main/examples/ontology-lifecycle[`examples/ontology-lifecycle/`] — Python, NAMS:
   `import_`, `activate`, `diff`, `migrate` and `get_migration` polling, with a
   `query.cypher` read-back.
 * link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/ontology-lifecycle[`typescript/examples/ontology-lifecycle/`] —
   the same lifecycle through `OntologyClient`.
+* link:https://github.com/neo4j-labs/agent-memory/tree/main/examples/ontology-extraction[`examples/ontology-extraction/`] — Python, Bolt, no API keys:
+  author an ontology, `create` and `activate` it, ingest with alias variation,
+  read the typed edges back, then `update` and `diff`.
+
+== See also
+
+* xref:explanation/ontologies.adoc[Ontologies] — the concept: templates, revisions, validation modes, and the Bolt and NAMS mechanics.
+* xref:how-to/use-ontologies.adoc[Use ontologies] — the NAMS activation recipe.
+* xref:how-to/ontology-driven-extraction.adoc[Drive extraction from an ontology] — the Bolt workflow.
+* xref:reference/nams-limits.adoc[NAMS limits and behavior] — the import/preview rate limit.

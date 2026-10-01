@@ -1,4 +1,4 @@
-= Drive Extraction From an Ontology
+= Drive extraction from an ontology
 :page-product: agent-memory
 :page-pagination:
 :toclevels: 3
@@ -9,7 +9,7 @@
 include::partial$backend-bolt-only.adoc[]
 
 To make extraction produce a predictable, typed graph instead of a pile of
-loosely-labelled nodes, write an ontology and hand it to the client. One
+loosely labeled nodes, write an ontology and hand it to the client. One
 document drives all of it: the GLiNER2.5 JointIE schema, the LLM extractor's
 prompt, relation validation on ingest, entity resolution, and the strict write
 paths.
@@ -19,13 +19,28 @@ paths.
 Ontology *management* (`client.ontology`) works on both backends. This page is
 about the bolt backend, where extraction runs in your process and the ontology
 shapes it locally. On NAMS, extraction runs server-side against the activated
-version — see xref:how-to/use-ontologies.adoc[Use Ontologies].
+version — see xref:how-to/use-ontologies.adoc[Use ontologies].
 ====
 
-== 1. Write the Ontology
+== Prerequisites
+
+* Install the local extractor, the CLI and YAML support. Quote package extras in shell commands:
++
+[source,bash]
+----
+python -m pip install 'neo4j-agent-memory[gliner2,openai,cli]==0.7.0' pyyaml
+----
++
+The first extraction downloads the GLiNER2.5 checkpoint `fastino/gliner2.5-base-v1` (about 407 MB).
+* Use a dedicated AuraDB instance and export `NEO4J_URI`, `NEO4J_USERNAME`, and `NEO4J_PASSWORD` as shown in xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the Aura connection setup]. These examples use the `bolt` backend; `NEO4J_DATABASE` defaults to `neo4j` when omitted.
+* Set `OPENAI_API_KEY` for the default embedding provider, or configure another one as shown in xref:how-to/configure-embedding-provider.adoc[Configure an embedding provider].
+* Run snippets containing `await` in an async function. The connected `client` in later fragments comes from step 3.
+
+== 1. Write the ontology
 
 An ontology is a YAML (or JSON) document with three parts: a `domain`, the
-`entity_types`, and the `relationships` between them.
+`entity_types`, and the `relationships` between them. Save this one as
+`ontology.yaml` in your working directory:
 
 [source,yaml]
 ----
@@ -122,7 +137,7 @@ relationships:
 Three things about this document are load-bearing:
 
 `description` is an annotation guideline, not documentation::
-GLiNER2.5 serialises each description into the encoder input, so it behaves the
+GLiNER2.5 serializes each description into the encoder input, so it behaves the
 way instructions to a human annotator do. Write the positive case in one
 sentence and then *rule things out* — the negative cases ("Not the support
 engineer who answers") are what stop a label from absorbing everything nearby.
@@ -146,20 +161,24 @@ relationship, use `inverse: OTHER_TYPE` and declare the reverse pattern too
 
 === How labels reach Neo4j
 
-Each entity type carries a POLE+O `pole_type` and an optional `subtype`. Those
-two properties are what the storage layer turns into PascalCase node labels, so
-`Customer` above lands as:
+Each entity type carries a POLE+O `pole_type` and an optional `subtype`, and the
+storage layer writes both onto the node as the `type` and `subtype` properties.
+The `pole_type` always becomes a PascalCase label. The `subtype` becomes a label
+only when it is one of the built-in POLE+O subtypes for that type (for `PERSON`:
+`INDIVIDUAL`, `ALIAS`, `PERSONA`, `SUSPECT`, `WITNESS` and `VICTIM`); any other
+subtype stays a property. So `Customer` above lands as:
 
 [source,cypher]
 ----
-(:Entity:Person:Customer {name: "Dana Whitfield", type: "PERSON", subtype: "CUSTOMER"})
+(:Entity:Person {name: "Dana Whitfield", type: "PERSON", subtype: "CUSTOMER"})
 ----
 
-Declare the `subtype`. Without it, `Customer` and `Engineer` both map to
-`(PERSON, None)` and become plain `:Entity:Person` nodes — the fine-grained
-distinction survives in the extractor's output but not in the graph.
+Match a custom subtype on the property, for example
+`MATCH (c:Person {subtype: "CUSTOMER"})`. Declare the `subtype` all the same.
+Without it, `Customer` and `Engineer` both map to `(PERSON, None)` and the
+fine-grained distinction survives in the extractor's output but not in the graph.
 
-== 2. Validate and Compile It
+== 2. Validate and compile it
 
 Check the document before wiring it in. `validate` reports every structural
 problem at once (duplicate labels, an undeclared relationship endpoint, a
@@ -188,22 +207,30 @@ entries grouped:
 neo4j-agent-memory ontology compile ontology.yaml
 ----
 
-`compile` needs the `gliner2` extra (`pip install "neo4j-agent-memory[gliner2]"`);
-`validate` does not. Both commands accept a legacy `EntitySchemaConfig` file
+`compile` needs the `gliner2` extra from the prerequisites; `validate` does
+not. Both commands accept a legacy `EntitySchemaConfig` file
 too — `load_ontology()` detects the shape and converts it on the way in.
 
-== 3. Point the Client at It
+== 3. Point the client at it
 
 Two equivalent ways in, depending on whether the path belongs in your
 configuration or in your code:
 
 [source,python]
 ----
+import os
+
 from neo4j_agent_memory import MemoryClient, MemorySettings
 from neo4j_agent_memory.config.settings import SchemaConfig
 
 settings = MemorySettings(
-    neo4j={"uri": "bolt://localhost:7687", "password": "password"},
+    backend="bolt",
+    neo4j={
+        "uri": os.environ["NEO4J_URI"],
+        "username": os.environ["NEO4J_USERNAME"],
+        "password": os.environ["NEO4J_PASSWORD"],
+        "database": os.getenv("NEO4J_DATABASE", "neo4j"),
+    },
     schema_config=SchemaConfig(ontology_path="ontology.yaml"),
 )
 
@@ -238,10 +265,10 @@ connection, before the extractor is built — is:
 
 `client.ontology_document` reports what was resolved and
 `client.validation_mode` reports how strictly it is enforced. See
-xref:reference/configuration.adoc#schema-configuration[Schema Configuration]
+xref:reference/configuration-providers.adoc#schema[Graph schema configuration]
 for every field.
 
-== 4. Store It in the Database Instead
+== 4. Store it in the database instead
 
 A file is fine for one process. To share one ontology across every client that
 connects to a database, store and activate it — after which
@@ -249,7 +276,7 @@ connects to a database, store and activate it — after which
 
 [source,python]
 ----
-from neo4j_agent_memory import load_ontology
+from neo4j_agent_memory import MemoryClient, load_ontology
 
 doc = load_ontology("ontology.yaml")
 
@@ -270,14 +297,14 @@ database.
 Later revisions are immutable and additive: `update(ontology_id, doc)` appends
 revision n+1, `activate(version.id)` swaps which one is bound, and
 `diff(ontology_id, 1, 2)` shows what changed. See
-xref:reference/ontology-api.adoc[Ontology API] for the whole surface and the
+xref:reference/ontology-api.adoc[Ontology API reference] for the whole surface and the
 bolt/NAMS differences.
 
-== 5. Choose Permissive or Strict
+== 5. Choose permissive or strict
 
 [cols="1,3", options="header"]
 |===
-| Mode | Behaviour
+| Mode | Behavior
 
 | `permissive` (default)
 | Extracted entities whose type the ontology does not declare are stored
@@ -295,11 +322,19 @@ bolt/NAMS differences.
 
 [source,python]
 ----
+import os
+
 from neo4j_agent_memory import MemorySettings
 from neo4j_agent_memory.config.settings import SchemaConfig
 
 settings = MemorySettings(
-    neo4j={"uri": "bolt://localhost:7687", "password": "password"},
+    backend="bolt",
+    neo4j={
+        "uri": os.environ["NEO4J_URI"],
+        "username": os.environ["NEO4J_USERNAME"],
+        "password": os.environ["NEO4J_PASSWORD"],
+        "database": os.getenv("NEO4J_DATABASE", "neo4j"),
+    },
     schema_config=SchemaConfig(
         ontology_path="ontology.yaml",
         validation_mode="strict",
@@ -308,15 +343,18 @@ settings = MemorySettings(
 ----
 
 `validation_mode=None` (the default) defers to the active stored version's mode,
-and then to `strict` if `strict_types=True` else `permissive`. Strict mode
-checks the *base* type when a subtype is not declared, so an entity typed
-`PERSON:CONTRACTOR` still validates against a declared `Customer` (PERSON)
-label; it is the unknown `pole_type` that fails.
+and then to `strict` if `strict_types=True` else `permissive`. Strict mode looks
+an entity up by its `(type, subtype)` pair. An undeclared subtype falls back to
+a *base* declaration of the same `pole_type` (one declared without a subtype),
+and a bare `pole_type` with no subtype resolves to the first label declared for
+it. The ontology above declares no base `PERSON` label, so an entity typed
+`PERSON` validates (as `Customer`), while `PERSON:CONTRACTOR` and any `LOCATION`
+are rejected.
 
 Start permissive, watch the warnings to find what your ontology is missing, then
 tighten to strict once ingestion is quiet.
 
-== 6. Verify the Typed Edges
+== 6. Verify the typed edges
 
 Store a couple of messages and read the graph back. Relations are stored as
 `RELATED_TO` with the relationship name in `r.type`, and the merge key includes
@@ -357,7 +395,7 @@ for row in rows:
   asserted sighting clears it permanently.
 
 | `extractor`
-| Which stage wrote it (`gliner2`, `llm`, …).
+| The stage that first wrote it (`gliner2`, `llm`, …).
 
 | `source_message_ids`
 | The messages it came from, capped at 25. `evidence` holds up to three
@@ -375,12 +413,12 @@ ORDER BY n DESC
 ----
 
 An empty relation result with entities present almost always means the ontology
-declares no relationships. A bare `DomainSchema` (the `--gliner-schema` domain
-catalog) is a label catalog with no endpoint typing, so relation decoding is
-skipped entirely; the `poleo`, `podcast` and `news` templates declare
-relationships, the other five do not until you attach some.
+declares no relationships. A bare `DomainSchema` is a label catalog with no
+endpoint typing, so relation decoding is skipped entirely. Of the eight built-in
+templates (`GLiNER2Extractor.for_schema`, `--gliner-schema`), `poleo`, `podcast`
+and `news` declare relationships; the other five do not until you attach some.
 
-== 7. Watch for the Two Quiet Failure Modes
+== 7. Watch for the two quiet failure modes
 
 Both look like "the text had nothing in it" if you are not expecting them.
 
@@ -403,7 +441,13 @@ from "its relations were split across windows", so check your own input length:
 
 [source,python]
 ----
+import re
 import warnings
+
+from neo4j_agent_memory.extraction import GLiNER2Extractor
+
+extractor = GLiNER2Extractor.for_ontology(client.ontology_document)
+text = "Dana Whitfield at Acme Corp reported that the Billing API is down."
 
 # Turn the feasibility warning into an error so a mis-compiled ontology fails
 # loudly rather than returning an empty result.
@@ -411,21 +455,22 @@ with warnings.catch_warnings():
     warnings.simplefilter("error", RuntimeWarning)
     result = await extractor.extract(text)
 
-# The long-input case has no warning to catch - measure it.
-if len(text.split()) > 384:
-    print("windowed: relations spanning chunk boundaries will be missing")
+# The long-input case has no warning to catch - measure it. The extractor
+# counts every punctuation mark as a word, so str.split() undercounts.
+if len(re.findall(r"\w+(?:[-_]\w+)*|\S", text)) > extractor.max_words:
+    print("windowed: relations spanning window boundaries will be missing")
 ----
 
-== Next Steps
+== Next steps
 
-* xref:how-to/tune-entity-resolution.adoc[Tune Entity Resolution] — the other
+* xref:how-to/tune-entity-resolution.adoc[Tune entity resolution] — the other
   half of a clean typed graph: one node per real-world entity.
 * link:https://github.com/neo4j-labs/agent-memory/tree/main/examples/ontology-extraction[`examples/ontology-extraction/`]
   — a keyless end-to-end run of this page: ontology, activation, alias
   variation across two sessions, typed edges with `support >= 2`.
-* xref:explanation/ontologies.adoc[Explanation: Ontologies] — templates,
-  revisions, validation modes, and what differs between bolt and NAMS.
-* xref:reference/ontology-api.adoc[Reference: Ontology API] — every
-  `client.ontology` method, with its bolt behaviour.
+* xref:explanation/ontologies.adoc[Ontologies] — templates, revisions,
+  validation modes, and what differs between bolt and NAMS.
+* xref:reference/ontology-api.adoc[Ontology API reference] — every
+  `client.ontology` method, with its bolt behavior.
 * xref:how-to/migrate-to-gliner2.adoc[Migrate to GLiNER2.5] — if you are coming
   from the `gliner` v1 stack.

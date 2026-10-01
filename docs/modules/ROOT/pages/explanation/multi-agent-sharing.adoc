@@ -1,188 +1,90 @@
-= Cross-Agent Memory Sharing
+= Cross-agent memory sharing
 :page-product: agent-memory
-:toc:
 :toclevels: 2
 
-How multiple agents — written in different languages, using different frameworks, deployed as separate services — read and write the same memory graph.
+Multiple agents can use records stored in a shared backend. Sharing requires compatible operations, the intended workspace or database, and explicit decisions about conversation and user scope.
 
-[.lead]
-**Conversations are private. Knowledge is shared.** That's the design contract that makes Neo4j Agent Memory natural for multi-agent systems.
+A session identifier organizes records. It does not by itself make a conversation private from another caller with access to the same backend.
 
+[[_the_capability_in_one_sentence]]
 == The capability in one sentence
 
-If two agents point at the same backend (NAMS API key, or the same Neo4j cluster), an entity created by Agent A is queryable by Agent B as soon as the write returns — with no copy step, no message bus, no cache invalidation.
+An agent can retrieve records written by another agent when both target the same authorized storage boundary and use supported operations. Retrieval also depends on the selected query and on any asynchronous extraction or indexing needed for the result.
 
-== The two namespaces
+[[_the_two_namespaces]]
+== Storage boundaries and record scope
 
-Every memory operation lives in one of two namespaces:
+On NAMS, the workspace is the service's tenancy boundary. A workspace key is bound to that workspace; an admin key selects a workspace according to the authentication contract. On Bolt, access depends on the Neo4j database and credentials granted to the caller.
 
-[cols="1,2,3", options="header"]
-|===
-|Namespace |Scoped by |What's in it
+Within that boundary, conversation IDs organize messages and trace records. Entities can be shared across conversations. A caller with broader read access can inspect more than one conversation, so separate IDs must not be described as private agent notebooks.
 
-|*Conversation namespace* (private)
-|`session_id` (and optionally `user_identifier=`)
-|`Conversation`, `Message`, `ReasoningTrace`, `ReasoningStep`, `ToolCall`. Each agent sees only the sessions it wrote to. One agent's chat history is invisible to another by default.
+See xref:reference/authentication.adoc[Authentication] and xref:reference/backend-capabilities.adoc[Backend capabilities] for the exact boundaries.
 
-|*Entity namespace* (shared)
-|Global (within a backend / workspace)
-|`Entity` (POLE+O), `Preference`, `Fact`, `Relationship` between entities. Any agent on the same backend reads what any other agent wrote.
-|===
+[[_multi_tenant_scoping_with_user_identifier]]
+== User identifiers are operation-specific
 
-This split is the load-bearing design choice. It mirrors how human teams work: individual notebooks (conversations) plus a shared wiki (knowledge).
+`user_identifier` is not accepted or enforced by every memory method. The supported fields and filters differ by backend and operation. A field stored in metadata does not automatically become a predicate on every read.
 
-On **NAMS**, the shared boundary is the **workspace** (bound to your API key): every agent using the same workspace shares the entity graph, while different workspaces are fully isolated from one another. On **bolt**, the shared boundary is the Neo4j database. Either way, `user_identifier=` sub-divides users *within* that boundary. See xref:explanation/backends.adoc#tenancy[Tenancy & scoping].
+In particular, the current Bolt semantic message search accepts a `session_id` argument but does not apply it as a conversation filter. Do not use that argument to promise isolation or correct it by filtering only a limited result page in application code. Such filtering can miss relevant results and does not create an access-control boundary.
 
-== Multi-tenant scoping with `user_identifier`
+For a multi-user application, use the documented workspace/database boundary and enforce application authorization before calling memory operations. Follow xref:how-to/multi-tenancy.adoc[Multi-tenant memory] and the capability table for the supported per-operation filters.
 
-For SaaS-style deployments where one backend serves many end-users, every memory call accepts a `user_identifier=` kwarg:
+[[_cross_language_sharing_same_contract_different_sdks]]
+== Cross-language sharing
 
-[source,python]
-----
-# Agent code, identical for every end-user
-async def handle_request(user_id: str, message: str):
-    async with MemoryClient() as memory:
-        await memory.short_term.add_message(
-            session_id=f"chat-{user_id}",
-            role="user",
-            content=message,
-            user_identifier=user_id,  # scopes the write
-        )
-        # Subsequent reads with the same user_identifier only see this user's data
-        prefs = await memory.long_term.search_preferences(
-            "communication style",
-            user_identifier=user_id,
-        )
-----
+Python's NAMS REST transport and the TypeScript SDK can address the same hosted workspace. The Python Bolt backend connects directly to Neo4j and is not the same transport. The TCK bridge is a separate conformance-testing interface.
 
-`user_identifier` is stored as a property on every node and used as a WHERE filter on every read. See xref:how-to/multi-tenancy.adoc[Multi-tenant memory] for the full pattern.
+Sharing requires the same hosted endpoint and workspace, not merely the same environment variable names or user label. SDK return shapes can differ, and a method available on Python Bolt may have no hosted counterpart. Use xref:reference/rest-api.adoc[the REST contract] and xref:reference/backend-capabilities.adoc[the capability table] when designing a cross-language path.
 
-== Cross-language sharing: same contract, different SDKs
-
-The Python SDK (`neo4j-agent-memory`) and the TypeScript SDK (`@neo4j-labs/agent-memory`) both implement the same xref:reference/rest-api.adoc[NAMS REST contract]. So an agent in either language can read what an agent in the other wrote.
-
-Example: a Python ingestion agent and a TypeScript chat agent sharing entities:
-
-[source,python]
-----
-# ingestion-agent (Python) — runs on a cron, scrapes podcasts
-async with MemoryClient() as memory:
-    entity, _ = await memory.long_term.add_entity(
-        "Alice Johnson", "PERSON",
-        description="Former CTO of Acme, speaker on Lenny's podcast Ep. 42",
-    )
-----
-
-[source,typescript]
-----
-// chat-agent (TypeScript) — runs on Cloudflare Workers
-const memory = new MemoryClient();
-const matches = await memory.longTerm.searchEntities("Alice Johnson", { topK: 3 });
-// matches[0].description includes the entity the Python agent created.
-----
-
-Both SDKs write nodes with the same labels, property names, and relationship types. The graph doesn't know which language produced it.
-
+[[_a_typical_multi_agent_architecture]]
 == A typical multi-agent architecture
 
-[cols="1,3", options="header"]
+.Three agent clients share entities inside one workspace and database boundary
+image::diagrams/multi-agent-boundaries.svg["Three agent clients -- ingestion, chat and analytics -- each inside the same workspace/database boundary, each writing to its own conversation id, with entities shared across those conversations inside the boundary. A caller without access to the workspace or database is blocked outside it",width=100%,link=self]
+
+[cols="1,3",options="header"]
 |===
-|Layer |Responsibility
-
-|*Backend* (NAMS or Neo4j)
-|Single source of truth for the memory graph. NAMS is the natural choice when you don't want to operate Neo4j; self-hosted Bolt is the choice when you need write-Cypher or geospatial features.
-
-|*Agents* (any language, any framework)
-|Each agent is a separate process or service. Each holds its own `MemoryClient` pointed at the same backend. Each owns its session IDs but reads the shared entity graph.
-
-|*Orchestrator* (optional)
-|A coordinating agent that reads all sub-agents' reasoning traces, queries the shared entity graph, and synthesizes a response. Can be a workflow engine (LangGraph, Mastra) or a simple supervisor agent.
+|Component |Responsibility
+|Backend |Persist records inside the authorized workspace or database boundary.
+|Agent application |Carry forward actual conversation IDs, select retrieval scope, and decide what context enters a model call.
+|Orchestrator |Coordinate work and inspect permitted records from participating agents when the application authorizes it.
 |===
 
-When agents are independent services (containerized, on different runtimes), NAMS removes the "who runs Neo4j?" question — every service just needs an API key.
+Each process can hold its own client. The client is a connection to shared storage, not a private copy of the graph. Authorization and write ownership remain application design decisions.
 
-== Worked example: ingestion + chat + analytics
+[[_worked_example_ingestion_chat_analytics]]
+== Example: ingestion, chat, and analytics
 
-Three agents that never talk to each other directly but cooperate via shared memory:
+An ingestion process can store source messages. A chat process can retrieve relevant supported records after any required extraction completes. An analytics process can inspect permitted records and produce summaries.
 
-[cols="1,1,1,3", options="header"]
-|===
-|Agent |Language |Framework |What it does
+These processes need not call each other directly, but they need a shared contract for identifiers, provenance, and readiness. A chat process must not assume that an entity write also created preferences, facts, or relationships unsupported by its backend. See xref:tutorials/nams-quickstart.adoc[NAMS quickstart] for a concrete hosted path.
 
-|**Ingestion**
-|Python
-|PydanticAI
-|Cron job. Reads podcast transcripts, extracts `Person`/`Organization` entities, writes them to long-term memory.
+[[_when_agents_collide_avoiding_write_conflicts]]
+== Concurrent writers and identity
 
-|**Chat**
-|TypeScript
-|Vercel AI SDK on Cloudflare Workers
-|User-facing chat. On every turn, reads relevant entities and preferences from the shared graph, persists the conversation in its own session namespace.
+Two agents can try to describe the same entity. Resolution and deduplication help identify candidates, but they do not substitute for a concurrency policy or guarantee that every simultaneous write is merged correctly.
 
-|**Analytics**
-|Python
-|Plain script + `client.query.cypher(...)`
-|Nightly. Reads all entities, computes co-mention graphs, surfaces trends.
-|===
+Decide which application owns an update, retain source evidence, and distinguish repeated requests from separate observations. Backend-specific resolution outcomes and review workflows belong in xref:explanation/resolution-deduplication.adoc[Resolution and deduplication] and xref:reference/api/long-term.adoc[the long-term API reference].
 
-Each agent is its own deployment. None imports the others. They cooperate solely through reads and writes against the shared backend.
+[[_reasoning_trace_isolation]]
+== Trace retrieval and visibility
 
-== When agents collide: avoiding write conflicts
+Trace records can be associated with a conversation or session, and a session-specific retrieval operation can select that subset. This association is useful for reviewing one task; it is not a promise that other authorized callers cannot query those records.
 
-Because the entity namespace is shared, two agents *can* try to create the same entity at the same time. Neo4j Agent Memory handles this with:
+An orchestrator's broader audit access must be intentional. The recorded trace contains only the actions, observations, and outcomes the application or integration captures. Follow xref:how-to/audit-reasoning.adoc[Audit reasoning] for the supported read path.
 
-* **Entity deduplication on ingest** — `add_entity()` checks for embedding-similar and fuzzy-name matches before creating a new node. Above the `auto_merge_threshold` (default 0.95), the new write merges into the existing node and the name is added as an alias.
-* **`SAME_AS` flagged pairs** — between `flag_threshold` (0.85) and the auto-merge threshold, the new entity is created but linked via a `SAME_AS` relationship for human review.
-* **Server-side dedup on NAMS** — the hosted backend performs dedup transparently.
+[[_why_this_matters_for_ai_engineering]]
+== Why shared memory helps
 
-See xref:how-to/deduplication.adoc[Handle duplicates] for the configuration knobs.
+Shared records can reduce conflicting copies of knowledge and retain a common provenance trail. They do not guarantee that every agent immediately holds the same context: agents may query different subsets, cache results, or read before asynchronous processing completes.
 
-== Reasoning trace isolation
+Adding agents therefore requires checking authorization, identifiers, lifecycle hooks, and concurrent writes, even when the underlying storage remains the same.
 
-While entities are shared, reasoning traces are per-session by design:
+[[_see_also]]
+== See also
 
-[source,python]
-----
-# Agent A starts a trace
-trace_a = await memory.reasoning.start_trace(
-    session_id="agent-a-session-1",
-    task="Plan a trip",
-)
-
-# Agent B in the same process — its traces don't show up in A's session
-trace_b = await memory.reasoning.start_trace(
-    session_id="agent-b-session-1",
-    task="Book a flight",
-)
-
-# A's get_session_traces returns only A's traces
-await memory.reasoning.get_session_traces("agent-a-session-1")
-----
-
-But if an orchestrator wants cross-agent visibility for audit, it can query Cypher (Bolt) or the read-only Cypher endpoint (NAMS):
-
-[source,cypher]
-----
-// All traces created in the last hour, across all sessions and agents
-MATCH (t:ReasoningTrace)
-WHERE t.created_at > datetime() - duration('PT1H')
-RETURN t.session_id, t.task, t.outcome, t.success
-ORDER BY t.created_at DESC
-----
-
-See xref:how-to/audit-reasoning.adoc[Audit reasoning with TOUCHED edges] for the full audit pattern.
-
-== Why this matters for AI engineering
-
-The hardest problem in multi-agent systems is not coordination — it's coherence. Two agents that "know" different things will give the user contradictory answers. A shared memory graph keeps every agent's worldview in sync without bolting on a separate state management layer.
-
-The architecture also degrades gracefully: a single-agent prototype written against `MemoryClient` becomes a multi-agent system by adding more agents that point at the same backend. No refactor.
-
-== See Also
-
-* xref:explanation/memory-types.adoc[Understanding the Three Memory Types] — what conversations, entities, and traces are
-* xref:explanation/backends.adoc[Bolt vs NAMS] — which backend to pick
-* xref:how-to/multi-tenancy.adoc[Multi-tenant memory] — `user_identifier=` patterns
-* xref:how-to/use-nams.adoc[Use NAMS] — the hosted-service operational guide
-* xref:tutorials/nams-quickstart.adoc[NAMS Quickstart] — end-to-end deployment
-* xref:reference/rest-api.adoc[NAMS REST API] — the wire-level contract both SDKs implement
+* xref:reference/backend-capabilities.adoc[Backend capabilities and scope]
+* xref:reference/authentication.adoc[Authentication]
+* xref:how-to/multi-tenancy.adoc[Multi-tenant memory]
+* xref:explanation/memory-types.adoc[The three memory types]
+* xref:how-to/use-nams.adoc[Use NAMS]

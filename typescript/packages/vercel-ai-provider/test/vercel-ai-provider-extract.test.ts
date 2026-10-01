@@ -1,6 +1,5 @@
 /**
- * Graph extraction — entities and relationships extracted from a stored
- * memory must land in the long-term graph via the real SDK API:
+ * Graph extraction. Extracted entities and relationships are saved with
  * addEntity(name, type, options) and addRelationship(sourceId, targetId, type).
  */
 
@@ -63,9 +62,8 @@ describe('createGraphExtractor', () => {
   });
 
   /**
-   * The hosted REST API has no relationship endpoint, so every extracted edge
-   * fails identically. Now that extraction actually runs, an unsuppressed log
-   * would emit one line per edge per stored memory forever.
+   * With @neo4j-labs/agent-memory 0.4.x, relationships have no REST route, so
+   * every edge fails the same way. It should log once, not once per edge.
    */
   it('logs an unsupported relationship backend once, not once per edge', async () => {
     const warn = vi.fn();
@@ -88,8 +86,34 @@ describe('createGraphExtractor', () => {
     await createGraphExtractor({} as any)(client, { content: 'A B C', type: 'fact' });
 
     expect(fake.longTerm.addRelationship).toHaveBeenCalledTimes(3);
-    const relWarnings = warn.mock.calls.filter(([m]) => /relationship endpoint/.test(m));
+    const relWarnings = warn.mock.calls.filter(([m]) => /does not accept relationship writes/.test(m));
     expect(relWarnings).toHaveLength(1);
+  });
+
+  it('links to an entity already stored under the same name and type', async () => {
+    fake.longTerm.getEntityByName.mockImplementation(async (name: string) =>
+      name === 'Alex' ? { id: 'ent-stored-alex', name: 'Alex', type: 'Person' } : null,
+    );
+    mockedGenerateText.mockResolvedValue(graphResult(
+      [{ name: 'Alex', type: 'person', description: 'A user' }, { name: 'Neovim', type: 'tool' }],
+      [{ from: 'Alex', to: 'Neovim', type: 'USES' }],
+    ));
+
+    await createGraphExtractor({} as any)(fake as any, { content: 'Alex uses Neovim', type: 'fact' });
+
+    // Types compare case-insensitively, so the stored Person is reused.
+    expect(fake.longTerm.addEntity).not.toHaveBeenCalledWith('Alex', expect.anything(), expect.anything());
+    expect(fake.longTerm.addEntity).toHaveBeenCalledWith('Neovim', 'tool', expect.anything());
+    expect(fake.longTerm.addRelationship).toHaveBeenCalledWith('ent-stored-alex', 'ent-Neovim', 'USES');
+  });
+
+  it('creates a new entity when the stored one of that name has another type', async () => {
+    fake.longTerm.getEntityByName.mockResolvedValue({ id: 'ent-apple-co', name: 'Apple', type: 'organization' });
+    mockedGenerateText.mockResolvedValue(graphResult([{ name: 'Apple', type: 'food' }]));
+
+    await createGraphExtractor({} as any)(fake as any, { content: 'Alex eats an Apple a day', type: 'fact' });
+
+    expect(fake.longTerm.addEntity).toHaveBeenCalledWith('Apple', 'food', expect.anything());
   });
 
   it('keeps logging genuine relationship write failures every time', async () => {
@@ -210,10 +234,7 @@ describe('createGraphExtractor — self-referential guard', () => {
     expect(fake.longTerm.addEntity).not.toHaveBeenCalled();
   });
 
-  /**
-   * The guard keys on proper-vs-common noun, so a script that has no case must
-   * make it decline rather than reject every entity in that language.
-   */
+  /** Names in scripts without letter case must not be rejected as common nouns. */
   it('does not reject entities written in caseless scripts', async () => {
     mockedGenerateText.mockResolvedValue(graphResult([
       { name: '北京', type: 'Location' },
@@ -280,5 +301,65 @@ describe('createGraphExtractor — self-referential guard', () => {
 
     const stored = fake.longTerm.addEntity.mock.calls.map((c: any[]) => c[0]);
     expect(stored).toEqual(['preferences']);
+  });
+});
+
+/**
+ * Hosted NAMS has no get_entity_by_name route, so an already-stored entity is
+ * found through search instead. Search is nearest-neighbour, so only an exact
+ * name counts — a near match is a different entity, not a duplicate.
+ */
+describe('createGraphExtractor — finding a stored entity without get_entity_by_name', () => {
+  beforeEach(() => {
+    fake.longTerm.getEntityByName.mockRejectedValue(new Error('unsupported on this backend'));
+  });
+
+  it('reuses the entity that search returns under the same name and type', async () => {
+    fake.longTerm.searchEntities.mockResolvedValue([
+      { id: 'ent-alexandra', name: 'Alexandra', type: 'person' },
+      { id: 'ent-stored-alex', name: 'Alex', type: 'Person' },
+    ]);
+    mockedGenerateText.mockResolvedValue(graphResult(
+      [{ name: 'Alex', type: 'person' }, { name: 'Neovim', type: 'tool' }],
+      [{ from: 'Alex', to: 'Neovim', type: 'USES' }],
+    ));
+
+    await createGraphExtractor({} as any)(fake as any, { content: 'Alex uses Neovim', type: 'fact' });
+
+    expect(fake.longTerm.addEntity).not.toHaveBeenCalledWith('Alex', expect.anything(), expect.anything());
+    expect(fake.longTerm.addRelationship).toHaveBeenCalledWith('ent-stored-alex', 'ent-Neovim', 'USES');
+  });
+
+  it('matches on the canonical name too', async () => {
+    fake.longTerm.searchEntities.mockResolvedValue([
+      { id: 'ent-stored-alex', name: 'Alex Rivera', canonicalName: 'Alex', type: 'person' },
+    ]);
+    mockedGenerateText.mockResolvedValue(graphResult([{ name: 'Alex', type: 'person' }]));
+
+    await createGraphExtractor({} as any)(fake as any, { content: 'Alex again', type: 'fact' });
+
+    expect(fake.longTerm.addEntity).not.toHaveBeenCalled();
+  });
+
+  it('creates a new entity rather than merging a near match', async () => {
+    fake.longTerm.searchEntities.mockResolvedValue([
+      { id: 'ent-alexandra', name: 'Alexandra', type: 'person' },
+    ]);
+    mockedGenerateText.mockResolvedValue(graphResult([{ name: 'Alex', type: 'person' }]));
+
+    await createGraphExtractor({} as any)(fake as any, { content: 'Alex is new', type: 'fact' });
+
+    expect(fake.longTerm.addEntity).toHaveBeenCalledWith('Alex', 'person', expect.anything());
+  });
+
+  it('creates a new entity when the same name is stored under another type', async () => {
+    fake.longTerm.searchEntities.mockResolvedValue([
+      { id: 'ent-apple-co', name: 'Apple', type: 'organization' },
+    ]);
+    mockedGenerateText.mockResolvedValue(graphResult([{ name: 'Apple', type: 'food' }]));
+
+    await createGraphExtractor({} as any)(fake as any, { content: 'an Apple a day', type: 'fact' });
+
+    expect(fake.longTerm.addEntity).toHaveBeenCalledWith('Apple', 'food', expect.anything());
   });
 });

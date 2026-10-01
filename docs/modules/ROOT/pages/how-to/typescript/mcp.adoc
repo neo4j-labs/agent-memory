@@ -1,5 +1,4 @@
-= How to: use the MCP tools
-:toc: left
+= Use the MCP tools
 :source-highlighter: rouge
 
 The `@neo4j-labs/agent-memory/mcp` subpath ships 12 neo4j-agent-memory tool
@@ -10,6 +9,14 @@ your own MCP server, or to invoke tools programmatically against a
 
 A runnable example lives at
 link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/mcp[`typescript/examples/mcp`].
+
+Prerequisites: Node.js 22+, the MCP/Zod peers and NAMS test-workspace credentials.
+
+== Procedure
+
+. Build/install the source MCP example using its README.
+. Register the memory tools on a server, applying the allow-list and audit hook you need.
+. Connect a client using the chosen transport and inspect its actual `tools/list` response.
 
 == When to self-host MCP
 
@@ -25,7 +32,7 @@ that cannot reach the hosted server.
 
 == The 12 tools
 
-[options="header"]
+[cols="5,6,2",options="header"]
 |===
 | Tool | Wraps | Annotations
 | `memory_create_conversation` | `shortTerm.createConversation` | write
@@ -84,6 +91,131 @@ server's own schema validation before the dispatcher runs.
 Tool results are one JSON `text` block. No `outputSchema` is declared: several
 tools resolve to arrays, which `structuredContent` cannot carry without
 re-shaping the payload.
+
+== Add a custom tool alongside the memory tools
+
+`registerMemoryTools` only registers the 12 memory tools; nothing stops you
+calling `server.registerTool` again to add tools of your own. Register custom
+tools in the same setup function, after `registerMemoryTools(...)` and before
+connecting the transport, and follow the same conventions as the built-in
+tools: validate or scope any model-supplied input yourself, return
+`isError: true` with a text message on failure instead of throwing, and give
+the tool honest `readOnlyHint` / `destructiveHint` annotations.
+
+This recipe continues the `my-memory-mcp` project from
+xref:tutorials/mcp-server-typescript.adoc[the MCP server tutorial], adding a
+scoped, read-only tool that inspects only the graph records that tutorial's
+messages created.
+
+Prerequisites: the `my-memory-mcp` project through Step 7 of that tutorial,
+with its `src/tutorial-state.ts` and `src/tutorial-cleanup.ts` helpers already
+in place and its `.tutorial-state/mcp.json` ledger populated.
+
+. Add these imports beside the existing imports in `src/server.ts`:
++
+[source,typescript]
+----
+import { isAbsolute } from "node:path";
+import { TutorialRun } from "./tutorial-state.js";
+import { inspectGraph } from "./tutorial-cleanup.js";
+----
+
+. Insert this registration inside `main()`, after `registerMemoryTools(...)`
+  and before connecting the transport:
++
+[source,typescript]
+----
+// In src/server.ts, inside main(), after registerMemoryTools(...):
+server.registerTool(
+  "memory_tutorial_graph",
+  {
+    description: "Inspect graph records linked only to this tutorial's recorded messages.",
+    inputSchema: {},
+    annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
+  },
+  async () => {
+    let run: TutorialRun | undefined;
+    try {
+      const path = process.env.TUTORIAL_STATE_PATH;
+      if (!path || !isAbsolute(path)) {
+        throw new Error("Set TUTORIAL_STATE_PATH to the absolute path of this lesson's state file.");
+      }
+      run = TutorialRun.load(path, resolveTutorialConfig(), "mcp");
+      const rows = await inspectGraph(run);
+      return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { content: [{ type: "text", text: message }], isError: true };
+    } finally {
+      await run?.client.close();
+    }
+  },
+);
+----
++
+The tool accepts no model-supplied Cypher or resource IDs. Its helper verifies
+the saved conversation and message ownership, then uses those message IDs as
+parameters in the scoped graph query. An empty graph can mean extraction is
+still pending; it does not negate the exact message readback from the
+tutorial's Step 6.
+
+. Print the absolute state-file path without exposing its contents, then rebuild:
++
+[source,bash]
+----
+printf '%s/.tutorial-state/mcp.json\n' "$PWD"
+npm run build
+----
+
+. Add `TUTORIAL_STATE_PATH` to this server's private Desktop `env` block using
+  that exact printed path, alongside the same NAMS credential and endpoint,
+  then restart Claude Desktop.
+
+Verify: reconnecting should list seven tools including `memory_tutorial_graph`.
+Ask Desktop to invoke it — any returned graph rows must refer to the recorded
+message IDs from the tutorial. A state or credential mismatch surfaces as a
+tool error, not permission to inspect another workspace.
+
+The same `server.registerTool` pattern works on any `McpServer`, tutorial
+project or not — swap the description, `inputSchema` and handler body for
+whatever your own tool looks up, keeping the `isError` and annotation
+conventions above. A custom tool registered this way is unaffected by the
+`only` allow-list below — that option scopes the memory tools
+`registerMemoryTools` itself registers, not tools you add separately — so a
+custom tool is always advertised in `tools/list` once registered.
+
+== Restrict which tools are exposed
+
+Pass `only` to `registerMemoryTools` to scope down which of the 12 memory
+tools get registered:
+
+[source,typescript]
+----
+const toolNames = registerMemoryTools(server, memory, {
+  only: ["memory_get_context", "memory_search_messages"],
+  onCall: ({ tool, argKeys, durationMs, ok }) =>
+    console.error(`[mcp] ${tool} keys=[${argKeys.join(",")}] ${durationMs}ms ok=${ok}`),
+});
+----
+
+Anything not on the list is neither advertised in the client's `tools/list`
+response nor callable — an attempted call to an excluded tool (for example
+`memory_create_conversation`) is rejected. `registerMemoryTools` returns the
+names it registered, so checking `toolNames` after a change to the list is a
+quick sanity check. Combine `only` with the exported `READ_ONLY_MEMORY_TOOLS`
+set — `only: [...READ_ONLY_MEMORY_TOOLS]` — to build, for example, a
+review-only surface that can search and read context but never write.
+
+The `onCall` audit hook fires once per call to whichever memory tools
+`registerMemoryTools` actually registered, so `only` scopes it the same way.
+
+Continuing the tutorial project: replace its original registration block in
+`src/server.ts` with the one above — do not register the same tools twice —
+and remove the `memory_tutorial_graph` registration from the previous recipe
+if it is still present. Rebuild with `npm run build` and restart Claude
+Desktop. Verify: reconnecting should list exactly two tools, and an attempted
+`memory_create_conversation` call must be rejected. The tutorial's CLI cleanup
+step does not depend on exposing deletion tools to Desktop.
 
 == Streamable HTTP
 
@@ -174,8 +306,17 @@ scheduled for removal in 1.0 — migrate to the `memory_<noun>_<verb>` form.
 
 == Compatibility
 
-Verified against `@neo4j-labs/agent-memory` 0.5.0-dev,
+Current-source example dependency declarations (not a release or live-service verification):
 `@modelcontextprotocol/sdk` 1.30, `zod` 4.6, Node.js 22 — 2026-09.
 `@modelcontextprotocol/sdk` and `zod` are optional peer dependencies; they are
 required only by the `./mcp/register` subpath (the MCP SDK already depends on
 `zod`).
+
+== Verify the integration
+
+In `typescript/examples/mcp/`, run `npm run typecheck` and `npm test`. The offline
+suite assembles the tutorial's base server with the custom-tool and
+restricted-tool recipes on this page, compiles each variant to `dist/server.js`,
+connects over stdio, and checks tool counts: 6 base tools, 7 with
+`memory_tutorial_graph`, 2 when restricted. It does not require a live NAMS
+key. Use the tutorial's returned-id sequence for a separate live check.

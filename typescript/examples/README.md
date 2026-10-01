@@ -4,35 +4,37 @@
 ![Status: Beta](https://img.shields.io/badge/Status-Beta-6366F1)
 ![Community Supported](https://img.shields.io/badge/Support-Community-6B7280)
 
-Runnable examples for each integration shipped with
+Repository examples for integrations in the current source of
 [`@neo4j-labs/agent-memory`](https://www.npmjs.com/package/@neo4j-labs/agent-memory).
-Each one is a self-contained Node project you can copy, install and run
+These are repository examples that build against the in-tree SDK. Most run
 against the hosted [Neo4j Agent Memory Service (NAMS)](https://memory.neo4jlabs.com).
 
 > ⚠️ **Neo4j Labs Project**
 >
-> These examples are part of [`neo4j-agent-memory`](https://github.com/neo4j-labs/agent-memory), a Neo4j Labs project. They are actively maintained but not officially supported. APIs may change. Community support is available via the [Neo4j Community Forum](https://community.neo4j.com).
+> These examples are part of [`neo4j-agent-memory`](https://github.com/neo4j-labs/agent-memory), a Neo4j Labs project. They are actively maintained but not officially supported. There are no SLAs, backward-compatibility guarantees, or scheduled deprecation commitments. APIs may change without notice. Community support is available via the [Neo4j Community Forum](https://community.neo4j.com).
 
 ## Prerequisites
 
 - **Node.js 22+** — every example declares `"engines": {"node": ">=22"}`.
   `eve-commerce-agent/` needs **Node 24+** (the `eve` framework requires it).
 - A `MEMORY_API_KEY` from [memory.neo4jlabs.com](https://memory.neo4jlabs.com).
-  Each example's own test suite runs offline without one.
+  Each example's own test suite runs offline without one. Mocked tests do not
+  establish that every demo feature has a hosted endpoint; see the eve limitation below.
 
 ## The examples
 
 | Folder | What it shows |
 |---|---|
-| [`nextjs-memory-chat/`](./nextjs-memory-chat) | **Flagship full-stack demo.** Next.js 16 App Router travel assistant on hosted NAMS: `agentMemoryMiddleware` in the route handler, a live entity-graph rail with lazy `expandGraph` on double-click, an extraction-status badge, and a reasoning-trace drawer |
+| [`nextjs-memory-chat/`](./nextjs-memory-chat) | **Flagship full-stack demo.** Next.js 16 App Router travel assistant on hosted NAMS: `createNamsProvider` from `@neo4j-labs/nams-ai-provider` in the route handler, a live entity-graph rail with lazy `expandGraph` on double-click, an extraction-status badge, and a reasoning-trace drawer |
 | [`vercel-ai/`](./vercel-ai) | The minimal middleware snippet — memory-augmented chat through the Vercel AI SDK in one script |
+| [`nams-ai-provider/`](./nams-ai-provider) | The four `@neo4j-labs/nams-ai-provider` integration modes — provider, middleware, tools, and lifecycle hooks — one runnable program each |
 | [`mcp/`](./mcp) | An MCP server you run yourself, exposing the SDK's 12 memory tools with Zod-validated inputs and read/write annotations, plus a 13th read-only Cypher console behind an allow-list |
 | [`langchain/`](./langchain) | Chat-history and entity-retriever shapes for LangChain JS, plus a NAMS-backed memory module |
 | [`mastra/`](./mastra) | Wrapping the client as a Mastra-compatible memory provider, with NAMS threads |
 | [`strands/`](./strands) | AWS Strands agent with session persistence, three-tier context, reasoning capture, and a `MemoryStore` script |
 | [`ontology-lifecycle/`](./ontology-lifecycle) | The NAMS ontology lifecycle through `OntologyClient` — import an Arrows diagram, activate it, ingest, diff two revisions, then migrate the graph onto a renamed type |
 | [`cloudflare-agents-edge/`](./cloudflare-agents-edge) | A Cloudflare Worker with no driver and no Node built-ins — memory over `fetch`, streamed turns persisted with `ctx.waitUntil`, tests that run inside `workerd` |
-| [`eve-commerce-agent/`](./eve-commerce-agent) | Agentic commerce on Vercel's [eve](https://eve.dev) framework: a NAMS-backed eve **memory provider** gives a shopping assistant a shopper profile that survives the session, plus a reasoning trace per tool call and a human-approved checkout (Node 24+) |
+| [`eve-commerce-agent/`](./eve-commerce-agent) | **Experimental contract demo; hosted profile/checkout paths are blocked by unsupported preference/fact APIs.** Explores Vercel's [eve](https://eve.dev) memory-provider, tool-trace and approval interfaces with mocked profile/order storage (Node 24+) |
 
 The Python gallery — twenty-five examples including the bolt backend, the
 framework integrations and four full-stack apps — is at
@@ -41,24 +43,41 @@ framework integrations and four full-stack apps — is at
 ## Running an example
 
 ```bash
-cd nextjs-memory-chat
-cp .env.example .env       # then edit .env with your MEMORY_API_KEY
-npm install
-npm run dev                # or `npm start` for the single-script examples
+# From the repository root
+cd typescript
+npm ci
+npm run build                        # the SDK every example links to
+cd packages/vercel-ai-provider       # nextjs-memory-chat and nams-ai-provider only
+npm ci
+npm run build
+cd ../../examples/nextjs-memory-chat
+npm ci
+cp .env.example .env.local           # set MEMORY_API_KEY and OPENAI_API_KEY
+npm run dev                          # or npm start for script examples
 ```
 
-Each example's own README has the full step-by-step.
+Each example's own README has the full step-by-step, including which keys it
+needs and whether it reads `.env` or `.env.local`.
 
 ## Notes
 
-- These examples use `"@neo4j-labs/agent-memory": "file:../.."` to
-  depend on the in-tree SDK during development — so contributors can
-  iterate on both without an npm publish round-trip. When using one of
-  these examples as a template for your own project, replace the
-  `file:` path with the published version:
-  ```
-  "@neo4j-labs/agent-memory": "^0.4.1"
-  ```
+These examples use `"@neo4j-labs/agent-memory": "file:../.."`. Build the SDK
+before example installation. `nextjs-memory-chat/` and `nams-ai-provider/` also
+link `"@neo4j-labs/nams-ai-provider": "file:../../packages/vercel-ai-provider"`,
+so build that package as well. Strands' `install-links=true` copies the package,
+so rebuild and reinstall after SDK changes. An install cannot create missing
+`dist` exports for you.
+
+### Copying an example
+
+1. Replace `file:../..` only after checking that the selected npm artifact exports
+   every API the example calls. Current-source features may not be released.
+2. Copy or replace `../tsconfig.base.json`; a folder copied on its own cannot
+   resolve that repository-relative compiler configuration.
+3. Copy `.env.example` and follow the example's own runtime and framework peer floors.
+4. Preserve its lockfile policy and rerun type checks and offline tests. A successful
+   mock is separate from a live hosted/model check.
+
 - **Lockfile policy.** Example lockfiles are committed where they exist, and
   CI installs with `npm ci` when it finds one and `npm install` otherwise. A
   committed lockfile buys reproducibility; an example without one acts as an
@@ -85,7 +104,10 @@ Each example's own README has the full step-by-step.
 3. Ship `lint` (`tsc --noEmit`) and `test` scripts; keep the suite offline so
    it runs with no API key.
 4. Write a README with the Labs badges, the disclaimer, prerequisites, run
-   steps, expected output, a support section and a "verified against" footer.
+   steps, expected output, a support section and a provenance footer — either a
+   dated verification note naming the source commit, installed artifacts, checks
+   and mocked/live boundaries, or the `Compatibility scope:` statement the other
+   examples here use when no such run has been performed.
 5. Add the directory to the `type-check-examples` matrix in
    `.github/workflows/ci-typescript.yml`, and add a row to the table above.
 
@@ -101,4 +123,4 @@ Apache 2.0 — see the main `neo4j-agent-memory` repository for details.
 
 ---
 
-_Verified against [`@neo4j-labs/agent-memory`](https://www.npmjs.com/package/@neo4j-labs/agent-memory) 0.4.1 (the in-tree `typescript/package.json` version and the current npm release) on Node 22 and 24, on 2026-09-10._
+_Compatibility scope: source checkout plus committed manifests/lockfiles. No npm publication or live-service outcome is established by this index._

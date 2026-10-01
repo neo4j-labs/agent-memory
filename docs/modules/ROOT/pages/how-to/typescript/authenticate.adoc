@@ -1,124 +1,84 @@
-= How To Authenticate
-:description: API keys, OAuth refresh, scopes, and token rotation against the hosted service.
+= Authenticate a TypeScript client
+:description: Configure API keys and token refresh for the hosted REST client.
+:source-highlighter: rouge
 
-The hosted Neo4j Agent Memory Service supports two authentication flows:
+Use this procedure to authenticate the current TypeScript client against NAMS.
+You need an installed SDK and a credential for the intended workspace. Use
+xref:reference/authentication.adoc[the authentication reference] for service
+scopes, expiry and identity-provider policy; they are separate from SDK versions.
 
-* **Static `nams_*` API keys** — issued via the dashboard, expire in 90 days.
-* **OAuth 2.0 PKCE** — short-lived JWT access tokens with refresh.
+anchor:_static_api_keys[]
 
-Every client SDK accepts either through the same `apiKey` / `tokenProvider`
-configuration knobs.
+== 1. Configure a credential and check access
 
-== Static API keys
+Get a credential from link:https://memory.neo4jlabs.com/[NAMS] and set
+`MEMORY_API_KEY` without committing it to your repository. The default client
+reads that variable when `process.env` is available.
 
-Set the `Authorization: Bearer nams_*` header on every request.
-
-[source,bash]
+[source,typescript]
 ----
-curl -H "Authorization: Bearer $MEMORY_API_KEY" \
-  https://memory.neo4jlabs.com/v1/entities
-----
+import { MemoryClient } from "@neo4j-labs/agent-memory";
 
-In the SDKs:
-
-[tabs]
-======
-TypeScript::
-+
-[source,ts]
-----
-new MemoryClient({
-  endpoint: "https://memory.neo4jlabs.com/v1",
+const client = new MemoryClient({
   apiKey: process.env.MEMORY_API_KEY,
-})
-----
-
-Python::
-+
-[source,python]
-----
-MemoryClient(
-    endpoint="https://memory.neo4jlabs.com/v1",
-    api_key=os.environ["MEMORY_API_KEY"],
-)
-----
-
-Go::
-+
-[source,go]
-----
-memory.New(
-    memory.WithEndpoint("https://memory.neo4jlabs.com/v1"),
-    memory.WithAPIKey(os.Getenv("MEMORY_API_KEY")),
-)
-----
-======
-
-== Managing keys via the SDK
-
-All five clients expose an `auth` (or `Auth`) sub-client mirroring
-`/v1/auth/api-keys`:
-
-[source,ts]
-----
-// List keys for a workspace.
-const keys = await client.auth.listApiKeys(workspaceId);
-
-// Create a new key. Plaintext is returned ONCE — store it now.
-const fresh = await client.auth.createApiKey({
-  label: "ci-runner",
-  scopes: ["read", "write"],
-  workspaceId,
+  workspaceId: process.env.MEMORY_WORKSPACE_ID,
 });
-console.log(fresh.key);  // nams_...
-
-// Revoke immediately.
-await client.auth.revokeApiKey(fresh.id);
+try {
+  const conversations = await client.shortTerm.listConversations({ limit: 1 });
+  console.log(`Authenticated; returned ${conversations.length} conversation(s).`);
+} finally { await client.close(); }
 ----
 
-== OAuth refresh-token rotation
+An empty successful list verifies the request too. A 401/403 becomes
+`AuthenticationError`; inspect its optional `requestId` and check the credential's
+workspace/scope. Never print a key just to check whether it is present.
 
-Static keys are convenient but coarse. For long-running services, prefer the
-OAuth flow:
+On Cloudflare Workers, pass `env.MEMORY_API_KEY` from the handler explicitly.
+`workspaceId` sends `X-Workspace-Id` where the deployment needs it; an explicit
+entry in `headers` overrides that value. A conversation's `userId` is a separate
+identifier and does not choose a workspace.
 
-. Exchange your IdP token at `POST /v1/auth/exchange` to receive
-  `{access_token, refresh_token, expires_in}`.
-. Use the access token like a static key.
-. Before it expires, call `auth.refreshAccessToken(refresh_token)` to rotate.
+anchor:_oauth_refresh_token_rotation[]
 
-The clients support a `tokenProvider` callback so you can plug your refresh
-logic in once and forget it:
+== 2. Supply an application-managed refresh callback when needed
 
-[source,ts]
+For OAuth, the application obtains and securely stores tokens using the service's
+flow. `tokenProvider` overrides `apiKey` and is called while building request
+headers. It must return a usable access token; the SDK does not automatically
+schedule refresh or retry a request after a 401.
+
+[source,typescript]
 ----
-new MemoryClient({
-  endpoint: "https://memory.neo4jlabs.com/v1",
-  tokenProvider: async () => myTokenStore.getFreshAccessToken(),
-})
-----
+import { MemoryClient } from "@neo4j-labs/agent-memory";
 
-[source,python]
-----
-async def get_token() -> str:
-    return await my_token_store.get_fresh_access_token()
-
-MemoryClient(
-    endpoint="https://memory.neo4jlabs.com/v1",
-    token_provider=get_token,
-)
+// Inject your application's token store; implement expiry/refresh coordination there.
+function clientWithTokens(getFreshAccessToken: () => Promise<string>) {
+  return new MemoryClient({ tokenProvider: getFreshAccessToken });
+}
 ----
 
-== Discovery endpoints
+`client.auth.refreshAccessToken(refreshToken)` returns an `AccessTokenPair`
+(`accessToken`, `refreshToken`, `expiresIn`). Save the returned refresh token as
+part of the application's token-store update. Do not log token contents.
 
-The service implements the standard MCP / OAuth discovery endpoints:
+anchor:_managing_keys_via_the_sdk[]
 
-* `GET /.well-known/oauth-protected-resource` — RFC 9728
-* `GET /.well-known/oauth-authorization-server` — RFC 8414
-* `GET /.well-known/jwks.json` — JWT signing keys
+== 3. Manage keys only with appropriate workspace permissions
 
-== Rotation policy
+The current source exposes `auth.listApiKeys(workspaceId)`,
+`createApiKey({ label, scopes, workspaceId })`, `rotateApiKey(keyId)`,
+`revokeApiKey(keyId)` and `revealApiKey(keyId, workspaceId)`.
+The service authorizes these operations; an ordinary data-plane key may not have
+administrative access. Inspect the returned optional `expiresAt`/`key` fields
+rather than assuming every response contains plaintext.
 
-Static keys expire after 90 days. Set a calendar reminder, or automate
-rotation with the `auth` API and a CI cron job. The plaintext is returned
-only at creation time — the SDK's `revealApiKey()` works only for keys you
-already created in the same workspace.
+anchor:_rotation_policy[]
+Rotation and revocation change credentials used by applications. Coordinate the
+replacement with those applications and store any returned plaintext in their
+secret store. Consult xref:reference/typescript-api.adoc[the API reference] for
+method types and xref:how-to/typescript/handle-errors.adoc[error handling] for
+failed requests. Other language clients have their own configuration names and
+should use their corresponding SDK guides.
+
+anchor:_discovery_endpoints[]
+For OAuth discovery endpoints and token flows, use xref:reference/authentication.adoc[the authentication reference]. The SDK refresh callback consumes an access token; your application configures discovery and refresh coordination.

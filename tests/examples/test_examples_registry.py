@@ -17,7 +17,9 @@ What this enforces:
 * every ``tests/examples/test_*.py`` module contributes at least one test to the
   quick (no-Neo4j) suite, so a new example cannot silently skip that job;
 * the quick suite has exactly one definition — the marker expression — shared by
-  the Makefile, ``examples/README.md`` and ``ci-python.yml``.
+  the Makefile, ``examples/README.md`` and ``ci-python.yml``;
+* every tracked dependency manifest (examples, SDKs, docs) is covered by an
+  entry of the right ecosystem in ``.github/dependabot.yml``.
 
 Everything is static except the last check, which asks pytest itself to collect
 the quick suite (``--collect-only``) rather than re-deriving marker semantics.
@@ -28,6 +30,7 @@ act; forgetting a test module is not.
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import re
 import subprocess
@@ -35,6 +38,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 REPO_ROOT = Path(__file__).parent.parent.parent
 EXAMPLES_DIR = REPO_ROOT / "examples"
@@ -44,6 +48,7 @@ PY_INDEX = EXAMPLES_DIR / "README.md"
 TS_INDEX = TS_EXAMPLES_DIR / "README.md"
 CI_PYTHON = REPO_ROOT / ".github" / "workflows" / "ci-python.yml"
 CI_TYPESCRIPT = REPO_ROOT / ".github" / "workflows" / "ci-typescript.yml"
+DEPENDABOT = REPO_ROOT / ".github" / "dependabot.yml"
 
 #: The single definition of the quick example suite. Must match the Makefile's
 #: `test-examples-quick` target and ci-python.yml's `example-tests-quick` job.
@@ -64,6 +69,17 @@ NO_ENV_EXAMPLE_OK = {
 #: keep it that way.
 NO_TEST_MODULE_OK: dict[str, str] = {}
 
+#: Directories under `typescript/examples/` that are not themselves examples,
+#: with why. These are support code for the real examples, so they have no
+#: README, package.json, index row or CI matrix entry — and must not be held to
+#: those rules. A genuine example missing any of them still fails.
+TS_NOT_AN_EXAMPLE = {
+    "shared": (
+        "tutorial helper modules imported by the vercel-ai and mcp examples "
+        "(tutorial-state/-cleanup/-mcp.ts); not a runnable example of its own"
+    ),
+}
+
 
 def _example_dirs() -> list[Path]:
     return sorted(
@@ -74,7 +90,11 @@ def _example_dirs() -> list[Path]:
 
 
 def _ts_example_dirs() -> list[Path]:
-    return sorted(p for p in TS_EXAMPLES_DIR.iterdir() if p.is_dir() and not p.name.startswith("."))
+    return sorted(
+        p
+        for p in TS_EXAMPLES_DIR.iterdir()
+        if p.is_dir() and not p.name.startswith(".") and p.name not in TS_NOT_AN_EXAMPLE
+    )
 
 
 def _top_level_scripts() -> list[Path]:
@@ -205,8 +225,13 @@ def test_ts_example_has_a_readme_with_labs_conventions(example: Path):
     assert readme.exists(), f"typescript/examples/{example.name}/ has no README.md"
     content = readme.read_text(encoding="utf-8")
     assert "Neo4j-Labs" in content, f"{example.name}/README.md is missing the Neo4j Labs badge"
-    assert re.search(r"[Vv]erified against", content), (
-        f"typescript/examples/{example.name}/README.md has no 'verified against' footer"
+    # A provenance footer: either a dated "verified against" note, or the
+    # "Compatibility scope" statement the TypeScript gallery standardised on —
+    # it names what the example was built against without claiming a run that
+    # nobody performed. One of the two must be present.
+    assert re.search(r"[Vv]erified against|[Cc]ompatibility scope", content), (
+        f"typescript/examples/{example.name}/README.md has no provenance footer "
+        "('Verified against …' or 'Compatibility scope: …')"
     )
 
 
@@ -262,6 +287,86 @@ def test_ts_example_depends_on_the_in_tree_sdk(example: Path):
     assert pin.startswith("file:"), (
         f"{example.name}/package.json pins the SDK as {pin!r}; examples use "
         '"file:../.." so contributors can iterate without an npm publish'
+    )
+
+
+# ---------------------------------------------------------------------------
+# Dependency automation
+# ---------------------------------------------------------------------------
+
+#: Generated files that look like manifests but must not be tracked by
+#: Dependabot, with why.
+NOT_A_MANIFEST = {
+    "requirements-docker.txt": (
+        "exported from uv.lock by `make docker-requirements`; Dependabot updates "
+        "the lock and ci-python.yml checks the export matches"
+    ),
+}
+
+
+def _manifest_dirs() -> dict[str, str]:
+    """Map each directory holding a tracked manifest to the ecosystem it needs.
+
+    A uv.lock makes a directory `uv` (so Dependabot refreshes the lock with the
+    manifest); any other pyproject.toml or requirements file makes it `pip`.
+    """
+    files = subprocess.run(
+        ["git", "ls-files", "*package.json", "*pyproject.toml", "*uv.lock", "*requirements*.txt"],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+        check=True,
+    ).stdout.split()
+    dirs: dict[str, set[str]] = {}
+    for f in files:
+        path = Path(f)
+        if "node_modules" in path.parts or path.name in NOT_A_MANIFEST:
+            continue
+        dirs.setdefault(
+            "/" + path.parent.as_posix() if path.parent != Path(".") else "/", set()
+        ).add(path.name)
+    ecosystems = {}
+    for d, names in dirs.items():
+        if "package.json" in names:
+            ecosystems[d] = "npm"
+        elif "uv.lock" in names:
+            ecosystems[d] = "uv"
+        else:
+            ecosystems[d] = "pip"
+    return dict(sorted(ecosystems.items()))
+
+
+def _dependabot_matches(directory: str, pattern: str) -> bool:
+    """Segment-wise glob match, as Dependabot's `directories` does (`*` stays in one segment)."""
+    d, p = directory.rstrip("/").split("/"), pattern.rstrip("/").split("/")
+    return len(d) == len(p) and all(fnmatch.fnmatchcase(a, b) for a, b in zip(d, p))
+
+
+def _dependabot_ecosystems_for(directory: str) -> list[str]:
+    config = yaml.safe_load(DEPENDABOT.read_text(encoding="utf-8"))
+    return [
+        entry["package-ecosystem"]
+        for entry in config["updates"]
+        # The Actions entry uses "/" to mean .github/workflows, not a manifest.
+        if entry["package-ecosystem"] != "github-actions"
+        and any(
+            _dependabot_matches(directory, pattern)
+            for pattern in entry.get("directories", [entry.get("directory")])
+            if pattern
+        )
+    ]
+
+
+@pytest.mark.syntax
+@pytest.mark.parametrize("directory,ecosystem", list(_manifest_dirs().items()))
+def test_manifest_is_covered_by_dependabot(directory: str, ecosystem: str):
+    found = _dependabot_ecosystems_for(directory)
+    assert found == [ecosystem], (
+        f"{directory} holds a {ecosystem} manifest but .github/dependabot.yml "
+        f"covers it with {found or 'nothing'}. Add the directory to the "
+        f"{ecosystem!r} entry for its tier (see the comments in dependabot.yml); "
+        "a manifest with no entry ages silently, and a uv project under `pip` "
+        "never gets its uv.lock refreshed."
     )
 
 

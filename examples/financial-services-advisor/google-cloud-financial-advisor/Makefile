@@ -109,9 +109,20 @@ format:
 # requirements-docker.txt is the locked dependency set exported without
 # [tool.uv.sources], so the image resolves neo4j-agent-memory from PyPI
 # instead of the editable path outside the Docker build context.
+#
+# `--no-sources` makes uv re-lock without the editable path, and `uv export`
+# writes that re-lock back to uv.lock (`--frozen` cannot be combined with
+# `--no-sources`). Exporting from a scratch copy keeps the committed lock
+# intact. Never edit requirements-docker.txt by hand: change uv.lock
+# (`uv lock --upgrade-package <name>`) and re-run this target. CI fails when
+# the two disagree.
 docker-requirements:
-	cd backend && uv export --no-dev --no-emit-project --no-hashes --no-sources \
-		--format requirements.txt -o requirements-docker.txt
+	@tmp=$$(mktemp -d) && \
+		cp backend/pyproject.toml backend/uv.lock "$$tmp"/ && \
+		(cd "$$tmp" && uv export --quiet --no-dev --no-emit-project --no-hashes --no-sources \
+			--format requirements.txt -o requirements-docker.txt) && \
+		cp "$$tmp"/requirements-docker.txt backend/requirements-docker.txt; \
+		status=$$?; rm -rf "$$tmp"; exit $$status
 
 docker-build: docker-requirements
 	docker build -t financial-advisor-backend ./backend

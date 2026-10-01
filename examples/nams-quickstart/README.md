@@ -106,10 +106,12 @@ accumulate over a conversation — a brand-new one often reports `0` of each. Th
 offline smoke test (`tests/examples/test_nams_quickstart_example.py`) drives the
 same path with fixed payloads if you want to see it run without a key.
 
-## Switching to your own Neo4j
+## Switching to AuraDB
 
 Steps 1, the entity write in 2, 5 and 7 are the backend-agnostic Protocol. Swap
 the settings object and they run against your own Neo4j unchanged:
+
+Follow [Aura setup and cleanup](../AURA_SETUP.md) and export its connection variables before constructing the Bolt settings.
 
 ```python
 import os
@@ -120,7 +122,8 @@ from neo4j_agent_memory import BoltSettings, Neo4jConfig, connect
 
 settings = BoltSettings(
     neo4j=Neo4jConfig(
-        uri=os.getenv("NEO4J_URI", "bolt://localhost:7687"),
+        uri=os.environ["NEO4J_URI"],
+        username=os.environ["NEO4J_USERNAME"],
         password=SecretStr(os.environ["NEO4J_PASSWORD"]),
     ),
     embedding="openai/text-embedding-3-small",
@@ -150,4 +153,6 @@ layers (preferences and facts search, geospatial, consolidation, eval). See
 
 ---
 
-_Verified against `neo4j-agent-memory` 0.6.0-dev (branch `examples-updates`), Python 3.12, with the NAMS transport mocked (`tests/examples/test_nams_quickstart_example.py`) — 2026-09-10. `NamsSettings`/`connect()`, `short_term.get_extraction_status` and `long_term.expand_graph` ship in the 0.6 line; until it is released, install the library from this repository (`uv pip install -e ../..`) rather than from PyPI._
+**Historical verification report — 2026-09-10.** The following records a prior checkout/test report. Its development-version labels, passing counts, and release-availability statements are historical, not evidence of current package compatibility.
+
+> _Verified against `neo4j-agent-memory` 0.6.0-dev (branch `examples-updates`), Python 3.12, with the NAMS transport mocked (`tests/examples/test_nams_quickstart_example.py`) — 2026-09-10. `NamsSettings`/`connect()`, `short_term.get_extraction_status` and `long_term.expand_graph` ship in the 0.6 line; until it is released, install the library from this repository (`uv pip install -e ../..`) rather than from PyPI._

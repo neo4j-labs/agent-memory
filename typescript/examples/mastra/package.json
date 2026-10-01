@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@mastra/core": "^1.66",
-    "@mastra/memory": "^1.28",
+    "@mastra/memory": "^1.30",
     "@neo4j-labs/agent-memory": "file:../.."
   },
   "devDependencies": {

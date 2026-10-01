@@ -1,0 +1,318 @@
+= Control memory with lifecycle hooks
+:source-highlighter: rouge
+
+The `@neo4j-labs/nams-ai-provider` package talks only to the hosted Neo4j
+Agent Memory Service (NAMS) at https://memory.neo4jlabs.com — it has no Bolt
+equivalent for a self-managed Neo4j database.
+
+Hooks mode takes the model out of the memory loop entirely: your code loads
+the session transcript before every generation and saves it after
+(`prepare`/`onFinish`), so nothing memory-related appears in the tool schema
+and every turn is captured exactly once, regardless of what the model
+decides. Lifecycle hooks add control around that cycle — block a prompt, deny
+a tool call, rewrite a result, redact a write, retry a flaky tool, add
+context for the next turn — at eight points in the generation's lifecycle.
+This page walks through a complete, runnable program that wires all eight.
+
+A runnable copy of this program, alongside the other three modes, lives at
+link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/nams-ai-provider[`typescript/examples/nams-ai-provider`].
+
+Prerequisites:
+
+* Node.js 22 or newer (the package's declared floor).
+* A `MEMORY_API_KEY` from https://memory.neo4jlabs.com[memory.neo4jlabs.com].
+* An `OPENAI_API_KEY`. The program uses `@ai-sdk/openai` by default; to use
+  another provider, pass its model factory to the `hooksModeDemo()` call at the
+  bottom of the file.
+* A Node.js project set up as an ES module, with the packages installed:
++
+[source,bash]
+----
+npm init -y   # only if the directory has no package.json yet
+npm pkg set type=module
+npm install @neo4j-labs/nams-ai-provider@0.3.0 @neo4j-labs/agent-memory@0.5.0 ai@^7 @ai-sdk/openai@^4 zod@^4
+npm install --save-dev tsx
+----
+
+== The program
+
+.Save as `hooks-mode.ts`
+[source,typescript]
+----
+/**
+ * Lifecycle hooks mode: your code loads and saves the session transcript
+ * around every generation (`prepare` / `onFinish`); nothing memory-related is
+ * shown to the model. Lifecycle hooks add control around that. The four turns
+ * below exercise all eight events. SessionStart and SessionEnd run once per
+ * session; UserPromptSubmit, PreMemoryWrite and Stop run on every turn; the
+ * three tool events run when their tool is called:
+ *
+ *   SessionStart         adds a note about the user
+ *   UserPromptSubmit      redacts card numbers before the model sees them
+ *   PreToolUse             denies the destructive tool
+ *   PostToolUse              carries a note into the next turn
+ *   PostToolUseFailure         retries a flaky tool once, then gives up
+ *   PreMemoryWrite               redacts again, before it reaches the graph
+ *   Stop                           logs what was saved
+ *   SessionEnd                       runs on shutdown
+ *
+ * Run with:
+ *
+ *   MEMORY_API_KEY=nams_... OPENAI_API_KEY=sk-... npx tsx src/hooks-mode.ts
+ */
+
+import { realpathSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
+import { createNams, type NamsHookConfig } from '@neo4j-labs/nams-ai-provider';
+import { openai } from '@ai-sdk/openai';
+import { ToolLoopAgent, stepCountIs, tool, type LanguageModel } from 'ai';
+import { z } from 'zod';
+
+const userId = process.env.NAMS_DEMO_USER ?? 'demo-user-hooks-mode';
+const modelId = process.env.NAMS_DEMO_MODEL ?? 'gpt-5.4-mini';
+const CARD = /\b(?:\d[ -]*?){13,16}\b/g;
+const redact = (text: string): string => text.replace(CARD, '[redacted card]');
+
+/** Run the four-turn hooks demo. `buildModel` defaults to OpenAI; tests pass a mock model factory. */
+export async function hooksModeDemo(buildModel: (id: string) => LanguageModel = openai): Promise<string[]> {
+  const apiKey = process.env.MEMORY_API_KEY;
+  if (!apiKey) {
+    throw new Error('Set MEMORY_API_KEY before running this example. Get a free key at https://memory.neo4jlabs.com');
+  }
+  let flakyAttempts = 0;
+  const hooks: NamsHookConfig = {
+    SessionStart: [({ reason }) => ({ additionalContext: `Session ${reason}. The user is on the free plan.` })],
+    UserPromptSubmit: [({ prompt }) => {
+      const clean = redact(prompt);
+      return clean === prompt ? undefined : { updatedPrompt: clean, systemMessage: 'Redacted a card number.' };
+    }],
+    PreToolUse: [{
+      matcher: 'delete_account',
+      hooks: [() => ({ permissionDecision: 'deny' as const, permissionDecisionReason: 'Account deletion is disabled in this demo.' })],
+    }],
+    PostToolUse: [{
+      matcher: 'get_weather',
+      hooks: [({ output }) => ({ additionalContext: `Last weather lookup: ${JSON.stringify(output)}` })],
+    }],
+    PostToolUseFailure: [{
+      matcher: 'flaky_lookup',
+      hooks: [({ attempt }) => (attempt === 1 ? { retry: true, systemMessage: 'flaky_lookup failed once, retrying.' } : undefined)],
+    }],
+    PreMemoryWrite: [({ turns }) => ({ updatedTurns: turns.map(t => ({ ...t, content: redact(t.content) })) })],
+    Stop: [({ turns }) => { console.log(`   [hook] saved ${turns.length} turns`); }],
+    SessionEnd: [({ reason }) => { console.log(`   [hook] session ended (${reason})`); }],
+  };
+  const nams = createNams({ apiKey, endpoint: process.env.MEMORY_ENDPOINT, workspaceId: process.env.MEMORY_WORKSPACE_ID });
+  const session = nams.hooks({ userId, hooks }); // one instance: prepare + onFinish share a client
+  const get_weather = tool({
+    description: 'Current weather for a city',
+    inputSchema: z.object({ city: z.string() }),
+    execute: async ({ city }) => ({ city, condition: 'sunny', tempC: 21 }),
+  });
+  const delete_account = tool({
+    description: 'Permanently delete the user account',
+    inputSchema: z.object({ confirm: z.boolean() }),
+    execute: async () => ({ deleted: true }),
+  });
+  const flaky_lookup = tool({
+    description: 'Look up a fact. Fails the first time it is called in this process.',
+    inputSchema: z.object({ topic: z.string() }),
+    execute: async ({ topic }) => {
+      flakyAttempts += 1;
+      if (flakyAttempts === 1) throw new Error('transient lookup error');
+      return { topic, fact: `${topic} is well documented` };
+    },
+  });
+  const INSTRUCTIONS = 'You are a helpful assistant.';
+  const agent = new ToolLoopAgent({
+    model: buildModel(modelId),
+    instructions: INSTRUCTIONS,
+    tools: session.withHooks({ get_weather, delete_account, flaky_lookup }), // wrapping is what runs the tool hooks
+    callOptionsSchema: z.object({ userId: z.string(), prompt: z.string(), memoryContext: z.string().optional() }),
+    // Hook context goes in instructions -- the AI SDK rejects system messages in `messages`.
+    prepareCall: ({ options, ...settings }) => ({
+      ...settings,
+      instructions: [INSTRUCTIONS, options?.memoryContext].filter(Boolean).join('\n\n'),
+      runtimeContext: options,
+    }),
+    onFinish: session.onFinish(),
+    stopWhen: stepCountIs(5),
+  });
+  async function turn(label: string, message: string): Promise<string> {
+    console.log(`\n--- ${label}`);
+    console.log(`user:      ${message}`);
+    // prepare() runs SessionStart and UserPromptSubmit, then loads the history.
+    const prepared = await session.prepare({ userId, prompt: message });
+    if (prepared.blocked) {
+      console.log(`blocked:   ${prepared.blockReason}`);
+      return prepared.blockReason ?? '';
+    }
+    const { text } = await agent.generate({
+      messages: prepared.messages,
+      options: { userId, prompt: prepared.prompt, memoryContext: prepared.instructions },
+    });
+    console.log(`assistant: ${text}`);
+    return text;
+  }
+  const answers = [
+    await turn('Turn 1 -- a tool call the hooks allow', 'What is the weather in Oslo?'),
+    await turn('Turn 2 -- a flaky tool the hooks retry', 'Look up a fact about graph databases for me.'),
+    await turn('Turn 3 -- a tool call the hooks deny', 'Please delete my account, I confirm.'),
+    await turn('Turn 4 -- sensitive input', 'My card is 4111 1111 1111 1111, remember it.'),
+  ];
+  await session.end({ userId, reason: 'demo_complete' });
+  return answers;
+}
+// Run only when executed directly, not when a test imports this file.
+const entry = process.argv[1];
+if (entry && import.meta.url === pathToFileURL(realpathSync(entry)).href) {
+  hooksModeDemo().catch(err => {
+    console.error(err);
+    process.exit(1);
+  });
+}
+----
+
+== How the program works
+
+The diagram shows where each of the eight events fires around one
+generation. The xref:reference/nams-ai-provider.adoc#hook-events[API
+reference] lists every event's input and output fields and the matcher,
+timeout, and failure rules.
+
+.The eight NAMS hook lifecycle events around one generation, and which ones have no matcher.
+image::diagrams/nams-ai-provider-hooks.svg["Sequence diagram of the eight NAMS hook lifecycle events around one generation: prepare() triggers SessionStart then the matcherless UserPromptSubmit, which can block or rewrite the prompt; the app calls the model; withHooks() wraps each tool call with PreToolUse (allow or deny, rewrite the input) and, after it settles, PostToolUse or PostToolUseFailure (rewrite the output, or retry once on attempt 1); onFinish() runs the matcherless PreMemoryWrite (block or rewrite the turns) before persisting, then the matcherless Stop; SessionEnd fires when the app calls end(). A footer notes a hook that throws or times out is logged and skipped, never breaking the generation.",width=100%,link=self]
+
+. `redact(text)` replaces anything that looks like a 13–16 digit card number
+  with `[redacted card]`; two different hooks call it below.
+. Build a `hooks: NamsHookConfig` object with one entry per event this demo
+  needs:
++
+--
+* `SessionStart` — a bare handler (matches every occurrence) that adds
+  `additionalContext` noting the session's `reason` (`created` or
+  `resumed`).
+* `UserPromptSubmit` — redacts the incoming prompt; if redaction changed
+  anything it returns `{ updatedPrompt, systemMessage }`, otherwise
+  `undefined` (no rewrite).
+* `PreToolUse` — a **group** with `matcher: 'delete_account'`, so it only
+  runs for that tool, returning `{ permissionDecision: 'deny',
+  permissionDecisionReason }`.
+* `PostToolUse` — a group matching `'get_weather'` that adds the tool's
+  output as `additionalContext` for the next turn.
+* `PostToolUseFailure` — a group matching `'flaky_lookup'` that retries once:
+  it returns `{ retry: true, systemMessage }` only when `attempt === 1`,
+  returning `undefined` (no further retry) on the second failure.
+* `PreMemoryWrite` — a bare handler that maps every turn's `content` through
+  `redact()` and returns `{ updatedTurns }`. `UserPromptSubmit` has already
+  redacted the prompt that is saved, so this is a second line of defence: it
+  catches a card number that the model's answer or a tool-call record echoes
+  back before the turns reach the graph.
+* `Stop` and `SessionEnd` — bare handlers that just `console.log` a summary;
+  demonstrating that a hook doesn't have to return anything.
+--
+. `createNams({ apiKey, endpoint, workspaceId })` builds the memory client,
+  then `nams.hooks({ userId, hooks })` returns one session handle — `prepare`
+  and `onFinish` below share it, so they share the same pending-context
+  queue and session-started bookkeeping. No `conversationId` is passed, so
+  the handle continues the user's most recent NAMS conversation and creates
+  one only if the user has none.
+. Define three AI SDK tools (`get_weather`, `delete_account`, `flaky_lookup`)
+  with plain `execute` functions — `flaky_lookup` throws on its first call in
+  the process and succeeds after.
+. Build the agent:
++
+--
+* `tools: session.withHooks({ get_weather, delete_account, flaky_lookup })`
+  — wrapping is what actually runs the `PreToolUse`/`PostToolUse`/
+  `PostToolUseFailure` hooks; an unwrapped tool set would skip them.
+* `callOptionsSchema` declares `{ userId, prompt, memoryContext? }` as the
+  per-call options shape.
+* `prepareCall` folds `options.memoryContext` (the hooks'
+  `additionalContext`) into `instructions`, and copies `options` onto
+  `runtimeContext` so `onFinish` can read the scope for this call. The AI
+  SDK rejects system messages inside `messages`, which is why hook context
+  travels through `instructions` instead.
+* `onFinish: session.onFinish()` — persists every turn once the tool loop
+  finishes.
+--
+. Define a `turn(label, message)` helper:
++
+--
+* `session.prepare({ userId, prompt: message })` runs `SessionStart` (once
+  per scope) and `UserPromptSubmit`, then loads prior history. If a hook
+  blocked the prompt, `prepared.blocked` is `true` and the helper returns the
+  block reason **without calling the model**.
+* Otherwise `agent.generate({ messages: prepared.messages, options: {
+  userId, prompt: prepared.prompt, memoryContext: prepared.instructions } })`
+  runs the generation. `prepared.prompt` is the prompt *after* any
+  `UserPromptSubmit` rewrite — pass that one on, not the original.
+--
+. Run four turns, each exercising a different hook, then call
+  `session.end({ userId, reason: 'demo_complete' })` to fire `SessionEnd`
+  and reset the session-started bookkeeping for this scope.
+
+== Run and verify
+
+Run the saved file with both keys set:
+
+[source,bash]
+----
+MEMORY_API_KEY=nams_... OPENAI_API_KEY=sk-... npx tsx hooks-mode.ts
+----
+
+To run the copy in the repository instead, follow the setup in the
+link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/nams-ai-provider[example's
+README], then run `npm run hooks-mode` from
+`typescript/examples/nams-ai-provider/`. The `Run with` comment at the top of
+the program shows the path of that copy.
+
+Expected output (wording, tool calls, and therefore the saved-turn counts
+vary with the model). The `[nams]` lines are hook system messages and
+warnings from the package's default logger, which writes them to stderr:
+
+[source,text]
+----
+--- Turn 1 -- a tool call the hooks allow
+user:      What is the weather in Oslo?
+   [hook] saved 4 turns
+assistant: It's sunny in Oslo, 21C.
+
+--- Turn 2 -- a flaky tool the hooks retry
+user:      Look up a fact about graph databases for me.
+[nams] PostToolUseFailure hook: flaky_lookup failed once, retrying.
+   [hook] saved 4 turns
+assistant: Graph databases are well documented.
+
+--- Turn 3 -- a tool call the hooks deny
+user:      Please delete my account, I confirm.
+[nams] PreToolUse denied delete_account: Account deletion is disabled in this demo.
+   [hook] saved 4 turns
+assistant: I can't do that -- account deletion is disabled in this demo.
+
+--- Turn 4 -- sensitive input
+user:      My card is 4111 1111 1111 1111, remember it.
+[nams] UserPromptSubmit hook: Redacted a card number.
+   [hook] saved 2 turns
+assistant: Got it, but I can't store card numbers.
+   [hook] session ended (demo_complete)
+----
+
+Check three things:
+
+* The turn 2 tool call succeeds only because `PostToolUseFailure` retried it
+  once.
+* The turn 3 tool call never runs, because `PreToolUse` denied it. The model
+  gets the denial back as the tool's result, which is why turn 3 still saves
+  four turns: the prompt, a `[tool-call]` audit turn, a `[tool-result]` audit
+  turn holding the denial, and the answer. Turns 1 and 2 save the same four;
+  turn 4 has no tool call, so it saves two.
+* The card number typed in turn 4 never reaches NAMS unredacted.
+  `UserPromptSubmit` rewrote the prompt before the model saw it, and that
+  rewritten prompt is the one `onFinish` saves.
+
+== See also
+
+* xref:how-to/typescript/nams-ai-provider.adoc[Choose a NAMS AI provider mode]
+* xref:reference/nams-ai-provider.adoc[NAMS AI provider API reference]
+* xref:explanation/nams-ai-provider-retrieval.adoc[How the NAMS AI provider retrieves memory]

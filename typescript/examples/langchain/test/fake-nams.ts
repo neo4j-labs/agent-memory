@@ -24,7 +24,6 @@ export interface FakeNamsOptions {
 export class FakeNamsTransport implements Transport {
   readonly calls: Array<{ method: string; params: Record<string, unknown> }> = [];
   readonly messages: StoredMessage[] = [];
-  readonly preferences: Array<{ id: string; category: string; preference: string }> = [];
   closed = false;
   entitySearches = 0;
 
@@ -95,18 +94,10 @@ export class FakeNamsTransport implements Transport {
           recent_messages: this.messages.slice(-6),
         };
 
-      case "add_preference": {
-        const preference = {
-          id: this.nextId("pref"),
-          category: String(params.category),
-          preference: String(params.preference),
-        };
-        this.preferences.push(preference);
-        return preference;
-      }
-
+      case "add_preference":
       case "search_preferences":
-        return this.preferences;
+      case "add_fact":
+        throw new Error("Unsupported on hosted REST; this fake must not implement it.");
 
       case "search_entities": {
         this.entitySearches += 1;

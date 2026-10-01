@@ -1,0 +1,508 @@
+= NAMS AI provider API reference
+:page-product: agent-memory
+:toclevels: 2
+:source-highlighter: rouge
+
+The shape of the public surface of `@neo4j-labs/nams-ai-provider`: every export,
+grouped by the mode that uses it, plus every option's type, default, and
+constraint.
+
+[NOTE]
+====
+This package has no generated TypeDoc reference — it publishes on its own
+`nams-ai-provider-v*` tags, independently of the `@neo4j-labs/agent-memory`
+SDK, and the TypeDoc workflow only watches `typescript/src/**`. This page is
+hand-maintained; update it directly when the provider's exports or options
+change.
+====
+
+See xref:how-to/typescript/nams-ai-provider.adoc[choosing a mode] for a
+task-oriented comparison, and
+xref:explanation/nams-ai-provider-retrieval.adoc[how retrieval works] for why
+the defaults below are shaped the way they are.
+
+== Exports by mode
+
+=== Provider mode
+
+[cols="2,3", options="header"]
+|===
+| Export | Signature
+
+| `createNamsProvider(options: NamsProviderOptions)`
+| Returns a `ProviderV4` (`specificationVersion: 'v4'`). `languageModel(modelId)` returns `baseProvider(modelId)` wrapped with the same middleware as `createNams().wrap()`; the wrapped model works with `generateText`, `streamText`, and `ToolLoopAgent`. `embeddingModel`/`imageModel` throw `NoSuchModelError` — this provider only wraps language models, so call your `baseProvider` directly for embeddings or images. Works with `createProviderRegistry`.
+|===
+
+`NamsProviderOptions` extends `NamsConfig` with:
+
+[cols="1,2,1,3", options="header"]
+|===
+| Field | Type | Default | Notes
+
+| `baseProvider`
+| `+(modelId: string) => LanguageModelV4 \| LanguageModelV3 \| LanguageModelV2+`
+| _(required)_
+| Any `@ai-sdk/*` provider function, such as `openai`. It must return a model object; a gateway model-id string is not accepted.
+
+| `scope`
+| `NamsScope`
+| _(required)_
+| Fixed for the life of the provider. Create one provider instance per user session; see <<nams-scope>> for how the conversation is chosen.
+
+| `maxMemories`
+| `number`
+| `6`
+| Capped at `12` regardless of what is configured.
+
+| `persistInteractions`
+| `boolean`
+| `true`
+| Save each turn (user input and assistant response) back to NAMS.
+|===
+
+=== Middleware mode
+
+[cols="2,3", options="header"]
+|===
+| Export | Signature
+
+| `createNams(config: NamsFactoryConfig)`
+| Returns `{ wrap, tools, toolsWithMcp, hooks }`. `.wrap(model, scope)` is middleware mode; see <<tools-mode>> and <<hooks-mode>> for the others. `NamsFactoryConfig` is `NamsConfig` plus `maxMemories`, `persistInteractions`, `extractionModel`, and `extractionOptions`.
+| `createNamsMemory(config: NamsMemoryConfig)`
+| Lower-level factory `createNams().wrap` and `createNamsProvider` both build on. Returns `{ wrap(model, scope, providerId?) }`.
+|===
+
+`NamsMemoryConfig` extends `NamsConfig` with the same `maxMemories` (default
+`6`, capped at `12`) and `persistInteractions` (default `true`) fields as
+`NamsProviderOptions`, without `baseProvider`/`scope`.
+
+[[tools-mode]]
+=== Tools mode
+
+[cols="2,3", options="header"]
+|===
+| Export | Signature
+
+| `createNamsMemoryTools(options: NamsToolsOptions)`
+| Returns `{ query_memory, store_memory }`, an AI SDK `ToolSet`.
+
+| `createNamsTools(options: NamsToolsWithMcpOptions): Promise<NamsToolsResult>`
+| NAMS tools, optionally merged with an MCP server's tools. `NamsToolsWithMcpOptions` is `NamsToolsOptions` plus `mcp?: McpConfig`.
+
+| `enforceQueryMemory(options?: EnforceQueryMemoryOptions)`
+| A `prepareStep` hook (`PrepareStepFunction`) that keeps `toolChoice: 'required'` until `query_memory` has run this loop.
+
+| `ensureMemoryStored(tools: ToolSet, options?: EnsureMemoryStoredOptions)`
+| Returns an `onFinish` callback, `+(event: FinishedTurn) => Promise<EnsureMemoryStoredResult>+`, that stores the turn if the model never called `store_memory`. Must be passed the exact tool set object `createNamsMemoryTools`/`.tools()`/`.toolsWithMcp()` returned — a spread copy (`+{ ...tools }+`) throws.
+
+| `NamsMemoryTools` (class)
+| `.forUser(userId, conversationId?)` returns NAMS tools only; `.forUserWithMcp(userId, mcp?, conversationId?)` returns `NamsToolsResult`.
+
+| `NamsMcpConnectionError` (class, extends `Error`)
+| Thrown by `toolsWithMcp()` when the MCP connection fails and `mcp.optional` is not `true`. See <<errors>>.
+
+| `createGraphExtractor(model: LanguageModel, options?: GraphExtractorOptions): GraphExtractor`
+| Tools-mode-only entity/relationship extraction from a stored memory. Passed as `extractionModel`/`extractionOptions` on `createNams`/`createNamsMemoryTools`.
+|===
+
+`NamsToolsOptions` extends `NamsConfig` and `NamsScope` with:
+
+[cols="1,2,1,3", options="header"]
+|===
+| Field | Type | Default | Notes
+
+| `extractionModel`
+| `LanguageModel`
+| —
+| Tools mode only; one extra model call per `store_memory` write of type `fact`, `user_preference`, or `pattern`, which then stores the named entities in the memory instead of one flat entity. The extractor also proposes relationships between them, but the hosted REST API does not accept relationship writes, so they are skipped with one logged warning. If extraction fails, the memory is stored as a flat entity. `createNamsProvider` and `createNamsMemory` do not accept it (removed in 0.3.0); set on `createNams()`, `.wrap()` and `.hooks()` ignore it with one logged warning.
+
+| `extractionOptions`
+| `GraphExtractorOptions`
+| —
+| `+{ skipEntity?: (entity: { name, type, description }) => boolean }+`. Default skip rule drops self-referential entities: empty names, all-lowercase common nouns, or a name that is just the singular of its own type.
+|===
+
+`McpConfig` (the second argument to `toolsWithMcp`, or `NamsToolsWithMcpOptions.mcp`):
+
+[cols="1,2,1,3", options="header"]
+|===
+| Field | Type | Default | Notes
+
+| `url`
+| `string`
+| _(required)_
+| MCP server URL.
+
+| `headers`
+| `+Record<string, string> \| (() => Record<string, string> \| Promise<Record<string, string>>)+`
+| —
+| Sent on every request.
+
+| `toolPrefix`
+| `string`
+| —
+| Prefixes every MCP tool name (e.g. `mcp_`). Without a prefix, an MCP tool named `query_memory` or `store_memory` replaces the NAMS tool, with a logged warning.
+
+| `optional`
+| `boolean`
+| `false`
+| When `true`, a failed MCP connection falls back to NAMS-only tools with a warning instead of throwing `NamsMcpConnectionError`; `close()` is then a no-op and `mcp.error` holds the error.
+|===
+
+`NamsToolsResult` is `+{ tools: ToolSet; close: () => Promise<void>; mcp?: McpConnectionStatus }+`. `tools` holds the NAMS and MCP tools together;
+`close()` closes the MCP connection and is a no-op without one.
+`McpConnectionStatus` is `{ connected: boolean; toolNames: string[]; error?:
+NamsMcpConnectionError }` — `toolNames` are the MCP tools' names as the
+model sees them, with `toolPrefix` applied, and `error` is set when
+`optional: true` hid a connection failure. `mcp` is absent when no MCP
+config was passed. `ensureMemoryStored` accepts the merged `tools` object.
+
+`EnforceQueryMemoryOptions.graceSteps`: `number`, default `3` — steps that
+get `toolChoice: 'required'` before `query_memory` is forced; step
+`graceSteps` itself is the forced one (`toolChoice: { type: 'tool', toolName:
+'query_memory' }`), so `{ graceSteps: 0 }` forces it as the literal first
+step. While `toolChoice` is `'required'` the model can call any tool, in any
+order, but cannot finish with a text-only answer. Keep `graceSteps` at least
+two below your `stopWhen` budget so the forced query and the final answer
+both still fit.
+
+`EnsureMemoryStoredOptions.fallback`: `+(turn: UnstoredTurn) => StoreInput | null+`,
+default stores the final assistant text as an `interaction` (never a
+`fact`), or nothing when the text is empty; `UnstoredTurn` is `{ text:
+string; toolNames: string[] }` and `StoreInput` is `{ content: string; type:
+MemoryType; confidence?: number; tags?: string[] }`.
+`EnsureMemoryStoredResult` is `{ stored: true; input } | { stored: false;
+reason: 'already-stored' | 'nothing-to-store' | 'failed' }`. `failed` means
+the write threw; the error is logged.
+
+The `query_memory` tool's input schema (`QueryInput`): `{ query: string;
+limit?: number (1–20, default 5) }`. At most 12 hits are returned, whatever
+`limit` asks for. It returns `QueryOutput`: `{ found: boolean; count?:
+number; message?: string; memories: MemoryHit[] }` — `count` is set when
+something was found, and `message` is `"No relevant memories found."` or
+`"Memory lookup failed."` otherwise.
+
+The `store_memory` tool's input schema (`ToolStoreInput`): `{ content:
+string (1–2000 chars); type: 'fact' | 'interaction' | 'pattern' |
+'user_preference'; confidence?: number (0–1, default 0.7); tags?: string[]
+(max 10 entries, each ≤40 chars, default []) }`. An `interaction` is saved as
+an assistant message in the user's conversation; every other type creates (or
+reuses) a flat entity, unless `extractionModel` is set. It returns
+`StoreOutput`: `{ stored: boolean; type: string; preview: string; message:
+string }` — `preview` is the first 80 characters of `content`, and a failed
+write returns `stored: false` with `message: "Failed to store memory."`.
+
+[[hooks-mode]]
+=== Hooks mode
+
+[cols="2,3", options="header"]
+|===
+| Export | Signature
+
+| `createNams(config).hooks(scope?)` / `createNamsHooks(options: NamsHooksOptions)`
+| Returns `NamsHooks`: `{ loadSession, prepare, withHooks, onFinish, end }`.
+
+| `compileHooks(config, logger, onSystemMessage?)`
+| Compiles a `NamsHookConfig` into a `NamsHookRegistry`. Used internally by `createNamsHooks`; exported for advanced/standalone use.
+|===
+
+`NamsHooksOptions` extends `NamsConfig` with:
+
+[cols="1,2,1,3", options="header"]
+|===
+| Field | Type | Default | Notes
+
+| `userId`, `conversationId`
+| `string`
+| —
+| Default scope; every method call can override it.
+
+| `sessionLimit`
+| `number`
+| `40`
+| Max prior turns `loadSession`/`prepare` restore.
+
+| `hooks`
+| `NamsHookConfig`
+| —
+| Lifecycle hooks by event — see <<hook-events>>.
+
+| `onSystemMessage`
+| `NamsSystemMessageSink`
+| logs via the configured logger
+| Where a hook's `systemMessage` output goes: `+(message: string, event: NamsHookEvent) => void+`. The default logs `<event> hook: <message>` as a warning.
+|===
+
+`NamsHooks` methods:
+
+[cols="2,3", options="header"]
+|===
+| Method | Behavior
+
+| `loadSession(options?: LoadSessionOptions): Promise<ModelMessage[]>`
+| Restores prior `user`/`assistant` turns only (tool-audit turns are skipped). Returns `[]` for a new user and, instead of throwing, on a backend error. Throws if no `userId` is set on the call or on `createNamsHooks()`.
+
+| `prepare(options: PrepareOptions): Promise<PrepareResult>`
+| Runs `SessionStart` then `UserPromptSubmit`, then loads history. Returns `{ messages, instructions?, prompt, blocked, blockReason?, systemMessages }` — check `blocked` before calling the model, and pass `prompt` (the prompt after any `UserPromptSubmit` rewrite) on to `onFinish`.
+
+| `withHooks(tools: ToolSet, scope?: Partial<NamsScope>): ToolSet`
+| Wraps a tool set so `PreToolUse`/`PostToolUse`/`PostToolUseFailure` run around each call. Returns the tools untouched when no tool hooks are registered.
+
+| `onFinish(scope?: OnFinishScope): NamsOnFinishCallback`
+| Runs `PreMemoryWrite` then `Stop`, and persists the turn exactly once via a bulk write (falling back to per-message writes on failure). The saved turns are the user prompt, one `[tool-call]` and one `[tool-result]` audit turn per tool call, any assistant text, and the final answer — so a generation with one tool call and no text beside it saves four turns. Each scope field (`userId`, `conversationId`, `prompt`, `persistUserPrompt`) is read from the AI SDK call's `runtimeContext` first, falling back to the `scope` passed to `onFinish()`.
+
+| `end(scope?): Promise<void>`
+| Runs `SessionEnd`, then forgets the scope's session state and queued context, so the next `prepare()` fires `SessionStart` again. It does not create or close a NAMS conversation.
+|===
+
+`OnFinishScope`: `{ userId?, conversationId?, prompt?: string | ModelMessage[], persistUserPrompt?: boolean (default true) }`.
+`LoadSessionOptions` is `{ userId?, conversationId?, limit? }`, and
+`PrepareOptions` adds `prompt: string` (required) to it. `NamsToolBlocked` —
+what a denied tool returns to the model instead of its result — is `{
+blocked: true; toolName: string; reason: string }`.
+
+=== Low-level utilities
+
+`makeClient`, `getLogger`, `resolveConversation`, `findExistingConversation`,
+`retrieveMemories`, and `storeMemory` (all from the shared client module) are
+exported for advanced use — building a custom mode on the same retrieval and
+persistence logic the four built-in modes use. Ordinary usage does not need
+them.
+
+== Types
+
+=== `NamsConfig`
+
+[cols="1,1,1,3", options="header"]
+|===
+| Field | Type | Default | Notes
+
+| `apiKey`
+| `string`
+| _(required)_
+| No built-in environment-variable fallback.
+
+| `endpoint`
+| `string`
+| `https://memory.neo4jlabs.com/v1`
+| The NAMS REST endpoint.
+
+| `workspaceId`
+| `string`
+| —
+| NAMS workspace id.
+
+| `logger`
+| `NamsLogger`
+| `console` (`{ warn, error }`)
+| Sink for non-fatal errors: `{ warn(message, error?), error(message, error?) }`. The default prefixes each line with `[nams]`.
+
+| `crossSessionLimit`
+| `number`
+| `5`
+| Other recent conversations each lookup also searches, 2 requests each. `0` disables cross-session search.
+
+| `graphExpansionLimit`
+| `number`
+| `2`
+| Matched entities whose relationships are read back, 1 request each. `0` disables graph expansion. At most 5 relationships are taken from any one entity.
+|===
+
+[[nams-scope]]
+=== `NamsScope`
+
+`{ userId: string; conversationId?: string }`.
+
+The conversation a scope reads and writes is, in order: the `conversationId`
+you pass; otherwise the one this client already resolved for the same user;
+otherwise the user's most recent NAMS conversation; and only if the user has
+none, a new conversation. Leaving out `conversationId` therefore continues
+the user's latest conversation — it does not start a new one. To start a
+separate conversation, create it with the SDK
+(`shortTerm.createConversation({ userId })`) and pass its `id`. Hooks mode's
+`loadSession` follows the same order but never creates a conversation.
+
+=== Memory hit types
+
+`MemoryHit`: `{ content: string; source: MemorySource; type: string; score?:
+number }`. `score` is the entity's stored extraction confidence where one
+exists — it is not used to rank hits (see
+xref:explanation/nams-ai-provider-retrieval.adoc[why]).
+
+`MemorySource`: `'long-term' | 'graph' | 'conversation' | 'cross-session' |
+'reasoning'`.
+
+`MemoryType`: `'fact' | 'interaction' | 'pattern' | 'user_preference'`.
+
+=== Other exported types
+
+Every other exported name is a type that appears in the signatures above:
+
+* Configuration and results: `NamsMode` (`'provider' | 'middleware' |
+  'tools' | 'hooks'`), `NamsFactoryConfig`, `NamsLogger`, `GraphExtractor`,
+  `GraphExtractorOptions`, `FinishedTurn` (the `{ text?, toolCalls?, steps? }`
+  that the `ensureMemoryStored` callback reads), `UnstoredTurn`, `StoreInput`,
+  `ToolStoreInput`, `QueryInput`, `QueryOutput`, `StoreOutput`,
+  `McpConnectionStatus`.
+* Hooks: `NamsHookEvent` (the eight event names), `NamsHookConfig`,
+  `NamsHookGroup` (`{ matcher?, hooks }`), `NamsHookEntry` (`{ handler,
+  timeout?, name? }`), `NamsHookHandler`, `NamsHookBase`, `NamsHookInputs`
+  and `NamsHookOutputs` (maps from event name to input and output type),
+  `NamsHookResult`, `NamsHookRegistry`, `NamsSystemMessageSink`,
+  `NamsOnFinishEvent`, `NamsOnFinishCallback`, `LoadSessionOptions`,
+  `PrepareOptions`, `PrepareResult`, `OnFinishScope`, `SessionTurn`, and the
+  per-event `<Event>Input`/`<Event>Output` types (for example
+  `PreToolUseInput` and `PreToolUseOutput`).
+
+[[hook-events]]
+== Hook events
+
+Every input extends a common base: `{ event, userId: string, conversationId?:
+string, timestamp: Date }`. Every output can also carry `additionalContext?:
+string` (text returned in the `instructions` field of the `prepare()` result
+for you to hand to the model: in the current call for `SessionStart` and
+`UserPromptSubmit`, on the next call for `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PreMemoryWrite`, and
+`Stop`, capped at 20 queued entries per scope; discarded for `SessionEnd`) and
+`systemMessage?: string` (routed to `onSystemMessage`), in addition to the
+fields below. `additionalContext` never becomes a message, because the AI SDK
+rejects system messages inside `messages`; append `instructions` to your own
+instructions instead.
+
+[cols="2,2,3,3", options="header"]
+|===
+| Event | Fires | Extra input fields | Extra output fields
+
+| `SessionStart`
+| The first `prepare()` call for a scope, and again after `end()`
+| `reason: 'created' \| 'resumed'` (`resumed` when the user already has a conversation)
+| — (context/system-message only)
+
+| `UserPromptSubmit`
+| Inside `prepare()`, before history loads
+| `prompt: string`
+| `decision?: 'block'`, `blockReason?: string`, `updatedPrompt?: string` (replaces the prompt for the model and for the saved turn)
+
+| `PreToolUse`
+| Before a `withHooks()`-wrapped tool runs
+| `toolName: string`, `toolCallId?: string`, `input: unknown`
+| `permissionDecision?: 'allow' \| 'deny'`, `permissionDecisionReason?: string`, `updatedInput?: unknown`
+
+| `PostToolUse`
+| After a wrapped tool returns
+| `toolName: string`, `toolCallId?: string`, `input: unknown`, `output: unknown`
+| `updatedOutput?: unknown`
+
+| `PostToolUseFailure`
+| After a wrapped tool throws
+| `toolName: string`, `toolCallId?: string`, `input: unknown`, `error: unknown`, `attempt: number` (1, or 2 after a hook asked for a retry)
+| `retry?: boolean` (honoured on the first failure only)
+
+| `PreMemoryWrite`
+| Inside `onFinish()`, before saving
+| `turns: SessionTurn[]`
+| `decision?: 'block'` (nothing is saved), `blockReason?: string`, `updatedTurns?: SessionTurn[]`
+
+| `Stop`
+| Inside `onFinish()`, after the turns are saved
+| `text?: string`, `turns: SessionTurn[]`
+| — (context/system-message only; the write has already happened)
+
+| `SessionEnd`
+| `end({ reason })`
+| `reason: string` (default `'other'`)
+| — (system-message only; `additionalContext` is discarded)
+|===
+
+`SessionTurn` is `{ role: 'user' | 'assistant'; content: string; metadata?:
+Record<string, unknown> }`.
+
+Rules:
+
+* A `matcher` scopes a hook group to specific tool names or session reasons.
+  It is omitted or `*` (everything), a plain name, a `|`- or `,`-separated
+  list of plain names, or otherwise a regular expression tested against the
+  subject. An invalid regular expression is logged once at startup and never
+  matches. A bare handler is shorthand for a group that matches everything.
+* `SessionStart` and `SessionEnd` match on `reason`,
+  `PreToolUse`/`PostToolUse`/`PostToolUseFailure` on `toolName`.
+  `UserPromptSubmit`, `PreMemoryWrite`, and `Stop` have nothing to match on,
+  so a matcher set on them is ignored with a startup warning.
+* Rewrites chain — each handler sees the previous handler's replacement, and
+  the final value is what the tool, the model, or the write gets.
+* The first `deny`/`block` wins and skips the handlers after it. A denied
+  tool does not throw: it returns `NamsToolBlocked` to the model, so the
+  loop continues and the model can explain the refusal.
+* A hook that throws is logged as an error and skipped. One that outruns its
+  `timeout` (default `30000` ms, per-entry override via
+  `NamsHookEntry.timeout`) is abandoned and logged as a warning — **a hook
+  can never break a generation**.
+
+[[errors]]
+== Errors
+
+[cols="1,3", options="header"]
+|===
+| Class | When it is thrown
+
+| `NamsMcpConnectionError` (extends `Error`)
+| From `toolsWithMcp()`/`createNamsTools()` when the MCP connection fails and `mcp.optional` is not `true`. Fields: `url: string`, `status?: number`, `wwwAuthenticate?: string`. On an HTTP 401 the message names the required auth scheme parsed from the `WWW-Authenticate` challenge.
+|===
+
+The package does not define its own transport error hierarchy. Failures from
+the underlying `@neo4j-labs/agent-memory` calls (see the SDK's error classes
+on xref:reference/typescript-api.adoc[the TypeScript SDK API reference]) are
+mostly caught and logged through the configured `NamsLogger` rather than
+thrown — a lookup or persistence failure degrades that turn's memory instead
+of failing the model call.
+
+== Environment variables
+
+[cols="1,1,3", options="header"]
+|===
+| Variable | Required | Used for
+
+| `MEMORY_API_KEY`
+| yes
+| NAMS API key — pass it as `apiKey`. Read by the runnable examples and snippets in code, not by the package itself.
+|===
+
+No environment variable selects a mode; provider, middleware, tools, and hooks
+are chosen entirely in code.
+
+== Peers, runtime, and versioning
+
+[cols="1,2", options="header"]
+|===
+| Peer | Range
+
+| `ai`
+| `^7.0.0`
+
+| `@neo4j-labs/agent-memory`
+| `~0.4.0 \|\| ~0.5.0`
+
+| `zod`
+| `^3.25.76 \|\| ^4.1.8`
+
+| `@ai-sdk/mcp` _(optional)_
+| `^2.0.0` — only needed for `toolsWithMcp()`, loaded lazily.
+|===
+
+Requires Node.js 22 or newer (`engines.node: ">=22"`). ESM-only (`"type":
+"module"`) with a single entry point — `package.json` declares no subpath
+exports, unlike `@neo4j-labs/agent-memory`.
+
+Releases are tagged `nams-ai-provider-v<X.Y.Z>` and published via
+`.github/workflows/publish-nams-ai-provider.yml`, independently of the SDK's
+`typescript-v*` tags. The current release is `0.3.0` (2026-09-22).
+
+== See also
+
+* xref:how-to/typescript/nams-ai-provider.adoc[Choose a NAMS AI provider mode]
+* xref:how-to/typescript/nams-ai-provider-provider-mode.adoc[Wrap a model in provider mode]
+* xref:how-to/typescript/nams-ai-provider-middleware-mode.adoc[Wrap a model in middleware mode]
+* xref:how-to/typescript/nams-ai-provider-tools-mode.adoc[Expose memory as tools]
+* xref:how-to/typescript/nams-ai-provider-hooks-mode.adoc[Control memory with lifecycle hooks]
+* xref:explanation/nams-ai-provider-retrieval.adoc[How the NAMS AI provider retrieves memory]
+* xref:reference/typescript-api.adoc[TypeScript SDK API reference]
+* link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/packages/vercel-ai-provider[Package source and README on GitHub]

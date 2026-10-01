@@ -850,13 +850,13 @@ def mcp() -> None:
     "--port",
     type=int,
     default=8080,
-    help="Port to bind for --transport http. The MCP endpoint is /mcp/.",
+    help="Port to bind for --transport http. The MCP endpoint is /mcp.",
 )
 @click.option(
     "--profile",
     type=click.Choice(["core", "extended"]),
     default="extended",
-    help="Tool profile: core (6 tools) or extended (16 tools).",
+    help="Tool profile: core (6 tools) or extended (16 tools on bolt, 20 on NAMS).",
 )
 @click.option(
     "--session-strategy",

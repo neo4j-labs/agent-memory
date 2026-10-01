@@ -533,3 +533,32 @@ class TestIssue79:
         assert len(rows) == 1
         assert rows[0]["target_name"] == "Charles Brubaker"
         assert rows[0]["rel_type"] == "AUTHORED_BY"
+
+
+class TestPotentialDuplicates:
+    """``find_potential_duplicates`` reports each flagged pair once, with its score."""
+
+    async def test_each_pending_pair_is_returned_once_with_its_confidence(
+        self, clean_memory_client
+    ):
+        long_term = clean_memory_client.long_term
+        existing, _ = await long_term.add_entity(
+            "John Smith", "PERSON", resolve=False, generate_embedding=False
+        )
+        flagged, _ = await long_term.add_entity(
+            "Jon Smith", "PERSON", resolve=False, generate_embedding=False
+        )
+        await clean_memory_client.graph.execute_write(
+            """
+            MATCH (e1:Entity {id: $source_id}), (e2:Entity {id: $target_id})
+            CREATE (e1)-[:SAME_AS {confidence: 0.88, match_type: 'embedding',
+                                   status: 'pending', created_at: datetime()}]->(e2)
+            """,
+            {"source_id": str(flagged.id), "target_id": str(existing.id)},
+        )
+
+        pairs = await long_term.find_potential_duplicates(limit=10)
+
+        assert [(a.name, b.name, confidence) for a, b, confidence in pairs] == [
+            ("Jon Smith", "John Smith", 0.88)
+        ]

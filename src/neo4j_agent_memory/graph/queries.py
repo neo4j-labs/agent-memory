@@ -4,27 +4,68 @@
 # SHORT-TERM MEMORY QUERIES
 # =============================================================================
 
-GET_LAST_MESSAGE = """
-MATCH (c:Conversation {id: $conversation_id})-[:HAS_MESSAGE]->(m:Message)
-WHERE NOT (m)-[:NEXT_MESSAGE]->()
-RETURN m
-LIMIT 1
-"""
-
 MIGRATE_MESSAGE_LINKS = """
+// Link each conversation's messages into one chain in timestamp order, and
+// delete every FIRST_MESSAGE / NEXT_MESSAGE link that disagrees with it: the
+// branch a concurrent append forked off, a reverse link, a second
+// FIRST_MESSAGE. Links that already agree are left alone, so a rerun writes
+// nothing.
+//
+// Messages that share a timestamp, as every batch written by
+// add_messages_batch in 0.6.0 does, keep the order of the single chain that
+// already links them; tied messages that no chain start reaches, or that are
+// not linked at all, fall back to message id order. On a batch where the
+// 0.6.0 migration overlaid its id-ordered links, the tied messages still end
+// up in one chain, but their order can mix input and id order.
+//
+// A tied run starts at a head, a message with no NEXT_MESSAGE predecessor of
+// the same timestamp, and tie_rank is a message's shortest distance from a
+// head along tied links (null when no head reaches it). That is one ANY
+// SHORTEST search per head rather than one per message, so a long tied run
+// costs one walk. Do not rank by counting predecessor paths: once the 0.6.0
+// migrate has overlaid reverse links on a tied batch, the number of paths
+// through it grows exponentially.
 MATCH (c:Conversation)
-MATCH (c)-[:HAS_MESSAGE]->(m:Message)
-WITH c, m ORDER BY m.timestamp ASC
+CALL (c) {
+    MATCH (c)-[:HAS_MESSAGE]->(m:Message)
+    RETURN m, null AS rank
+  UNION ALL
+    MATCH (c)-[:HAS_MESSAGE]->(head:Message)
+    // Only head's own incoming links can be expanded here. Keep earlier
+    // unlabelled: with earlier:Message, in this form or in a NOT EXISTS
+    // subquery, the planner may start from the Message(timestamp) index
+    // across the whole database, quadratic in messages sharing a timestamp.
+    WHERE size([(head)<-[:NEXT_MESSAGE]-(earlier)
+                WHERE earlier.timestamp = head.timestamp | earlier]) = 0
+    MATCH run = ANY SHORTEST (head) ((earlier:Message)-[:NEXT_MESSAGE]->(later:Message)
+                                    WHERE earlier.timestamp = later.timestamp)* (m:Message)
+    RETURN m, length(run) AS rank
+}
+WITH c, m, min(rank) AS tie_rank
+WITH c, m ORDER BY m.timestamp ASC, tie_rank ASC, m.id ASC
 WITH c, collect(m) AS messages
-WHERE size(messages) > 0
-WITH c, messages, head(messages) AS firstMsg
+CALL (c, messages) {
+    MATCH (c)-[stale:FIRST_MESSAGE]->(other)
+    WHERE other <> messages[0]
+    DELETE stale
+}
+CALL (messages) {
+    UNWIND range(0, size(messages) - 1) AS i
+    // messages[i + 1] is null for the last message: all its links are stale.
+    WITH messages[i] AS prev, messages[i + 1] AS next
+    MATCH (prev)-[stale:NEXT_MESSAGE]->(other)
+    WHERE next IS NULL OR other <> next
+    DELETE stale
+}
+WITH c, messages, messages[0] AS firstMsg
 MERGE (c)-[:FIRST_MESSAGE]->(firstMsg)
 WITH c, messages
-UNWIND range(0, size(messages) - 2) AS i
-WITH c, messages[i] AS prev, messages[i + 1] AS next
-MERGE (prev)-[:NEXT_MESSAGE]->(next)
-WITH c, count(*) AS links
-RETURN c.id AS conversation_id, links + 1 AS messages_linked
+CALL (messages) {
+    UNWIND range(0, size(messages) - 2) AS i
+    WITH messages[i] AS prev, messages[i + 1] AS next
+    MERGE (prev)-[:NEXT_MESSAGE]->(next)
+}
+RETURN c.id AS conversation_id, size(messages) AS messages_linked
 """
 
 CREATE_CONVERSATION = """
@@ -67,14 +108,30 @@ LIMIT $limit
 
 CREATE_MESSAGE = """
 MATCH (c:Conversation {id: $conversation_id})
+// Write to the conversation before reading the tail. SET takes a write lock on
+// c that is held to commit, so concurrent appends to one conversation serialize
+// instead of all reading the same predecessor and forking the chain.
+SET c.updated_at = datetime()
+WITH c
 OPTIONAL MATCH (c)-[:HAS_MESSAGE]->(last:Message)
 WHERE NOT (last)-[:NEXT_MESSAGE]->()
+// A chain forked by a pre-fix write exposes more than one tail, and every
+// clause below runs once per row -- which would CREATE this message once per
+// tail and breach the uniqueness constraint on Message.id. Collapse to the
+// newest tail. migrate_message_links() repairs a chain that is already forked.
+// Finding the tail reads every message in the conversation.
+WITH c, last ORDER BY last.timestamp DESC LIMIT 1
 CREATE (m:Message {
     id: $id,
     role: $role,
     content: $content,
     embedding: $embedding,
-    timestamp: datetime(),
+    // Never sort before the tail: an append that waited on the lock took its
+    // statement clock before the append it waited for committed.
+    timestamp: CASE WHEN last IS NOT NULL AND last.timestamp >= datetime()
+                    THEN last.timestamp + duration({microseconds: 1})
+                    ELSE datetime()
+               END,
     metadata: $metadata
 })
 CREATE (c)-[:HAS_MESSAGE]->(m)
@@ -84,63 +141,57 @@ FOREACH (_ IN CASE WHEN last IS NOT NULL THEN [1] ELSE [] END |
 FOREACH (_ IN CASE WHEN last IS NULL THEN [1] ELSE [] END |
     CREATE (c)-[:FIRST_MESSAGE]->(m)
 )
-SET c.updated_at = datetime()
 RETURN m
 """
 
 CREATE_MESSAGES_BATCH = """
-UNWIND $messages AS msg
 MATCH (c:Conversation {id: $conversation_id})
+// Lock the conversation before reading its tail, exactly as CREATE_MESSAGE
+// does, and create and link the batch in the same transaction. A concurrent
+// append then cannot link to the old tail between the read and the link.
+// As in CREATE_MESSAGE, finding the tail reads every message in the
+// conversation; this happens once per batch, not once per message.
+SET c.updated_at = datetime()
+WITH c
+OPTIONAL MATCH (c)-[:HAS_MESSAGE]->(last:Message)
+WHERE NOT (last)-[:NEXT_MESSAGE]->()
+WITH c, last ORDER BY last.timestamp DESC LIMIT 1
+// datetime() is evaluated once per statement, so messages without an explicit
+// timestamp would all share it and read back in arbitrary order. Give them
+// strictly increasing times in input order instead, starting after the tail.
+WITH c, last,
+     CASE WHEN last IS NOT NULL AND last.timestamp >= datetime()
+          THEN last.timestamp + duration({microseconds: 1})
+          ELSE datetime()
+     END AS base
+UNWIND range(0, size($messages) - 1) AS i
+WITH c, last, base, i, $messages[i] AS msg
 CREATE (m:Message {
     id: msg.id,
     role: msg.role,
     content: msg.content,
     embedding: msg.embedding,
-    timestamp: CASE WHEN msg.timestamp IS NOT NULL THEN datetime(msg.timestamp) ELSE datetime() END,
+    timestamp: CASE WHEN msg.timestamp IS NOT NULL
+                    THEN datetime(msg.timestamp)
+                    ELSE base + duration({microseconds: i})
+               END,
     metadata: msg.metadata
 })
 CREATE (c)-[:HAS_MESSAGE]->(m)
-WITH c, count(m) AS created
-SET c.updated_at = datetime()
-RETURN created
-"""
-
-CREATE_MESSAGE_LINKS = """
-// Link messages in order based on the provided message_ids list
-// If previous_last_id is provided, link it to the first message
-// If create_first_message is true, create FIRST_MESSAGE relationship
-MATCH (c:Conversation {id: $conversation_id})
-WITH c, $message_ids AS ids, $previous_last_id AS prevLastId, $create_first_message AS createFirst
-
-// Get all messages in the order specified
-UNWIND range(0, size(ids) - 1) AS idx
-MATCH (m:Message {id: ids[idx]})
-WITH c, collect(m) AS messages, prevLastId, createFirst
-WHERE size(messages) > 0
-
-// Get first message for linking
-WITH c, messages, prevLastId, createFirst, head(messages) AS firstMsg
-
-// Create FIRST_MESSAGE if this is a new conversation
-FOREACH (_ IN CASE WHEN createFirst THEN [1] ELSE [] END |
-    MERGE (c)-[:FIRST_MESSAGE]->(firstMsg)
+WITH c, last, i, m ORDER BY i
+WITH c, last, collect(m) AS messages
+FOREACH (first IN CASE WHEN last IS NULL THEN [head(messages)] ELSE [] END |
+    CREATE (c)-[:FIRST_MESSAGE]->(first)
 )
-
-// Link from previous last message to first of this batch
-WITH c, messages, prevLastId, firstMsg
-OPTIONAL MATCH (prevLast:Message {id: prevLastId})
-WITH c, messages, prevLast, firstMsg
-FOREACH (_ IN CASE WHEN prevLast IS NOT NULL THEN [1] ELSE [] END |
-    CREATE (prevLast)-[:NEXT_MESSAGE]->(firstMsg)
+WITH messages, CASE WHEN last IS NULL THEN messages ELSE [last] + messages END AS chain
+FOREACH (j IN range(0, size(chain) - 2) |
+    FOREACH (prev IN [chain[j]] |
+        FOREACH (next IN [chain[j + 1]] |
+            CREATE (prev)-[:NEXT_MESSAGE]->(next)
+        )
+    )
 )
-
-// Create NEXT_MESSAGE chain within the batch
-WITH c, messages
-UNWIND CASE WHEN size(messages) > 1 THEN range(0, size(messages) - 2) ELSE [] END AS i
-WITH c, messages[i] AS prev, messages[i + 1] AS next
-CREATE (prev)-[:NEXT_MESSAGE]->(next)
-
-RETURN count(*) AS linked
+RETURN size(messages) AS created
 """
 
 UPDATE_MESSAGE_EMBEDDING = """
@@ -159,7 +210,7 @@ ORDER BY m.timestamp ASC
 GET_CONVERSATION_MESSAGES = """
 MATCH (c:Conversation {id: $conversation_id})-[:HAS_MESSAGE]->(m:Message)
 RETURN m
-ORDER BY m.timestamp ASC
+ORDER BY m.timestamp ASC, m.id ASC
 LIMIT $limit
 """
 

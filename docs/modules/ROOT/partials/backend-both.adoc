@@ -1,4 +1,4 @@
 [NOTE]
 ====
-icon:cloud[] *Available on NAMS: Yes* — with backend-specific differences (some steps run server-side on NAMS, and a few sub-features are bolt-only). See the xref:explanation/backends.adoc#capability-matrix[capability matrix] for the details.
+icon:cloud[] *Available on NAMS: Yes, with differences.* NAMS supports this kind of memory, but not every call on this page: some steps run server-side, some calls take different arguments or return different shapes, and some are Bolt-only. Check the xref:reference/backend-capabilities.adoc[backend capabilities reference] before you adapt a Bolt procedure.
 ====

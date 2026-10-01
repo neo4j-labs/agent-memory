@@ -9,6 +9,10 @@ on:
       - 'benchmarks/**'
       - 'examples/**'
       - 'docs/**'
+      - 'README*.md'
+      - 'CONTRIBUTING.md'
+      - 'deploy/cloudrun/**'
+      - '.claude/skills/docs-*/**'
       - 'scripts/**'
       - 'pyproject.toml'
       - 'uv.lock'
@@ -24,6 +28,10 @@ on:
       - 'benchmarks/**'
       - 'examples/**'
       - 'docs/**'
+      - 'README*.md'
+      - 'CONTRIBUTING.md'
+      - 'deploy/cloudrun/**'
+      - '.claude/skills/docs-*/**'
       - 'scripts/**'
       - 'pyproject.toml'
       - 'uv.lock'
@@ -46,7 +54,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
@@ -65,16 +73,16 @@ jobs:
       # carries an `# isort: skip` or the backend becomes a real package.
       - name: Run ruff check
         run: |
-          uv run ruff check src tests examples \
+          uv run ruff check src tests examples docs/modules/ROOT/examples \
             --extend-per-file-ignores 'examples/financial-services-advisor/aws-financial-services-advisor/backend/handler.py:I001'
 
       - name: Run ruff format check
-        run: uv run ruff format --check src tests examples
+        run: uv run ruff format --check src tests examples docs/modules/ROOT/examples
 
   type-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
@@ -121,7 +129,7 @@ jobs:
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
@@ -149,7 +157,7 @@ jobs:
           include-hidden-files: true
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v7
         if: matrix.python-version == '3.12'
         with:
           files: ./coverage.xml
@@ -177,7 +185,7 @@ jobs:
           --health-retries 20
           --health-start-period 30s
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
@@ -188,6 +196,11 @@ jobs:
       - name: Install dependencies
         run: uv sync --group dev --all-extras
 
+      # The Microsoft extra supplies the framework core; the documentation
+      # constructor contract also needs the separately published OpenAI client.
+      - name: Install framework documentation client
+        run: uv pip install 'agent-framework-openai>=1.13,<2'
+
       - name: Wait for Neo4j to be ready
         run: |
           echo "Waiting for Neo4j to be ready..."
@@ -195,7 +208,7 @@ jobs:
             if curl -s http://localhost:7474 > /dev/null 2>&1; then
               echo "Neo4j HTTP interface is ready"
               # Also check bolt connection
-              if uv run python -c "from neo4j import GraphDatabase; d = GraphDatabase.driver('bolt://localhost:7687', auth=('neo4j', 'test-password')); d.verify_connectivity(); d.close(); print('Bolt ready')" 2>/dev/null; then
+              if uv run --no-sync python -c "from neo4j import GraphDatabase; d = GraphDatabase.driver('bolt://localhost:7687', auth=('neo4j', 'test-password')); d.verify_connectivity(); d.close(); print('Bolt ready')" 2>/dev/null; then
                 echo "Neo4j is fully ready!"
                 break
               fi
@@ -203,6 +216,9 @@ jobs:
             echo "Attempt $i: Waiting for Neo4j..."
             sleep 2
           done
+
+      - name: Run offline framework documentation contracts
+        run: uv run --no-sync pytest tests/docs/test_python_integration_contracts.py -q --timeout=60
 
       # Cache the whole Hugging Face cache dir so tests don't re-download any
       # model on every run (a cold download can exceed the no-llm test's
@@ -219,11 +235,22 @@ jobs:
           restore-keys: |
             hf-cache-${{ runner.os }}-
 
+      # The maintained tutorial and how-to programs in
+      # docs/modules/ROOT/examples, run phase by phase against this job's Neo4j.
+      - name: Run documentation programs against Neo4j
+        run: |
+          uv run --no-sync pytest tests/docs/test_tutorial_examples.py tests/docs/test_howto_examples.py \
+            -v --tb=short --timeout=600
+        env:
+          NEO4J_URI: bolt://localhost:7687
+          NEO4J_USERNAME: neo4j
+          NEO4J_PASSWORD: test-password
+
       - name: Run integration tests with coverage
         # NAMS integration tests have a dedicated workflow
         # (.github/workflows/nams-integration.yml) so we exclude them here.
         run: |
-          uv run pytest tests/integration -v \
+          uv run --no-sync pytest tests/integration -v \
             --ignore=tests/integration/nams \
             --tb=short \
             --timeout=300 \
@@ -245,7 +272,7 @@ jobs:
           include-hidden-files: true
 
       - name: Upload integration coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v7
         if: always()
         with:
           files: ./coverage-integration.xml
@@ -277,7 +304,7 @@ jobs:
           --health-retries 20
           --health-start-period 30s
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
@@ -330,7 +357,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[testcontainers]')
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
@@ -384,7 +411,7 @@ jobs:
           --health-retries 20
           --health-start-period 30s
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
@@ -449,7 +476,7 @@ jobs:
   example-tests-quick:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
@@ -502,6 +529,19 @@ jobs:
           uv run ruff check src tests
           uv run pytest -q --timeout=120
 
+      # The backend image installs from requirements-docker.txt, which is
+      # exported from uv.lock. Dependabot updates uv.lock, not the export (see
+      # `exclude-paths` in .github/dependabot.yml), so a stale export means the
+      # image ships different versions from the ones the tests just ran.
+      - name: Check requirements-docker.txt matches uv.lock
+        working-directory: examples/financial-services-advisor/google-cloud-financial-advisor
+        run: |
+          make docker-requirements
+          if ! git diff --exit-code -- backend/requirements-docker.txt backend/uv.lock; then
+            echo "::error::uv.lock or requirements-docker.txt is stale. In examples/financial-services-advisor/google-cloud-financial-advisor run 'cd backend && uv lock' then 'make docker-requirements', and commit both files."
+            exit 1
+          fi
+
       # Examples must use the public API: `client.query.cypher` for reads,
       # `client.graph.execute_write` for writes. `client._client` and the
       # internal Cypher-constant module are reach-throughs that break on any
@@ -531,7 +571,7 @@ jobs:
     outputs:
       frontend: ${{ steps.detect.outputs.frontend }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -582,7 +622,7 @@ jobs:
             dir: examples/financial-services-advisor/aws-financial-services-advisor/infrastructure
             build: synth
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -620,11 +660,31 @@ jobs:
         working-directory: ${{ matrix.dir }}
         run: npm run ${{ matrix.build || 'build' }}
 
+  # Run the hosted tutorials against their Python floor without heavyweight providers.
+  hosted-tutorial-minimum:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v4
+      - name: Install a clean Python 3.10 hosted environment
+        run: |
+          uv venv --python 3.10 .venv-hosted
+          uv pip install --python .venv-hosted/bin/python '.[nams]' pytest pytest-asyncio pytest-timeout respx
+      - name: Verify hosted clients and maintained tutorial failure paths
+        run: |
+          .venv-hosted/bin/python -m pytest -q \
+            tests/unit/nams/test_ontology.py \
+            tests/docs/test_hosted_tutorial_contracts.py \
+            tests/docs/test_hosted_tutorial_cleanup.py \
+            tests/docs/test_hosted_tutorial_lifecycle.py \
+            tests/docs/test_skills_tutorial.py \
+            tests/docs/test_ontology_tutorial.py --timeout=60
+
   # Documentation tests - validates code snippets and internal links
   docs-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
@@ -641,7 +701,7 @@ jobs:
         run: uv sync --group dev
 
       - name: Install docs dependencies
-        run: cd docs && npm install
+        run: cd docs && npm ci
 
       - name: Run documentation syntax validation
         run: |
@@ -652,10 +712,26 @@ jobs:
 
       - name: Run documentation link validation
         run: |
-          uv run pytest tests/docs/test_links.py \
+          uv run pytest tests/docs/test_links.py tests/docs/test_docs_checker.py \
+            tests/docs/test_nav_labels.py \
             -v \
             --tb=short \
             --timeout=60
+
+      - name: Run offline documentation contracts
+        run: |
+          uv run pytest tests/docs/test_python_reference_contracts.py \
+            tests/docs/test_hosted_tutorial_contracts.py \
+            tests/docs/test_hosted_tutorial_cleanup.py \
+            tests/docs/test_hosted_tutorial_lifecycle.py \
+            tests/docs/test_skills_tutorial.py \
+            tests/docs/test_ontology_tutorial.py \
+            tests/docs/test_core_python_tutorials.py \
+            tests/docs/test_aura_tutorial_setup.py \
+            tests/docs/test_aura_tutorial_persona.py \
+            tests/docs/test_operational_howto_contracts.py \
+            tests/docs/test_diagram_manifest.py \
+            tests/docs/test_cloudrun_assets.py -q --timeout=60
 
       - name: Run documentation build tests
         run: |
@@ -664,13 +740,20 @@ jobs:
             --tb=short \
             --timeout=180
 
+      # The same gate as `make docs-lint` minus Playwright: source coverage, the
+      # diagram manifest, one clean Antora build, rendered links and images, and
+      # every section id recorded in scripts/docs_section_ids.json. A renamed
+      # section must keep its old id as an anchor, or this step fails.
+      - name: Check docs sources, a fresh build and recorded section ids
+        run: uv run python scripts/check_docs.py --build
+
   # Merge coverage from unit and integration tests, check threshold
   coverage-report:
     runs-on: ubuntu-latest
     needs: [test, integration-test]
     if: always()
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
@@ -704,7 +787,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload merged coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v7
         with:
           files: ./coverage-merged.xml
           flags: merged
@@ -718,7 +801,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4

@@ -1,0 +1,192 @@
+[
+  {
+    "example": "lennys-memory",
+    "os": "darwin",
+    "arch": "arm64",
+    "firstCompatibleNode22": "22.13.0",
+    "node24Compatible": true,
+    "node18Failures": 14,
+    "node2212Failures": [
+      [
+        "node_modules/@napi-rs/wasm-runtime",
+        "^20.19.0 || ^22.13.0 || >=23.5.0"
+      ],
+      [
+        "node_modules/@typescript-eslint/visitor-keys/node_modules/eslint-visitor-keys",
+        "^20.19.0 || ^22.13.0 || >=24"
+      ]
+    ]
+  },
+  {
+    "example": "full-stack-chat-agent",
+    "os": "darwin",
+    "arch": "arm64",
+    "firstCompatibleNode22": "22.13.0",
+    "node24Compatible": true,
+    "node18Failures": 27,
+    "node2212Failures": [
+      [
+        "node_modules/@eslint/config-array",
+        "^20.19.0 || ^22.13.0 || >=24"
+      ],
+      [
+        "node_modules/@eslint/config-helpers",
+        "^20.19.0 || ^22.13.0 || >=24"
+      ],
+      [
+        "node_modules/@eslint/core",
+        "^20.19.0 || ^22.13.0 || >=24"
+      ],
+      [
+        "node_modules/@eslint/object-schema",
+        "^20.19.0 || ^22.13.0 || >=24"
+      ],
+      [
+        "node_modules/@eslint/plugin-kit",
+        "^20.19.0 || ^22.13.0 || >=24"
+      ],
+      [
+        "node_modules/@napi-rs/wasm-runtime",
+        "^20.19.0 || ^22.13.0 || >=23.5.0"
+      ],
+      [
+        "node_modules/eslint",
+        "^20.19.0 || ^22.13.0 || >=24"
+      ],
+      [
+        "node_modules/eslint-scope",
+        "^20.19.0 || ^22.13.0 || >=24"
+      ],
+      [
+        "node_modules/eslint-visitor-keys",
+        "^20.19.0 || ^22.13.0 || >=24"
+      ],
+      [
+        "node_modules/espree",
+        "^20.19.0 || ^22.13.0 || >=24"
+      ]
+    ]
+  },
+  {
+    "example": "microsoft_agent_retail_assistant",
+    "os": "darwin",
+    "arch": "arm64",
+    "firstCompatibleNode22": "22.13.0",
+    "node24Compatible": true,
+    "node18Failures": 8,
+    "node2212Failures": [
+      [
+        "node_modules/@napi-rs/wasm-runtime",
+        "^20.19.0 || ^22.13.0 || >=23.5.0"
+      ],
+      [
+        "node_modules/@typescript-eslint/visitor-keys/node_modules/eslint-visitor-keys",
+        "^20.19.0 || ^22.13.0 || >=24"
+      ]
+    ]
+  },
+  {
+    "example": "financial-services-advisor/google-cloud-financial-advisor",
+    "os": "darwin",
+    "arch": "arm64",
+    "firstCompatibleNode22": "22.13.0",
+    "node24Compatible": true,
+    "node18Failures": 44,
+    "node2212Failures": [
+      [
+        "node_modules/@eslint/config-array",
+        "^20.19.0 || ^22.13.0 || >=24"
+      ],
+      [
+        "node_modules/@eslint/config-helpers",
+        "^20.19.0 || ^22.13.0 || >=24"
+      ],
+      [
+        "node_modules/@eslint/core",
+        "^20.19.0 || ^22.13.0 || >=24"
+      ],
+      [
+        "node_modules/@eslint/js",
+        "^20.19.0 || ^22.13.0 || >=24"
+      ],
+      [
+        "node_modules/@eslint/object-schema",
+        "^20.19.0 || ^22.13.0 || >=24"
+      ],
+      [
+        "node_modules/@eslint/plugin-kit",
+        "^20.19.0 || ^22.13.0 || >=24"
+      ],
+      [
+        "node_modules/eslint",
+        "^20.19.0 || ^22.13.0 || >=24"
+      ],
+      [
+        "node_modules/eslint-scope",
+        "^20.19.0 || ^22.13.0 || >=24"
+      ],
+      [
+        "node_modules/eslint-visitor-keys",
+        "^20.19.0 || ^22.13.0 || >=24"
+      ],
+      [
+        "node_modules/espree",
+        "^20.19.0 || ^22.13.0 || >=24"
+      ],
+      [
+        "node_modules/jsdom",
+        "^20.19.0 || ^22.13.0 || >=24.0.0"
+      ]
+    ]
+  },
+  {
+    "example": "financial-services-advisor/aws-financial-services-advisor",
+    "os": "darwin",
+    "arch": "arm64",
+    "firstCompatibleNode22": "22.13.0",
+    "node24Compatible": true,
+    "node18Failures": 22,
+    "node2212Failures": [
+      [
+        "node_modules/@eslint/config-array",
+        "^20.19.0 || ^22.13.0 || >=24"
+      ],
+      [
+        "node_modules/@eslint/config-helpers",
+        "^20.19.0 || ^22.13.0 || >=24"
+      ],
+      [
+        "node_modules/@eslint/core",
+        "^20.19.0 || ^22.13.0 || >=24"
+      ],
+      [
+        "node_modules/@eslint/js",
+        "^20.19.0 || ^22.13.0 || >=24"
+      ],
+      [
+        "node_modules/@eslint/object-schema",
+        "^20.19.0 || ^22.13.0 || >=24"
+      ],
+      [
+        "node_modules/@eslint/plugin-kit",
+        "^20.19.0 || ^22.13.0 || >=24"
+      ],
+      [
+        "node_modules/eslint",
+        "^20.19.0 || ^22.13.0 || >=24"
+      ],
+      [
+        "node_modules/eslint-scope",
+        "^20.19.0 || ^22.13.0 || >=24"
+      ],
+      [
+        "node_modules/eslint-visitor-keys",
+        "^20.19.0 || ^22.13.0 || >=24"
+      ],
+      [
+        "node_modules/espree",
+        "^20.19.0 || ^22.13.0 || >=24"
+      ]
+    ]
+  }
+]

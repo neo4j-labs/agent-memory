@@ -1,5 +1,5 @@
-<!DOCTYPE html><html class="default" lang="en" data-base="../"><head><meta charset="utf-8"/><meta http-equiv="x-ua-compatible" content="IE=edge"/><title>MemoryClientOptions | @neo4j-labs/agent-memory - v0.4.1</title><meta name="description" content="Documentation for @neo4j-labs/agent-memory"/><meta name="viewport" content="width=device-width, initial-scale=1"/><link rel="stylesheet" href="../assets/style.css"/><link rel="stylesheet" href="../assets/highlight.css"/><script defer src="../assets/main.js"></script><script async src="../assets/icons.js" id="tsd-icons-script"></script><script async src="../assets/search.js" id="tsd-search-script"></script><script async src="../assets/navigation.js" id="tsd-nav-script"></script><script async src="../assets/hierarchy.js" id="tsd-hierarchy-script"></script></head><body><script>document.documentElement.dataset.theme = localStorage.getItem("tsd-theme") || "os";document.body.style.display="none";setTimeout(() => window.app?app.showPage():document.body.style.removeProperty("display"),500)</script><header class="tsd-page-toolbar">
-<div class="tsd-toolbar-contents container"><a href="../index.html" class="title">@neo4j-labs/agent-memory - v0.4.1</a>
+<!DOCTYPE html><html class="default" lang="en" data-base="../"><head><meta charset="utf-8"/><meta http-equiv="x-ua-compatible" content="IE=edge"/><title>MemoryClientOptions | @neo4j-labs/agent-memory (source; unreleased changes since 0.5.0)</title><meta name="description" content="Documentation for @neo4j-labs/agent-memory (source; unreleased changes since 0.5.0)"/><meta name="viewport" content="width=device-width, initial-scale=1"/><link rel="stylesheet" href="../assets/style.css"/><link rel="stylesheet" href="../assets/highlight.css"/><script defer src="../assets/main.js"></script><script async src="../assets/icons.js" id="tsd-icons-script"></script><script async src="../assets/search.js" id="tsd-search-script"></script><script async src="../assets/navigation.js" id="tsd-nav-script"></script><script async src="../assets/hierarchy.js" id="tsd-hierarchy-script"></script></head><body><script>document.documentElement.dataset.theme = localStorage.getItem("tsd-theme") || "os";document.body.style.display="none";setTimeout(() => window.app?app.showPage():document.body.style.removeProperty("display"),500)</script><header class="tsd-page-toolbar">
+<div class="tsd-toolbar-contents container"><a href="../index.html" class="title">@neo4j-labs/agent-memory (source; unreleased changes since 0.5.0)</a>
 <div id="tsd-toolbar-links"><a href="https://github.com/neo4j-labs/agent-memory">GitHub</a><a href="https://neo4j.com/labs/agent-memory/sdks/typescript">Docs</a><a href="https://community.neo4j.com">Community</a></div><button id="tsd-search-trigger" class="tsd-widget" aria-label="Search"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><use href="../assets/icons.svg#icon-search"></use></svg></button><dialog id="tsd-search" aria-label="Search"><input role="combobox" id="tsd-search-input" aria-controls="tsd-search-results" aria-autocomplete="list" aria-expanded="true" autocapitalize="off" autocomplete="off" placeholder="Search the docs" maxLength="100"/>
 <ul role="listbox" id="tsd-search-results"></ul>
 <div id="tsd-search-status" aria-live="polite" aria-atomic="true">
@@ -13,7 +13,7 @@
 <h1>Interface MemoryClientOptions</h1></div>
 <div class="tsd-signature"><span class="tsd-signature-keyword">interface</span> <span class="tsd-kind-interface">MemoryClientOptions</span> <span class="tsd-signature-symbol">{</span><br/>    <a class="tsd-kind-property" href="#apikey">apiKey</a><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">;</span><br/>    <a class="tsd-kind-property" href="#endpoint">endpoint</a><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">;</span><br/>    <a class="tsd-kind-property" href="#headers">headers</a><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-type">Record</span><span class="tsd-signature-symbol">&lt;</span><span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">,</span> <span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">&gt;</span><span class="tsd-signature-symbol">;</span><br/>    <a class="tsd-kind-property" href="#logger">logger</a><span class="tsd-signature-symbol">?:</span> <a href="../types/index.Logger.html" class="tsd-signature-type tsd-kind-type-alias">Logger</a><span class="tsd-signature-symbol">;</span><br/>    <a class="tsd-kind-property" href="#namespace">namespace</a><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">;</span><br/>    <a class="tsd-kind-property" href="#timeout">timeout</a><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-type">number</span><span class="tsd-signature-symbol">;</span><br/>    <a class="tsd-kind-property" href="#tokenprovider">tokenProvider</a><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-symbol">()</span> <span class="tsd-signature-symbol">=&gt;</span> <span class="tsd-signature-type">string</span> <span class="tsd-signature-symbol">|</span> <span class="tsd-signature-type">Promise</span><span class="tsd-signature-symbol">&lt;</span><span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">&gt;</span><span class="tsd-signature-symbol">;</span><br/>    <a class="tsd-kind-property" href="#transport">transport</a><span class="tsd-signature-symbol">?:</span> <a href="../types/index.TransportMode.html" class="tsd-signature-type tsd-kind-type-alias">TransportMode</a><span class="tsd-signature-symbol">;</span><br/>    <a class="tsd-kind-property" href="#workspaceid">workspaceId</a><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">;</span><br/><span class="tsd-signature-symbol">}</span></div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/neo4j-labs/agent-memory/blob/27c79d41c874fc2baed9cd3a482f43a96882a0f0/typescript/src/types.ts#L315">types.ts:315</a></li></ul></aside>
+<li>Defined in <a href="https://github.com/neo4j-labs/agent-memory/blob/e2bcb93eb85a516ac67f0b436bd75909c6edcde4/typescript/src/types.ts#L315">types.ts:315</a></li></ul></aside>
 <section class="tsd-panel-group tsd-index-group">
 <section class="tsd-panel tsd-index-panel">
 <details class="tsd-index-content tsd-accordion" open><summary class="tsd-accordion-summary tsd-index-summary"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><use href="../assets/icons.svg#icon-chevronDown"></use></svg>
@@ -40,21 +40,21 @@
 <div class="tsd-comment tsd-typography"><p>API key for authentication.</p>
 </div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/neo4j-labs/agent-memory/blob/27c79d41c874fc2baed9cd3a482f43a96882a0f0/typescript/src/types.ts#L320">types.ts:320</a></li></ul></aside></section>
+<li>Defined in <a href="https://github.com/neo4j-labs/agent-memory/blob/e2bcb93eb85a516ac67f0b436bd75909c6edcde4/typescript/src/types.ts#L320">types.ts:320</a></li></ul></aside></section>
 <section class="tsd-panel tsd-member">
 <h3 class="tsd-anchor-link" id="endpoint"><code class="tsd-tag">Optional</code><span>endpoint</span><a href="#endpoint" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h3>
 <div class="tsd-signature"><span class="tsd-kind-property">endpoint</span><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-type">string</span></div>
 <div class="tsd-comment tsd-typography"><p>Service base URL (bridge endpoint, or <code>https://.../v1</code> for REST).</p>
 </div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/neo4j-labs/agent-memory/blob/27c79d41c874fc2baed9cd3a482f43a96882a0f0/typescript/src/types.ts#L317">types.ts:317</a></li></ul></aside></section>
+<li>Defined in <a href="https://github.com/neo4j-labs/agent-memory/blob/e2bcb93eb85a516ac67f0b436bd75909c6edcde4/typescript/src/types.ts#L317">types.ts:317</a></li></ul></aside></section>
 <section class="tsd-panel tsd-member">
 <h3 class="tsd-anchor-link" id="headers"><code class="tsd-tag">Optional</code><span>headers</span><a href="#headers" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h3>
 <div class="tsd-signature"><span class="tsd-kind-property">headers</span><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-type">Record</span><span class="tsd-signature-symbol">&lt;</span><span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">,</span> <span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">&gt;</span></div>
 <div class="tsd-comment tsd-typography"><p>Additional headers to include in every request.</p>
 </div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/neo4j-labs/agent-memory/blob/27c79d41c874fc2baed9cd3a482f43a96882a0f0/typescript/src/types.ts#L344">types.ts:344</a></li></ul></aside></section>
+<li>Defined in <a href="https://github.com/neo4j-labs/agent-memory/blob/e2bcb93eb85a516ac67f0b436bd75909c6edcde4/typescript/src/types.ts#L344">types.ts:344</a></li></ul></aside></section>
 <section class="tsd-panel tsd-member">
 <h3 class="tsd-anchor-link" id="logger"><code class="tsd-tag">Optional</code><span>logger</span><a href="#logger" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h3>
 <div class="tsd-signature"><span class="tsd-kind-property">logger</span><span class="tsd-signature-symbol">?:</span> <a href="../types/index.Logger.html" class="tsd-signature-type tsd-kind-type-alias">Logger</a></div>
@@ -63,35 +63,35 @@ tracing requests in development. Caller controls log level by ignoring
 unwanted event kinds. See <a href="../types/index.LogEvent.html" class="tsd-kind-type-alias">LogEvent</a>.</p>
 </div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/neo4j-labs/agent-memory/blob/27c79d41c874fc2baed9cd3a482f43a96882a0f0/typescript/src/types.ts#L351">types.ts:351</a></li></ul></aside></section>
+<li>Defined in <a href="https://github.com/neo4j-labs/agent-memory/blob/e2bcb93eb85a516ac67f0b436bd75909c6edcde4/typescript/src/types.ts#L351">types.ts:351</a></li></ul></aside></section>
 <section class="tsd-panel tsd-member">
 <h3 class="tsd-anchor-link" id="namespace"><code class="tsd-tag">Optional</code><span>namespace</span><a href="#namespace" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h3>
 <div class="tsd-signature"><span class="tsd-kind-property">namespace</span><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-type">string</span></div>
-<div class="tsd-comment tsd-typography"><p>Shared entity namespace for multi-agent collaboration.</p>
+<div class="tsd-comment tsd-typography"><p>Accepted but currently unused; does not scope requests or isolate entities.</p>
 </div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/neo4j-labs/agent-memory/blob/27c79d41c874fc2baed9cd3a482f43a96882a0f0/typescript/src/types.ts#L338">types.ts:338</a></li></ul></aside></section>
+<li>Defined in <a href="https://github.com/neo4j-labs/agent-memory/blob/e2bcb93eb85a516ac67f0b436bd75909c6edcde4/typescript/src/types.ts#L338">types.ts:338</a></li></ul></aside></section>
 <section class="tsd-panel tsd-member">
 <h3 class="tsd-anchor-link" id="timeout"><code class="tsd-tag">Optional</code><span>timeout</span><a href="#timeout" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h3>
 <div class="tsd-signature"><span class="tsd-kind-property">timeout</span><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-type">number</span></div>
 <div class="tsd-comment tsd-typography"><p>Request timeout in milliseconds. Default: 30000.</p>
 </div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/neo4j-labs/agent-memory/blob/27c79d41c874fc2baed9cd3a482f43a96882a0f0/typescript/src/types.ts#L341">types.ts:341</a></li></ul></aside></section>
+<li>Defined in <a href="https://github.com/neo4j-labs/agent-memory/blob/e2bcb93eb85a516ac67f0b436bd75909c6edcde4/typescript/src/types.ts#L341">types.ts:341</a></li></ul></aside></section>
 <section class="tsd-panel tsd-member">
 <h3 class="tsd-anchor-link" id="tokenprovider"><code class="tsd-tag">Optional</code><span>token<wbr/>Provider</span><a href="#tokenprovider" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h3>
 <div class="tsd-signature"><span class="tsd-kind-property">tokenProvider</span><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-symbol">()</span> <span class="tsd-signature-symbol">=&gt;</span> <span class="tsd-signature-type">string</span> <span class="tsd-signature-symbol">|</span> <span class="tsd-signature-type">Promise</span><span class="tsd-signature-symbol">&lt;</span><span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">&gt;</span></div>
 <div class="tsd-comment tsd-typography"><p>OAuth refresh-token-aware token provider. Overrides apiKey when supplied.</p>
 </div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/neo4j-labs/agent-memory/blob/27c79d41c874fc2baed9cd3a482f43a96882a0f0/typescript/src/types.ts#L335">types.ts:335</a></li></ul></aside></section>
+<li>Defined in <a href="https://github.com/neo4j-labs/agent-memory/blob/e2bcb93eb85a516ac67f0b436bd75909c6edcde4/typescript/src/types.ts#L335">types.ts:335</a></li></ul></aside></section>
 <section class="tsd-panel tsd-member">
 <h3 class="tsd-anchor-link" id="transport"><code class="tsd-tag">Optional</code><span>transport</span><a href="#transport" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h3>
 <div class="tsd-signature"><span class="tsd-kind-property">transport</span><span class="tsd-signature-symbol">?:</span> <a href="../types/index.TransportMode.html" class="tsd-signature-type tsd-kind-type-alias">TransportMode</a></div>
 <div class="tsd-comment tsd-typography"><p>Override transport selection. Default: &quot;auto&quot; (REST if endpoint contains /v1).</p>
 </div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/neo4j-labs/agent-memory/blob/27c79d41c874fc2baed9cd3a482f43a96882a0f0/typescript/src/types.ts#L332">types.ts:332</a></li></ul></aside></section>
+<li>Defined in <a href="https://github.com/neo4j-labs/agent-memory/blob/e2bcb93eb85a516ac67f0b436bd75909c6edcde4/typescript/src/types.ts#L332">types.ts:332</a></li></ul></aside></section>
 <section class="tsd-panel tsd-member">
 <h3 class="tsd-anchor-link" id="workspaceid"><code class="tsd-tag">Optional</code><span>workspace<wbr/>Id</span><a href="#workspaceid" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h3>
 <div class="tsd-signature"><span class="tsd-kind-property">workspaceId</span><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-type">string</span></div>
@@ -102,7 +102,7 @@ key (production). Optional and harmless when unset. Falls back to the
 <code>MEMORY_WORKSPACE_ID</code> environment variable.</p>
 </div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/neo4j-labs/agent-memory/blob/27c79d41c874fc2baed9cd3a482f43a96882a0f0/typescript/src/types.ts#L329">types.ts:329</a></li></ul></aside></section></section></details></div>
+<li>Defined in <a href="https://github.com/neo4j-labs/agent-memory/blob/e2bcb93eb85a516ac67f0b436bd75909c6edcde4/typescript/src/types.ts#L329">types.ts:329</a></li></ul></aside></section></section></details></div>
 <div class="col-sidebar">
 <div class="page-menu">
 <div class="tsd-navigation settings">
@@ -121,7 +121,7 @@ key (production). Optional and harmless when unset. Falls back to the
 <div><a href="#apikey"><svg class="tsd-kind-icon" viewBox="0 0 24 24" aria-label="Property"><use href="../assets/icons.svg#icon-1024"></use></svg><span>api<wbr/>Key</span></a><a href="#endpoint"><svg class="tsd-kind-icon" viewBox="0 0 24 24" aria-label="Property"><use href="../assets/icons.svg#icon-1024"></use></svg><span>endpoint</span></a><a href="#headers"><svg class="tsd-kind-icon" viewBox="0 0 24 24" aria-label="Property"><use href="../assets/icons.svg#icon-1024"></use></svg><span>headers</span></a><a href="#logger"><svg class="tsd-kind-icon" viewBox="0 0 24 24" aria-label="Property"><use href="../assets/icons.svg#icon-1024"></use></svg><span>logger</span></a><a href="#namespace"><svg class="tsd-kind-icon" viewBox="0 0 24 24" aria-label="Property"><use href="../assets/icons.svg#icon-1024"></use></svg><span>namespace</span></a><a href="#timeout"><svg class="tsd-kind-icon" viewBox="0 0 24 24" aria-label="Property"><use href="../assets/icons.svg#icon-1024"></use></svg><span>timeout</span></a><a href="#tokenprovider"><svg class="tsd-kind-icon" viewBox="0 0 24 24" aria-label="Property"><use href="../assets/icons.svg#icon-1024"></use></svg><span>token<wbr/>Provider</span></a><a href="#transport"><svg class="tsd-kind-icon" viewBox="0 0 24 24" aria-label="Property"><use href="../assets/icons.svg#icon-1024"></use></svg><span>transport</span></a><a href="#workspaceid"><svg class="tsd-kind-icon" viewBox="0 0 24 24" aria-label="Property"><use href="../assets/icons.svg#icon-1024"></use></svg><span>workspace<wbr/>Id</span></a></div></details></div></details></div>
 <div class="site-menu">
 <nav id="tsd-sidebar-links" class="tsd-navigation"><a href="https://github.com/neo4j-labs/agent-memory" class="tsd-nav-link">GitHub</a><a href="https://neo4j.com/labs/agent-memory/sdks/typescript" class="tsd-nav-link">Docs</a><a href="https://community.neo4j.com" class="tsd-nav-link">Community</a></nav>
-<nav class="tsd-navigation"><a href="../modules.html">@neo4j-labs/agent-memory - v0.4.1</a>
+<nav class="tsd-navigation"><a href="../modules.html">@neo4j-labs/agent-memory (source; unreleased changes since 0.5.0)</a>
 <ul class="tsd-small-nested-navigation" id="tsd-nav-container">
 <li>Loading...</li></ul></nav></div></div></div><footer>
 <p class="tsd-generator">Generated using <a href="https://typedoc.org/" target="_blank">TypeDoc</a></p></footer>

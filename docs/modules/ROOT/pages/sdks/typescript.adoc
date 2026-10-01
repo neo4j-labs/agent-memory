@@ -2,20 +2,39 @@
 :description: Install, configure, and use the TypeScript SDK for Neo4j Agent Memory.
 
 The TypeScript SDK is a thin HTTP client over the
-xref:reference/rest-api.adoc[NAMS] hosted service. It runs on Node 20+,
+xref:reference/rest-api.adoc[NAMS] hosted service. It runs on Node 22+,
 Bun, Deno, Cloudflare Workers, and Vercel Edge.
+
+include::partial$labs-disclaimer.adoc[]
 
 == Install
 
 [source,bash]
 ----
-npm install @neo4j-labs/agent-memory
+npm install @neo4j-labs/agent-memory@0.5.0
 # or
-pnpm add @neo4j-labs/agent-memory
-bun add @neo4j-labs/agent-memory
+pnpm add @neo4j-labs/agent-memory@0.5.0
+bun add @neo4j-labs/agent-memory@0.5.0
 ----
 
-Requires Node.js 20+.
+Requires Node.js 22 or newer.
+
+The package declares several optional peer dependencies, each needed only
+for one integration: `@ai-sdk/provider` for the Vercel AI SDK middleware
+types, `zod` and `@modelcontextprotocol/sdk` for `mcp/register`,
+`@strands-agents/sdk` for the AWS Strands integration, and
+`@opentelemetry/api` for tracing. Install only the ones your app uses.
+
+[#source-bootstrap]
+== Source bootstrap
+
+The repository's example projects and the tutorials pin the SDK with
+`file:../..` so they always run against current source. Contributors build
+the SDK from source for the same reason — it is not a workaround for a
+missing release. For the complete source-checkout setup, follow
+xref:tutorials/hosted-quickstart-typescript.adoc[the hosted tutorial]:
+
+include::partial$typescript-tutorial-checkout.adoc[]
 
 == Quick start
 
@@ -44,7 +63,7 @@ explicitly — see xref:how-to/typescript/edge-runtime.adoc[Edge Runtime].
 
 == Framework integrations
 
-All five ship as subpath exports.
+The first five ship as subpath exports; the NAMS AI provider is a separate npm package.
 
 [cols="1,2,1", options="header"]
 |===
@@ -55,24 +74,14 @@ All five ship as subpath exports.
 | LangChain JS | `@neo4j-labs/agent-memory/integrations/langchain` | xref:how-to/typescript/langchain.adoc[LangChain JS]
 | Mastra | `@neo4j-labs/agent-memory/integrations/mastra` | xref:how-to/typescript/mastra.adoc[Mastra]
 | AWS Strands | `@neo4j-labs/agent-memory/integrations/strands` | xref:how-to/typescript/strands.adoc[Strands]
+| NAMS AI provider | `@neo4j-labs/nams-ai-provider` (separate package) | xref:how-to/typescript/nams-ai-provider.adoc[Choose a NAMS AI provider mode]
 |===
-
-== Where to go next
-
-* xref:tutorials/first-agent-memory-typescript.adoc[Tutorial: First agent memory (TypeScript)]
-* xref:tutorials/hosted-quickstart-typescript.adoc[Tutorial: Hosted quickstart]
-* xref:how-to/typescript/authenticate.adoc[How-to: authenticate]
-* xref:how-to/typescript/edge-runtime.adoc[How-to: deploy to edge runtimes]
-* xref:how-to/typescript/observability.adoc[How-to: enable observability]
-* xref:how-to/typescript/handle-errors.adoc[How-to: handle errors]
-* xref:how-to/typescript/troubleshooting.adoc[Troubleshooting]
-* xref:reference/typescript-api.adoc[Full API reference] (with the link:{attachmentsdir}/api/typescript/index.html[TypeDoc-generated method-level reference])
 
 == Source and releases
 
 * Package: link:https://www.npmjs.com/package/@neo4j-labs/agent-memory[`@neo4j-labs/agent-memory` on npm]
 * Source: link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript[`typescript/` in the agent-memory repo]
-* Release tags: `typescript-v*` (e.g. `typescript-v0.4.0`)
+* Release tags: `typescript-v*` (e.g. `typescript-v0.5.0`)
 * Changelog: link:https://github.com/neo4j-labs/agent-memory/blob/main/typescript/CHANGELOG.md[typescript/CHANGELOG.md]
 
 == Looking for the Python SDK?
@@ -83,8 +92,25 @@ can read and write the same memory.
 
 == Runnable examples
 
-link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples[`typescript/examples/`] holds nine examples. Start
+link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples[`typescript/examples/`] holds ten examples. Start
 with link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/nextjs-memory-chat[`nextjs-memory-chat/`] —
 the flagship full-stack demo: a Next.js 16 App Router assistant on hosted NAMS
 with a live entity-graph rail, an extraction-status badge and a reasoning-trace
-drawer. Every example is type-checked, tested and (where it builds) built in CI.
+drawer. See xref:how-to/typescript/nextjs-memory-chat.adoc[the task-oriented guide]
+for the four decisions behind it, or clone the example directly. The CI example matrix checks source compatibility with mocked services.
+The eve commerce demo currently has unsupported hosted preference/fact paths;
+see its README before using it as a deployment example. Offline checks do not
+prove npm artifact availability or live-service behavior.
+
+== See also
+
+anchor:_where_to_go_next[]
+
+* xref:tutorials/first-agent-memory-typescript.adoc[Tutorial: First agent memory (TypeScript)]
+* xref:tutorials/hosted-quickstart-typescript.adoc[Tutorial: Hosted quickstart]
+* xref:how-to/typescript/authenticate.adoc[Authenticate a TypeScript client]
+* xref:how-to/typescript/edge-runtime.adoc[Deploy to edge runtimes]
+* xref:how-to/typescript/observability.adoc[Enable request logging]
+* xref:how-to/typescript/handle-errors.adoc[Handle TypeScript REST errors]
+* xref:how-to/typescript/troubleshooting.adoc[Troubleshooting]
+* xref:reference/typescript-api.adoc[Full API reference] (with the link:{attachmentsdir}/api/typescript/index.html[TypeDoc-generated method-level reference])

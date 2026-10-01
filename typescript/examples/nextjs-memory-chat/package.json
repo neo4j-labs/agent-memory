@@ -21,6 +21,7 @@
     "@chakra-ui/react": "^3.37.0",
     "@emotion/react": "^11.14.0",
     "@neo4j-labs/agent-memory": "file:../..",
+    "@neo4j-labs/nams-ai-provider": "file:../../packages/vercel-ai-provider",
     "@neo4j-nvl/react": "^1.2.1",
     "ai": "^7.0",
     "next": "^16.3.4",
@@ -37,6 +38,7 @@
     "msw": "^2.14.3",
     "tsx": "^4.0.0",
     "typescript": "^5.9.3",
-    "vitest": "^5.0.0"
+    "vitest": "^5.0.0",
+    "zod": "^4.6.0"
   }
 }

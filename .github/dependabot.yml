@@ -1,314 +1,215 @@
 # Dependency automation for a polyglot repo: one Python library at the root, a
-# TypeScript SDK under `typescript/`, 5 TypeScript examples, and 8 example apps
-# with their own backends and frontends. Before this file existed, every pin in
-# the tree aged silently (see cross-cutting review finding xc-F06) — example
-# backends sat on `pydantic-ai>=0.0.39` against 2.x, and the workflows pinned
-# six unreviewed `actions/*@v4`.
+# TypeScript SDK under `typescript/`, ten TypeScript examples, and a set of
+# Python and full-stack example apps. Before this file existed every pin in the
+# tree aged silently (cross-cutting review finding xc-F06).
 #
-# Conventions used throughout:
-#   * minor + patch updates are grouped into one PR per manifest, so routine
-#     churn costs one review;
-#   * major updates are left ungrouped so each framework migration gets its own
-#     PR and its own reviewer;
-#   * example manifests are labelled `examples` so they triage separately from
-#     library dependencies.
+# The first version of this file had one entry per directory and left majors
+# ungrouped. That opened 115 PRs in its first 13 days: one upstream major
+# (`typescript` 7, `eslint` 10, `@types/node` 26) became six to nine PRs, the
+# pip entries raised the lower bound of every `>=x,<y` range on each release,
+# and the generated `requirements-docker.txt` was bumped as if it were a
+# hand-edited manifest. The layout below follows what comparable repositories
+# (vercel/ai, langchain, langgraph, pydantic-ai, the MCP SDKs, mastra) converge
+# on:
 #
-# Note on the Python ecosystem: `pip` is used for every Python manifest
-# (PEP 621 `pyproject.toml` and `requirements.txt` alike). The root and the four
-# example backends also track a `uv.lock`; switch those entries to
-# `package-ecosystem: "uv"` once the lockfile policy in xc-F14 is settled, so
-# the locks are refreshed with the manifests.
+#   * Two tiers. Shipped code (the Python library, the TypeScript SDK, the
+#     Vercel AI provider) is checked weekly. Examples, docs and Actions are
+#     checked monthly.
+#   * One entry per ecosystem and tier with `directories`, so a group spans every
+#     directory and routine churn costs one PR, not one per directory.
+#   * Majors are grouped with `group-by: dependency-name`, so a framework
+#     migration is one PR that touches every directory using that framework.
+#   * A cooldown so brand-new releases (and their quick follow-up patches)
+#     settle before a PR opens. For pip/uv only `default-days` is honoured.
+#   * `increase-if-necessary` on Python manifests: no PR while an existing
+#     `>=x,<y` range already admits the new release.
+#   * The repo's own packages are never bumped in examples; releases own those
+#     pins.
+#
+# Security updates ignore `schedule`, `cooldown` and `open-pull-requests-limit`,
+# so none of the throttling below delays a CVE fix.
+#
+# Directories must not overlap between entries of the same ecosystem. When you
+# add an example with its own manifest, add its directory here (the TypeScript
+# examples are picked up by a glob).
 version: 2
 
 updates:
-  # ---------------------------------------------------------------------------
-  # GitHub Actions
-  # ---------------------------------------------------------------------------
-  - package-ecosystem: "github-actions"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    labels: ["dependencies", "ci"]
-    groups:
-      actions-minor-patch:
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
+  # ===========================================================================
+  # Tier 1: shipped code, weekly
+  # ===========================================================================
 
-  # ---------------------------------------------------------------------------
-  # Python — library
-  # ---------------------------------------------------------------------------
-  - package-ecosystem: "pip"
+  # Python library. `uv` rather than `pip` so uv.lock moves with pyproject.toml.
+  # `increase-if-necessary` keeps the published lower bounds where they are
+  # (raising them would force every user's floor up) and only widens a range
+  # when a new release falls outside it.
+  - package-ecosystem: "uv"
     directory: "/"
     schedule:
       interval: "weekly"
       day: "monday"
+    cooldown:
+      default-days: 7
+    versioning-strategy: "increase-if-necessary"
     labels: ["dependencies", "python"]
     groups:
       python-minor-patch:
-        patterns: ["*"]
         update-types: ["minor", "patch"]
+      # Majors stay one PR per dependency: each is a compatibility decision
+      # for everyone who installs the library.
 
-  # ---------------------------------------------------------------------------
-  # Python — example backends with a pyproject.toml
-  # ---------------------------------------------------------------------------
-  - package-ecosystem: "pip"
-    directory: "/examples/full-stack-chat-agent/backend"
-    schedule:
-      interval: "weekly"
-      day: "tuesday"
-    labels: ["dependencies", "python", "examples"]
-    groups:
-      example-minor-patch:
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
-
-  - package-ecosystem: "pip"
-    directory: "/examples/lennys-memory/backend"
-    schedule:
-      interval: "weekly"
-      day: "tuesday"
-    labels: ["dependencies", "python", "examples"]
-    groups:
-      example-minor-patch:
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
-
-  - package-ecosystem: "pip"
-    directory: "/examples/financial-services-advisor/aws-financial-services-advisor/backend"
-    schedule:
-      interval: "weekly"
-      day: "tuesday"
-    labels: ["dependencies", "python", "examples"]
-    groups:
-      example-minor-patch:
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
-
-  - package-ecosystem: "pip"
-    directory: "/examples/financial-services-advisor/google-cloud-financial-advisor/backend"
-    schedule:
-      interval: "weekly"
-      day: "tuesday"
-    labels: ["dependencies", "python", "examples"]
-    groups:
-      example-minor-patch:
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
-
-  # ---------------------------------------------------------------------------
-  # Python — example backends with only a requirements.txt
-  # (`microsoft_agent_retail_assistant` has no pyproject at all; the three
-  # `nams-*` examples are single-file scripts with a one-line requirements.txt.)
-  # ---------------------------------------------------------------------------
-  - package-ecosystem: "pip"
-    directory: "/examples/microsoft_agent_retail_assistant/backend"
-    schedule:
-      interval: "weekly"
-      day: "tuesday"
-    labels: ["dependencies", "python", "examples"]
-    groups:
-      example-minor-patch:
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
-
-  - package-ecosystem: "pip"
-    directory: "/examples/nams-quickstart"
-    schedule:
-      interval: "weekly"
-      day: "tuesday"
-    labels: ["dependencies", "python", "examples", "nams"]
-    groups:
-      example-minor-patch:
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
-
-  - package-ecosystem: "pip"
-    directory: "/examples/nams-fastapi"
-    schedule:
-      interval: "weekly"
-      day: "tuesday"
-    labels: ["dependencies", "python", "examples", "nams"]
-    groups:
-      example-minor-patch:
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
-
-  - package-ecosystem: "pip"
-    directory: "/examples/nams-langchain"
-    schedule:
-      interval: "weekly"
-      day: "tuesday"
-    labels: ["dependencies", "python", "examples", "nams"]
-    groups:
-      example-minor-patch:
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
-
-  # ---------------------------------------------------------------------------
-  # npm — TypeScript SDK and its workspace package
-  # ---------------------------------------------------------------------------
+  # TypeScript SDK and the Vercel AI provider package.
   - package-ecosystem: "npm"
-    directory: "/typescript"
+    directories:
+      - "/typescript"
+      - "/typescript/packages/vercel-ai-provider"
     schedule:
       interval: "weekly"
       day: "monday"
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
     labels: ["dependencies", "typescript"]
+    ignore:
+      # Tracks the lowest supported Node release (`engines`), not npm latest.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     groups:
       npm-minor-patch:
-        patterns: ["*"]
         update-types: ["minor", "patch"]
+      npm-major:
+        update-types: ["major"]
+        group-by: dependency-name
 
-  - package-ecosystem: "npm"
-    directory: "/typescript/packages/vercel-ai-provider"
+  # ===========================================================================
+  # Tier 2: examples, docs and CI, monthly
+  # ===========================================================================
+
+  # Every action in one PR, majors included: action majors are almost always
+  # runtime bumps (node20 -> node24) with no workflow changes.
+  - package-ecosystem: "github-actions"
+    directory: "/"
     schedule:
-      interval: "weekly"
-      day: "monday"
-    labels: ["dependencies", "typescript"]
+      interval: "monthly"
+    cooldown:
+      default-days: 7
+    labels: ["dependencies", "ci"]
     groups:
-      npm-minor-patch:
+      actions:
         patterns: ["*"]
-        update-types: ["minor", "patch"]
 
-  # ---------------------------------------------------------------------------
-  # npm — TypeScript examples
-  # (`@neo4j-labs/agent-memory` itself is a `file:../..` link in these
-  # manifests, so Dependabot only tracks their framework pins.)
-  # ---------------------------------------------------------------------------
-  - package-ecosystem: "npm"
-    directory: "/typescript/examples/langchain"
+  # Example backends that have a uv.lock. Their pyproject.toml resolves
+  # neo4j-agent-memory from the checkout via [tool.uv.sources]; the ignore rule
+  # keeps Dependabot from touching that pin.
+  #
+  # The Google Cloud backend's `requirements-docker.txt` is generated from its
+  # uv.lock (`make docker-requirements`), so Dependabot updates the lock and CI
+  # (`ci-python.yml`) fails until the export is regenerated.
+  - package-ecosystem: "uv"
+    directories:
+      - "/examples/full-stack-chat-agent/backend"
+      - "/examples/lennys-memory/backend"
+      - "/examples/financial-services-advisor/aws-financial-services-advisor/backend"
+      - "/examples/financial-services-advisor/google-cloud-financial-advisor/backend"
+    exclude-paths:
+      - "requirements-docker.txt"
     schedule:
-      interval: "weekly"
-      day: "wednesday"
+      interval: "monthly"
+    cooldown:
+      default-days: 14
+    versioning-strategy: "increase-if-necessary"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "python", "examples"]
+    ignore:
+      - dependency-name: "neo4j-agent-memory"
+    groups:
+      examples-python-minor-patch:
+        update-types: ["minor", "patch"]
+      examples-python-major:
+        update-types: ["major"]
+        group-by: dependency-name
+      examples-python-security:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  # Example backends and scripts with only a requirements.txt. These pin
+  # ranges such as `python-dotenv>=1.0,<2`; with `increase-if-necessary` a PR
+  # opens only when a release falls outside the range, which in practice means
+  # a new major.
+  - package-ecosystem: "pip"
+    directories:
+      - "/examples/microsoft_agent_retail_assistant/backend"
+      - "/examples/nams-quickstart"
+      - "/examples/nams-fastapi"
+      - "/examples/nams-langchain"
+      - "/examples/ontology-extraction"
+      - "/examples/ontology-lifecycle"
+      - "/examples/claude-code-team-memory"
+    schedule:
+      interval: "monthly"
+    cooldown:
+      default-days: 14
+    versioning-strategy: "increase-if-necessary"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "python", "examples"]
+    ignore:
+      - dependency-name: "neo4j-agent-memory"
+    groups:
+      examples-pip:
+        patterns: ["*"]
+        group-by: dependency-name
+      examples-pip-security:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  # TypeScript examples, example frontends and the CDK app. The SDK and the
+  # provider are `file:` links in these manifests; the ignore rules make that
+  # explicit.
+  - package-ecosystem: "npm"
+    directories:
+      - "/typescript/examples/*"
+      - "/examples/full-stack-chat-agent/frontend"
+      - "/examples/lennys-memory/frontend"
+      - "/examples/microsoft_agent_retail_assistant/frontend"
+      - "/examples/financial-services-advisor/aws-financial-services-advisor/frontend"
+      - "/examples/financial-services-advisor/google-cloud-financial-advisor/frontend"
+      - "/examples/financial-services-advisor/aws-financial-services-advisor/infrastructure"
+    schedule:
+      interval: "monthly"
+    cooldown:
+      default-days: 14
+      semver-major-days: 30
+    open-pull-requests-limit: 5
     labels: ["dependencies", "typescript", "examples"]
+    ignore:
+      - dependency-name: "@neo4j-labs/agent-memory"
+      - dependency-name: "@neo4j-labs/nams-ai-provider"
+      # Tracks the Node release each example's `engines` field requires.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     groups:
-      example-minor-patch:
-        patterns: ["*"]
+      examples-npm-minor-patch:
         update-types: ["minor", "patch"]
-
-  - package-ecosystem: "npm"
-    directory: "/typescript/examples/mastra"
-    schedule:
-      interval: "weekly"
-      day: "wednesday"
-    labels: ["dependencies", "typescript", "examples"]
-    groups:
-      example-minor-patch:
+      examples-npm-major:
+        update-types: ["major"]
+        group-by: dependency-name
+      examples-npm-security:
+        applies-to: security-updates
         patterns: ["*"]
-        update-types: ["minor", "patch"]
 
+  # Documentation site (Antora) and the diagram exporter.
   - package-ecosystem: "npm"
-    directory: "/typescript/examples/mcp"
+    directories:
+      - "/docs"
+      - "/docs/diagrams"
     schedule:
-      interval: "weekly"
-      day: "wednesday"
-    labels: ["dependencies", "typescript", "examples"]
-    groups:
-      example-minor-patch:
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
-
-  - package-ecosystem: "npm"
-    directory: "/typescript/examples/strands"
-    schedule:
-      interval: "weekly"
-      day: "wednesday"
-    labels: ["dependencies", "typescript", "examples"]
-    groups:
-      example-minor-patch:
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
-
-  - package-ecosystem: "npm"
-    directory: "/typescript/examples/vercel-ai"
-    schedule:
-      interval: "weekly"
-      day: "wednesday"
-    labels: ["dependencies", "typescript", "examples"]
-    groups:
-      example-minor-patch:
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
-
-  # ---------------------------------------------------------------------------
-  # npm — example frontends and the CDK app
-  # ---------------------------------------------------------------------------
-  - package-ecosystem: "npm"
-    directory: "/examples/full-stack-chat-agent/frontend"
-    schedule:
-      interval: "weekly"
-      day: "thursday"
-    labels: ["dependencies", "frontend", "examples"]
-    groups:
-      example-minor-patch:
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
-
-  - package-ecosystem: "npm"
-    directory: "/examples/lennys-memory/frontend"
-    schedule:
-      interval: "weekly"
-      day: "thursday"
-    labels: ["dependencies", "frontend", "examples"]
-    groups:
-      example-minor-patch:
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
-
-  - package-ecosystem: "npm"
-    directory: "/examples/microsoft_agent_retail_assistant/frontend"
-    schedule:
-      interval: "weekly"
-      day: "thursday"
-    labels: ["dependencies", "frontend", "examples"]
-    groups:
-      example-minor-patch:
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
-
-  - package-ecosystem: "npm"
-    directory: "/examples/financial-services-advisor/aws-financial-services-advisor/frontend"
-    schedule:
-      interval: "weekly"
-      day: "thursday"
-    labels: ["dependencies", "frontend", "examples"]
-    groups:
-      example-minor-patch:
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
-
-  - package-ecosystem: "npm"
-    directory: "/examples/financial-services-advisor/google-cloud-financial-advisor/frontend"
-    schedule:
-      interval: "weekly"
-      day: "thursday"
-    labels: ["dependencies", "frontend", "examples"]
-    groups:
-      example-minor-patch:
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
-
-  - package-ecosystem: "npm"
-    directory: "/examples/financial-services-advisor/aws-financial-services-advisor/infrastructure"
-    schedule:
-      interval: "weekly"
-      day: "thursday"
-    labels: ["dependencies", "examples", "infrastructure"]
-    groups:
-      example-minor-patch:
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
-
-  # ---------------------------------------------------------------------------
-  # npm — documentation site (Antora)
-  # ---------------------------------------------------------------------------
-  - package-ecosystem: "npm"
-    directory: "/docs"
-    schedule:
-      interval: "weekly"
-      day: "friday"
+      interval: "monthly"
+    cooldown:
+      default-days: 14
     labels: ["dependencies", "documentation"]
     groups:
       docs-minor-patch:
-        patterns: ["*"]
         update-types: ["minor", "patch"]
+      docs-major:
+        update-types: ["major"]
+        group-by: dependency-name

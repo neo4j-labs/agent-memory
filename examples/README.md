@@ -10,6 +10,8 @@ Runnable examples for [`neo4j-agent-memory`](https://github.com/neo4j-labs/agent
 >
 > These examples are part of [`neo4j-agent-memory`](https://github.com/neo4j-labs/agent-memory), a Neo4j Labs project. They are actively maintained but not officially supported. APIs may change. Community support is available via the [Neo4j Community Forum](https://community.neo4j.com).
 
+For examples using the Python `bolt` backend, first follow [the shared Aura setup and cleanup guide](AURA_SETUP.md). Keep its Aura credentials exported while running the example and update any private `.env` connection settings the example loads. Hosted NAMS examples use their own workspace setup.
+
 ## How to choose an example
 
 | If you want to… | Start here |
@@ -24,7 +26,7 @@ Runnable examples for [`neo4j-agent-memory`](https://github.com/neo4j-labs/agent
 | Stop blocking the user-visible response on Neo4j writes | [`buffered-writes/`](#buffered-writes) |
 | Wire 1-hop "what touched this entity?" audit queries | [`audit-trail/`](#audit-trail) |
 | Gate CI on memory quality like any other regression metric | [`eval-harness/`](#eval-harness) |
-| Run with no LLM at all (air-gapped, offline, deterministic) | [`no_llm/`](#run-without-an-llm) |
+| Run local models without an LLM API (Aura requires network access) | [`no_llm/`](#run-without-an-llm) |
 | Tune entity extraction for a specific domain | [`domain-schemas/`](#domain-schemas) |
 | Type your own domain, get typed relations and merged aliases out of extraction | [`ontology-extraction/`](#ontology-driven-extraction) |
 | Resolve duplicate entities | [`entity_resolution.py`](#entity-resolution) |
@@ -49,7 +51,7 @@ Run against the hosted [NAMS](https://memory.neo4jlabs.com) service — no Neo4j
 | [`nams-fastapi/`](nams-fastapi/) | NAMS-backed memory inside a FastAPI service: one lifespan-managed client, per-user scoping from the authenticated request, the library's error taxonomy mapped onto HTTP status codes, a `/chat` route that reads assembled context before answering, and a `/search` route. |
 | [`nams-langchain/`](nams-langchain/) | The same `create_agent` + middleware agent as [`langchain_agent.py`](#langchain), against hosted NAMS — server-side extraction and embeddings, no Neo4j to run. |
 | [`ontology-lifecycle/`](ontology-lifecycle/) | The full NAMS ontology lifecycle: import an Arrows diagram into a typed schema, activate it, ingest under it, then rename a type and migrate the already-extracted entities — `import_`, `diff`, `migrate` + `get_migration` polling, with a `query.cypher` read-back. Hosted-only; the bolt twin is [`existing-graph/`](#existing-graph). |
-| [`claude-code-team-memory/`](claude-code-team-memory/) | Shared memory for Claude Code, Claude Desktop and Cursor with **no agent code** — ready-to-copy `.mcp.json` / `claude_desktop_config.json` / `.cursor/mcp.json` files wiring the hosted NAMS MCP server (47 scope-gated tools, OAuth) and the self-hosted `mcp serve` (6 or 16 tools) side by side, plus `provision_keys.py` (one rotatable `client.auth` key per developer), `seed_workspace.py` (`bulk_add_messages` → await extraction → read back) and `doctor.py` (key, config validity, tool surface, reachability, extraction status). |
+| [`claude-code-team-memory/`](claude-code-team-memory/) | Shared memory for Claude Code, Claude Desktop and Cursor with **no agent code** — ready-to-copy `.mcp.json` / `claude_desktop_config.json` / `.cursor/mcp.json` files wiring the hosted NAMS MCP server (scope-dependent tools, OAuth) and the self-hosted `mcp serve` (6 or 16 tools) side by side, plus `provision_keys.py` (one rotatable `client.auth` key per developer), `seed_workspace.py` (`bulk_add_messages` → await extraction → read back) and `doctor.py` (key, config validity, tool surface, reachability, extraction status). |
 
 ```bash
 cp examples/.env.example examples/.env   # then set MEMORY_API_KEY=nams_...
@@ -156,7 +158,7 @@ These four examples cover the v0.2 feature drop. Each is self-contained, runs wi
 
 ### Full-stack chat agent
 
-[`full-stack-chat-agent/`](full-stack-chat-agent/) — FastAPI + PydanticAI 2.x + Next.js over two Neo4j graphs (memory plus a seeded local news graph); SSE with live tool events, reasoning traces with `:TOUCHED` audit edges, entity extraction switched by `EXTRACTION_MODE`. Bolt only (it uses `client.get_graph()`). Great middle-weight example; the frontend has its own README, lint/typecheck/test scripts and a Node 22 floor.
+[`full-stack-chat-agent/`](full-stack-chat-agent/) — FastAPI + PydanticAI 2.x + Next.js over two Neo4j graphs (memory plus a seeded news graph in Aura); SSE with live tool events, reasoning traces with `:TOUCHED` audit edges, entity extraction switched by `EXTRACTION_MODE`. Bolt only (it uses `client.get_graph()`). Great middle-weight example; the frontend has its own README, lint/typecheck/test scripts and a Node 22 floor.
 
 ### Lenny's Podcast Memory Explorer
 
@@ -209,7 +211,7 @@ Equivalent `make` targets: `make test-examples-quick` and `make test-examples`. 
 
 1. Add a directory under `examples/` (or a single `.py` for a script).
 2. Pin the library as `neo4j-agent-memory[...]>=0.5.0,<0.7` in `requirements.txt` or `pyproject.toml`, and read every model id from an environment variable with a current default.
-3. Include a README following the [Neo4j Labs guidelines](https://github.com/neo4j-labs) — Labs badge, status badge, community support badge, disclaimer, prerequisites, run steps, expected output, support section, and a "verified against" footer naming the library version, the framework versions you tested, and the date.
+3. Include a README following the [Neo4j Labs guidelines](https://github.com/neo4j-labs) — Labs badge, status badge, community support badge, disclaimer, prerequisites, run steps, expected output, support section, and a "Verified against …" footer naming the library version, the framework versions you tested, the checks you ran, and the date. Say which checks used mocks and which ran against a live service.
 4. Add a smoke test under `tests/examples/`. Mirror an existing one such as [`tests/examples/test_buffered_writes_example.py`](../tests/examples/test_buffered_writes_example.py) for the structure, and mark the classes that need a database with `@pytest.mark.requires_neo4j`.
 5. Register the test in `.github/workflows/ci-python.yml` under `example-tests-quick` if it needs no Neo4j (`example-tests` picks up the whole directory automatically).
 6. Add a row to the index above — `tests/examples/test_examples_registry.py` enforces it.
@@ -234,4 +236,6 @@ Apache 2.0 — see the main `neo4j-agent-memory` repository for details.
 
 ---
 
-_Verified against `neo4j-agent-memory` 0.6.0-dev (in-tree; NAMS hosted-backend support shipped in v0.4.0, workspace addressing and the ontology surface in v0.5.0) and [`@neo4j-labs/agent-memory`](https://www.npmjs.com/package/@neo4j-labs/agent-memory) 0.4.1 on npm, on 2026-09-10. Examples pinning unreleased surface say so in their own footers._
+**Historical verification report — 2026-09-10.** The following records a prior checkout/test report. Its development-version labels, passing counts, and release-availability statements are historical, not evidence of current package compatibility.
+
+> _Verified against `neo4j-agent-memory` 0.6.0-dev (in-tree; NAMS hosted-backend support shipped in v0.4.0, workspace addressing and the ontology surface in v0.5.0) and [`@neo4j-labs/agent-memory`](https://www.npmjs.com/package/@neo4j-labs/agent-memory) 0.4.1 on npm, on 2026-09-10. Examples pinning unreleased surface say so in their own footers._

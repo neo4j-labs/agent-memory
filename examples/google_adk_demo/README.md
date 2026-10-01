@@ -62,18 +62,12 @@ from a *fresh* ADK session that has no conversation history of its own.
 ## Prerequisites
 
 - Python 3.10+
-- Neo4j 5.x (local Docker, Aura, or self-hosted) **or** a hosted NAMS API key
+- A dedicated empty AuraDB instance **or** a hosted NAMS API key
 - `google-adk` 2.x — tested against 2.7.0 with `google-genai` 2.22.0
 - Optional: a Gemini API key. Without one the demo drives the same `Runner`
   with a scripted stand-in model, so every step still executes.
 
-```bash
-# Docker Neo4j matching CI
-docker run -d --name neo4j -p 7474:7474 -p 7687:7687 \
-  -e NEO4J_AUTH=neo4j/test-password \
-  -e NEO4J_PLUGINS='["apoc"]' \
-  neo4j:5.26-community
-```
+For the Aura path, follow [Aura setup and cleanup](../AURA_SETUP.md) and export `NEO4J_URI`, `NEO4J_USERNAME`, and `NEO4J_PASSWORD` before running the demo.
 
 ## Setup
 
@@ -87,7 +81,8 @@ export OPENAI_API_KEY=sk-...
 pip install "neo4j-agent-memory[extraction,sentence-transformers]"
 python -m spacy download en_core_web_sm
 
-cp .env.example .env   # the demo loads it via python-dotenv if installed
+cp .env.example .env
+# Set Aura NEO4J_URI/NEO4J_USERNAME/NEO4J_PASSWORD and the selected provider settings.
 ```
 
 Developing against the package source instead of a release:
@@ -161,7 +156,12 @@ from neo4j_agent_memory.integrations.google_adk import Neo4jMemoryService
 APP, USER, SID = "my-app", "user-123", "session-1"
 
 settings = MemorySettings(
-    neo4j=Neo4jConfig(uri="bolt://localhost:7687", username="neo4j", password="password")
+    backend="bolt",
+    neo4j=Neo4jConfig(
+        uri=os.environ["NEO4J_URI"],
+        username=os.environ["NEO4J_USERNAME"],
+        password=os.environ["NEO4J_PASSWORD"],
+    )
 )
 
 async with MemoryClient(settings) as client:
@@ -253,4 +253,6 @@ The demo resolves its backend from the environment and prints it:
 
 ---
 
-_Verified against `neo4j-agent-memory` 0.6.0-dev with google-adk 2.7.0 / google-genai 2.22.0 on 2026-09-10 — `python demo.py` and `python demo.py --no-agent` run end to end against Neo4j 5.26 with no API keys (scripted model, local embedder). The live-Gemini path was not exercised in this pass._
+**Historical verification report — 2026-09-10.** The following records a prior checkout/test report. Its development-version labels, passing counts, and release-availability statements are historical, not evidence of current package compatibility.
+
+> _Verified against `neo4j-agent-memory` 0.6.0-dev with google-adk 2.7.0 / google-genai 2.22.0 on 2026-09-10 — `python demo.py` and `python demo.py --no-agent` run end to end against Neo4j 5.26 with no API keys (scripted model, local embedder). The live-Gemini path was not exercised in this pass._

@@ -34,7 +34,7 @@ When to reach for it: agent turns where the user-visible latency budget cannot a
 
 ## Prerequisites
 
-- Neo4j 5.26 LTS or 2025.x+ running at `bolt://localhost:7687` (or set `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`).
+- A dedicated empty AuraDB instance with its connection variables exported; follow [Aura setup and cleanup](../AURA_SETUP.md).
 - `neo4j-agent-memory` installed with the `sentence-transformers` extra (`uv sync --extra sentence-transformers`) — the demo uses a local embedder and no LLM, so no API key is needed.
 - **Bolt only.** `client.buffered` raises `NotSupportedError` on the hosted NAMS backend, which commits writes server-side; `client.write_errors` is always empty there. See [Bolt vs NAMS](https://neo4j.com/labs/agent-memory/explanation/backends).
 
@@ -93,4 +93,6 @@ Reading the numbers:
 
 ---
 
-_Verified against `neo4j-agent-memory` v0.5.0 and Neo4j 5.26 (Docker) on 2026-09-10. The buffered-write API shipped in v0.2.0._
+**Historical verification report — 2026-09-10.** The following records a prior checkout/test report. Its development-version labels, passing counts, and release-availability statements are historical, not evidence of current package compatibility.
+
+> _Verified against `neo4j-agent-memory` v0.5.0 and Neo4j 5.26 (Docker) on 2026-09-10. The buffered-write API shipped in v0.2.0._

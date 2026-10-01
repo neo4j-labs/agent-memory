@@ -398,8 +398,8 @@ export class LongTermMemory {
    *   extraction landed.
    * - otherwise — succeed once at least `minResults` entities match.
    *
-   * Returns `true` if satisfied within `timeoutMs`, `false` otherwise (it does
-   * not throw, so callers can branch or skip gracefully).
+   * Returns `true` if satisfied within `timeoutMs`, `false` on timeout.
+   * Validation and transport errors propagate to the caller.
    */
   async waitForExtraction(options: WaitForExtractionOptions): Promise<boolean> {
     const {

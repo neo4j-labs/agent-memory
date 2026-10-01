@@ -1,0 +1,82 @@
+{
+  "checks": [
+    {
+      "name": "aws-bedrock-embeddings.adoc",
+      "oldSections": 21,
+      "missing": [],
+      "duplicate": [],
+      "bad": []
+    },
+    {
+      "name": "aws-hybrid-memory.adoc",
+      "oldSections": 27,
+      "missing": [],
+      "duplicate": [],
+      "bad": []
+    },
+    {
+      "name": "aws-strands.adoc",
+      "oldSections": 34,
+      "missing": [],
+      "duplicate": [],
+      "bad": []
+    },
+    {
+      "name": "crewai.adoc",
+      "oldSections": 16,
+      "missing": [],
+      "duplicate": [],
+      "bad": []
+    },
+    {
+      "name": "google-adk.adoc",
+      "oldSections": 8,
+      "missing": [],
+      "duplicate": [],
+      "bad": []
+    },
+    {
+      "name": "google-cloud.adoc",
+      "oldSections": 38,
+      "missing": [],
+      "duplicate": [],
+      "bad": []
+    },
+    {
+      "name": "langchain.adoc",
+      "oldSections": 18,
+      "missing": [],
+      "duplicate": [],
+      "bad": []
+    },
+    {
+      "name": "llamaindex.adoc",
+      "oldSections": 16,
+      "missing": [],
+      "duplicate": [],
+      "bad": []
+    },
+    {
+      "name": "microsoft-agent.adoc",
+      "oldSections": 33,
+      "missing": [],
+      "duplicate": [],
+      "bad": []
+    },
+    {
+      "name": "openai-agents.adoc",
+      "oldSections": 29,
+      "missing": [],
+      "duplicate": [],
+      "bad": []
+    },
+    {
+      "name": "pydantic-ai.adoc",
+      "oldSections": 18,
+      "missing": [],
+      "duplicate": [],
+      "bad": []
+    }
+  ],
+  "messages": []
+}

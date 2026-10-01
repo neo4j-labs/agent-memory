@@ -2,6 +2,11 @@ site:
   title: Neo4j Agent Memory
   start_page: agent-memory::index.adoc
 
+antora:
+  extensions:
+    - require: ./extensions/example-files.js
+    - require: ./extensions/tutorial-ui.js
+
 content:
   sources:
     - url: ..
@@ -9,6 +14,7 @@ content:
       start_path: docs
 
 ui:
+  supplemental_files: ./ui
   bundle:
     url: https://static-content.neo4j.com/build/ui-bundle-latest.zip
     snapshot: true

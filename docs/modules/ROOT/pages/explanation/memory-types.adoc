@@ -1,4 +1,4 @@
-= Understanding the Three Memory Types
+= Understanding the three memory types
 :page-product: agent-memory
 :page-pagination:
 :toclevels: 2
@@ -9,254 +9,73 @@
 :page-ad-underline-role: button
 :page-ad-underline: Enroll now
 
-Why agent memory is divided into short-term, long-term, and reasoning layers, and how they work together.
+The three memory layers organize different records: conversations, reusable knowledge, and recorded task execution. The names describe their roles, not automatic expiry or model learning.
 
-NOTE: The three-layer model is identical on both backends. See xref:explanation/backends.adoc[Bolt vs NAMS] for what differs operationally.
+NOTE: Both backends use these concepts, but supported operations and scopes differ. See xref:reference/backend-capabilities.adoc[Backend capabilities].
 
-== The Problem with Stateless Agents
+[[_the_problem_with_stateless_agents]]
+== The problem with stateless agents
 
-Most AI agents today are stateless. Each conversation starts fresh. The agent doesn't remember:
+A model call uses the context supplied for that call. Without retained records and a retrieval path, a later call cannot use an earlier conversation, a stated preference, or a recorded tool result.
 
-* What you discussed yesterday
-* Your preferences and interests
-* How it solved similar problems before
-* Facts it learned about your domain
+Persistence solves only part of the problem. An application must also decide which records to retrieve and how to use them. Storing information does not by itself retrain the model or insert that information into future prompts.
 
-This leads to repetitive interactions, missed context, and agents that never truly learn from experience.
+[[_a_three_layer_solution]]
+== Three complementary memory layers
 
-== A Three-Layer Solution
+anchor:_short_term_memory_what_happened[]anchor:_long_term_memory_what_the_agent_knows[]anchor:_reasoning_memory_how_to_solve_problems[]
 
-neo4j-agent-memory addresses this with three distinct memory layers, each serving a different purpose:
+.MemoryClient with three memory layers backed by Neo4j
+image::diagrams/memory-architecture.svg["Memory architecture: MemoryClient with three memory layers backed by Neo4j",width=100%,align=left,link=self]
 
-image::diagrams/the-three-layer-memory-architecture.png[Three-layer memory architecture: short-term, long-term, and reasoning memory backed by Neo4j,width=600,align=left]
+* *Short-term memory* stores conversations and messages, preserving sequence and enabling supported retrieval of past exchanges. "Short-term" does not mean in-process or automatically deleted: these records are persisted.
+* *Long-term memory* represents reusable declarative knowledge, including entities and, on supported backend surfaces, preferences and facts. Relationships connect that knowledge to other records.
+* *Reasoning memory* stores the task steps, tool calls, observations, and outcomes that an application or integration records. It is an execution record, not access to a model's private internal reasoning.
 
-image::diagrams/three-memory-types-diagram.png[Detailed breakdown of all three memory types: short-term (Conversation/Message chain), long-term (POLE+O entities, Preference, Fact), and reasoning (Trace, Step, ToolCall) with their key capabilities,width=600,align=left]
+These are product terms. Human-memory analogies are approximate: both a conversation and a task trace can describe an episode; the current prompt is closer to working memory than any one persisted layer.
 
-=== Short-Term Memory: What Happened
+NOTE: "Observation" above is a reasoning step's recorded observation, often derived from a tool result. NAMS also uses "observation" and "reflection" in an unrelated sense, for the compressed tiers of a conversation's short-term context, which both SDKs can read on the hosted backend. See xref:explanation/context-tiers.adoc[Understanding the three-tier context model] and the xref:glossary.adoc[glossary] for each sense.
 
-Short-term memory stores *experiences* - the conversations, messages, and interactions your agent has with users.
+[[_why_three_layers]]
+== Why separate the layers?
 
-[cols="1,2"]
-|===
-| Characteristic | Description
+anchor:_different_lifetimes[]anchor:_different_access_patterns[]anchor:_different_schemas[]
 
-| *Temporal*
-| Messages are ordered in time, forming conversation threads
+The layers have different retrieval patterns. Conversation history answers what was said and in what order. Entity retrieval answers what is known about a topic and how it relates to other topics. Trace retrieval answers what recorded actions led to an outcome.
 
-| *Ephemeral-ish*
-| Recent messages matter most; older ones may be summarized or archived
+Their structures also differ: messages form a sequence, entities form a connected knowledge graph, and traces contain steps and tool calls. An application's retention and summarization policies may differ by record type. Persistence duration is a policy choice, not a fixed lifetime implied by the layer name.
 
-| *Searchable*
-| Semantic search finds relevant past exchanges
+[[_how_they_connect]]
+== How the layers connect
 
-| *Scoped*
-| Organized by session/user for context isolation
-|===
+anchor:_messages_entities[]anchor:_traces_messages[]anchor:_unified_context[]
 
-Think of it as the agent's "working memory" - what's been happening in the current and recent conversations.
+On Bolt (see xref:explanation/backends.adoc[Bolt and NAMS]), `:MENTIONS` connects a message to an extracted entity, and a trace can link to its triggering message through `:INITIATED_BY`. These links retain the context in which knowledge or an action arose. An application must actually record or extract these relationships; the presence of the three layers does not populate them automatically.
 
-=== Long-Term Memory: What the Agent Knows
+Context assembly can combine relevant material from the supported layers for an LLM prompt. Its output and available filters are part of the client/backend contract. See xref:reference/api/memory-client.adoc[MemoryClient] and xref:reference/backend-capabilities.adoc[Backend capabilities].
 
-Long-term memory stores *declarative knowledge* - entities, facts, and preferences that persist across sessions.
+[[_the_graph_advantage]]
+== Why connections help retrieval
 
-[cols="1,2"]
-|===
-| Characteristic | Description
+anchor:_relationship_traversal[]anchor:_temporal_queries[]anchor:_combined_search[]
 
-| *Structured*
-| Entities have types (POLE+O), relationships, and attributes
+A graph can connect an entity to the conversation that mentioned it and the task outcome that followed. This allows questions that combine content, relationships, and time, rather than considering each record independently.
 
-| *Persistent*
-| Knowledge accumulates over time and across users
+Vector similarity can supply candidates while graph relationships and properties provide additional context. Those techniques answer different questions: similar text does not necessarily identify the same entity, and a nearby node is not automatically relevant to the current task. xref:explanation/graph-architecture.adoc[Graph memory architecture] explains the tradeoffs.
 
-| *Connected*
-| Entities relate to each other in a graph
+[[_best_practices]]
+== From stored memory to useful context
 
-| *Enrichable*
-| Entities can be enhanced with external data (Wikipedia, etc.)
-|===
+anchor:_use_short_term_for_conversation_context[]anchor:_use_long_term_for_domain_knowledge[]anchor:_use_reasoning_for_similar_problems[]anchor:_connect_across_types[]
 
-This is the agent's "semantic memory" - the facts and concepts it has learned.
+The application chooses the actor responsible for each operation. It may load recent messages before a model call, retrieve entities for a domain question, or look up recorded outcomes from similar tasks. Middleware and agent tools can help, but their behavior must be explicitly connected to the application lifecycle.
 
-=== Reasoning Memory: How to Solve Problems
+Separate task patterns are documented in xref:how-to/messages.adoc[Store and search messages], xref:how-to/entities.adoc[Work with entities], and xref:how-to/reasoning-traces.adoc[Record reasoning traces]. Use the scope supported by the selected backend; a conversation identifier alone is not an authorization boundary.
 
-Reasoning memory stores *procedural knowledge* - traces of how the agent reasoned through problems and which tools it used.
+[[_see_also]]
+== See also
 
-[cols="1,2"]
-|===
-| Characteristic | Description
-
-| *Trace-based*
-| Records sequences of thoughts, actions, and observations
-
-| *Tool-aware*
-| Tracks which tools were called, with what arguments, and what results
-
-| *Outcome-linked*
-| Associates reasoning paths with success/failure
-
-| *Searchable*
-| Find similar past reasoning for new problems
-|===
-
-This is the agent's "episodic memory" for problem-solving - remembering *how* it did things, not just *what* it knows.
-
-== Why Three Layers?
-
-=== Different Lifetimes
-
-Each memory type has a different lifecycle:
-
-* *Short-term*: Active during conversation, may be summarized after
-* *Long-term*: Persists indefinitely, grows over time
-* *Reasoning*: Archival - useful for analysis and pattern learning
-
-=== Different Access Patterns
-
-Each type is queried differently:
-
-* *Short-term*: "What did we just discuss?" → Recent messages in sequence
-* *Long-term*: "What do I know about X?" → Graph traversal and semantic search
-* *Reasoning*: "How did I solve similar problems?" → Trace similarity search
-
-=== Different Schemas
-
-Each type has different structure:
-
-* *Short-term*: Linear sequences of messages
-* *Long-term*: Graph of typed entities with relationships
-* *Reasoning*: Trees of traces → steps → tool calls
-
-== How They Connect
-
-The three memory types aren't isolated - they're connected in the same graph:
-
-.Graph Schema
-[listing]
-....
-(Conversation)-[:HAS_MESSAGE]->(Message)
-(Message)-[:NEXT_MESSAGE]->(Message)
-(Message)-[:MENTIONS]->(Entity)
-(Entity)-[:WORKS_AT]->(Entity)
-(Entity)-[:LOCATED_IN]->(Entity)
-(ReasoningTrace)-[:INITIATED_BY]->(Message)
-(ToolCall)-[:TRIGGERED_BY]->(Message)
-....
-
-=== Messages → Entities
-
-When you store a message, entity extraction can automatically identify and link entities mentioned in the text. This populates long-term memory from short-term interactions.
-
-=== Traces → Messages
-
-Reasoning traces can link back to the message that triggered them. This connects "what the user asked" to "how the agent reasoned about it."
-
-=== Unified Context
-
-The `get_context()` method combines all three memory types into a single context for LLM prompts:
-
-[source,python]
-----
-context = await client.get_context("restaurant recommendation", session_id="user-123")
-# Returns:
-# - Recent relevant messages (short-term)
-# - Related entities and preferences (long-term)
-# - Similar past reasoning traces (reasoning)
-----
-
-== The Graph Advantage
-
-All three memory types live in Neo4j, which provides unique capabilities:
-
-=== Relationship Traversal
-
-Find how entities connect across memory types:
-
-[source,cypher]
-----
-// Find entities mentioned in messages that triggered successful reasoning
-MATCH (m:Message)-[:MENTIONS]->(e:Entity)
-MATCH (t:ReasoningTrace)-[:INITIATED_BY]->(m)
-WHERE t.success = true
-RETURN e.name, count(*) as mentions
-ORDER BY mentions DESC
-----
-
-=== Temporal Queries
-
-Track how knowledge evolves:
-
-[source,cypher]
-----
-// Find when an entity was first mentioned
-MATCH (m:Message)-[:MENTIONS]->(e:Entity {name: "OpenAI"})
-RETURN min(m.created_at) as first_mention
-----
-
-=== Combined Search
-
-Neo4j combines vector similarity, graph traversal, and property filters:
-
-[source,cypher]
-----
-// Semantic search + graph filter + property filter
-CALL db.index.vector.queryNodes('message_embedding', 10, $embedding)
-YIELD node as m, score
-MATCH (m)-[:MENTIONS]->(e:Entity {type: "PERSON"})
-WHERE m.created_at > datetime() - duration('P7D')
-RETURN m.content, e.name, score
-----
-
-== Best Practices
-
-=== Use Short-Term for Conversation Context
-
-Include recent messages in your LLM prompts for continuity:
-
-[source,python]
-----
-recent = await client.short_term.get_messages(session_id, limit=10)
-context = "\n".join([f"{m.role}: {m.content}" for m in recent])
-----
-
-=== Use Long-Term for Domain Knowledge
-
-Query entities when the user asks about specific topics:
-
-[source,python]
-----
-entities = await client.long_term.search_entities("machine learning")
-# Add entity descriptions to prompt context
-----
-
-=== Use Reasoning for Similar Problems
-
-When facing a new task, find how similar tasks were solved:
-
-[source,python]
-----
-similar = await client.reasoning.search_traces("summarize document")
-# Use successful trace outcomes as examples
-----
-
-=== Connect Across Types
-
-Link reasoning traces to triggering messages for full traceability:
-
-[source,python]
-----
-trace = await client.reasoning.start_trace(
-    session_id,
-    task="Answer user question",
-    triggered_by_message_id=user_message.id,
-)
-----
-
-== See Also
-
-* xref:how-to/messages.adoc[Store and Search Messages] - Short-term memory operations
-* xref:how-to/entities.adoc[Work with Entities] - Long-term memory operations
-* xref:how-to/reasoning-traces.adoc[Record Reasoning Traces] - Reasoning memory operations
-* xref:reference/api/memory-client.adoc[MemoryClient API] - Full API reference
-* xref:explanation/multi-agent-sharing.adoc[Cross-Agent Memory Sharing] - How multiple agents share one memory graph
-* link:https://github.com/neo4j-labs/agent-memory-tck/blob/main/docs/explanation/memory-model.adoc[Memory model in the TCK spec] - The cross-language spec author's framing
+* xref:glossary.adoc[Terminology and memory analogies]
+* xref:explanation/multi-agent-sharing.adoc[Cross-agent sharing]
+* xref:explanation/poleo-model.adoc[POLE+O classification]
+* xref:reference/api/memory-client.adoc[MemoryClient API]

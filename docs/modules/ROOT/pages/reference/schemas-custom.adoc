@@ -1,0 +1,245 @@
+= Custom schemas and persistence
+:page-product: agent-memory
+:page-pagination:
+:toclevels: 2
+
+Custom `DomainSchema` and `OntologyDocument` examples, the Bolt-only schema persistence overview, the label-to-POLE+O entity type mapping, and the schema models, from xref:reference/schemas.adoc[Domain schemas reference].
+
+== Custom DomainSchema example
+
+A `DomainSchema` maps GLiNER2.5 label names to the descriptions the model reads as annotation guidelines. Pass it to `GLiNER2Extractor` as `ontology`; the extractor converts it with `to_ontology()`. The step-by-step procedure is in xref:how-to/entity-extraction-schemas.adoc[Apply a custom entity extraction schema].
+
+[source,python]
+----
+from neo4j_agent_memory.extraction import DomainSchema, GLiNER2Extractor
+
+real_estate_schema = DomainSchema(
+    name="real_estate",
+    entity_types={
+        "property": "A real estate property, building, or land parcel",
+        "agent": "A real estate agent or broker",
+        "buyer": "A property buyer or purchaser",
+        "seller": "A property seller or owner",
+        "price": "A property price, valuation, or asking price",
+        "location": "A neighborhood, city, or street address",
+    },
+)
+
+extractor = GLiNER2Extractor(ontology=real_estate_schema, threshold=0.5)
+----
+
+The converted catalog declares no relationships, so this extractor decodes entities only. Each label is typed through the <<_entity_type_mapping,entity type mapping>>: `location` becomes `LOCATION`, while `agent`, `buyer` and `seller` are not in the default table and land on `OBJECT` with the label as subtype.
+
+anchor:_schema_description_guidance[]
+anchor:_schema_best_practices[]
+
+See xref:how-to/entity-extraction-schemas.adoc#_write_effective_schema_descriptions[writing effective schema descriptions] for guidance on wording `DomainSchema` entity-type descriptions.
+
+== Custom ontology example
+
+To choose each label's POLE+O type and subtype and to declare typed relationships, build an `OntologyDocument` and pass it to `GLiNER2Extractor.for_ontology` or `ExtractorBuilder.with_ontology`. The document fields are listed in xref:reference/ontology-api.adoc[Ontology API reference].
+
+[source,python]
+----
+from neo4j_agent_memory.extraction import GLiNER2Extractor
+from neo4j_agent_memory.ontology import DomainInfo, EntityTypeDef, OntologyDocument, RelationshipDef
+
+real_estate = OntologyDocument(
+    domain=DomainInfo(id="real_estate", name="real_estate"),
+    entity_types=[
+        EntityTypeDef(
+            label="agent",
+            pole_type="PERSON",
+            subtype="AGENT",
+            description="A real estate agent or broker",
+        ),
+        EntityTypeDef(
+            label="property",
+            pole_type="OBJECT",
+            subtype="PROPERTY",
+            description="A real estate property, building, or land parcel",
+        ),
+    ],
+    relationships=[
+        RelationshipDef(
+            type="LISTS",
+            source="agent",
+            target="property",
+            description="An agent lists a property for sale or rent",
+        ),
+    ],
+)
+print(real_estate.validate_structure())  # [] when the document is sound
+extractor = GLiNER2Extractor.for_ontology(real_estate)
+----
+
+`validate_structure()` returns the document's structural problems as a list; an empty list means the document can be compiled.
+
+== Schema persistence
+
+Bolt only. Store EntitySchemaConfig documents in Neo4j using `neo4j_agent_memory.schema.SchemaManager`. This is a different class from the graph index/constraint manager at `client.schema`. Saving a schema does not automatically activate it on a MemoryClient or make it a named DomainSchema: load it and pass it explicitly to a supported builder/validator, for example `ExtractorBuilder().with_schema(schema)`.
+
+`SchemaManager` and the `(:Schema)` nodes it writes are separate from the ontology store, and a bolt `MemoryClient` never reads them. The ontology it extracts against comes from, in order: the `MemoryClient(ontology=...)` argument, `SchemaConfig.ontology_path` or `custom_schema_path`, the version activated in `client.ontology` (`BoltOntology`, backed by `(:Ontology)` and `(:OntologyVersion)` nodes), `SchemaModel.CUSTOM` with `entity_types`, and finally the `ontology_template` (POLE+O by default). To make a stored schema drive extraction, convert it with `EntitySchemaConfig.to_ontology()` and create and activate it through `client.ontology`; activation takes effect on the next connect. See xref:reference/ontology-api.adoc[Ontology API reference].
+
+[source,python]
+----
+import asyncio
+import os
+
+from neo4j_agent_memory import Neo4jClient, Neo4jConfig
+from neo4j_agent_memory.schema import EntitySchemaConfig, EntityTypeConfig, SchemaManager
+
+config = EntitySchemaConfig(
+    name="real_estate",
+    version="1.0",
+    description="Real estate domain schema",
+    entity_types=[
+        EntityTypeConfig(name="PROPERTY", description="A real estate property"),
+        EntityTypeConfig(name="AGENT", description="A real estate agent"),
+    ],
+)
+
+
+async def main() -> None:
+    neo4j = Neo4jConfig(
+        uri=os.environ["NEO4J_URI"],
+        username=os.environ["NEO4J_USERNAME"],
+        password=os.environ["NEO4J_PASSWORD"],
+        database=os.getenv("NEO4J_DATABASE", "neo4j"),
+    )
+    async with Neo4jClient(neo4j) as graph:  # <1>
+        manager = SchemaManager(graph)
+        stored = await manager.save_schema(config, created_by="admin")
+        schema = await manager.load_schema("real_estate")
+        print(stored.name, stored.version, schema.get_entity_type_names())
+
+
+asyncio.run(main())
+----
+<1> `SchemaManager` takes a connected `Neo4jClient`. `MemoryClient.graph` also wraps one on Bolt, but the wrapper's `execute_read`, which the load and list methods call, emits a `DeprecationWarning`.
+
+The full CRUD surface — `save_schema`, `load_schema`, `list_schemas`, `set_active_version`, `delete_schema`, and the rest — is on xref:reference/schemas-api.adoc[SchemaManager persistence API].
+
+== Entity type mapping
+
+An extracted label is mapped onto a POLE+O `(type, subtype)` pair. An ontology's own labels win (`EntityTypeDef.pole_type` and `subtype`); a label the ontology does not declare falls back to `DEFAULT_LABEL_MAPPING` in `neo4j_agent_memory.extraction.label_mapping`. Common entries:
+
+[cols="2,1,1,2", options="header"]
+|===
+| Extraction label | POLE+O type | Subtype | Neo4j labels
+
+| `person`
+| `PERSON`
+| —
+| `:Entity:Person`
+
+| `actor`, `author`, `director`
+| `PERSON`
+| `ACTOR`, `AUTHOR`, `DIRECTOR`
+| `:Entity:Person`
+
+| `organization`
+| `ORGANIZATION`
+| —
+| `:Entity:Organization`
+
+| `company`, `institution`
+| `ORGANIZATION`
+| `COMPANY`, `INSTITUTION`
+| `:Entity:Organization:Company`, `:Entity:Organization`
+
+| `location`
+| `LOCATION`
+| —
+| `:Entity:Location`
+
+| `city`, `country`
+| `LOCATION`
+| `CITY`, `COUNTRY`
+| `:Entity:Location:City`, `:Entity:Location:Country`
+
+| `event`, `meeting`, `incident`
+| `EVENT`
+| —, `MEETING`, `INCIDENT`
+| `:Entity:Event`, `:Entity:Event:Meeting`, `:Entity:Event:Incident`
+
+| `object`, `product`, `vehicle`
+| `OBJECT`
+| —, `PRODUCT`, `VEHICLE`
+| `:Entity:Object`, `:Entity:Object:Product`, `:Entity:Object:Vehicle`
+|===
+
+The subtype is stored on the entity's `subtype` property. For a POLE+O type it also becomes a node label only when it is one of the known POLE+O subtypes for that type, so `COMPANY` and `CITY` add a label while `ACTOR` and `INSTITUTION` do not.
+
+For GLiNER2.5, labels that neither the ontology nor the default table declares map to type `OBJECT` with the uppercased label as subtype; they are not automatically stored as a custom top-level entity type. Declare the label in an ontology with an explicit `pole_type` and `subtype`, or pass `label_mapping` to `GLiNER2Extractor` to replace the table. Direct bolt `add_entity` can store validated custom type/subtype labels; this separate path uses the graph query builder to convert labels to UpperCamelCase.
+
+== Schema models
+
+`DomainSchema` is a catalog for local GLiNER2.5 extraction. `EntitySchemaConfig` describes reusable entity/relation type metadata. Both convert to `OntologyDocument`, the document the extractors, relation validation and resolution use on bolt and that NAMS ontologies store (xref:reference/ontology-api.adoc[Ontology API]): `DomainSchema.to_ontology(relationships=...)`, `EntitySchemaConfig.to_ontology()` and `EntitySchemaConfig.from_ontology(doc)`. The conversions are not lossless: a catalog has no relationships of its own, and `from_ontology` collapses fine-grained ontology labels onto their POLE+O type as subtypes.
+
+=== DomainSchema
+
+Fields and defaults:
+
+[cols="2,3,2,4",options="header"]
+|===
+| Field | Type | Default | Description
+| `name` | `str` | `required` | Schema name identifier
+| `entity_types` | `dict[str, str]` | `required` | Mapping of entity type names to descriptions
+| `relation_types` | `dict[str, str]` | `{}` | Mapping of relation type names to descriptions
+|===
+
+`to_ontology(*, relationships=None)` returns an `OntologyDocument` with one entity type per label. The `relation_types` descriptions are used only to describe `relationships` entries that name the same type and have no description of their own.
+
+=== EntityTypeConfig
+
+Fields and defaults:
+
+[cols="2,3,2,4",options="header"]
+|===
+| Field | Type | Default | Description
+| `name` | `str` | `required` | Entity type name (e.g., PERSON)
+| `description` | `str \| None` | `None` | Description of the entity type
+| `subtypes` | `list[str]` | `[]` | Valid subtypes for this entity
+| `attributes` | `list[str]` | `[]` | Common attributes for this entity type
+| `color` | `str \| None` | `None` | Color for visualization (hex)
+|===
+
+=== RelationTypeConfig
+
+Fields and defaults:
+
+[cols="2,3,2,4",options="header"]
+|===
+| Field | Type | Default | Description
+| `name` | `str` | `required` | Relationship type name
+| `description` | `str \| None` | `None` |
+| `source_types` | `list[str]` | `[]` | Valid source entity types
+| `target_types` | `list[str]` | `[]` | Valid target entity types
+| `properties` | `list[str]` | `[]` | Properties on this relationship
+|===
+
+=== EntitySchemaConfig
+
+Fields and defaults:
+
+[cols="2,3,2,4",options="header"]
+|===
+| Field | Type | Default | Description
+| `name` | `str` | `'poleo'` | Schema name
+| `version` | `str` | `'1.0'` | Schema version
+| `description` | `str \| None` | `'POLE+O entity schema for knowledge graphs'` | Schema description
+| `entity_types` | `list[EntityTypeConfig]` | `POLE+O entity definitions` | List of valid entity types with their configurations
+| `relation_types` | `list[RelationTypeConfig]` | `POLE+O relation definitions` | List of valid relationship types
+| `default_entity_type` | `str` | `'OBJECT'` | Default type when entity type cannot be determined
+| `enable_subtypes` | `bool` | `True` | Whether to track entity subtypes
+| `strict_types` | `bool` | `False` | Whether to reject unknown entity types
+|===
+
+EntitySchemaConfig provides `get_entity_type_names()`, `get_subtypes(type)`, `get_relation_types()`, `is_valid_type(type)`, `normalize_type(type)`, `to_ontology()`, and the class method `from_ontology(doc)`. In non-strict mode, is_valid_type accepts unknown types. In strict mode, normalize_type maps an unknown type to default_entity_type; these helpers do not automatically instrument graph writes.
+
+== See also
+
+* xref:reference/schemas.adoc[Domain schemas reference]
+* xref:reference/schemas-api.adoc[SchemaManager persistence API]
+* xref:how-to/entity-extraction-schemas.adoc[Apply a custom entity extraction schema]

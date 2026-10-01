@@ -1,0 +1,134 @@
+= Why the v0.2 operational primitives are opt-in
+:page-product: agent-memory
+:toclevels: 2
+
+Buffered writes, consolidation, multi-tenancy scoping, privacy/audit, and the
+evaluation harness (the v0.2 surface) all share a design stance: each one is
+off by default, each one defaults to the least destructive behavior it can,
+and each one leaves an explicit trail instead of acting silently. This page
+explains that stance and what each primitive trades away for it. For the
+procedures themselves, see xref:how-to/buffered-writes.adoc[Buffered writes],
+xref:how-to/consolidation.adoc[Memory consolidation],
+xref:how-to/multi-tenancy.adoc[Associate memory with users and select scoped reads], and
+xref:how-to/evaluation.adoc[Evaluate memory quality].
+
+== Opt-in by default
+
+None of these primitives change behavior until an application asks for them:
+
+* Buffered writes require `MemorySettings.memory.write_mode="buffered"`; the
+  default is synchronous, where every write awaits its Neo4j round-trip.
+* User scoping is per call: passing `user_identifier=` to a supported write
+  method associates the conversation, preference, or trace with a `:User`
+  whether or not any setting is changed. Calls without it behave as before.
+  `MemorySettings.memory.multi_tenant=True` does not turn scoping on; it is a
+  guard that makes `add_message`, `add_messages_batch`, `add_preference`, and
+  `start_trace` raise `ValueError` when `user_identifier=` is omitted, so an
+  accidental unscoped write fails instead of landing unowned. Turning it on
+  therefore breaks existing unscoped writes until they pass a user.
+* Consolidation, evaluation, and audit recording are methods on
+  `client.consolidation` and `client.eval` that an application calls
+  explicitly — nothing runs on a timer inside the library.
+
+The library ships no built-in scheduler for any of this. An application
+that wants periodic dedupe, nightly archival, or a CI evaluation gate has to
+wire that itself; see the runnable examples under
+link:https://github.com/neo4j-labs/agent-memory/tree/main/examples[`examples/`]
+for the shape (`eval-harness/ci_gate.py` for a CI gate,
+`buffered-writes/` for a timed sync-vs-buffered comparison).
+
+Keeping these opt-in means existing v0.1 code keeps working unchanged after
+upgrading, and it means adopting one primitive never silently pulls in the
+behavior of another.
+
+== Dry-run-first where the operation mutates the graph
+
+Consolidation is the primitive that actually rewrites the graph, and every
+one of its four jobs — entity dedupe, long-trace summarization, preference
+supersede detection, conversation archival — defaults to `dry_run=True`. A
+dry run returns the same candidate report a live run would produce, without
+touching a node or relationship. An application reviews (or scripts a
+threshold check against) that report, then re-runs the same call with
+`dry_run=False` to apply it.
+
+This shifts the risk of a bad merge or a wrongly archived conversation from
+"discovered after the fact" to "visible before it happens." It also means
+consolidation can run against production data during development without a
+separate throwaway database — the dry run is read-only by construction, not
+by convention.
+
+The one job carved out of that pattern is `detect_superseded_preferences`:
+even in dry-run form, its candidate query does not enforce that the proposed
+replacement belongs to the same user as the old preference in a
+multi-tenant graph. That is a real gap, not a tradeoff — review candidates
+by hand or use the owner-checked path in
+xref:how-to/preferences.adoc[Store and revise a user preference] instead of
+applying its output directly.
+
+== Audit-logged where a read or a write needs a trail
+
+Two different audit mechanisms cover two different needs:
+
+* A `dry_run=False` consolidation run that applies changes writes a
+  `(:ConsolidationRun)` node recording when that job last ran and what it
+  touched — a trail for graph mutations.
+* `client.consolidation.record_read_audit(...)` writes a
+  `(:MemoryReadAudit)` node, optionally linked to a `(:User)` through
+  `:PERFORMED_READ`, for a sensitive *read* (a preference lookup, an
+  export, a cross-tenant query).
+
+Neither is automatic. The library does not intercept every
+`execute_read` call and log it, because that would double the database
+traffic for reads an application does not consider sensitive. Auditing is
+callsite-explicit: you decide which reads matter enough to record, and you
+call `record_read_audit` at that callsite.
+
+== What each primitive trades away
+
+[cols="1,3"]
+|===
+| Primitive | Cost of the opt-in, dry-run-first design
+
+| Buffered writes
+| A queued-but-undrained write is lost if the process is killed before
+  `flush()` runs. Writes drain in submission order on a single background
+  task, but two related writes are not transactional with each other —
+  only their relative order is preserved. Errors land in
+  `client.write_errors` instead of raising at the call site, so an
+  application that never checks that list will not notice a failed write.
+
+| Consolidation
+| Dry-run-first means consolidation never *prevents* a duplicate or a
+  stale preference from existing — it only helps you find and clear ones
+  that already exist, on a schedule you own. `detect_superseded_preferences`
+  additionally requires manual owner-checking in a multi-tenant graph (see
+  above).
+
+| Multi-tenancy scoping
+| `user_identifier` is checked only by the specific operations that accept
+  it, not enforced as a blanket filter across every method — see
+  xref:reference/backend-capabilities.adoc[Backend capabilities] for which
+  operations scope by user. It is a data-association mechanism, not
+  authentication or access control; an application must still keep an
+  untrusted identifier from reaching it directly.
+
+| Privacy and audit
+| Because auditing is callsite-explicit, an audit trail only exists for
+  the reads and writes a developer chose to instrument. A sensitive read
+  added later without a `record_read_audit` call leaves no trace.
+
+| Evaluation harness
+| The harness is a scaffold for regression detection against your own
+  labeled cases, not a benchmark or a guarantee of retrieval quality. It
+  reports whether *this* run's scores moved against *your* labels; it
+  does not replace the `:ConsolidationRun` audit trail (which records
+  *change* over time) or manual review of results.
+|===
+
+== See also
+
+* xref:how-to/buffered-writes.adoc[Buffered (fire-and-forget) writes]
+* xref:how-to/consolidation.adoc[Memory consolidation]
+* xref:how-to/multi-tenancy.adoc[Associate memory with users and select scoped reads]
+* xref:how-to/privacy-and-audit.adoc[Privacy and audit]
+* xref:how-to/evaluation.adoc[Evaluate memory quality]

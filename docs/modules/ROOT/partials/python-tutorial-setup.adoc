@@ -1,0 +1,19 @@
+Create a local folder and virtual environment for the examples on this page. The commands reuse an existing environment without changing its files:
+
+[source,bash]
+----
+mkdir -p ~/agent-memory-tutorials
+cd ~/agent-memory-tutorials
+if [ -e .venv ]; then
+  printf '%s\n' 'Using the existing virtual environment.'
+else
+  python3 -m venv .venv
+fi
+source .venv/bin/activate
+----
+
+Expected: `~/agent-memory-tutorials` is your working directory and its virtual environment is active. Install the published SDK with the command below.
+
+Each complete code block labelled *Save as* names a file to create in this folder using your editor. Copy the entire block, including imports and the entry point. Expand each helper disclosure and use *Copy code* to copy its full source. Keep all files together so their imports resolve.
+
+When continuing from another tutorial or guide, retain the existing environment, configuration, session files, and `.tutorial-state/`. Reuse unchanged helper files; compare an existing file before replacing it, and finish any pending cleanup or recovery before changing the code that owns its state.

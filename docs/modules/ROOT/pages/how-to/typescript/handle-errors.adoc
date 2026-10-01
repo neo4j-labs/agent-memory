@@ -1,90 +1,84 @@
-= How to: handle errors
-:toc: left
+= Handle TypeScript REST errors
 :source-highlighter: rouge
 
-Every error thrown by `@neo4j-labs/agent-memory` is a subclass of
-`MemoryError`. Errors from HTTP exchanges carry a `requestId` (when the
-service emitted one) so you can quote it in support threads.
+Use this procedure to classify an SDK failure and retry a transient, idempotent
+read. Prerequisites: a configured `MemoryClient` and Node.js 22 or later. The
+xref:reference/typescript-api.adoc[API reference] defines the full error mapping.
 
-== The hierarchy
+anchor:_the_hierarchy[]
+anchor:_the_requestid_field[]
 
-[source]
-----
-MemoryError                     // base class
-├── ConnectionError            // network / DNS / timeout / 5xx on connect
-├── AuthenticationError        // 401, 403
-├── NotFoundError              // 404 (rarely raised — most operations soft-handle)
-├── ValidationError            // client-side argument validation
-├── TransportError             // 4xx/5xx from the service; carries statusCode
-└── NotSupportedError          // operation not implemented by current transport
-----
+== 1. Preserve status and correlation information
 
-== The `requestId` field
+Ordinary REST 401/403 responses raise `AuthenticationError`. Other unsuccessful
+HTTP statuses, including 400/404/429/500, raise `TransportError`, with
+`statusCode`, `responseBody` and an optional `requestId`. Quote the request id in
+support reports when present; do not log credentials or raw bodies indiscriminately.
 
-Every error from a failed HTTP exchange has an optional `requestId`
-field, populated from `x-request-id` (or `request-id`, or
-`x-amzn-RequestId`) on the response. It's also embedded in the error's
-`toString()`:
+`ValidationError` and `NotSupportedError` describe selected failures before HTTP.
+`NotFoundError` exists for compatibility but is not the normal REST 404 mapping.
+There is no `RateLimitError` or `ValidationError.details`.
+
+anchor:_choosing_what_to_catch[]
+anchor:_logging_errors_in_production[]
 
 [source,typescript]
 ----
+import { MemoryClient, MemoryError, TransportError } from "@neo4j-labs/agent-memory";
+
+const client = new MemoryClient();
 try {
-  await client.shortTerm.createConversation({ userId: "alice" });
-} catch (err) {
-  if (err instanceof MemoryError) {
-    console.error(err.message, "requestId:", err.requestId);
+  await client.shortTerm.listConversations({ limit: 5 });
+} catch (error) {
+  if (error instanceof MemoryError) {
+    console.error(error.name, error.message, error.requestId);
   }
-  throw err;
-}
+  if (error instanceof TransportError) console.error("status", error.statusCode);
+  throw error;
+} finally { await client.close(); }
 ----
 
-Sample stack-trace line:
+Not every error extends `MemoryError`. Normal request timeouts can propagate a
+`DOMException` named `TimeoutError`; token providers and response parsing can
+also throw raw errors. Fetch `TypeError` exceptions are wrapped in `ConnectionError`.
+The optional `connect()` probe differs: it also wraps timeouts and 5xx responses
+in `ConnectionError`. Bulk writes of more than 100 messages raise a plain `Error`.
 
-[source]
-----
-TransportError: create_conversation failed: internal error [requestId=req-abc123]
-----
+anchor:_retries[]
 
-== Choosing what to catch
+== 2. Retry only a chosen idempotent read
 
-[options="header"]
-|===
-| Catch | When
-| `AuthenticationError` | Renew tokens, prompt the user, log them out.
-| `NotSupportedError` | Switch transports, or skip the optional feature gracefully.
-| `TransportError` (4xx) | Validate inputs; not retryable.
-| `TransportError` (5xx) | Retry with backoff; quote `requestId` if it persists.
-| `ConnectionError` | Retry with backoff; usually network-transient.
-| `ValidationError` | Fix the call site; never retryable.
-|===
-
-== Retries
-
-The client does **not** retry automatically. Wrap your calls in a small
-retry helper if you need it — be careful with non-idempotent operations
-(`addMessage`, `recordStep`, `recordToolCall` are NOT idempotent and a
-retry may produce a duplicate).
+The SDK sends one attempt per request and does not use `Retry-After` to schedule
+retries. The following complete helper retries only a conversation read, only
+on connection failures, 429 or 5xx, and at most three attempts. It propagates
+unknown/validation/authentication errors immediately and skips the final sleep.
 
 [source,typescript]
 ----
-async function retry<T>(fn: () => Promise<T>, max = 3): Promise<T> {
-  let lastErr: unknown;
-  for (let i = 0; i < max; i++) {
-    try { return await fn(); }
-    catch (err) {
-      lastErr = err;
-      if (err instanceof TransportError && err.statusCode && err.statusCode < 500) throw err;
-      if (err instanceof AuthenticationError) throw err;
-      await new Promise((r) => setTimeout(r, 100 * 2 ** i));
+import { ConnectionError, MemoryClient, TransportError } from "@neo4j-labs/agent-memory";
+
+async function readConversation(client: MemoryClient, conversationId: string) {
+  for (let attempt = 0; ; attempt++) {
+    try { return await client.shortTerm.getConversation(conversationId); }
+    catch (error) {
+      const transient = error instanceof ConnectionError ||
+        (error instanceof TransportError && error.statusCode !== undefined &&
+          (error.statusCode === 429 || error.statusCode >= 500));
+      if (!transient || attempt === 2) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** attempt));
     }
   }
-  throw lastErr;
 }
 ----
 
-== Logging errors in production
+Do not apply this helper to writes such as `addMessage`, `recordStep` or
+`recordToolCall`: a response can be lost after a successful write, and retrying
+can duplicate data. Choose write recovery separately for your application.
 
-The `logger` constructor option emits a typed `error` event per failed
-request — useful for routing into structured logging without writing
-your own try/catch around every call. See
-link:observability.adoc[How-to: enable request logging].
+== 3. Verify the failure path
+
+Use an offline route stub to return the statuses your application handles.
+Assert the class/status and attempt count, plus propagation of an unknown error.
+The SDK's `test/integration/docs-contract.test.ts` checks this documentation's
+HTTP mapping, lack of automatic retries and unsupported hosted methods.
+See xref:how-to/typescript/observability.adoc[request logging] for optional events.

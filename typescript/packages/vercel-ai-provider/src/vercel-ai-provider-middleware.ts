@@ -1,16 +1,7 @@
-/**
- * Middleware mode — transparent memory, no tool calls.
- *
- * createNamsMemory(config).wrap(model, scope) returns a LanguageModel that
- * injects relevant memories before every call and persists each turn after.
- * This middleware also underpins provider mode (see vercel-ai-provider.ts).
- *
- * No entity extraction here — turns are persisted as short-term messages and
- * NAMS extracts those server-side. Use tools mode for long-term memory.
- */
+/** Middleware mode: `wrap(model, scope)` adds memories to each turn and saves the conversation. Provider mode uses this too. */
 
 import { wrapLanguageModel } from 'ai';
-import type { LanguageModelV4, LanguageModelV4Middleware } from '@ai-sdk/provider';
+import type { LanguageModelMiddleware } from 'ai';
 import {
   makeClient,
   getLogger,
@@ -19,10 +10,14 @@ import {
 } from './vercel-ai-provider-client';
 import { MemoryHit, NamsConfig, NamsScope } from './vercel-ai-provider-types';
 
+// Model types come from `ai`, so they match the caller's `ai` version.
+export type WrappableModel = Parameters<typeof wrapLanguageModel>[0]['model'];
+export type WrappedModel = ReturnType<typeof wrapLanguageModel>;
+
 export interface NamsMemoryConfig extends NamsConfig {
-  /** Max memories retrieved and injected into the prompt per turn (default: 6). Does not affect storage. */
+  /** Max memories added to the prompt per turn (default: 6). */
   maxMemories?: number;
-  /** Persist each turn to NAMS short-term memory (default: true). */
+  /** Save each turn to NAMS (default: true). */
   persistInteractions?: boolean;
 }
 
@@ -34,9 +29,17 @@ const lastUserIndex = (prompt: any[]): number => {
   return -1;
 }
 
-/**
- * Return a copy of the prompt with `block` prepended to its last user message.
- */
+/** True for a later step of the same turn: tool results come after the last user message. */
+const continuesTurn = (prompt: any[]): boolean => {
+  const i = lastUserIndex(prompt);
+  return i >= 0 && prompt.slice(i + 1).some(m => m?.role === 'tool');
+}
+
+/** True when the model asks the app to run a tool. */
+const callsAppTool = (part: any): boolean =>
+  part?.type === 'tool-call' && !part.providerExecuted;
+
+/** Copy the prompt, with `block` added to the start of the last user message. */
 const withMemoryBlock = (prompt: any[], block: string): any[] => {
   const i = lastUserIndex(prompt);
   if (i < 0) return prompt;
@@ -52,39 +55,31 @@ const withMemoryBlock = (prompt: any[], block: string): any[] => {
   return next;
 }
 
-const toolCallInput = (part: any): string => {
-  if (typeof part?.input === 'string') return part.input;
-  const args = part?.input ?? part?.args;
-  if (args === undefined) return '';
-  try { return JSON.stringify(args) ?? ''; } catch { return ''; }
-}
-
-// Extract assistant text from a generate result. Falls back to serialized
-// tool-call input so structured responses (e.g. generateObject) still persist.
-const textFromResult = (result: any): string => {
+/** The model's answer, or '' when this step only calls tools. */
+const answerFromResult = (result: any): string => {
+  const content: any[] = Array.isArray(result?.content) ? result.content : [];
+  if (content.some(callsAppTool)) return '';
   if (typeof result?.text === 'string' && result.text) return result.text;
-  if (Array.isArray(result?.content)) {
-    const textParts = (result.content as any[])
-      .filter(p => p?.type === 'text')
-      .map(p => p.text as string)
-      .join('');
-    if (textParts) return textParts;
-    return (result.content as any[])
-      .filter(p => p?.type === 'tool-call')
-      .map(toolCallInput)
-      .join('');
-  }
-  return '';
+  return content
+    .filter(p => p?.type === 'text')
+    .map(p => p.text as string)
+    .join('');
 }
 
 const formatMemoryBlock = (memories: MemoryHit[]): string => {
+  // Explained only when there is a triple to explain.
+  const graphNote = memories.some(m => m.source === 'graph')
+    ? '\nA [graph] line is a stored relationship, written (subject)-[RELATIONSHIP]->(object).'
+    : '';
+
   return (
     'Relevant long-term memory about this user (use it to personalise your answer):\n' +
-    memories.map((m, i) => `${i + 1}. [${m.source}] ${m.content}`).join('\n')
+    memories.map((m, i) => `${i + 1}. [${m.source}] ${m.content}`).join('\n') +
+    graphNote
   );
 }
 
-// Text of the most recent user message in the prompt.
+// Text of the last user message.
 const lastUserText = (prompt: any[]): string => {
   const i = lastUserIndex(prompt);
   if (i < 0) return '';
@@ -104,7 +99,7 @@ const buildMiddleware = (
   scope: NamsScope,
   maxMemories: number,
   persist: boolean,
-): LanguageModelV4Middleware => {
+): LanguageModelMiddleware => {
   const client = makeClient(config);
   const log = getLogger(client);
 
@@ -114,43 +109,51 @@ const buildMiddleware = (
 
   const originalUserText = new WeakMap<object, string>();
 
-  // In a multi-step tool loop every step carries the same last user message —
-  // remember what was persisted so it is stored once per turn, not per step.
-  let lastPersistedUserText: string | undefined;
+  // Memories found at the start of the turn. Later steps reuse them.
+  let turnMemories: { userText: string; memories: MemoryHit[] } | undefined;
 
+  // Save the user's message on the first step and the answer on the last.
   async function persistTurn(params: any, assistantText: string): Promise<void> {
     if (!persist) return;
     const convId = await getConvId();
-    const userText = originalUserText.get(params as object) ?? lastUserText(params.prompt);
-    if (userText && userText !== lastPersistedUserText) {
-      lastPersistedUserText = userText;
-      await client.shortTerm.addMessage(convId, 'user', userText)
+    if (!continuesTurn(params.prompt)) {
+      const userText = originalUserText.get(params as object) ?? lastUserText(params.prompt);
+      if (userText) await client.shortTerm.addMessage(convId, 'user', userText)
         .catch(e => log.error('persist user message failed', e));
     }
     if (assistantText) await client.shortTerm.addMessage(convId, 'assistant', assistantText)
       .catch(e => log.error('persist assistant message failed', e));
   }
 
+  async function memoriesFor(prompt: any[], userText: string): Promise<MemoryHit[] | null> {
+    if (continuesTurn(prompt) && turnMemories?.userText === userText) return turnMemories.memories;
+
+    let convId: string;
+    try {
+      convId = await getConvId();
+    } catch (e) {
+      log.warn('resolveConversation failed', e);
+      return null;
+    }
+
+    const memories = await retrieveMemories(
+      client, scope, convId, userText, maxMemories,
+      { crossSessionLimit: config.crossSessionLimit, graphExpansionLimit: config.graphExpansionLimit },
+    ).catch(e => { log.warn('retrieve failed', e); return [] as MemoryHit[]; });
+    turnMemories = { userText, memories };
+    return memories;
+  }
+
   return {
     specificationVersion: 'v4',
-    // Retrieve memories for the user query and inject them into the prompt.
+    // Find memories for the user message and add them to the prompt.
     transformParams: async ({ params }) => {
       const userText = lastUserText(params.prompt);
       if (!userText) return params;
       originalUserText.set(params as object, userText);
 
-      let convId: string;
-      try {
-        convId = await getConvId();
-      } catch (e) {
-        log.warn('resolveConversation failed', e);
-        return params;
-      }
-
-      const memories = await retrieveMemories(client, scope, convId, userText, maxMemories)
-        .catch(e => { log.warn('retrieve failed', e); return [] as MemoryHit[]; });
-
-      if (memories.length === 0) return params;
+      const memories = await memoriesFor(params.prompt, userText);
+      if (!memories?.length) return params;
 
       const augmented = { ...params, prompt: withMemoryBlock(params.prompt, formatMemoryBlock(memories)) };
       originalUserText.set(augmented as object, userText);
@@ -159,17 +162,16 @@ const buildMiddleware = (
 
     wrapGenerate: async ({ doGenerate, params }) => {
       const result = await doGenerate();
-      await persistTurn(params, textFromResult(result))
+      await persistTurn(params, answerFromResult(result))
         .catch(e => log.warn('persist failed', e));
       return result;
     },
 
-    // Tap the stream to accumulate text and tool-call args; persist the full
-    // turn in flush once the stream closes.
+    // Collect the streamed text. Save the turn when the stream closes.
     wrapStream: async ({ doStream, params }) => {
       const { stream, ...rest } = await doStream();
       let text = '';
-      const pendingToolArgs = new Map<string, string>();
+      let handsOffToTools = false;
 
       const tap = new TransformStream({
         transform(chunk: any, controller) {
@@ -177,22 +179,12 @@ const buildMiddleware = (
             text += (chunk.delta ?? chunk.textDelta ?? chunk.text ?? '') as string;
           else if (chunk?.type === 'text')
             text += (chunk.text ?? '') as string;
-          else if (chunk?.type === 'tool-input-delta') {
-            const id = chunk.id as string;
-            pendingToolArgs.set(id, (pendingToolArgs.get(id) ?? '') + (chunk.delta ?? ''));
-          } else if (chunk?.type === 'tool-call-delta') {
-            const id = chunk.toolCallId as string;
-            pendingToolArgs.set(id, (pendingToolArgs.get(id) ?? '') + (chunk.argsTextDelta ?? ''));
-          } else if (chunk?.type === 'tool-call') {
-            pendingToolArgs.set((chunk.toolCallId ?? chunk.id) as string, toolCallInput(chunk));
-          }
+          else if (callsAppTool(chunk))
+            handsOffToTools = true;
           controller.enqueue(chunk);
         },
         async flush() {
-          for (const args of pendingToolArgs.values()) {
-            if (args) text += args;
-          }
-          await persistTurn(params, text)
+          await persistTurn(params, handsOffToTools ? '' : text)
             .catch(e => log.warn('persist failed', e));
         },
       });
@@ -202,16 +194,13 @@ const buildMiddleware = (
   };
 }
 
-/**
- * Create a NAMS memory provider. `wrap(model, scope)` returns a drop-in
- * LanguageModelV4 with transparent memory retrieval and persistence.
- */
+/** Create memory middleware. `wrap(model, scope)` returns the model with memory. */
 export function createNamsMemory(config: NamsMemoryConfig) {
   const maxMemories = config.maxMemories ?? 6;
   const persist = config.persistInteractions ?? true;
 
   return {
-    wrap(model: LanguageModelV4, scope: NamsScope, providerId?: string): LanguageModelV4 {
+    wrap(model: WrappableModel, scope: NamsScope, providerId?: string): WrappedModel {
       const middleware = buildMiddleware(config, scope, maxMemories, persist);
       return wrapLanguageModel({ model, middleware, ...(providerId && { providerId }) });
     },

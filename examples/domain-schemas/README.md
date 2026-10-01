@@ -55,17 +55,14 @@ Every demo is a flag, so any schema can exercise any of them: `--relations`, `--
 uv sync --all-extras
 
 # Or with pip
-pip install "neo4j-agent-memory[gliner2,sentence-transformers]"
+pip install "neo4j-agent-memory[gliner2,sentence-transformers]==0.7.0"
 ```
 
 - GLiNER2.5 downloads its model (~407 MB for `base`, ~296 MB for `small`) on first use; later runs read the cache.
 - **Relations need no extra model**: they come out of the same pass, for the three templates that declare relationships (`poleo`, `podcast`, `news`). `--relations` on a label-only template says so instead of running.
 - Neo4j is **optional** — extraction runs with no database. Storage needs one (see below) and uses a local sentence-transformers embedder, so no API key is involved either way.
 
-```bash
-# Optional: environment for the storage step
-cp ../.env.example ../.env     # NEO4J_URI / NEO4J_USERNAME / NEO4J_PASSWORD
-```
+For the optional storage step, follow [Aura setup and cleanup](../AURA_SETUP.md) and export the connection variables. The extraction-only commands below explicitly use `--no-store` so exported credentials do not turn them into writes.
 
 ## Run
 
@@ -74,15 +71,14 @@ cp ../.env.example ../.env     # NEO4J_URI / NEO4J_USERNAME / NEO4J_PASSWORD
 uv run python examples/domain-schemas/run.py --list
 
 # Extraction only, no database
-uv run python examples/domain-schemas/run.py --schema medical
+uv run python examples/domain-schemas/run.py --schema medical --no-store
 
 # Any demo, on any schema
-uv run python examples/domain-schemas/run.py --schema news --relations
-uv run python examples/domain-schemas/run.py --schema legal --batch --streaming
+uv run python examples/domain-schemas/run.py --schema news --relations --no-store
+uv run python examples/domain-schemas/run.py --schema legal --batch --streaming --no-store
 
-# Extract and store the graph in Neo4j (make neo4j-start provides this one)
-NEO4J_URI=bolt://localhost:7687 NEO4J_PASSWORD=test-password \
-  uv run python examples/domain-schemas/run.py --schema poleo --relations --store
+# Extract and store in the dedicated Aura instance configured above
+uv run python examples/domain-schemas/run.py --schema poleo --relations --store
 
 # Tuning
 uv run python examples/domain-schemas/run.py --schema podcast --threshold 0.5 --device mps
@@ -152,7 +148,7 @@ With `--store` the run ends with a graph instead of a list:
 STORING IN NEO4J
 ======================================================================
 
-  backend: bolt (bolt://localhost:7687)
+  backend: bolt (neo4j+s://<instance-id>.databases.neo4j.io)
   Stored 7 entity nodes from 8 extracted mentions (dedup actions: {'none': 7, 'merged': 1})
   Linked all of them to the :Extractor node 'GLiNER2Extractor'
 
@@ -228,7 +224,7 @@ for rel in result.relations:
 
 Only the templates that declare relationships (`poleo`, `podcast`, `news`)
 produce edges; the rest are label-only catalogs. With `--store`, the relations
-found this way are persisted as `(:Entity)-[:RELATED_TO {relation_type}]->(:Entity)`
+found this way are persisted as `(:Entity)-[:RELATED_TO {type}]->(:Entity)`
 via `long_term.add_relationship`.
 
 ### Batch extraction (native GLiNER2.5 inference)
@@ -361,7 +357,7 @@ Install it and re-run. The first run downloads the model (~407 MB).
 
 ### Neo4j authentication fails
 
-The repo's Docker Neo4j (`make neo4j-start`) uses `test-password`, which is also the runner's default. Export `NEO4J_PASSWORD` for any other instance.
+Verify the generated Aura URI, username and password from [the shared setup](../AURA_SETUP.md). Confirm the instance is **Running** in the Aura console and remove stale connection values from any private `.env` file loaded by the runner.
 
 ### Low confidence scores
 

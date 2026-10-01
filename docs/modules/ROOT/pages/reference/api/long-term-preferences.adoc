@@ -1,0 +1,260 @@
+= Preference and fact operations
+:page-product: agent-memory
+:page-pagination:
+:toclevels: 2
+
+Preference and fact storage/search operations from xref:reference/api/long-term.adoc[LongTermMemory API reference]. Signatures show types, keyword-only arguments (`*`), and defaults; they are reference declarations, not calls to execute directly.
+
+anchor:_preference_operations[]
+anchor:_parameters_2[]
+
+== Preference operations (bolt only)
+
+=== add_preference
+
+Store a preference. Use `preference`, not `value`, as the keyword. `user_identifier` creates an explicit user association; `applies_to` targets an entity.
+
+// contract: memory/long_term.py:LongTermMemory.add_preference
+[source,python]
+----
+async def add_preference(
+    category: str,
+    preference: str,
+    *,
+    context: str | None=None,
+    confidence: float=1.0,
+    generate_embedding: bool=True,
+    metadata: dict[str, Any] | None=None,
+    user_identifier: str | None=None,
+    applies_to: list[Any] | None=None,
+) -> Preference: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `category` | Preference category (food, music, communication, etc.)
+| `preference` | The preference statement
+| `context` | When/where preference applies
+| `confidence` | Confidence score
+| `generate_embedding` | Whether to generate embedding
+| `metadata` | Optional metadata
+| `user_identifier` | When provided, writes a `(:User)-[:HAS_PREFERENCE]->(:Preference)` edge linking the preference to the user's :User node. Multi-tenant deployments should pass this on every call.
+| `applies_to` | Optional list of xref:reference/api/reasoning-models.adoc#_entityref[EntityRef] describing the entities this preference scopes to. Each ref is materialized as a `(:Preference)-[:APPLIES_TO]->(:Entity)` edge so `get_preferences_for(user, applies_to=...)` queries can find scoped preferences efficiently.
+|===
+
+anchor:_get_preferences[]
+
+=== get_preferences_by_category
+
+Return preferences in a category. This is the category-listing operation; `get_preferences` does not exist.
+
+// contract: memory/long_term.py:LongTermMemory.get_preferences_by_category
+[source,python]
+----
+async def get_preferences_by_category(category: str, *, limit: int=100) -> list[Preference]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `category` | The preference category
+| `limit` | Maximum results
+|===
+
+=== get_preferences_for
+
+Retrieve preferences with explicit user/entity filters and optional superseded preferences.
+
+// contract: memory/long_term.py:LongTermMemory.get_preferences_for
+[source,python]
+----
+async def get_preferences_for(
+    user_identifier: str,
+    *,
+    applies_to: Any | None=None,
+    active_only: bool=True,
+    as_of: datetime | None=None,
+) -> list[Preference]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `user_identifier` | The user whose preferences to return.
+| `applies_to` | Optional `EntityRef` to scope further (e.g. preferences scoped to a particular Industry).
+| `active_only` | When `True` (default), exclude preferences that have been superseded.
+| `as_of` | When provided, only preferences whose validity interval contains this timestamp are returned. Implements the v0.5 bi-temporal time-travel API on top of valid_from / valid_until set by `add_preference` and `supersede_preference`.
+|===
+
+=== search_preferences
+
+Semantic preference search. The optional category filter is not a user boundary.
+
+// contract: memory/long_term.py:LongTermMemory.search_preferences
+[source,python]
+----
+async def search_preferences(
+    query: str,
+    *,
+    category: str | None=None,
+    limit: int=10,
+    threshold: float=0.7,
+) -> list[Preference]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `query` | Search query
+| `category` | Optional filter by category
+| `limit` | Maximum results
+| `threshold` | Minimum similarity threshold
+|===
+
+anchor:_delete_preference[]
+
+=== supersede_preference
+
+Mark a preference as superseded. This is not deletion; there is no `delete_preference` wrapper.
+
+// contract: memory/long_term.py:LongTermMemory.supersede_preference
+[source,python]
+----
+async def supersede_preference(old_preference_id: UUID | str, new_preference_id: UUID | str) -> None: ...
+----
+
+
+anchor:_fact_operations[]
+
+== Fact operations (bolt only)
+
+=== add_fact
+
+Store a subject–predicate–object statement. The object parameter is named `obj`; validity bounds and confidence are optional.
+
+// contract: memory/long_term.py:LongTermMemory.add_fact
+[source,python]
+----
+async def add_fact(
+    subject: str,
+    predicate: str,
+    obj: str,
+    *,
+    confidence: float=1.0,
+    valid_from: datetime | None=None,
+    valid_until: datetime | None=None,
+    generate_embedding: bool=True,
+    metadata: dict[str, Any] | None=None,
+) -> Fact: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `subject` | Fact subject
+| `predicate` | Fact predicate/relationship
+| `obj` | Fact object
+| `confidence` | Confidence score
+| `valid_from` | Start of validity
+| `valid_until` | End of validity
+| `generate_embedding` | Whether to generate embedding
+| `metadata` | Optional metadata
+|===
+
+anchor:_get_facts[]
+
+=== get_facts_about
+
+Return facts whose subject exactly equals `subject`. Facts where the name appears as the object are not returned. There is no `get_facts` wrapper.
+
+// contract: memory/long_term.py:LongTermMemory.get_facts_about
+[source,python]
+----
+async def get_facts_about(subject: str, *, limit: int=100) -> list[Fact]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `subject` | Exact subject value to match
+| `limit` | Maximum results
+|===
+
+=== search_facts
+
+Return matching Fact models with semantic similarity in metadata.
+
+// contract: memory/long_term.py:LongTermMemory.search_facts
+[source,python]
+----
+async def search_facts(
+    query: str,
+    *,
+    limit: int=10,
+    threshold: float=0.7,
+) -> list[Fact]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `query` | Search query
+| `limit` | Maximum results
+| `threshold` | Minimum similarity threshold
+|===
+
+
+anchor:_preference_fact_models[]
+
+== Models
+
+Import these Pydantic models from `neo4j_agent_memory.memory.long_term`. IDs are UUIDs, and inherited memory fields are shown below.
+
+=== Preference
+
+Pydantic model; inherited memory-entry fields are included.
+
+[cols="2,3,2,4",options="header"]
+|===
+| Field | Type | Default | Description
+| `id` | `UUID` | `new UUID` | Unique identifier.
+| `created_at` | `datetime` | `current UTC time` | Creation time.
+| `updated_at` | `datetime \| None` | `None` | Last update time, if updated.
+| `embedding` | `list[float] \| None` | `None` | Embedding vector, if one was generated.
+| `metadata` | `dict[str, Any]` | `{}` | Arbitrary key-value metadata, stored as JSON.
+| `category` | `str` | `required` | Preference category
+| `preference` | `str` | `required` | The preference statement
+| `context` | `str \| None` | `None` | When/where preference applies
+| `confidence` | `float` | `1.0` | Confidence score
+| `linked_entities` | `list[UUID]` | `[]` | Linked entity IDs
+|===
+
+=== Fact
+
+Pydantic model; inherited memory-entry fields are included.
+
+[cols="2,3,2,4",options="header"]
+|===
+| Field | Type | Default | Description
+| `id` | `UUID` | `new UUID` | Unique identifier.
+| `created_at` | `datetime` | `current UTC time` | Creation time.
+| `updated_at` | `datetime \| None` | `None` | Last update time, if updated.
+| `embedding` | `list[float] \| None` | `None` | Embedding vector, if one was generated.
+| `metadata` | `dict[str, Any]` | `{}` | Arbitrary key-value metadata, stored as JSON.
+| `subject` | `str` | `required` | Fact subject
+| `predicate` | `str` | `required` | Fact predicate/relationship
+| `object` | `str` | `required` | Fact object
+| `confidence` | `float` | `1.0` | Confidence score
+| `source_id` | `UUID \| None` | `None` | Source message/document ID
+| `valid_from` | `datetime \| None` | `None` | Start of validity
+| `valid_until` | `datetime \| None` | `None` | End of validity
+|===
+
+`Fact.as_triple` returns `(subject, predicate, object)`.
+
+== See also
+
+* xref:reference/api/long-term.adoc[LongTermMemory API reference]
+* xref:how-to/preferences.adoc[Store and revise a user preference]
+* xref:how-to/entities.adoc[Work with entities]

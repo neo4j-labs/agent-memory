@@ -1,188 +1,116 @@
 = Ontologies
 :description: What an ontology is, how it extends POLE+O, how it drives extraction and resolution, and how validation modes and versioning work.
 
-Ontologies work on *both* backends. As of v0.7 `client.ontology` is backed by
-`BoltOntology` on bolt (versioned `:Ontology` / `:OntologyVersion` nodes in your
-own Neo4j) and by `NamsOntology` on the hosted service. The two implementations
-satisfy one `OntologyAPI` Protocol, so ontology-management code reads the same
-either way — see <<bolt-vs-nams>> for where the behaviour differs.
+An ontology supplies a domain vocabulary and validation policy. It refines the broad POLE+O categories without requiring every application to treat all entities as generic people, places, or objects.
 
+NOTE: Since 0.7.0, `client.ontology` works on both backends: `BoltOntology` stores versioned ontologies in your own Neo4j database, and `NamsOntology` manages them in a hosted workspace. Both implement one `OntologyAPI` protocol, so ontology-management code reads the same either way; <<bolt-vs-nams>> lists where the mechanics differ. See also xref:reference/backend-capabilities.adoc[Backend capabilities] and xref:explanation/backends.adoc[Bolt and NAMS].
+
+[[_what_is_an_ontology]]
 == What is an ontology?
 
-An *ontology* is a typed, versioned, validated schema for your knowledge graph.
-Where the base xref:explanation/poleo-model.adoc[POLE+O model] gives you five
-coarse entity categories (Person, Organization, Location, Event, Object), an
-ontology refines them into a concrete domain vocabulary:
+An ontology describes entity types, properties, and allowed relationships for a domain. For example, a research domain can distinguish a study from a dataset and describe how they are connected while retaining a broad POLE+O category.
 
-* **Entity types** — each carries a `pole_type` (one of the POLE+O categories),
-  an optional `subtype`, display metadata (`color`, `icon`), and a list of typed
-  **properties**.
-* **Properties** — a `name`, a `type` (`string`, `datetime`, `date`, `float`,
-  `integer`), and optional `required`, `unique`, and `enum` constraints.
-* **Relationships** — a typed edge (`UPPER_SNAKE`) with `source` and `target`
-  entity labels.
-
-NAMS ships ~28 *system templates* (healthcare, legal, cybersecurity,
-financial-services, software-engineering, and more). Activating one makes
-server-side extraction produce a clean, predictable graph — `Patient`,
-`Provider`, `Diagnosis` with enforced fields and enumerations — instead of
-generic, loosely-typed nodes. The bolt store ships the eight local domain
-templates instead (`poleo`, `podcast`, `news`, `scientific`, `business`,
-`entertainment`, `medical`, `legal`), built from the same catalog the extractors
-use.
+A schema makes the vocabulary explicit. It does not guarantee that extracted information is true or that the model selected the correct type. The complete document structure belongs in xref:reference/ontology-api.adoc[the ontology reference].
 
 == One document, four consumers
 
-On bolt the ontology is not only a validation schema — it is the single thing
-the extraction and storage pipeline agrees on. The effective document is
-resolved once per connection and handed to:
+On Bolt an ontology is more than a validation schema: it is the one document the local extraction and storage pipeline agrees on. The client resolves the effective document once per connection and hands it to:
 
-. **GLiNER2.5's JointIE schema**, compiled from the document. Entity
-  descriptions become zero-shot annotation guidelines, and relationship
-  `source`/`target` labels are enforced *during* beam search rather than
-  filtered afterwards.
-. **The LLM extractor's prompt**, where the same descriptions and the legal
-  `SOURCE -[REL]-> TARGET` catalogue replace a hardcoded POLE+O block.
-. **Relation validation** — `ExtractionResult.validate_relations()` drops
-  relations whose endpoint labels the ontology does not permit, which matters
-  most for the stages that have no endpoint typing of their own.
-. **Entity resolution** — `EntityTypeDef.aliases` is the resolver's gazetteer,
-  and `resolution_threshold` / `review_threshold` are its per-type bands.
+. *GLiNER2.5's JointIE schema*, compiled from the document. Entity descriptions become zero-shot annotation guidelines, and each relationship's `source` and `target` labels are enforced during decoding rather than filtered afterwards.
+. *The LLM extractor's prompt*, where the same descriptions and the permitted `SOURCE -[REL]-> TARGET` patterns replace a fixed POLE+O block.
+. *Relation validation*, which drops relations whose endpoint labels the ontology does not permit. This matters most for extraction stages that have no endpoint typing of their own.
+. *Entity resolution*, which uses `EntityTypeDef.aliases` as its gazetteer and `resolution_threshold` / `review_threshold` as per-type bands.
 
-Hence the extension fields on the document model: `description` on entity types,
-relationships and properties; `aliases`; `threshold` (a per-label decoding
-floor); `resolution_threshold` and `review_threshold`; and the decoding
-constraints `unique_source`, `unique_target`, `acyclic`, `allow_self`, `inverse`
-and the document-level `no_self_loops`. They are all defaulted, so a document
-written before v0.7 (or fetched from NAMS) still parses.
+That is why the document model carries extension fields: `description` on entity types, relationships and properties; `aliases`; a per-label `threshold`; `resolution_threshold` and `review_threshold`; the decoding constraints `unique_source`, `unique_target`, `acyclic`, `allow_self` and `inverse`; and the document-level `no_self_loops`. All of them have defaults, so a document written before 0.7.0, or fetched from NAMS, still parses.
 
-Two design choices follow from JointIE's flat label space. Fine-grained types
-are declared as *labels* with a `pole_type` and a `subtype` rather than
-recovered by a second pass, and `RelationshipDef.source`/`target` stay single
-labels — several defs may share one `type`, and the compiler groups them into
-one relation with head/tail lists.
+Two design choices follow from JointIE's flat label space. A fine-grained type is declared as its own label with a `pole_type` and a `subtype`, rather than recovered by a second classification pass. A relationship's `source` and `target` each name a single label; several relationship definitions may share one `type`, and the compiler groups them.
 
-== Templates vs. owned ontologies
+[[_templates_vs_workspace_owned_ontologies]]
+== Templates and workspace-owned ontologies
 
-Templates are read-only (`is_system = true`). To customize one you *clone* it
-into an editable copy, which you can then revise. Exactly one version is active
-at a time: a workspace on NAMS (where `nams-default` is implicitly bound until
-you activate your own), a database on bolt (where nothing is bound until you
-activate something, and the library falls back to the built-in POLE+O ontology).
+A system template offers a starting vocabulary. A workspace-owned copy allows an application to adapt that vocabulary without modifying the shared template.
 
-On bolt, templates are synthesised rather than stored: they carry an id of
-`template:<name>`, have no revision history, and cannot be updated or deleted.
-`clone("podcast")` is what turns one into a real, editable ontology at revision
-1.
+An active ontology version determines the workspace's validation policy. Template availability and active-version behavior are part of the service contract; retrieve the available and active records rather than depending on a fixed template count. See xref:how-to/use-ontologies.adoc[Use ontologies].
 
+On Bolt the scope is a database rather than a workspace. Its templates are the eight built-in domain templates (`poleo`, `podcast`, `news`, `scientific`, `business`, `entertainment`, `medical`, `legal`), the same catalog the extractors use. They are synthesized rather than stored: each carries a `template:<name>` id, has no revision history, and cannot be updated or deleted. `clone()` turns one into an editable stored ontology at revision 1. Nothing is bound in a new database until you activate a version; until then, a client given no ontology of its own falls back to the template named by `schema_config.ontology_template` (POLE+O by default).
+
+[[_versioning_and_immutability]]
 == Versioning and immutability
 
-Every change produces a new *immutable revision*. `clone` yields revision 1;
-each `update` yields revision n+1. A version records its `revision`,
-`validation_mode`, a `schema_hash`, and provenance. You `activate` a specific
-*version* (by its `ov_…` id) — activation is what binds a schema to the
-workspace and starts validating writes against it.
+A version identifies a particular schema revision. Changing a schema and activating a version are distinct operations: an editable definition is not necessarily the one governing current writes.
 
-== Validation modes
+Version history supports comparison and deliberate rollout. Changing the active version may affect other applications using the workspace. A tutorial or experiment should preserve the previous active version or use a disposable workspace, rather than treating activation as local program state.
 
-Each version has a `validation_mode`:
+[[_validation_modes]]
+== Validation tradeoffs
 
-[cols="1,3",options="header"]
-|===
-| Mode | Behavior
-| `permissive` | (default) Non-conforming entity writes are accepted and recorded.
-| `strict` | Writes that violate the schema are rejected. The SDK surfaces the rejection as `ValidationError`.
-|===
+Permissive validation favors accepting input while recording non-conformance. Strict validation favors rejecting writes that violate the active schema. The right choice depends on whether the application can tolerate incomplete ingestion or imperfectly typed records.
 
-`permissive` favors ingestion tolerance; `strict` favors graph cleanliness. You
-choose per version, and `get_active()` reports the active mode.
+Validation enforces the declared constraints. It cannot determine whether a source statement is factually correct. See xref:reference/ontology-api.adoc[Validation modes and errors] for the current request and result contract.
 
-On bolt the mode is enforced client-side, and one rule holds in *both* modes:
-relations the ontology does not permit are dropped before storage, because
-writing an edge the schema forbids is never the intent. What `strict` adds is
-entity-level enforcement — `long_term.add_entity` and `add_relationship` raise
-`ValidationError` for an undeclared type, an undeclared relationship name or a
-forbidden endpoint pair, and message ingestion drops extracted entities whose
-`(type, subtype)` the ontology does not declare. The mode comes from
-`schema_config.validation_mode`, then the active stored version's mode, then
-`strict` if `strict_types` else `permissive`.
+On Bolt the mode is enforced in the client, and one rule holds in both modes: extracted relations the ontology does not permit are dropped before storage, because writing an edge the schema forbids is never the intent. `strict` adds entity-level enforcement. `long_term.add_entity` and `add_relationship` raise `ValidationError` for an undeclared type, an undeclared relationship name or a forbidden endpoint pair, and message ingestion drops extracted entities whose `(type, subtype)` the ontology does not declare. The client takes the mode from `schema_config.validation_mode`, then from the active stored version when that version supplied the document, and otherwise uses `strict` when `schema_config.strict_types` is set and `permissive` when it is not.
 
 [#bolt-vs-nams]
-== Bolt vs NAMS
+== Bolt and NAMS mechanics
 
-The method surface is identical; the mechanics behind it are not.
+The method surface is the same on both backends; the mechanics behind it are not.
 
 [cols="1,2,2",options="header"]
 |===
 | Concern | Bolt (`BoltOntology`) | NAMS (`NamsOntology`)
 
 | Storage
-| `(:Ontology)-[:HAS_VERSION]->(:OntologyVersion)` in your database, with the
-  document as a JSON string property and a `schema_hash` over its content
-| Server-side, per workspace
+| `(:Ontology)-[:HAS_VERSION]->(:OntologyVersion)` in your database. The document is a JSON string property, with a `schema_hash` over its content.
+| Server-side, per workspace.
 
 | Templates
-| The eight local domain templates, synthesised as `template:<name>` rows
-| ~28 system templates with revision rows
+| The eight built-in domain templates, listed as read-only `template:<name>` rows.
+| The service's system templates, with revision rows.
 
 | Active version
-| One per database. Nothing is bound until you `activate()`
-| One per workspace. `nams-default` is bound implicitly
+| One per database. Nothing is bound until you call `activate()`.
+| One per workspace. `nams-default` is bound until the workspace activates its own.
 
 | `get_active()` with nothing bound
-| Raises `NotSupportedError` (it does *not* silently fall back to POLE+O — the
-  runtime ontology resolution applies that fallback itself)
-| Raises `NotSupportedError`
+| Raises `NotSupportedError`. It does not fall back to POLE+O; the client's connect-time resolution applies that fallback itself.
+| Raises `NotSupportedError`.
 
 | `import_` formats
-| Converted locally: `json`, `yaml`, `native`, `arrows`, `auto`. The
-  extraction-backed converters (`rdf`, `graphql`, `cypher`, `linkml`,
-  `data-importer`) and any `url=` fetch raise `NotSupportedError`
-| Every format, including server-side URL fetch
+| Converted locally: `json`, `yaml`, `native`, `arrows` and `auto`. The extraction-backed converters and any `url=` fetch raise `NotSupportedError`.
+| Every service format, including a server-side URL fetch.
 
 | `migrate`
-| Runs **synchronously**, one transaction per label pair, and returns an
-  already-terminal `MigrationJob`. `batch_size` is accepted and ignored
-| Enqueues a background job you poll with `get_migration()`
+| Runs synchronously, one transaction per label pair, and returns a finished `MigrationJob`. `batch_size` is accepted and ignored.
+| Enqueues a background job that you poll with `get_migration()`.
 
 | Validation
-| Client-side, from `validate_structure()` plus the strict write paths
-| Server-side, at write time
+| In the client: `validate_structure()` on `create` and `update`, plus the strict write paths.
+| Server-side, at write time.
 
-| Extension fields (descriptions, aliases, thresholds, constraints)
-| Drive the local pipeline: the JointIE schema, the LLM prompt and the resolver
-| Client-side concepts. `NamsOntology` sends the document exactly as given, but
-  whether the service persists fields it does not model is not verified for
-  this release — extraction and resolution there run against its own engine
+| Extension fields (descriptions, aliases, thresholds, decoding constraints)
+| Drive the local pipeline: the JointIE schema, the LLM prompt and the resolver.
+| Sent only when set: extension fields left at their defaults are omitted from the request body, so a document without extensions keeps its earlier shape. Whether the service keeps fields it does not model is not verified for this release; its extraction and resolution use its own engine.
 
-| Drives extraction
-| Yes — locally, once resolved at connect time
-| Yes — server-side, asynchronously after a write
+| Effect on extraction
+| Local, from the document resolved at connect time.
+| Server-side and asynchronous after a write.
 |===
 
+[[_relationship_to_server_side_extraction]]
 == Relationship to extraction
 
-On *NAMS*, ontologies shape the server-side GraphRAG extraction pipeline. Once a
-version is active, entities extracted from stored messages — and entities you
-write directly with `add_entity` — are validated against the active schema.
-Extraction is asynchronous; use
-xref:how-to/use-ontologies.adoc[`wait_for_extraction`] when you need to observe
-the result deterministically.
+On NAMS, the active vocabulary informs the server-side graph extraction and validation path. A completed message write does not necessarily mean that asynchronous extraction has finished.
 
-On *bolt*, extraction runs in your process, so the ontology is resolved once at
-connect time and compiled into the extractor before the first message is stored.
-Precedence: the explicit `MemoryClient(ontology=...)` keyword,
-`schema_config.ontology_path`, `schema_config.custom_schema_path`, the active
-stored version (when `use_active_ontology` is on), `SchemaModel.CUSTOM` plus
-`entity_types`, then the built-in template named by `ontology_template`. Because
-that happens at connect time, activating a version affects the *next*
-connection, not the client that activated it. `client.ontology_document` and
-`client.validation_mode` report what was resolved.
+Applications that need extracted entities before their next operation must observe the supported extraction-completion mechanism. The xref:how-to/use-ontologies.adoc[ontology guide] provides the exact waiting and verification steps. Activating a new version is also separate from migrating already stored records.
 
+On Bolt, extraction runs in your process during the write, so there is nothing to wait for. The ontology is resolved once at connect time and compiled into the extractor before the first message is stored. The first available source wins: the `MemoryClient(ontology=...)` keyword, `schema_config.ontology_path`, `schema_config.custom_schema_path`, the active stored version (when `schema_config.use_active_ontology` is on), `SchemaModel.CUSTOM` with `entity_types`, and finally the built-in template named by `schema_config.ontology_template`. Because resolution happens at connect time, activating a version affects the next connection, not the client that activated it. `client.ontology_document` and `client.validation_mode` report what the client resolved. See xref:how-to/ontology-driven-extraction.adoc[drive extraction from an ontology] for the Bolt procedure.
+
+[[_see_also]]
 == See also
 
-* xref:how-to/ontology-driven-extraction.adoc[How-to: Drive extraction from an ontology]
-* xref:how-to/tune-entity-resolution.adoc[How-to: Tune entity resolution]
-* xref:how-to/use-ontologies.adoc[How-to: Use ontologies]
-* xref:reference/ontology-api.adoc[Reference: Ontology API]
-* xref:tutorials/ontology-quickstart.adoc[Tutorial: Ontology quickstart]
+* xref:how-to/use-ontologies.adoc[Use ontologies]
+* xref:how-to/ontology-driven-extraction.adoc[Drive extraction from an ontology]
+* xref:how-to/tune-entity-resolution.adoc[Tune entity resolution]
+* xref:reference/ontology-api.adoc[Ontology API]
+* xref:tutorials/ontology-quickstart.adoc[Ontology quickstart]
+* xref:explanation/poleo-model.adoc[POLE+O classification]

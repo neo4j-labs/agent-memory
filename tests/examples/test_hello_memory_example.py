@@ -148,12 +148,35 @@ class TestHelloMemoryStructure:
         if "create_conversation" in source:
             assert "if client.is_nams:" in source
 
-    def test_no_bolt_localhost_password_drift(self):
-        """The script default must match the container the README documents."""
+    def test_no_bolt_localhost_credential_drift(self):
+        """The bolt path is AuraDB; every file that mentions it must agree.
+
+        The README used to document a `docker run` one-liner whose password had
+        to match the script default. It documents AuraDB now, so the invariant
+        moved: the README points at the shared setup, and `.env.example`'s
+        commented bolt block uses the same variables and default the script
+        reads -- an uncommented `.env.example` must reach the same database the
+        script would.
+        """
         source = MAIN_PY.read_text(encoding="utf-8")
         readme = (EXAMPLE_DIR / "README.md").read_text(encoding="utf-8")
+        env_example = (EXAMPLE_DIR / ".env.example").read_text(encoding="utf-8")
+
         assert 'os.getenv("NEO4J_PASSWORD", "test-password")' in source
-        assert "NEO4J_AUTH=neo4j/test-password" in readme
+        assert "AURA_SETUP.md" in readme, (
+            "the README must link the shared Aura setup instructions for the bolt path"
+        )
+        assert "docker run" not in readme, (
+            "the bolt path moved to AuraDB; a stray docker one-liner reintroduces "
+            "the local-password drift this test was written for"
+        )
+        assert "# NEO4J_PASSWORD=test-password" in env_example, (
+            ".env.example's commented bolt block must carry the same default the "
+            "script reads, so uncommenting it reaches the same database"
+        )
+        assert "docker" not in env_example, (
+            ".env.example still points at a docker one-liner the README no longer has"
+        )
 
     def test_readme_follows_labs_conventions(self):
         readme = (EXAMPLE_DIR / "README.md").read_text(encoding="utf-8")

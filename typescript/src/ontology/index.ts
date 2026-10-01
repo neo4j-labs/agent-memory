@@ -2,9 +2,9 @@
  * NAMS ontology surface — typed, versioned, validated domain schemas
  * extending POLE+O. Mirrors the Python `client.ontology` accessor.
  *
- * The ontology endpoints are a snake_case sub-API verified empirically against
- * staging (absent from the OpenAPI spec). The `RestTransport` routes for these
- * (`*_ontology`) send bodies verbatim via the `snakeBody` flag.
+ * The ontology endpoints use the service’s snake_case contract. The active
+ * response carries its bound version, which can be older than the latest
+ * revision. `RestTransport` sends these bodies verbatim via `snakeBody`.
  *
  *   GET    /ontologies                        → list (summaries)
  *   GET    /ontologies/{id}                    → { record, versions[] }
@@ -93,12 +93,22 @@ export interface Ontology {
   versions: OntologyVersion[];
 }
 
+/**
+ * The active ontology document plus the version it is bound to.
+ *
+ * Unreleased behaviour (not in 0.5.0; see CHANGELOG [Unreleased]): the binding
+ * metadata comes from the `version` object on the active response, and a
+ * legacy document-only response leaves it all undefined. In 0.5.0 these fields
+ * were composed from extra `list()`/`get()` calls using the latest revision.
+ */
 export interface ActiveOntology {
   document: OntologyDocument;
   validationMode?: string;
   revision?: number;
   ontologyId?: string;
   versionId?: string;
+  /** Unreleased: not present in 0.5.0; see CHANGELOG [Unreleased]. */
+  schemaHash?: string;
 }
 
 export interface CreateOntologyOptions {
@@ -281,6 +291,66 @@ function toVersion(raw: WireVersion): OntologyVersion {
   };
 }
 
+/** Validate the supplied binding without tightening unrelated version parsing. */
+function toActiveVersion(raw: unknown): OntologyVersion {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("Invalid active ontology version metadata: expected an object.");
+  }
+  const value = raw as Record<string, unknown>;
+  for (const key of ["id", "ontology_id"]) {
+    if (typeof value[key] !== "string" || !value[key].trim()) {
+      throw new Error(`Invalid active ontology version metadata: ${key} is required.`);
+    }
+  }
+  if (typeof value.revision !== "number" || !Number.isSafeInteger(value.revision) || value.revision < 1) {
+    throw new Error("Invalid active ontology version metadata: revision must be a positive integer.");
+  }
+  if (value.validation_mode !== "permissive" && value.validation_mode !== "strict") {
+    throw new Error("Invalid active ontology version metadata: unknown validation_mode.");
+  }
+  for (const key of ["schema_hash", "created_at", "message"]) {
+    if (value[key] != null && typeof value[key] !== "string") {
+      throw new Error(`Invalid active ontology version metadata: ${key} must be a string.`);
+    }
+  }
+  if (value.schema_json != null && typeof value.schema_json !== "string") {
+    throw new Error("Invalid active ontology version metadata: schema_json must be a string.");
+  }
+  const version = toVersion(value as unknown as WireVersion);
+  if (value.schema_json != null && !version.document) {
+    throw new Error("Invalid active ontology version metadata: schema_json is not a document.");
+  }
+  return version;
+}
+
+/** Compare parsed fields with their defaults, independent of JSON key order. */
+function normalizedDocument(doc: OntologyDocument): string {
+  return JSON.stringify({
+    domain: {
+      id: doc.domain.id,
+      name: doc.domain.name,
+      description: doc.domain.description ?? null,
+      tagline: doc.domain.tagline ?? null,
+      emoji: doc.domain.emoji ?? null,
+    },
+    entityTypes: doc.entityTypes.map((e) => ({
+      label: e.label,
+      poleType: e.poleType,
+      subtype: e.subtype ?? null,
+      color: e.color ?? null,
+      icon: e.icon ?? null,
+      properties: e.properties.map((p) => ({
+        name: p.name,
+        type: p.type,
+        required: p.required ?? false,
+        unique: p.unique ?? false,
+        enum: p.enum ?? null,
+      })),
+    })),
+    relationships: doc.relationships.map((r) => ({ type: r.type, source: r.source, target: r.target })),
+  });
+}
+
 function toSummary(raw: WireSummary): OntologySummary {
   return {
     id: raw.id,
@@ -397,8 +467,19 @@ export class OntologyClient {
     };
   }
 
+  /**
+   * Return the active document and the version it is bound to, read from the
+   * active response (which can be older than the latest revision).
+   *
+   * Unreleased behaviour (not in 0.5.0; see CHANGELOG [Unreleased]): malformed
+   * version metadata, or a version whose schema conflicts with the active
+   * document, throws a plain `Error` (not a `MemoryError` subclass). 0.5.0
+   * composed the metadata from `list()`/`get()` instead.
+   *
+   * @throws {@link NotSupportedError} when no ontology is bound.
+   */
   async getActive(): Promise<ActiveOntology> {
-    const raw = await this.transport.request<{ ontology?: WireDocument }>(
+    const raw = await this.transport.request<{ ontology?: WireDocument; version?: unknown }>(
       "get_active_ontology",
       {},
     );
@@ -406,24 +487,19 @@ export class OntologyClient {
     if (!document) {
       throw new NotSupportedError("No active ontology bound for this workspace.");
     }
-    const active: ActiveOntology = { document };
-    // Compose version metadata via a second lookup (the active response carries
-    // no version metadata).
-    const summaries = await this.list();
-    const match =
-      summaries.find((s) => s.isActive) ??
-      summaries.find((s) => s.name === document.domain.id);
-    if (match) {
-      active.ontologyId = match.id;
-      const detail = await this.get(match.id);
-      const current = currentVersion(detail, match.currentRevision);
-      if (current) {
-        active.validationMode = current.validationMode;
-        active.revision = current.revision;
-        active.versionId = current.id;
-      }
+    if (raw.version == null) return { document };
+    const version = toActiveVersion(raw.version);
+    if (version.document && normalizedDocument(version.document) !== normalizedDocument(document)) {
+      throw new Error("Active ontology version schema conflicts with the active document.");
     }
-    return active;
+    return {
+      document,
+      ontologyId: version.ontologyId,
+      versionId: version.id,
+      revision: version.revision,
+      validationMode: version.validationMode,
+      schemaHash: version.schemaHash,
+    };
   }
 
   async clone(templateName: string): Promise<OntologyVersion> {
@@ -530,13 +606,4 @@ export class OntologyClient {
     });
     return toMigrationJob(raw);
   }
-}
-
-function currentVersion(ontology: Ontology, revision?: number): OntologyVersion | undefined {
-  if (ontology.versions.length === 0) return undefined;
-  if (revision !== undefined) {
-    const exact = ontology.versions.find((v) => v.revision === revision);
-    if (exact) return exact;
-  }
-  return ontology.versions.reduce((a, b) => (b.revision > a.revision ? b : a));
 }

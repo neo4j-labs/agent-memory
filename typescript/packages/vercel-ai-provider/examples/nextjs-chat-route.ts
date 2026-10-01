@@ -1,9 +1,8 @@
 /**
- * Drop-in Next.js App Router chat endpoint with NAMS memory.
+ * Next.js App Router chat route with NAMS memory.
  *
- * Copy into your app as `app/api/chat/route.ts`. Pair with `useChat()` from
- * `@ai-sdk/react` on the client — no other changes needed; memory is
- * transparent per user.
+ * Copy to `app/api/chat/route.ts` and use `useChat()` from `@ai-sdk/react`.
+ * Memory is automatic for each user.
  */
 
 import { openai } from '@ai-sdk/openai';
@@ -19,7 +18,7 @@ const model = process.env.NAMS_DEMO_MODEL ?? 'gpt-5.4-mini';
 export async function POST(req: Request): Promise<Response> {
   const { messages, userId }: { messages: UIMessage[]; userId: string } = await req.json();
 
-  // One provider instance per request, scoped to the authenticated user.
+  // One provider per request, for this user.
   const nams = createNamsProvider({
     apiKey: process.env.MEMORY_API_KEY!,
     baseProvider: openai,

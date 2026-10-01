@@ -1,0 +1,244 @@
+= SchemaManager persistence API
+:page-product: agent-memory
+:page-pagination:
+:toclevels: 2
+
+The `neo4j_agent_memory.schema.SchemaManager` CRUD surface from xref:reference/schemas.adoc[Domain schemas reference]. Signatures show types, keyword-only arguments (`*`), and defaults; they are reference declarations, not calls to execute directly.
+
+== SchemaManager persistence API (bolt)
+
+The following methods belong to `neo4j_agent_memory.schema.SchemaManager`, constructed with a connected Neo4jClient. Its active schema version is persistence metadata; changing it does not reconfigure existing MemoryClient extractors. `load_schema` loads the active version; `load_schema_version` selects an explicit version.
+
+=== save_schema
+
+Save a schema to Neo4j.
+
+// contract: schema/persistence.py:SchemaManager.save_schema
+[source,python]
+----
+async def save_schema(
+    schema: EntitySchemaConfig,
+    *,
+    created_by: str | None=None,
+    set_active: bool=True,
+) -> StoredSchema: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `schema` | The EntitySchemaConfig to save
+| `created_by` | Optional identifier for who created this schema
+| `set_active` | Whether to set this as the active version (default True)
+|===
+
+=== load_schema
+
+Load the active schema by name.
+
+// contract: schema/persistence.py:SchemaManager.load_schema
+[source,python]
+----
+async def load_schema(name: str) -> EntitySchemaConfig | None: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `name` | Schema name to load
+|===
+
+=== load_schema_version
+
+Load a specific version of a schema.
+
+// contract: schema/persistence.py:SchemaManager.load_schema_version
+[source,python]
+----
+async def load_schema_version(name: str, version: str) -> EntitySchemaConfig | None: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `name` | Schema name
+| `version` | Schema version to load
+|===
+
+=== get_stored_schema
+
+Get full stored schema details by name.
+
+// contract: schema/persistence.py:SchemaManager.get_stored_schema
+[source,python]
+----
+async def get_stored_schema(name: str) -> StoredSchema | None: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `name` | Schema name
+|===
+
+=== get_stored_schema_by_id
+
+Get stored schema by ID.
+
+// contract: schema/persistence.py:SchemaManager.get_stored_schema_by_id
+[source,python]
+----
+async def get_stored_schema_by_id(schema_id: UUID | str) -> StoredSchema | None: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `schema_id` | Schema UUID
+|===
+
+=== list_schemas
+
+List all schemas or filter by name.
+
+// contract: schema/persistence.py:SchemaManager.list_schemas
+[source,python]
+----
+async def list_schemas(name: str | None=None) -> list[SchemaListItem]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `name` | Optional schema name to filter by
+|===
+
+=== list_schema_versions
+
+List all versions of a schema.
+
+// contract: schema/persistence.py:SchemaManager.list_schema_versions
+[source,python]
+----
+async def list_schema_versions(name: str) -> list[StoredSchema]: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `name` | Schema name
+|===
+
+=== set_active_version
+
+Set a specific version as the active schema.
+
+// contract: schema/persistence.py:SchemaManager.set_active_version
+[source,python]
+----
+async def set_active_version(name: str, version: str) -> StoredSchema | None: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `name` | Schema name
+| `version` | Version to set as active
+|===
+
+=== schema_exists
+
+Check if a schema exists.
+
+// contract: schema/persistence.py:SchemaManager.schema_exists
+[source,python]
+----
+async def schema_exists(name: str) -> bool: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `name` | Schema name to check
+|===
+
+=== delete_schema
+
+Delete a specific schema version by ID.
+
+// contract: schema/persistence.py:SchemaManager.delete_schema
+[source,python]
+----
+async def delete_schema(schema_id: UUID | str) -> bool: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `schema_id` | Schema UUID to delete
+|===
+
+=== delete_all_versions
+
+Delete all versions of a schema.
+
+// contract: schema/persistence.py:SchemaManager.delete_all_versions
+[source,python]
+----
+async def delete_all_versions(name: str) -> int: ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `name` | Schema name to delete
+|===
+
+=== ensure_schema_index
+
+Create index on Schema nodes for efficient lookups.
+
+// contract: schema/persistence.py:SchemaManager.ensure_schema_index
+[source,python]
+----
+async def ensure_schema_index() -> None: ...
+----
+
+`StoredSchema` includes the stored record ID, name, version, active flag, creation timestamp, creator, and EntitySchemaConfig. Schema deletion removes schema records; it does not delete the memory entities previously extracted using them.
+
+=== StoredSchema
+
+Fields and defaults:
+
+[cols="2,3,2,4",options="header"]
+|===
+| Field | Type | Default | Description
+| `id` | `UUID` | `required` |
+| `name` | `str` | `required` |
+| `version` | `str` | `required` |
+| `description` | `str \| None` | `required` |
+| `config` | `EntitySchemaConfig` | `required` |
+| `is_active` | `bool` | `required` |
+| `created_at` | `datetime` | `required` |
+| `created_by` | `str \| None` | `required` |
+|===
+
+=== SchemaListItem
+
+Fields and defaults:
+
+[cols="2,3,2,4",options="header"]
+|===
+| Field | Type | Default | Description
+| `name` | `str` | `required` |
+| `latest_version` | `str` | `required` |
+| `description` | `str \| None` | `required` |
+| `version_count` | `int` | `required` |
+| `is_active` | `bool` | `required` |
+|===
+
+== See also
+
+* xref:reference/schemas.adoc[Domain schemas reference]
+* xref:reference/schemas-custom.adoc[Custom schemas and persistence]
+* xref:how-to/entity-extraction-schemas.adoc[Apply a custom entity extraction schema]

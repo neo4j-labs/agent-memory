@@ -5,10 +5,12 @@ This is the ten-line script you actually put in a workflow. It reuses
 adds the two things CI needs: a machine-readable report on disk and a
 non-zero exit code when the score regresses.
 
-Run from the repo root::
+After installing the published package and exporting the dedicated Aura
+connection settings described in main.py, save both files under eval-harness/
+and run from your local agent-memory-tutorials directory::
 
-    uv run python examples/eval-harness/ci_gate.py
-    uv run python examples/eval-harness/ci_gate.py --min-score 0.9 --report eval-report.json
+    python eval-harness/ci_gate.py
+    python eval-harness/ci_gate.py --min-score 0.9 --report eval-report.json
 
 Exit codes: ``0`` at or above the threshold, ``1`` below it, ``2`` when the
 run itself failed (no Neo4j, bad credentials, a seed error).

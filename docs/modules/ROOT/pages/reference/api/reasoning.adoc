@@ -1,416 +1,48 @@
-= ReasoningMemory API Reference
+= ReasoningMemory API reference
 :page-product: agent-memory
 :page-pagination:
 :toclevels: 2
 
-API for reasoning trace and tool call storage.
+Reasoning trace, step, and tool-call operations exposed through `client.reasoning`. The main signatures are for bolt; NAMS stores conversation-level steps and tool calls and synthesizes the trace lifecycle locally.
+
+Signatures below show types, keyword-only arguments (`*`), and defaults. They are reference declarations; the examples show calls to execute.
+
+See xref:reference/backend-capabilities.adoc[Backend capabilities] for availability and data scope. This page is a short overview and index; each subsystem has its own page.
 
 == Overview
 
-`ReasoningMemory` records how agents solve problems: reasoning steps, tool calls, and outcomes.
+A bolt trace records a task and optional outcome. Its ordered steps can hold thoughts, actions, observations, and tool calls.
 
 [source,python]
 ----
-async with MemoryClient(settings) as client:
-    # Access via client
-    reasoning = client.reasoning
+from neo4j_agent_memory.core.memory import ToolCallStatus
 
-    # Start a reasoning trace
-    trace = await reasoning.start_trace(
-        session_id="user-123",
-        task="Find restaurant recommendations"
-    )
-----
-
-== Trace Operations
-
-=== start_trace
-
-Start a new reasoning trace.
-
-[source,python]
-----
-trace = await reasoning.start_trace(
-    session_id: str,
-    task: str,
-    triggered_by_message_id: str | None = None,
-    metadata: dict[str, Any] | None = None,
+trace = await client.reasoning.start_trace("example", "Find Italian restaurants")
+step = await client.reasoning.add_step(
+    trace.id, thought="Search nearby restaurants", action="search_restaurants"
+)
+await client.reasoning.record_tool_call(
+    step.id, "search_api", {"cuisine": "Italian"},
+    result=[{"name": "La Trattoria"}], duration_ms=234,
+    status=ToolCallStatus.SUCCESS,
+)
+await client.reasoning.complete_trace(
+    trace.id, outcome="Recommended La Trattoria", success=True
 )
 ----
 
-==== Parameters
+For NAMS, first create a conversation and replace `example` with its server-issued ID. Read xref:reference/api/reasoning-search-stats.adoc#_nams_lifecycle_and_operations[NAMS lifecycle and operations] before relying on trace persistence.
 
-[cols="1,1,1,3", options="header"]
-|===
-| Parameter | Type | Default | Description
+== On this subsystem
 
-| `session_id`
-| `str`
-| _required_
-| Session identifier
+* anchor:_trace_operations[]anchor:_parameters[]anchor:_returns[]anchor:_get_traces[]anchor:_delete_trace[]anchor:_trace_operations_bolt[]anchor:_start_trace[]anchor:_complete_trace[]anchor:_get_trace[]anchor:_get_trace_with_steps[]anchor:_get_session_traces[]anchor:_list_traces[]xref:reference/api/reasoning-traces.adoc[Trace operations] — `start_trace`, `complete_trace`, `get_trace`, `get_trace_with_steps`, `get_session_traces`, `list_traces`.
+* anchor:_step_operations[]anchor:_parameters_2[]anchor:_tool_call_operations[]anchor:_parameters_3[]anchor:_get_steps[]anchor:_get_tool_calls[]anchor:_message_linking[]anchor:_step_and_tool_call_operations_bolt[]anchor:_add_step[]anchor:_record_tool_call[]anchor:_on_tool_call_recorded[]anchor:_context_and_message_links_bolt[]anchor:_get_context[]anchor:_link_trace_to_message[]anchor:_streamingtracerecorder_bolt[]anchor:_start_step[]anchor:_add_observation[]anchor:_set_outcome[]xref:reference/api/reasoning-steps.adoc[Step, tool-call, and streaming operations] — `add_step`, `record_tool_call`, `on_tool_call_recorded`, `link_trace_to_message`, and the `StreamingTraceRecorder` context manager.
+* anchor:_search_operations[]anchor:_returns_2[]anchor:_search_traces[]anchor:_find_similar_traces[]anchor:_statistics[]anchor:_returns_3[]anchor:_search_bolt_only[]anchor:_get_similar_traces[]anchor:_search_steps[]anchor:_statistics_bolt_only[]anchor:_get_tool_stats[]anchor:_get_tool_usage_stats[]anchor:_migrate_tool_stats[]anchor:_nams_lifecycle_and_operations[]xref:reference/api/reasoning-search-stats.adoc[Search, statistics, and NAMS lifecycle] — `get_similar_traces`, `search_steps`, `get_tool_stats`, and the NAMS synthetic-trace lifecycle table.
+* anchor:_entityref[]anchor:_models[]anchor:_reasoningtrace[]anchor:_reasoningstep[]anchor:_toolcall[]anchor:_tool[]anchor:_toolstats[]anchor:_reasoningstepwithcontext[]anchor:_structured_outcomes_and_entity_references_bolt[]anchor:_traceoutcome[]xref:reference/api/reasoning-models.adoc[Models and structured outcomes] — `ReasoningTrace`, `ReasoningStep`, `ToolCall`, `Tool`, `ToolStats`, `EntityRef`, and `TraceOutcome`.
 
-| `task`
-| `str`
-| _required_
-| Task description
+anchor:_example[]
 
-| `triggered_by_message_id`
-| `str`
-| `None`
-| Message that triggered this trace
+== See also
 
-| `metadata`
-| `dict`
-| `None`
-| Additional metadata
-|===
-
-==== Returns
-
-`ReasoningTrace` object with generated `id`.
-
-=== complete_trace
-
-Complete a reasoning trace with outcome.
-
-[source,python]
-----
-trace = await reasoning.complete_trace(
-    trace_id: str,
-    outcome: str,
-    success: bool = True,
-)
-----
-
-=== get_trace
-
-Get a trace by ID.
-
-[source,python]
-----
-trace = await reasoning.get_trace(trace_id: str)
-----
-
-=== get_traces
-
-Get traces for a session.
-
-[source,python]
-----
-traces = await reasoning.get_traces(
-    session_id: str | None = None,
-    limit: int = 50,
-)
-----
-
-=== delete_trace
-
-Delete a trace and its steps.
-
-[source,python]
-----
-await reasoning.delete_trace(trace_id: str)
-----
-
-== Step Operations
-
-=== add_step
-
-Add a reasoning step to a trace.
-
-[source,python]
-----
-step = await reasoning.add_step(
-    trace_id: str,
-    thought: str,
-    action: str | None = None,
-    observation: str | None = None,
-)
-----
-
-==== Parameters
-
-[cols="1,1,1,3", options="header"]
-|===
-| Parameter | Type | Default | Description
-
-| `trace_id`
-| `str`
-| _required_
-| Parent trace ID
-
-| `thought`
-| `str`
-| _required_
-| Agent's reasoning/thought
-
-| `action`
-| `str`
-| `None`
-| Action taken
-
-| `observation`
-| `str`
-| `None`
-| Result observed
-|===
-
-=== get_steps
-
-Get steps for a trace.
-
-[source,python]
-----
-steps = await reasoning.get_steps(trace_id: str)
-----
-
-== Tool Call Operations
-
-=== record_tool_call
-
-Record a tool call within a step.
-
-[source,python]
-----
-tool_call = await reasoning.record_tool_call(
-    step_id: str,
-    tool_name: str,
-    arguments: dict[str, Any],
-    result: Any,
-    duration_ms: float | None = None,
-    success: bool = True,
-    error: str | None = None,
-    message_id: str | None = None,
-)
-----
-
-==== Parameters
-
-[cols="1,1,1,3", options="header"]
-|===
-| Parameter | Type | Default | Description
-
-| `step_id`
-| `str`
-| _required_
-| Parent step ID
-
-| `tool_name`
-| `str`
-| _required_
-| Name of the tool called
-
-| `arguments`
-| `dict`
-| _required_
-| Tool arguments
-
-| `result`
-| `Any`
-| _required_
-| Tool result
-
-| `duration_ms`
-| `float`
-| `None`
-| Execution time in milliseconds
-
-| `success`
-| `bool`
-| `True`
-| Whether the call succeeded
-
-| `error`
-| `str`
-| `None`
-| Error message if failed
-
-| `message_id`
-| `str`
-| `None`
-| Message that triggered the call
-|===
-
-=== get_tool_calls
-
-Get tool calls for a step.
-
-[source,python]
-----
-tool_calls = await reasoning.get_tool_calls(step_id: str)
-----
-
-== Search Operations
-
-=== search_traces
-
-Semantic search for similar reasoning traces.
-
-[source,python]
-----
-results = await reasoning.search_traces(
-    query: str,
-    session_id: str | None = None,
-    limit: int = 10,
-    min_score: float = 0.0,
-)
-----
-
-==== Returns
-
-List of `(ReasoningTrace, score)` tuples.
-
-=== find_similar_traces
-
-Find traces similar to a given trace.
-
-[source,python]
-----
-similar = await reasoning.find_similar_traces(
-    trace_id: str,
-    limit: int = 5,
-)
-----
-
-== Statistics
-
-=== get_tool_stats
-
-Get tool usage statistics.
-
-[source,python]
-----
-stats = await reasoning.get_tool_stats(
-    session_id: str | None = None,
-)
-----
-
-==== Returns
-
-[source,python]
-----
-{
-    "search_api": {"calls": 42, "successes": 40, "failures": 2, "avg_duration_ms": 150.5},
-    "weather_tool": {"calls": 10, "successes": 10, "failures": 0, "avg_duration_ms": 80.2},
-    ...
-}
-----
-
-== Message Linking
-
-=== link_trace_to_message
-
-Link an existing trace to a message.
-
-[source,python]
-----
-await reasoning.link_trace_to_message(
-    trace_id: str,
-    message_id: str,
-)
-----
-
-Creates an `INITIATED_BY` relationship:
-
-[source]
-----
-(ReasoningTrace) -[:INITIATED_BY]-> (Message)
-----
-
-== Models
-
-=== ReasoningTrace
-
-[source,python]
-----
-@dataclass
-class ReasoningTrace:
-    id: str
-    session_id: str
-    task: str
-    outcome: str | None
-    success: bool | None
-    started_at: datetime
-    completed_at: datetime | None
-    metadata: dict[str, Any]
-    embedding: list[float] | None
-----
-
-=== ReasoningStep
-
-[source,python]
-----
-@dataclass
-class ReasoningStep:
-    id: str
-    trace_id: str
-    thought: str
-    action: str | None
-    observation: str | None
-    sequence: int
-    timestamp: datetime
-----
-
-=== ToolCall
-
-[source,python]
-----
-@dataclass
-class ToolCall:
-    id: str
-    step_id: str
-    tool_name: str
-    arguments: dict[str, Any]
-    result: Any
-    duration_ms: float | None
-    success: bool
-    error: str | None
-    timestamp: datetime
-----
-
-== Example
-
-[source,python]
-----
-async with MemoryClient(settings) as client:
-    # Start reasoning trace linked to user message
-    trace = await client.reasoning.start_trace(
-        session_id="user-123",
-        task="Find Italian restaurants nearby",
-        triggered_by_message_id=message.id,
-    )
-
-    # Add reasoning step
-    step = await client.reasoning.add_step(
-        trace.id,
-        thought="User wants Italian food. I should search for nearby restaurants.",
-        action="search_restaurants",
-    )
-
-    # Record tool call
-    await client.reasoning.record_tool_call(
-        step.id,
-        tool_name="search_api",
-        arguments={"cuisine": "Italian", "location": "nearby"},
-        result=[{"name": "La Trattoria", "rating": 4.5}],
-        duration_ms=234.5,
-    )
-
-    # Complete trace
-    await client.reasoning.complete_trace(
-        trace.id,
-        outcome="Recommended La Trattoria based on high rating",
-        success=True,
-    )
-
-    # Later: find similar past reasoning
-    similar = await client.reasoning.search_traces("restaurant recommendations")
-    for trace, score in similar:
-        print(f"[{score:.2f}] {trace.task}: {trace.outcome}")
-----
-
-== See Also
-
-* xref:reference/api/memory-client.adoc[MemoryClient API]
-* xref:how-to/reasoning-traces.adoc[Record Reasoning Traces]
-* xref:explanation/memory-types.adoc[Understanding Memory Types]
+* xref:how-to/reasoning-traces.adoc[Record reasoning traces]
+* xref:explanation/memory-types.adoc[Memory types]

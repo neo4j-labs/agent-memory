@@ -1,0 +1,597 @@
+{
+  "version": 1,
+  "diagrams": [
+    {
+      "output": "docs/modules/ROOT/images/diagrams/1-natural-relationship-modeling.png",
+      "source": "docs/assets/diagrams/excalidraw/1-natural-relationship-modeling.excalidraw",
+      "referring_pages": [],
+      "owner": "documentation maintainers",
+      "status": "pending-placement",
+      "source_sha256": "b7f556a55d3a15a47dd9ffeb63b42406442604ac5d07c4564ac1ede8eaad01c8",
+      "output_sha256": "56aa663c3bad2c949f78609108740ff5c5e1580a07df11c7fa99dbb77854e011",
+      "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+      "reviewed_on": "2026-09-24",
+      "referring_documents": []
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/1-natural-relationship-modeling.svg",
+      "source": "docs/assets/diagrams/excalidraw/1-natural-relationship-modeling.excalidraw",
+      "referring_pages": [],
+      "owner": "documentation maintainers",
+      "status": "pending-placement",
+      "source_sha256": "b7f556a55d3a15a47dd9ffeb63b42406442604ac5d07c4564ac1ede8eaad01c8",
+      "output_sha256": "7fb55ae9526d8daf7ca900d9871d38ec9e4ceb0103016c60436a5f9951466501",
+      "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+      "referring_documents": [],
+      "reviewed_on": "2026-09-24"
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/a-three-layer-solution.png",
+      "referring_pages": [],
+      "owner": "documentation maintainers",
+      "status": "unresolved-provenance",
+      "output_sha256": "c81a1d02248e4880e123a8bd48b1791a6e605eb1969e8febe8350442db589c34",
+      "referring_documents": [],
+      "note": "No editable .excalidraw source found under docs/assets/diagrams/excalidraw/ and no page references this file; provenance could not be established. Left on disk, not deleted, pending maintainer review."
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/architecture-overview.png",
+      "source": "docs/assets/diagrams/excalidraw/architecture-overview.excalidraw",
+      "referring_pages": [],
+      "owner": "documentation maintainers",
+      "status": "unresolved-provenance",
+      "source_sha256": "359ce6736b361362fb5f60dccd20dc17d80cf00d0dc3d0b2c32cc33d8f51ce42",
+      "output_sha256": "9158de23823e9929761007d73b9c9f0a4d916edce2f3d68850074615459168bc",
+      "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+      "referring_documents": [],
+      "note": "Export exists with a matching editable source but was never wired into a page or this manifest. Left on disk pending maintainer triage (which page, if any, should embed it)."
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/architecture.png",
+      "referring_pages": [],
+      "owner": "documentation maintainers",
+      "status": "unresolved-provenance",
+      "output_sha256": "9200d833e676fdcd93f7d43c11023ebec03a53efd461d2a33303061cf0350f5f",
+      "referring_documents": [],
+      "note": "No editable .excalidraw source found under docs/assets/diagrams/excalidraw/ and no page references this file; provenance could not be established. Left on disk, not deleted, pending maintainer review."
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/background-entity-enrichment.png",
+      "source": "docs/assets/diagrams/excalidraw/background-entity-enrichment.excalidraw",
+      "referring_pages": [],
+      "owner": "documentation maintainers",
+      "status": "pending-placement",
+      "source_sha256": "16990f00d00443bd0f00aa385434090dc1c87dac974316b7932780a362f0d561",
+      "output_sha256": "55bf3f022fa394100398ae0fbfcff788e928dcaee2f4b0053d18049f8246dc99",
+      "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+      "reviewed_on": "2026-09-24",
+      "referring_documents": []
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/background-entity-enrichment.svg",
+      "source": "docs/assets/diagrams/excalidraw/background-entity-enrichment.excalidraw",
+      "referring_pages": [],
+      "owner": "documentation maintainers",
+      "status": "pending-placement",
+      "source_sha256": "16990f00d00443bd0f00aa385434090dc1c87dac974316b7932780a362f0d561",
+      "output_sha256": "2c1b15df831e440208dd6bfc25635d2474550c54bd53b7f091a1264a782b9c08",
+      "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+      "referring_documents": [],
+      "reviewed_on": "2026-09-24"
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/buffered-write-flow.svg",
+      "source": "docs/assets/diagrams/excalidraw/buffered-write-flow.excalidraw",
+      "referring_pages": [
+        "docs/modules/ROOT/pages/how-to/buffered-writes.adoc"
+      ],
+      "owner": "documentation maintainers",
+      "status": "exported-and-visually-reviewed",
+      "source_sha256": "a99526112a42bfbcb3505deff5a81ecd644e2fe9c35203703173ab09d72788f7",
+      "output_sha256": "595280bedd15ea3eb40bdaaac63a5c17e28e1abf97f51fd21c5c757497e9693b",
+      "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+      "referring_documents": [],
+      "reviewed_on": "2026-09-18"
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/embedding-based-similarity.svg",
+      "source": "docs/assets/diagrams/excalidraw/embedding-based-similarity.excalidraw",
+      "referring_pages": [
+        "docs/modules/ROOT/pages/explanation/resolution-deduplication.adoc"
+      ],
+      "owner": "documentation maintainers",
+      "status": "exported-and-visually-reviewed",
+      "source_sha256": "d900384063d779341844396c6c755d7fb4a7b345dfdc6a1dd6e8ffdb9f085e56",
+      "output_sha256": "26d5ce2ebe3e47860b38a1fa5c596fe0187902f02625f0354a7a3a6fdb1b3563",
+      "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+      "referring_documents": [],
+      "reviewed_on": "2026-09-18"
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/entity-dedup-flow.svg",
+      "source": "docs/assets/diagrams/excalidraw/entity-dedup-flow.excalidraw",
+      "referring_pages": [
+        "docs/modules/ROOT/pages/how-to/deduplication.adoc"
+      ],
+      "owner": "documentation maintainers",
+      "status": "exported-and-visually-reviewed",
+      "source_sha256": "d3d9fdcfefe6fb775be4001c123357153c7c07990e8f3cc1d1a05489c614bcac",
+      "output_sha256": "c611a8f51727593954013d472cecc466fb59a987c10e162b6377dd2f0211bb55",
+      "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+      "reviewed_on": "2026-09-24",
+      "referring_documents": []
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/extraction-pipeline.svg",
+      "source": "docs/assets/diagrams/excalidraw/three-extraction-approaches.excalidraw",
+      "referring_pages": [
+        "docs/modules/ROOT/pages/explanation/extraction-pipeline.adoc",
+        "docs/modules/ROOT/pages/how-to/entity-extraction.adoc"
+      ],
+      "owner": "documentation maintainers",
+      "status": "exported-and-visually-reviewed",
+      "source_sha256": "694789a95939c8b18bcc85e435227027a986862287639bc54a020ecba75b1a58",
+      "output_sha256": "24bdc6e06b4dc9f031bbd7bd3934e780b63e9ad00092c27e711a98cb167b44a7",
+      "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+      "reviewed_on": "2026-09-18",
+      "referring_documents": []
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/financial-advisor-app-chat-aml-agent.png",
+      "referring_pages": [],
+      "owner": "documentation maintainers",
+      "status": "unresolved-provenance",
+      "output_sha256": "9440d612f8601fd45d1a46f0be1dd4be94c09e39a493fc9d44ab42ec15e4ba01",
+      "referring_documents": [],
+      "note": "No editable .excalidraw source found under docs/assets/diagrams/excalidraw/ and no page references this file; provenance could not be established. Left on disk, not deleted, pending maintainer review."
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/graph-schema.png",
+      "source": "docs/assets/diagrams/excalidraw/graph-schema.excalidraw",
+      "referring_pages": [],
+      "owner": "documentation maintainers",
+      "status": "pending-placement",
+      "source_sha256": "5c18d62a35166af8ed63d6d814e15168f3689d9b88d8a6c19d754cbcd24828c9",
+      "output_sha256": "35f56d2bdb1d98f744a8da35edf46ce99a28b308a3c337c2838446ae00f23479",
+      "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+      "reviewed_on": "2026-09-24",
+      "referring_documents": [],
+      "note": "Not embedded on any page. The second WORKS_AT arrow (from Sarah Lee) stops short of its target; fix the scene before placing this export."
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/graph-schema.svg",
+      "source": "docs/assets/diagrams/excalidraw/graph-schema.excalidraw",
+      "referring_pages": [],
+      "owner": "documentation maintainers",
+      "status": "pending-placement",
+      "source_sha256": "5c18d62a35166af8ed63d6d814e15168f3689d9b88d8a6c19d754cbcd24828c9",
+      "output_sha256": "0a8ff47f4b68d022822900f600c359c0e6d03da6fa27d9a283046777e7054d2d",
+      "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+      "referring_documents": [],
+      "reviewed_on": "2026-09-24",
+      "note": "Not embedded on any page. The second WORKS_AT arrow (from Sarah Lee) stops short of its target; fix the scene before placing this export."
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/mcp-server-architecture.png",
+      "source": "docs/assets/diagrams/excalidraw/mcp-server-architecture.excalidraw",
+      "referring_pages": [],
+      "owner": "documentation maintainers",
+      "status": "pending-placement",
+      "source_sha256": "dda9d723ddc00cd28292ff4d0fea2201d9c332d2efec8fe6f4f4b88d3eeb912f",
+      "output_sha256": "c9ccdd858e97d5e6203e26fcd0a7f03de37370c64ab86b65ad99a6338d72eccb",
+      "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+      "reviewed_on": "2026-09-18",
+      "referring_documents": [
+        "README.md"
+      ],
+      "note": "Referenced by README.md; re-exported from the current scene."
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/mcp-server-architecture.svg",
+      "source": "docs/assets/diagrams/excalidraw/mcp-server-architecture.excalidraw",
+      "referring_pages": [
+        "docs/modules/ROOT/pages/reference/mcp-tools.adoc"
+      ],
+      "owner": "documentation maintainers",
+      "status": "exported-and-visually-reviewed",
+      "source_sha256": "dda9d723ddc00cd28292ff4d0fea2201d9c332d2efec8fe6f4f4b88d3eeb912f",
+      "output_sha256": "1013178c8230776c638b53e6ff95afacb103e246ca0cfa8c8b56e73b4a454a70",
+      "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+      "referring_documents": [],
+      "reviewed_on": "2026-09-18"
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/memory-architecture.svg",
+      "source": "docs/assets/diagrams/excalidraw/memory-architecture.excalidraw",
+      "referring_pages": [
+        "docs/modules/ROOT/pages/explanation/graph-architecture.adoc",
+        "docs/modules/ROOT/pages/explanation/memory-types.adoc"
+      ],
+      "owner": "documentation maintainers",
+      "status": "exported-and-visually-reviewed",
+      "source_sha256": "804878ea1537d49d02dc94ba247a44268993c2f1e489aa3ed66d025a6fe7cce7",
+      "output_sha256": "ff3804ae54892c5c9a83381d36e6cf5817dc03117262b0307be03cacf517f826",
+      "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+      "referring_documents": [],
+      "reviewed_on": "2026-09-24"
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/message-chain.svg",
+      "source": "docs/assets/diagrams/excalidraw/message-chain.excalidraw",
+      "referring_pages": [
+        "docs/modules/ROOT/pages/how-to/messages.adoc",
+        "docs/modules/ROOT/pages/tutorials/first-agent-memory.adoc"
+      ],
+      "owner": "documentation maintainers",
+      "status": "exported-and-visually-reviewed",
+      "source_sha256": "78da9f8bb16a73cf04b370795c6fed50432c5be84f5cc6a79a4566771e2a7cef",
+      "output_sha256": "48a63dc8045175152e291c7d9f347ac6abc40d3d1c45f8c7b0cd1e54276d7e2f",
+      "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+      "reviewed_on": "2026-09-18",
+      "referring_documents": []
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/microsoft-agent-architecture.svg",
+      "source": "docs/assets/diagrams/excalidraw/microsoft-agent-architecture.excalidraw",
+      "referring_pages": [
+        "docs/modules/ROOT/pages/how-to/integrations/microsoft-agent.adoc"
+      ],
+      "owner": "documentation maintainers",
+      "status": "exported-and-visually-reviewed",
+      "source_sha256": "771dbd10bb9d4ec4075a67fdf8763dd1490163fe5366c86a6c00f9f39be686fc",
+      "output_sha256": "e3c002ccbb259956ba2c39c5ee91b8635202bafe6121d906b7f29ec62519d6fe",
+      "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+      "referring_documents": [],
+      "reviewed_on": "2026-09-18"
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/overview.png",
+      "referring_pages": [],
+      "owner": "documentation maintainers",
+      "status": "unresolved-provenance",
+      "output_sha256": "84d619d7b580e452168bd6737ed515bb9b439488af3c55cc321a7f7b55d2022f",
+      "referring_documents": [],
+      "note": "No editable .excalidraw source found under docs/assets/diagrams/excalidraw/ and no page references this file; provenance could not be established. Left on disk, not deleted, pending maintainer review."
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/pipeline-architecture.png",
+      "referring_pages": [],
+      "owner": "documentation maintainers",
+      "status": "unresolved-provenance",
+      "output_sha256": "3a2e0e921acd65ef750fc77f732ef6f55486763c5f3be428add0787c8e6e9660",
+      "referring_documents": [],
+      "note": "No editable .excalidraw source found under docs/assets/diagrams/excalidraw/ and no page references this file; provenance could not be established. Left on disk, not deleted, pending maintainer review."
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/poleo-model.svg",
+      "source": "docs/assets/diagrams/excalidraw/poleo-model.excalidraw",
+      "referring_pages": [
+        "docs/modules/ROOT/pages/explanation/poleo-model.adoc"
+      ],
+      "owner": "documentation maintainers",
+      "status": "exported-and-visually-reviewed",
+      "source_sha256": "cb1844b4b1c83a2cc2ad924681d3becada2c95e7b30455abd8fa05f8f26ad7c8",
+      "output_sha256": "d68ddf5eba7364035668095eca43237d4e799f9b5c9e2b3631b9154f867899b0",
+      "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+      "referring_documents": [],
+      "reviewed_on": "2026-09-24"
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/preference-aware-context-graph.svg",
+      "source": "docs/assets/diagrams/excalidraw/preference-aware-context-graph.excalidraw",
+      "referring_pages": [
+        "docs/modules/ROOT/pages/how-to/preferences.adoc"
+      ],
+      "owner": "documentation maintainers",
+      "status": "exported-and-visually-reviewed",
+      "source_sha256": "e84f6c0bbb27b61fb5f2953cd681fb8351d23501c39d17ecaaba0478ff1aa839",
+      "output_sha256": "6160e078de6d7f114f3c6a09bb805396d55278b50fc2e66257592b806d457063",
+      "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+      "reviewed_on": "2026-09-24",
+      "referring_documents": []
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/reasoning-trace-graph.svg",
+      "source": "docs/assets/diagrams/excalidraw/reasoning-trace-graph.excalidraw",
+      "referring_pages": [
+        "docs/modules/ROOT/pages/how-to/reasoning-traces.adoc"
+      ],
+      "owner": "documentation maintainers",
+      "status": "exported-and-visually-reviewed",
+      "source_sha256": "e43294f114ea226c302ff7651933ebe0e7387c1049be50cb5b8eaeeff78681aa",
+      "output_sha256": "828234cf07367a8fe206747e4dca06bd7fdd92b82fb2f6c43955690ed1f2aa1f",
+      "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+      "reviewed_on": "2026-09-18",
+      "referring_documents": []
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/shared-memory-data-flow-kyc-graph-credit.svg",
+      "source": "docs/assets/diagrams/excalidraw/shared-memory-data-flow-kyc-graph-credit.excalidraw",
+      "referring_pages": [
+        "docs/modules/ROOT/pages/how-to/integrations/aws-strands.adoc"
+      ],
+      "owner": "documentation maintainers",
+      "status": "exported-and-visually-reviewed",
+      "source_sha256": "9d720e557228f9cae5fa0e08cc777a6309570db1861c1d7146fd899e4b72aec8",
+      "output_sha256": "168ea2017c698a4cbf18cb0babe528ab6e2418a641cfb9a5814580244bf526c2",
+      "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+      "referring_documents": [],
+      "reviewed_on": "2026-09-18"
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/short-term-memory.png",
+      "referring_pages": [],
+      "owner": "documentation maintainers",
+      "status": "unresolved-provenance",
+      "output_sha256": "74ade02d628ed752623ac1808e0d24bcc0c7f90c6ef3fc914babbd72ee15e707",
+      "referring_documents": [],
+      "note": "No editable .excalidraw source found under docs/assets/diagrams/excalidraw/ and no page references this file; provenance could not be established. Left on disk, not deleted, pending maintainer review."
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/tfl-explorer-app-screenshot.png",
+      "referring_pages": [],
+      "owner": "documentation maintainers",
+      "status": "pending-placement",
+      "output_sha256": "3a850938493f0a2eb46fb6aab97725c437fac34a14d32a38954aaec42bf7eed0",
+      "note": "Captured application screenshot; editable source not available in this checkout. No longer embedded on any page: the application it shows is not in this repository.",
+      "referring_documents": []
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/tfl-explorer-full-stack-architecture.png",
+      "referring_pages": [],
+      "owner": "documentation maintainers",
+      "status": "unresolved-provenance",
+      "output_sha256": "e91896b3b5f8da771b83ca25c89f19f1ca235e8d3a15bccc757a34e02392fd02",
+      "referring_documents": [],
+      "note": "No editable .excalidraw source found under docs/assets/diagrams/excalidraw/ and no page references this file; provenance could not be established. Left on disk, not deleted, pending maintainer review."
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/the-three-layer-memory-architecture.png",
+      "source": "docs/assets/diagrams/excalidraw/the-three-layer-memory-architecture.excalidraw",
+      "referring_pages": [],
+      "owner": "documentation maintainers",
+      "status": "pending-placement",
+      "source_sha256": "e290160d657c642c960f66923ba3e8cba201a8366ecaa34ae058c331f1df0ebf",
+      "output_sha256": "95e41e82974dba5b694763265c95d2b029c063fe8ae2a8b5fdf0a203b7d6a283",
+      "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+      "reviewed_on": "2026-09-18",
+      "referring_documents": [
+        "README.md"
+      ],
+      "note": "Referenced by README.md; re-exported from the current scene."
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/the-three-layer-memory-architecture.svg",
+      "source": "docs/assets/diagrams/excalidraw/the-three-layer-memory-architecture.excalidraw",
+      "referring_pages": [],
+      "owner": "documentation maintainers",
+      "status": "pending-placement",
+      "source_sha256": "e290160d657c642c960f66923ba3e8cba201a8366ecaa34ae058c331f1df0ebf",
+      "output_sha256": "3cc4ddb3dc07173cd3ce6a9c540ba6d960f620c0589b3eab74957e0df4f71049",
+      "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+      "referring_documents": [],
+      "reviewed_on": "2026-09-18",
+      "note": "Removed from index.adoc on 2026-09-24 at the maintainer's request; the main page now embeds memory-chat-request-flow.png and memory-graph-model.png. The PNG export of the same scene is still referenced by README.md."
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/three-extraction-approaches.png",
+      "source": "docs/assets/diagrams/excalidraw/three-extraction-approaches.excalidraw",
+      "referring_pages": [],
+      "owner": "documentation maintainers",
+      "status": "pending-placement",
+      "source_sha256": "694789a95939c8b18bcc85e435227027a986862287639bc54a020ecba75b1a58",
+      "output_sha256": "a6b7660e774a2300c90be88a1d669318bde96db6dc6cd177f29e1a28d8c6628a",
+      "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+      "reviewed_on": "2026-09-18",
+      "referring_documents": [
+        "README.md"
+      ],
+      "note": "Referenced by README.md. The pages embed extraction-pipeline.svg, exported from the same scene; regenerate this PNG by exporting the scene to a scratch .svg path with --png and copying the PNG here."
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/multi-tenant-scoping.svg",
+      "source": "docs/assets/diagrams/excalidraw/multi-tenant-scoping.excalidraw",
+      "referring_pages": [
+        "docs/modules/ROOT/pages/how-to/multi-tenancy.adoc"
+      ],
+      "owner": "documentation maintainers",
+      "status": "exported-and-visually-reviewed",
+      "source_sha256": "928d835bd8a57036b6395ddb8ca2fd6a0e5b6af732fffa9812f3af1cf05a7da6",
+      "output_sha256": "9d92db69111509f08cd7e7ac94d48aa51a7c8242f37d5b3eeab774502ea8b638",
+      "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+      "reviewed_on": "2026-09-24"
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/bolt-vs-nams-data-flow.svg",
+      "source": "docs/assets/diagrams/excalidraw/bolt-vs-nams-data-flow.excalidraw",
+      "referring_pages": [
+        "docs/modules/ROOT/pages/explanation/backends.adoc"
+      ],
+      "owner": "documentation maintainers",
+      "status": "exported-and-visually-reviewed",
+      "source_sha256": "a335c6d383d75736f1a4de4863cbd2d186c214bd360d55ac8cd440fffac4a37b",
+      "output_sha256": "65e47e28148c56271a11895eda6eb9265e6741ac1ed43c64a11437be7318c528",
+      "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+      "reviewed_on": "2026-09-18"
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/multi-agent-boundaries.svg",
+      "source": "docs/assets/diagrams/excalidraw/multi-agent-boundaries.excalidraw",
+      "referring_pages": [
+        "docs/modules/ROOT/pages/explanation/multi-agent-sharing.adoc"
+      ],
+      "owner": "documentation maintainers",
+      "status": "exported-and-visually-reviewed",
+      "source_sha256": "6632db903c931866b00c61b4bc23af06cca3bc5b14a578180c3a77a9ba8e1f40",
+      "output_sha256": "bc8e4cee3c862ae33e85fc578ddcba67810c867d98452bff0ffe7d0a1ccbfc5f",
+      "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+      "reviewed_on": "2026-09-18"
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/nams-hosted-memory-flow.svg",
+      "source": "docs/assets/diagrams/excalidraw/nams-hosted-memory-flow.excalidraw",
+      "referring_pages": [
+        "docs/modules/ROOT/pages/tutorials/first-agent-memory-typescript.adoc"
+      ],
+      "owner": "documentation maintainers",
+      "status": "exported-and-visually-reviewed",
+      "source_sha256": "42a6a1e2595fd1a830ff785801053f7fff865a4f334f88b8022b3a536574354d",
+      "output_sha256": "322fb19283f5de5f1f436c53f1d7a30981940b6655b221f2ba7786d2c139cd48",
+      "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+      "reviewed_on": "2026-09-18",
+      "referring_documents": []
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/typescript-mcp-architecture.svg",
+      "source": "docs/assets/diagrams/excalidraw/typescript-mcp-architecture.excalidraw",
+      "referring_pages": [
+        "docs/modules/ROOT/pages/tutorials/mcp-server-typescript.adoc"
+      ],
+      "owner": "documentation maintainers",
+      "status": "exported-and-visually-reviewed",
+      "source_sha256": "8c62e83fb69fb170a5bd096a2ed88a62ef147e5d23502e7d9d54dbf80ec5b122",
+      "output_sha256": "3bcc1ab824eb9a74ce022dd84bd664fe2060703fae614efd1f7a10838947cdbe",
+      "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+      "reviewed_on": "2026-09-18",
+      "referring_documents": []
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/entity-relationship-recipe.svg",
+      "source": "docs/assets/diagrams/excalidraw/entity-relationship-recipe.excalidraw",
+      "referring_pages": [
+        "docs/modules/ROOT/pages/how-to/entities.adoc"
+      ],
+      "owner": "documentation maintainers",
+      "status": "exported-and-visually-reviewed",
+      "source_sha256": "e218d32f23df057df902a5a402e00fc55e0b672ac5088740fad581625f807e50",
+      "output_sha256": "c8219d2aa48c302018964711e77a6152327adaed8cfe8db68bdf832fcf7aa361",
+      "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+      "reviewed_on": "2026-09-24",
+      "referring_documents": []
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/tutorial-routes.svg",
+      "source": "docs/assets/diagrams/excalidraw/tutorial-routes.excalidraw",
+      "referring_pages": [
+        "docs/modules/ROOT/pages/tutorials/index.adoc"
+      ],
+      "owner": "documentation maintainers",
+      "status": "exported-and-visually-reviewed",
+      "source_sha256": "d13b3709c2825b4ce44ae2a4aee829f2775c660badb6c16d456f03b66ba739a9",
+      "output_sha256": "33e9d5fb9305b522923ea4cb947fea503d50247527fe0e8ce9868364a697dab3",
+      "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+      "reviewed_on": "2026-09-18",
+      "referring_documents": []
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/context-tiers-funnel.svg",
+      "source": "docs/assets/diagrams/excalidraw/context-tiers-funnel.excalidraw",
+      "referring_pages": [
+        "docs/modules/ROOT/pages/explanation/context-tiers.adoc"
+      ],
+      "owner": "documentation maintainers",
+      "status": "exported-and-visually-reviewed",
+      "source_sha256": "22ce4fc10f51f6a5706380c56478473b048aa13a8247f74d67d17d6c3be058db",
+      "output_sha256": "e1a9d542e86f7b22c6e92c7eb3e318f8b54a9c9485300d0c331ea8484bd7d267",
+      "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+      "reviewed_on": "2026-09-18",
+      "referring_documents": []
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/reasoning-touched-audit.svg",
+      "source": "docs/assets/diagrams/excalidraw/reasoning-touched-audit.excalidraw",
+      "referring_pages": [
+        "docs/modules/ROOT/pages/how-to/audit-reasoning.adoc"
+      ],
+      "owner": "documentation maintainers",
+      "status": "exported-and-visually-reviewed",
+      "source_sha256": "f5a8f1c7110f9a42665f3dd8b2eae10a71e00a664c7df8d6176bd5de083dec96",
+      "output_sha256": "9253efaa8d0fccbb89b5e32bd0ebe9d66e1ae7e18775c2bc118606cf2b9f803e",
+      "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+      "reviewed_on": "2026-09-18",
+      "referring_documents": []
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/strands-session-memory.svg",
+      "source": "docs/assets/diagrams/excalidraw/strands-session-memory.excalidraw",
+      "referring_pages": [
+        "docs/modules/ROOT/pages/how-to/integrations/aws-strands.adoc"
+      ],
+      "owner": "documentation maintainers",
+      "status": "exported-and-visually-reviewed",
+      "source_sha256": "86e7968008d811c74e1a743d6194f0eff51bd68f21396e44b3d4e980e81e4456",
+      "output_sha256": "18042b072ab4923dd11df6d6a83ad4a03927f2929205421aea7169379376303f",
+      "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+      "reviewed_on": "2026-09-18",
+      "referring_documents": []
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/nams-ai-provider-modes.svg",
+      "source": "docs/assets/diagrams/excalidraw/nams-ai-provider-modes.excalidraw",
+      "referring_pages": [
+        "docs/modules/ROOT/pages/how-to/typescript/nams-ai-provider.adoc"
+      ],
+      "owner": "documentation maintainers",
+      "status": "exported-and-visually-reviewed",
+      "source_sha256": "67a1484184a75b9c82426defc68c401b42bded8e0e17ba9e35b5b1ef1b4b4164",
+      "output_sha256": "3446f9779933077bb596a42c6b40111ec93a7dfb2c553660e1e31c735ae0c1c3",
+      "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+      "reviewed_on": "2026-09-24",
+      "referring_documents": []
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/nams-ai-provider-hooks.svg",
+      "source": "docs/assets/diagrams/excalidraw/nams-ai-provider-hooks.excalidraw",
+      "referring_pages": [
+        "docs/modules/ROOT/pages/how-to/typescript/nams-ai-provider-hooks-mode.adoc"
+      ],
+      "owner": "documentation maintainers",
+      "status": "exported-and-visually-reviewed",
+      "source_sha256": "278c46592fb1967d9b7f8eff6dc8fbbbdb046862c987bf49dfc819c376a45863",
+      "output_sha256": "3257ebd00d94e2df81b53577b701e5535230af122f4ca7bf42ed1165775f5242",
+      "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+      "reviewed_on": "2026-09-23",
+      "referring_documents": []
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/nams-ai-provider-retrieval.svg",
+      "source": "docs/assets/diagrams/excalidraw/nams-ai-provider-retrieval.excalidraw",
+      "referring_pages": [
+        "docs/modules/ROOT/pages/explanation/nams-ai-provider-retrieval.adoc"
+      ],
+      "owner": "documentation maintainers",
+      "status": "exported-and-visually-reviewed",
+      "source_sha256": "f59fc00b68cd051905b3b60e57a147f93708a202757ee0d8341a5beaeaacade4",
+      "output_sha256": "6609333ce6c7ff3848ddda372e7b7359069598bb7343ed62dd3750340a56946d",
+      "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
+      "reviewed_on": "2026-09-23",
+      "referring_documents": []
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/memory-chat-request-flow.png",
+      "referring_pages": [
+        "docs/modules/ROOT/pages/index.adoc"
+      ],
+      "owner": "documentation maintainers",
+      "status": "exported-and-visually-reviewed",
+      "output_sha256": "3c37daa617a44ef933d5eceeb5815fd5b0867f1eaa342aa36d8bfad8482d05f8",
+      "derived_from": "img/memory-architecture.png",
+      "reviewed_on": "2026-09-24",
+      "referring_documents": [],
+      "note": "Raster diagram chosen by the maintainer for the main page (2026-09-24). No editable .excalidraw scene is in the repository; this file is img/memory-architecture.png resized from 2880px to 1400px wide with Pillow (Lanczos) so the 648px column renders it above the 0.45x size threshold. Its colours (short-term yellow, long-term purple, reasoning red) differ from the house palette."
+    },
+    {
+      "output": "docs/modules/ROOT/images/diagrams/memory-graph-model.png",
+      "referring_pages": [
+        "docs/modules/ROOT/pages/index.adoc"
+      ],
+      "owner": "documentation maintainers",
+      "status": "exported-and-visually-reviewed",
+      "output_sha256": "ad95ff04bcb8a02d7ed02494126e605b8e9e0f5ef9f2038ec425a7c2a5650f89",
+      "derived_from": "img/memory-graph-model.png",
+      "reviewed_on": "2026-09-24",
+      "referring_documents": [],
+      "note": "Raster diagram chosen by the maintainer for the main page (2026-09-24). No editable .excalidraw scene is in the repository; this file is img/memory-graph-model.png resized from 3434px to 1400px wide with Pillow (Lanczos). Several relationship names are simplified (MENTIONED_IN, TRIGGERED, USED_TOOL, CALL_OF, RETRIEVED, WORKS_AT); index.adoc carries a note with the stored names (MENTIONS, INITIATED_BY, USES_TOOL, INSTANCE_OF, TOUCHED, RELATED_TO)."
+    }
+  ]
+}

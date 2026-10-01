@@ -10,5 +10,5 @@ export default defineConfig({
   clean: true,
   treeshake: true,
   // Keep peer deps external to avoid bundling duplicates into dist.
-  external: ['ai', '@ai-sdk/provider', '@neo4j-labs/agent-memory', 'zod', '@ai-sdk/mcp'],
+  external: ['ai', '@neo4j-labs/agent-memory', 'zod', '@ai-sdk/mcp'],
 });

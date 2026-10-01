@@ -1,7 +1,7 @@
 # Cloud Run Service Definition
 #
 # Apply with:
-#   gcloud run services replace service.yaml --region=us-central1
+#   gcloud run services replace deploy/cloudrun/service.yaml --region=us-central1
 #
 # Note: Update PROJECT_ID and ensure secrets are created first
 
@@ -40,6 +40,12 @@ spec:
               value: "8080"
             - name: PYTHONUNBUFFERED
               value: "1"
+            # Vertex AI uses the attached service account and this project.
+            # Model/location/dimensions are selected explicitly by the image CMD.
+            - name: GOOGLE_CLOUD_PROJECT
+              value: "PROJECT_ID"
+            - name: NAM_EXTRACTION__EXTRACTOR_TYPE
+              value: "none"
             # Secrets from Secret Manager
             - name: NEO4J_URI
               valueFrom:
@@ -58,9 +64,9 @@ spec:
                   name: neo4j-password
             - name: NEO4J_DATABASE
               value: "neo4j"
-          # The MCP server exposes the protocol endpoint at /mcp/ (Streamable
+          # The MCP server exposes the protocol endpoint at /mcp (Streamable
           # HTTP) and no separate health route, so probe the listening socket
-          # rather than an HTTP path. An httpGet probe against /mcp/ would be
+          # rather than an HTTP path. An httpGet probe against /mcp would be
           # answered with a protocol error, and one against /health with a 404 —
           # either way the revision would never pass startup.
           startupProbe:

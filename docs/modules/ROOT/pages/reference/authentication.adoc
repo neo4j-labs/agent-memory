@@ -1,7 +1,12 @@
-= Authentication & API Keys
+= Authentication and API keys
 :page-product: agent-memory
 :toclevels: 2
 :icons: font
+
+[NOTE]
+====
+This page describes the service contract used by this checkout. The SDK source alone does not verify a deployed service, dashboard, quota or authentication configuration. Check the authenticated service response and current workspace settings when following operational instructions.
+====
 
 How the hosted NAMS backend authenticates requests, where API keys come from, and how to handle them safely. This page is language-neutral; for SDK-specific setup see xref:how-to/use-nams.adoc[Use NAMS] (Python) and xref:how-to/typescript/authenticate.adoc[Authentication] (TypeScript).
 
@@ -20,7 +25,7 @@ NAMS accepts three kinds of credential:
 
 | **API key** (`nams_…`) | Programmatic access from the SDKs, REST clients, and the MCP server. Sent directly as a Bearer token. *This is what you'll use in code.*
 | **Auth0 JWT** | Dashboard / browser sessions. An Auth0 login is exchanged for a short-lived (≈1 h, RS256) internal JWT via `POST /v1/auth/exchange`. Validate against the JWKS at `/.well-known/jwks.json`.
-| **MCP OAuth** | Interactive MCP clients (e.g. Claude Desktop) authenticate with an OAuth 2.0 Authorization-Code + PKCE flow. See xref:how-to/typescript/mcp.adoc[MCP Tools].
+| **MCP OAuth** | Interactive MCP clients (e.g. Claude Desktop) authenticate with an OAuth 2.0 Authorization-Code + PKCE flow. See xref:how-to/typescript/mcp.adoc[MCP tools].
 |===
 
 == Key format & the wire
@@ -41,7 +46,7 @@ Every key is created in one of two categories, which fix its scopes and how the 
 
 [cols="1,3",options="header"]
 |===
-| Category | Behaviour
+| Category | Behavior
 
 | **Workspace key** +
 (`category: "workspace"`, `workspaceId` required at creation)
@@ -57,7 +62,7 @@ The service also checks that the key's owner is a member of the resolved workspa
 
 The SDKs consume an existing key — set it once and the backend auto-selects NAMS:
 
-[cols="1,3",options="header"]
+[cols="2,3",options="header"]
 |===
 | Variable | Purpose
 
@@ -68,7 +73,7 @@ The SDKs consume an existing key — set it once and the backend auto-selects NA
 | `NAM_NAMS__*` | Nested `NamsConfig` overrides (timeout, retries, …).
 |===
 
-See xref:reference/environment-variables.adoc[Environment Variables] and xref:reference/configuration.adoc[Configuration] for the full list.
+See xref:reference/environment-variables.adoc[Environment variables] and xref:reference/configuration.adoc[Configuration] for the full list.
 
 == Key lifecycle
 
@@ -80,9 +85,9 @@ Keys are created and managed from the dashboard at link:https://memory.neo4jlabs
 
 | Create | `POST /v1/auth/api-keys` — body `{label, category, workspaceId?}`. Returns the raw key once; also stored encrypted-at-rest so it can be revealed later.
 | List | `GET /v1/auth/api-keys`
-| Reveal | `GET /v1/auth/api-keys/{id}/reveal` — owner-only (non-owners get `404`; revoked or pre-encryption keys get `410`).
-| Rotate | `POST /v1/auth/api-keys/{id}/rotate` — mints a new key and revokes the old one.
-| Revoke | `DELETE /v1/auth/api-keys/{id}` — added to a blocklist for 30 days; effective on the next request.
+| Reveal | `GET /v1/auth/api-keys/\{id}/reveal` — owner-only (non-owners get `404`; revoked or pre-encryption keys get `410`).
+| Rotate | `POST /v1/auth/api-keys/\{id}/rotate` — mints a new key and revokes the old one.
+| Revoke | `DELETE /v1/auth/api-keys/\{id}` — added to a blocklist for 30 days; effective on the next request.
 |===
 
 Key management requires a **user token or an admin key**, so a leaked workspace
@@ -120,7 +125,14 @@ with `category: "workspace"` directly. See xref:reference/rest-api.adoc[REST API
 
 == Handling keys safely
 
-* **Never commit a key.** Keep `nams_…` values in environment variables or a secrets manager; commit only `nams_xxxx` placeholders in examples and `.env.example` files.
-* **Scope per environment.** Use separate keys (and workspaces) for dev, staging, and production so one leak is contained.
-* **Rotate on exposure.** If a key leaks, `rotate` (or `revoke` + create); revocation is effectively immediate via the blocklist.
-* **Prefer short-lived tokens for browser contexts.** Use the Auth0 JWT exchange for dashboard/user sessions rather than embedding a long-lived API key in a client.
+* `nams_…` values are the credential; the service stores them encrypted-at-rest but transmits and displays them as plaintext, so examples and `.env.example` files in this repository use `nams_xxxx` placeholders, never a real key.
+* A workspace key is bound to one workspace (see "Key categories" above); using a separate key per environment (dev/staging/production) confines a single leak to one workspace instead of the whole account.
+* Rotation (`POST /v1/auth/api-keys/\{id}/rotate`) mints a replacement and revokes the original; revocation alone (`DELETE /v1/auth/api-keys/\{id}`) also works. Both take effect via the 30-day blocklist described under "Key lifecycle" above.
+* The Auth0 JWT exchange issues a short-lived (≈1h) token for dashboard/browser sessions; a `nams_…` API key carries the longer ~90-day static-key window noted under "Key format & the wire" above, so it is the higher-exposure credential to embed in a browser context.
+
+== See also
+
+* xref:how-to/use-nams.adoc[Connect a Python application to NAMS] — Python setup walkthrough.
+* xref:how-to/typescript/authenticate.adoc[Authentication] — TypeScript setup walkthrough.
+* xref:reference/rest-api.adoc[REST API reference] — the endpoints these credentials call.
+* xref:reference/nams-limits.adoc[NAMS limits and behavior] — quotas tied to a workspace and key.

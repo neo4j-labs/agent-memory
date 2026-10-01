@@ -2,8 +2,8 @@ name: TCK Conformance (Published Package)
 
 # Runs the agent-memory-tck Bronze conformance suite against the
 # *published* @neo4j-labs/agent-memory npm package. Distinct from the
-# in-tree typescript/test/tck/ suite (which runs in ci-typescript.yml) —
-# this verifies what users actually install.
+# opt-in in-tree typescript/test/tck/ suite (`npm run test:tck`), which
+# ci-typescript.yml does not run — this verifies what users actually install.
 #
 # Activated only after the TCK-side companion PR lands and
 # clients/typescript-pkg-runner/ exists in the TCK repo (see Step 7 of
@@ -30,7 +30,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     steps:
       - name: Checkout TCK
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: neo4j-labs/agent-memory-tck
           path: tck

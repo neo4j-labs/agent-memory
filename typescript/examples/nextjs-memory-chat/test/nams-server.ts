@@ -67,6 +67,13 @@ export class NamsState {
     { nodes: StoredEntity[]; edges: Array<{ id: string; source: string; target: string; type: string }> }
   >();
 
+  /**
+   * Relationships returned by `GET /entities/:id`, keyed by entity id — what
+   * the NAMS provider's graph expansion reads to build `(subject)-[REL]->(object)`
+   * memory hits.
+   */
+  relationships = new Map<string, Array<{ type: string; targetName: string }>>();
+
   private counter = 0;
 
   nextId(prefix: string): string {
@@ -133,6 +140,24 @@ export function createNamsServer(state: NamsState) {
       return HttpResponse.json({ id, user_id: body?.userId ?? "anonymous", created_at: new Date().toISOString() });
     }),
 
+    // The NAMS provider's cross-session search lists the user's other
+    // conversations before deciding there are none to search.
+    http.get(url("/conversations"), async ({ request }) => {
+      const requestUrl = new URL(request.url);
+      const userId = requestUrl.searchParams.get("user_id");
+      await record(request, "/conversations");
+      const conversations = [...state.conversations.values()]
+        .filter((conv) => !userId || conv.user_id === userId)
+        .map((conv) => ({
+          id: conv.id,
+          user_id: conv.user_id,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          message_count: conv.messages.length,
+        }));
+      return HttpResponse.json({ conversations });
+    }),
+
     http.post(url("/conversations/:id/messages/bulk"), async ({ request, params }) => {
       const body = (await record(request, "/conversations/:id/messages/bulk")) as {
         messages?: Array<{ role: string; content: string }>;
@@ -167,6 +192,17 @@ export function createNamsServer(state: NamsState) {
     http.get(url("/conversations/:id/messages"), async ({ request, params }) => {
       await record(request, "/conversations/:id/messages");
       return HttpResponse.json({ messages: state.conversation(String(params.id)).messages });
+    }),
+
+    // The NAMS provider searches the current conversation (and, per past
+    // conversation, each of those) before every model call. The real service
+    // ranks by embedding similarity; this fake has no embeddings, so it just
+    // returns the conversation's own messages, capped at `limit` — enough to
+    // prove retrieved history reaches the prompt without reimplementing search.
+    http.post(url("/conversations/:id/search"), async ({ request, params }) => {
+      const body = (await record(request, "/conversations/:id/search")) as { limit?: number };
+      const conv = state.conversation(String(params.id));
+      return HttpResponse.json({ messages: conv.messages.slice(-(body.limit ?? 10)) });
     }),
 
     http.get(url("/conversations/:id/context"), async ({ request, params }) => {
@@ -219,6 +255,23 @@ export function createNamsServer(state: NamsState) {
       return HttpResponse.json(state.graph);
     }),
 
+    // The NAMS provider reads one entity at a time to turn a search hit's
+    // relationships into `(subject)-[REL]->(object)` graph memory hits.
+    // Registered after the literal `/entities/graph` route above, since msw
+    // matches in registration order and `:id` would otherwise shadow it.
+    http.get(url("/entities/:id"), async ({ request, params }) => {
+      await record(request, "/entities/:id");
+      const entity = state.entities.find((e) => e.id === params.id);
+      if (!entity) return HttpResponse.json({ error: "not found" }, { status: 404 });
+      const relationships = (state.relationships.get(entity.id) ?? []).map((rel, index) => ({
+        id: `rel-${index}`,
+        type: rel.type,
+        target_id: `${entity.id}-target-${index}`,
+        target_name: rel.targetName,
+      }));
+      return HttpResponse.json({ ...entity, relationships, created_at: new Date().toISOString() });
+    }),
+
     http.post(url("/graph/expand"), async ({ request }) => {
       const body = (await record(request, "/graph/expand")) as {
         nodeId?: string;
@@ -257,6 +310,19 @@ export function createNamsServer(state: NamsState) {
       };
       state.steps.push(step);
       return HttpResponse.json(step);
+    }),
+
+    // The NAMS provider reads a conversation's reasoning steps as another
+    // memory source — a `direct response` step's reasoning text is surfaced
+    // the same way a matched entity or message is.
+    http.get(url("/reasoning/steps"), async ({ request }) => {
+      const requestUrl = new URL(request.url);
+      const conversationId = requestUrl.searchParams.get("conversation_id");
+      await record(request, "/reasoning/steps");
+      const steps = state.steps.filter(
+        (step) => !conversationId || step.conversation_id === conversationId,
+      );
+      return HttpResponse.json({ steps });
     }),
 
     http.get(url("/reasoning/trace/:id"), async ({ request, params }) => {

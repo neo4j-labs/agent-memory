@@ -4,26 +4,38 @@
 ![Status: Experimental](https://img.shields.io/badge/Status-Experimental-F59E0B)
 ![Community Supported](https://img.shields.io/badge/Support-Community-6B7280)
 
-A shopping assistant built on [eve](https://eve.dev) — Vercel's filesystem-first
-framework for durable agents — that remembers its shoppers between visits using
-the hosted [Neo4j Agent Memory Service](https://memory.neo4jlabs.com).
-
-The agent browses a 30-product catalog, keeps a cart, and will not place an order
-without a human's approval. The interesting part is the memory: the whole
-integration is **one eve memory slot** backed by a NAMS memory provider, so the
-shopper's sizes, brands and budget survive the session they were mentioned in.
+An experimental shopping-assistant integration for [eve](https://eve.dev),
+Vercel's framework for durable agents. It contains catalog, cart, approval and
+memory-provider code. The profile and order-storage paths use APIs unsupported
+by the current hosted transport; the mocked contract is described below.
 
 > ⚠️ **Neo4j Labs Project**
 >
 > This project is part of Neo4j Labs and is actively maintained, but not
-> officially supported. There are no SLAs or guarantees around backwards
-> compatibility and deprecation. For questions and support, please use the
+> officially supported. There are no SLAs, backward-compatibility guarantees,
+> or scheduled deprecation commitments. APIs may change without notice. For questions and support, please use the
 > [Neo4j Community Forum](https://community.neo4j.com).
 >
 > eve is itself a beta framework (`eve@0.53`) and its APIs move quickly. The
 > bundled docs in `node_modules/eve/docs` always match the version you installed.
 
-## What it shows
+## Hosted execution limitation
+
+This is an experimental integration/contract demo, not a working end-to-end
+hosted commerce recipe. `agent/lib/nams-memory.ts` calls `addPreference` and
+`searchPreferences`; `agent/tools/checkout.ts` calls `addFact`. The current
+`RestTransport` rejects all three with `NotSupportedError`. Its fake implements
+those operations, so successful offline profile/isolation/checkout tests do not
+prove the hosted path works.
+
+The walkthrough and output below describe the mocked demo contract. Do not use
+them as a hosted persistence or checkout guarantee. Conversation message/context
+operations are supported, but replacing the missing profile/order model requires
+an explicit product/example design decision. No SDK feature is added here to
+make the demo appear supported. Deployment and live checkout verification remain
+blocked on that decision.
+
+## What the mocked contract shows
 
 - **A NAMS memory provider is the whole integration.**
   [`agent/memory/shopper.ts`](agent/memory/shopper.ts) is nine lines; everything
@@ -112,16 +124,36 @@ Reach for `agentMemoryMiddleware` when you own the loop (see the
 - A model credential — either an `OPENAI_API_KEY` (used automatically) or an
   `AI_GATEWAY_API_KEY` / linked Vercel project for the gateway model id
 
-## Run it
+## Build the shared SDK first
+
+This is a source-checkout example. Its `file:../..` dependency and shared
+`../tsconfig.base.json` require the repository layout. From the repository root:
+
+```bash
+cd typescript
+npm ci
+npm run build
+cd examples/eve-commerce-agent
+```
+
+Run the commands below from `typescript/examples/eve-commerce-agent/`. Build **before**
+installing this example; package exports point at `typescript/dist/` and npm does
+not build the local SDK on installation. For standalone copies, follow the
+[copy checklist](../README.md#copying-an-example) and verify the selected npm
+artifact supplies every API used here.
+
+## Run locally to inspect the integration
 
 ```bash
 cp .env.example .env       # set MEMORY_API_KEY and one model key
-npm install
+npm ci
 npm run dev                # eve dev: HMR server + terminal REPL on :2000
 ```
 
-`npm run dev` opens eve's terminal UI, which is the quickest way to talk to the
-agent. Try:
+`npm run dev` opens eve's terminal UI. With the current hosted transport,
+profile capture/recall and checkout hit the unsupported operations described
+above. The following interaction illustrates the intended contract; it is not
+a passing hosted persistence check:
 
 ```
 I'm a size L on top and I love Northmoor. Anything waterproof?
@@ -316,7 +348,7 @@ The assertions that matter if memory breaks:
   touched;
 - recall degrades on a 503 and throws on a 401.
 
-## Deploy
+## Deployment (blocked for the full hosted workflow)
 
 ```bash
 npx eve deploy    # links a Vercel project, then deploys
@@ -344,9 +376,4 @@ This is a Neo4j Labs project — community supported, no SLA. Ask questions on t
 
 ---
 
-_Verified against @neo4j-labs/agent-memory 0.6.0-dev (in-tree), eve 0.53.1,
-ai 7.0.97, @ai-sdk/openai 4.0.65, zod 4.5.4, vitest 5.0.0, TypeScript 5.9.3,
-Node 24+ — 2026-09-10. `npm install`, `npm run typecheck` and `npm test` pass;
-`eve info` reports 0 errors and `eve dev --no-ui` serves a healthy runtime. The
-model calls and the live NAMS round-trip were not exercised — no API keys were
-available in this environment._
+_Compatibility scope: this example targets the current source checkout and its committed package/lock files. Offline tests validate the exercised contracts; they do not establish published-package availability, a live model result, or deployed NAMS behavior. Use the runtime floor above; record the actual package/runtime versions when verifying a release or deployment._

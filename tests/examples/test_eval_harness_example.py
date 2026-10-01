@@ -63,14 +63,32 @@ class TestEvalHarnessImports:
         monkeypatch.setenv("NEO4J_URI", "bolt://localhost:7687")
         monkeypatch.setenv("NEO4J_USERNAME", "neo4j")
         monkeypatch.setenv("NEO4J_PASSWORD", "password")
+        monkeypatch.setenv("NEO4J_DATABASE", "tutorial-db")
+        monkeypatch.setenv("MEMORY_API_KEY", "nams_not_a_real_key")
 
         try:
             module = _load(EVAL_DIR / "main.py", MODULE_NAME)
-            assert module.build_settings().memory.multi_tenant is True
+            settings = module.build_settings()
+            assert settings.memory.multi_tenant is True
+            assert settings.backend == "bolt"
+            assert settings.neo4j.database == "tutorial-db"
             # Parameterised so a reader can see what the flag is guarding.
             assert module.build_settings(multi_tenant=False).memory.multi_tenant is False
         finally:
             sys.modules.pop(MODULE_NAME, None)
+
+    @pytest.mark.parametrize("missing", ["NEO4J_URI", "NEO4J_USERNAME", "NEO4J_PASSWORD"])
+    def test_missing_connection_value_has_no_local_fallback(self, monkeypatch, missing):
+        for key, value in {
+            "NEO4J_URI": "neo4j+s://tutorial.example.invalid",
+            "NEO4J_USERNAME": "tutorial-user",
+            "NEO4J_PASSWORD": "synthetic-password",
+        }.items():
+            monkeypatch.setenv(key, value)
+        monkeypatch.delenv(missing)
+        module = _load(EVAL_DIR / "main.py", MODULE_NAME)
+        with pytest.raises(KeyError, match=missing):
+            module.build_settings()
 
     def test_dimension_parsing_and_payload_are_pure(self, monkeypatch):
         pytest.importorskip("sentence_transformers")

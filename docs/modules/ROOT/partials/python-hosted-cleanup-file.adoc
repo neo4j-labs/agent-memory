@@ -1,0 +1,11 @@
+Open the helper below and save its complete source as `hosted_tutorial_cleanup.py` in `~/agent-memory-tutorials`.
+
+.Show `hosted_tutorial_cleanup.py`
+[%collapsible]
+====
+.Save as `hosted_tutorial_cleanup.py`
+[source,python]
+----
+include::example$hosted_tutorial_cleanup.py[]
+----
+====

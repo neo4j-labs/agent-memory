@@ -9,9 +9,10 @@
 
 import type { LanguageModelV4 } from "@ai-sdk/provider";
 import type { MemoryClient } from "@neo4j-labs/agent-memory";
-import { agentMemoryMiddleware } from "@neo4j-labs/agent-memory/middleware/vercel-ai";
-import { convertToModelMessages, streamText, wrapLanguageModel, type UIMessage } from "ai";
+import { createNamsProvider } from "@neo4j-labs/nams-ai-provider";
+import { convertToModelMessages, streamText, type UIMessage } from "ai";
 
+import type { MemoryProviderConfig } from "./memory.js";
 import type {
   ContextPayload,
   ConversationPayload,
@@ -22,12 +23,12 @@ import type {
 
 /**
  * The assistant's brief. Deliberately says nothing about *how* memory works —
- * the middleware supplies the remembered constraints as prompt content, so the
- * instructions only have to tell the model to use what it is given.
+ * the NAMS provider supplies the remembered constraints as prompt content, so
+ * the instructions only have to tell the model to use what it is given.
  */
 export const INSTRUCTIONS = [
   "You are a travel planning assistant with a long memory.",
-  "Earlier turns of this conversation, and summaries of it, are supplied to you",
+  "Memories retrieved from earlier turns and conversations are supplied to you",
   "as context. Treat any constraint you find there (budget, dates, dietary needs,",
   "places already ruled out) as still binding, and say when you are relying on",
   "something the traveller told you earlier.",
@@ -38,6 +39,8 @@ export const INSTRUCTIONS = [
 
 export interface ChatDeps {
   client: MemoryClient;
+  /** The raw connection details `createNamsProvider` needs to build its own client. */
+  memory: MemoryProviderConfig;
   model: LanguageModelV4;
   userId: string;
   instructions?: string;
@@ -77,13 +80,25 @@ export function uiMessageText(message: UIMessage): string {
  *
  * Two things are worth staring at:
  *
- *  1. Only the newest user turn is forwarded to the model. The history the
- *     model sees is injected by `agentMemoryMiddleware` from NAMS, so the
- *     browser is not the source of truth for the conversation — reload the tab,
- *     open the URL on another device, and the thread is still there.
- *  2. There is no memory-specific code after `wrapLanguageModel`. Persisting
- *     both sides of the turn (including the streamed one) is the middleware's
- *     job.
+ *  1. Only the newest user turn is forwarded to the model. Anything earlier
+ *     reaches it only as a memory the NAMS provider retrieves for that turn —
+ *     messages from this and the user's other conversations, entities and
+ *     their graph relationships (all matched against the question), plus any
+ *     `'direct response'` reasoning steps from this and recent conversations
+ *     (not matched), capped at `maxMemories` — so the browser is not the
+ *     source of truth for the conversation: reload the tab, open the URL on
+ *     another device, and the thread is still there.
+ *  2. There is no memory-specific code after `createNamsProvider`. Persisting
+ *     both sides of the turn (including the streamed one) is the provider's
+ *     job. `baseProvider` ignores the `modelId` it is handed and always
+ *     returns `deps.model` — this route only ever calls the one model it was
+ *     given — so `nams.languageModel(...)` is called with an arbitrary id.
+ *
+ * `streamText` (not `ToolLoopAgent`) stays the entry point: this route has no
+ * memory *tools* for the model to call — retrieval and persistence happen in
+ * the provider, around the call, not inside a tool loop — and switching would
+ * change the response envelope this page, `useChat` and `test/routes.test.ts`
+ * are all built around for no behavioural gain.
  */
 export async function handleChat(deps: ChatDeps, request: Request): Promise<Response> {
   let body: ChatRequestBody;
@@ -100,17 +115,16 @@ export async function handleChat(deps: ChatDeps, request: Request): Promise<Resp
   const latest = uiMessages.filter((m) => m.role === "user").slice(-1);
   if (latest.length === 0) return badRequest("No user message to answer.");
 
-  // Memory supplies the history; the client only has to send the new turn.
+  // Memory retrieval supplies earlier context; the client only has to send the new turn.
   const messages = await convertToModelMessages(latest);
   const question = uiMessageText(latest[0]!);
 
-  const model = wrapLanguageModel({
-    model: deps.model,
-    middleware: agentMemoryMiddleware(deps.client, {
-      conversationId,
-      userId: deps.userId,
-    }),
+  const nams = createNamsProvider({
+    ...deps.memory,
+    baseProvider: () => deps.model,
+    scope: { userId: deps.userId, conversationId },
   });
+  const model = nams.languageModel("chat");
 
   const result = streamText({
     model,
@@ -140,7 +154,7 @@ async function recordTurn(
   try {
     await client.reasoning.recordStep({
       conversationId,
-      reasoning: `Answered using the context agentMemoryMiddleware injected for "${question}".`,
+      reasoning: `Answered using the memory the NAMS provider retrieved for "${question}".`,
       actionTaken: "generate_answer",
       result: answer.slice(0, 1_000),
     });
@@ -160,8 +174,12 @@ export async function handleCreateConversation(deps: MemoryDeps): Promise<Respon
 }
 
 /**
- * `GET /api/memory/context?conversationId=…` — the three tiers NAMS will inject
- * on the next call: reflections, observations, recent messages.
+ * `GET /api/memory/context?conversationId=…` — the three tiers NAMS stores for
+ * this conversation: reflections, observations, recent messages. The chat
+ * route's own retrieval is different: the NAMS provider searches messages,
+ * entities and graph relationships with the new question, adds any
+ * `'direct response'` reasoning steps, and prepends the best hits, rather than
+ * replaying these tiers.
  */
 export async function handleContext(deps: MemoryDeps, request: Request): Promise<Response> {
   const conversationId = new URL(request.url).searchParams.get("conversationId");

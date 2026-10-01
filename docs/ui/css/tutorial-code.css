@@ -1,0 +1,20 @@
+/* Preserve the shared theme while making tutorial keyboard focus visible. */
+body.code-nocollapse .doc .listingblock .code-inset button.btn-copy:focus-visible,
+body.code-nocollapse .doc pre:focus-visible,
+body.code-nocollapse .doc summary:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 4px;
+}
+
+/* The shared theme shows .code-inset only on hover (display: none otherwise),
+   which takes the copy button out of the tab order. Keep it rendered but
+   transparent, and reveal it on hover or while the listing holds focus. */
+body.code-nocollapse .doc .listingblock .code-inset {
+  display: block;
+  opacity: 0;
+}
+
+body.code-nocollapse .doc .listingblock:hover .code-inset,
+body.code-nocollapse .doc .listingblock:focus-within .code-inset {
+  opacity: 1;
+}

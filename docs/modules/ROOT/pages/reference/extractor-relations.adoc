@@ -1,0 +1,120 @@
+= Relation extractors
+:page-product: agent-memory
+:page-pagination:
+:toclevels: 2
+
+How the extractors from xref:reference/extractors.adoc[Extractor classes reference] produce typed relations, and how relations are checked against an ontology. Import from `neo4j_agent_memory.extraction`.
+
+anchor:_constructor_5[]
+anchor:_example_5[]
+
+[NOTE]
+====
+`GLiRELExtractor` and `GLiNERWithRelationsExtractor` were removed in 0.7 with the GLiREL stack, and importing them raises `ImportError` with a migration hint. There is no separate relation model: `GLiNER2Extractor` decodes relations in the same pass as the entities. See xref:how-to/migrate-to-gliner2.adoc[Migrate to GLiNER2.5].
+====
+
+== Relation sources
+
+[cols="2,3,3",options="header"]
+|===
+| Extractor | Relations | Endpoint typing
+| `GLiNER2Extractor` | Decoded jointly with the entities (JointIE), for the relationship types the ontology declares | Enforced during decoding. Relations carry `source_id`/`target_id` mention ids.
+| `LLMEntityExtractor` | Returned by the same model call when `extract_relations=True`. A relation whose endpoints are not among the extracted entity names is discarded. | Not enforced. With `ontology` set, the prompt lists the legal `SOURCE -[REL]-> TARGET` patterns; without it, relation names are free-form.
+| `SpacyEntityExtractor` | None | —
+|===
+
+== Joint decoding with GLiNER2.5
+
+`GLiNER2Extractor` compiles the ontology into a JointIE schema and decodes entities and relations in one pass. Relations are decoded only when all three of these hold: the call passes `extract_relations=True` (the default), the extractor was built with `extract_relations=True`, and the ontology declares at least one relationship type. An `entity_labels` list, and a `DomainSchema` converted without `relationships`, declare none, so they decode entities only.
+
+* Every endpoint is one of the entities in the same result, and the declared `(source, type, target)` patterns are enforced during beam search.
+* `source_id` and `target_id` hold the mention ids of the endpoints (`ExtractedEntity.id`), so a relation names the exact mention when one name occurs twice.
+* `relation_type` is normalized to UPPER_SNAKE with `normalize_relation_type`, so `works at` and `Works-At` both become `WORKS_AT`.
+* `derived` is set when the engine reports a relation it inferred, such as the mirror of a declared `inverse`.
+* The ontology's per-relation `threshold` is compiled into the schema; the extractor's `relation_threshold`, when set, then drops anything below it.
+* With an `entity_types` filter, a relationship type is compiled only when every endpoint label it declares survives the filter.
+* Input longer than `max_words` is windowed; relations whose endpoints fall in different windows are lost.
+
+[source,python]
+----
+from neo4j_agent_memory.extraction import GLiNER2Extractor
+
+extractor = GLiNER2Extractor.for_poleo(relation_threshold=0.6)
+result = await extractor.extract("John Smith works for Acme Corp in Boston.")
+for relation in result.relations:
+    print(relation.as_triple, relation.source_id, relation.target_id, relation.confidence)
+----
+
+== Relationship constraints
+
+The `RelationshipDef` fields of an `OntologyDocument` that shape decoding. Several defs may share one `type` to declare several legal endpoint pairs; they compile into one JointIE relation.
+
+[cols="1,4",options="header"]
+|===
+| Field | Effect
+| `type` | Relationship type name (UPPER_SNAKE)
+| `source`, `target` | Endpoint labels; each must be a declared entity label
+| `description` | Annotation guideline for the relation; the first non-empty one among defs of a type is used
+| `threshold` | Per-relation confidence floor; the lowest floor among defs of a type is used
+| `inverse` | The inverse relationship type; compiled only when that type is also in the schema
+| `unique_source` | At most one relation of this type per source
+| `unique_target` | At most one relation of this type per target
+| `acyclic` | No cycles of this type
+| `allow_self` | Permit self-loops for this type; one def that allows them is enough
+|===
+
+The document-level `no_self_loops` (default `True`) forbids self-loops on every relationship type that does not set `allow_self`; it is applied per relation, never as a global flag. Defs sharing a `type` must agree on `inverse`, `unique_source`, `unique_target` and `acyclic`; `OntologyDocument.validate_structure()` reports a disagreement, and compiling such a document raises `ValueError`. `RelationshipDef` has no `symmetric` field, and the compiler never passes `symmetric` to JointIE: it rejects every candidate edge in `gliner2` 2.0.0. Use `inverse` instead.
+
+Hard constraints can make a decode infeasible. The decoder then falls back to an empty assignment and `GLiNER2Extractor` emits a `RuntimeWarning`; that is not the same as "no facts in this text". See xref:reference/extractor-classes.adoc#_warnings_and_errors[Warnings and errors].
+
+== ExtractionResult.validate_relations
+
+Check every relation against the ontology's endpoint typing.
+
+// contract: extraction/base.py:ExtractionResult.validate_relations
+[source,python]
+----
+def validate_relations(
+    ontology: 'OntologyDocument',
+    *,
+    mode: Literal['warn', 'drop', 'raise']='warn',
+) -> 'tuple[ExtractionResult, list[ExtractedRelation]]': ...
+----
+
+A relation violates the ontology when its `relation_type` is not a declared relationship type, when either endpoint cannot be resolved to an entity in the same result, or when the resolved endpoint labels are not a declared `(source, type, target)` pattern (`OntologyDocument.permits`). Endpoints resolve by `source_id`/`target_id` first, then by normalized name. Relationship type names are compared through `normalize_relation_type` on both sides.
+
+[cols="1,3",options="header"]
+|===
+| `mode` | Behavior
+| `warn` | Log the violations and keep them (the default)
+| `drop` | Return a copy without them
+| `raise` | Raise `ValueError` naming the violations
+|===
+
+The return value is `(result, violations)`: the result to use (the same object unless `drop` removed something) and the violating relations. An ontology that declares no relationships cannot express a violation, so the result passes through unchanged.
+
+[source,python]
+----
+from neo4j_agent_memory.ontology import POLEO_ONTOLOGY
+
+checked, violations = result.validate_relations(POLEO_ONTOLOGY, mode="drop")
+for relation in violations:
+    print("not permitted:", relation.as_triple)
+----
+
+Validation also runs without a call from you:
+
+* `ExtractionPipeline` built with `ontology` validates the merged result with `mode="drop"`; see xref:reference/extractor-pipeline.adoc[Extraction pipeline].
+* Message ingestion on bolt drops relations that the client's ontology does not permit, in both validation modes. `strict` mode also drops entities whose type the ontology does not declare, with the relations that referenced them.
+
+== Stored relations
+
+Message ingestion with relation extraction enabled stores each relation as a `RELATED_TO` edge whose canonical name is `r.type`. The merge key is `{type: ...}`, so one pair of entities can carry several differently typed edges. Repeated observations increment `r.support`, keep the highest `r.confidence`, fold `r.derived` with `AND`, and append to `r.source_message_ids` (capped at 25) and `r.evidence` (capped at 3). Writes prefer `source_id`/`target_id` over a name lookup. `r.relation_type` is written as a mirror of `r.type` for one release.
+
+== See also
+
+* xref:reference/extractors.adoc[Extractor classes reference]
+* xref:reference/extractor-classes.adoc[Built-in extractor classes]
+* xref:reference/schemas-domains.adoc[Built-in domain schemas]
+* xref:how-to/ontology-driven-extraction.adoc[Drive extraction from an ontology]
+* xref:how-to/running-without-an-llm.adoc[Run without an LLM]

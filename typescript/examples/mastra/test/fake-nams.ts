@@ -2,10 +2,9 @@
  * An in-memory stand-in for the hosted Neo4j Agent Memory Service.
  *
  * `MemoryClient` accepts any `Transport`, so the whole example runs in CI with
- * no API key and no network. The fake keeps messages per conversation, which is
- * what makes the cross-thread assertions meaningful: a preference written in
- * thread one is resource-scoped and therefore still visible in thread two,
- * while thread two's message list starts empty.
+ * no API key and no network. The fake keeps messages per conversation, which
+ * proves the program explicitly reads the selected prior thread. Bridge-only
+ * preference/fact operations are rejected.
  */
 
 import type { Transport } from "@neo4j-labs/agent-memory";
@@ -27,7 +26,6 @@ interface StoredConversation {
 export class FakeNamsTransport implements Transport {
   readonly calls: Array<{ method: string; params: Record<string, unknown> }> = [];
   readonly conversations = new Map<string, StoredConversation>();
-  readonly preferences: Array<{ id: string; category: string; preference: string }> = [];
   closed = false;
 
   private counter = 0;
@@ -132,20 +130,10 @@ export class FakeNamsTransport implements Transport {
         return conv.messages.filter((m) => m.content.toLowerCase().includes("lisbon"));
       }
 
-      case "add_preference": {
-        const preference = {
-          id: this.nextId("pref"),
-          category: String(params.category),
-          preference: String(params.preference),
-        };
-        this.preferences.push(preference);
-        return preference;
-      }
-
+      case "add_preference":
       case "search_preferences":
-        // Preferences are resource-scoped, not thread-scoped — no filtering by
-        // conversation, which is exactly the behaviour the example demonstrates.
-        return this.preferences;
+      case "add_fact":
+        throw new Error("Unsupported on hosted REST; this fake must not implement it.");
 
       default:
         throw new Error(`FakeNamsTransport: unhandled method "${method}"`);

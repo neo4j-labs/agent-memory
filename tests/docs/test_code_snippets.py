@@ -47,35 +47,21 @@ class TestSnippetSyntax:
     def test_snippet_is_valid_python(self, snippet: CodeSnippet):
         """Every Python snippet should be valid Python syntax.
 
-        For async snippets without a wrapper function, the code is automatically
-        wrapped in an async function for syntax checking.
-
-        Signature documentation snippets (used in API reference to show method
-        parameters) are skipped as they are intentionally not runnable Python.
+        Snippets are compiled as written, with top-level ``await`` allowed, so
+        reference signatures written as ``def ...: ...`` stubs are checked too.
+        Only snippets that use ``...`` as a stand-in for omitted arguments or
+        items are skipped.
         """
-        # Skip signature documentation snippets (used in API reference docs)
-        if snippet.is_signature_doc:
-            pytest.skip("Signature documentation snippet - not runnable Python")
-
-        # Skip placeholder snippets that use ... as a placeholder
         if snippet.is_placeholder_snippet:
             pytest.skip("Placeholder snippet with ellipsis - not runnable Python")
 
-        # Use syntax-checkable code which wraps async snippets if needed
-        checkable_code = snippet.get_syntax_checkable_code()
         try:
-            compile(checkable_code, f"{snippet.file_path}:{snippet.line_number}", "exec")
+            snippet.check_compiles()
         except SyntaxError as e:
-            # Provide helpful error message
-            error_line = e.lineno
-            # Adjust line number if we wrapped the code
-            if snippet.needs_async_wrapper and error_line is not None:
-                error_line = max(1, error_line - 1)  # Account for wrapper line
-
             pytest.fail(
                 f"Syntax error in {snippet.file_path.name} line {snippet.line_number}\n"
                 f"Section: {snippet.section}\n"
-                f"Error: {e.msg} at line {error_line}\n"
+                f"Error: {e.msg} at line {e.lineno}\n"
                 f"Code:\n{snippet.code[:500]}"
             )
 
@@ -143,162 +129,28 @@ class TestSnippetImports:
     """Test that imports in snippets are resolvable."""
 
     def test_neo4j_agent_memory_imports_exist(self, python_snippets: list[CodeSnippet]):
-        """Verify that imported names from neo4j_agent_memory exist."""
-        # Collect all imports from neo4j_agent_memory
-        import_pattern = re.compile(r"from\s+neo4j_agent_memory(?:\.\w+)*\s+import\s+([^#\n]+)")
+        """Resolve the actual source module, including multiline imports/aliases.
 
-        all_imports: set[str] = set()
+        This is a declaration check; optional framework runtime contracts run in
+        their declared dependency environments. No missing-name allowlist hides
+        nonexistent APIs.
+        """
+        from tests.docs.utils.extract_code import local_import_errors
+
+        root = Path(__file__).resolve().parents[2] / "src"
+        failures = []
         for snippet in python_snippets:
-            for match in import_pattern.finditer(snippet.code):
-                imports_str = match.group(1)
-                # Parse comma-separated imports, handling parentheses
-                imports_str = imports_str.replace("(", "").replace(")", "").replace("\n", " ")
-                for name in imports_str.split(","):
-                    name = name.strip()
-                    if name and not name.startswith("#"):
-                        # Handle "as" aliases
-                        if " as " in name:
-                            name = name.split(" as ")[0].strip()
-                        all_imports.add(name)
-
-        # Try to import each name
-        import neo4j_agent_memory
-
-        missing = []
-        for name in all_imports:
-            # Check if name exists in the package
-            if not hasattr(neo4j_agent_memory, name):
-                # Try submodules
-                found = False
-                for submodule in ["extraction", "models", "config", "memory"]:
-                    try:
-                        mod = getattr(neo4j_agent_memory, submodule, None)
-                        if mod and hasattr(mod, name):
-                            found = True
-                            break
-                    except Exception:
-                        pass
-                if not found:
-                    missing.append(name)
-
-        # Allow some names that might be in submodules not checked
-        # These are classes that exist in submodules but are imported via
-        # submodule paths in docs (e.g., from neo4j_agent_memory.integrations.langchain import ...)
-        allowed_missing = {
-            # Schema and extraction
-            "EntitySchemaConfig",
-            "EntityTypeConfig",
-            "RelationTypeConfig",
-            "StreamingExtractor",
-            # GLiNER2Extractor / is_gliner2_available live behind
-            # extraction.__getattr__ (lazy, so the module imports without the
-            # gliner2 extra), which hasattr() on the package does not see.
-            "GLiNER2Extractor",
-            "is_gliner2_available",
-            # Removed in 0.7. These appear only in the "Before" snippets of
-            # how-to/migrate-to-gliner2.adoc, which exists to show the old
-            # spelling next to the new one; extraction.__getattr__ raises
-            # ImportError for each with a replacement hint. Do not reintroduce
-            # them anywhere else.
-            "GLiNEREntityExtractor",
-            "GLiNERWithRelationsExtractor",
-            "GLiRELExtractor",
-            "is_gliner_available",
-            "is_glirel_available",
-            "SpacyEntityExtractor",
-            "LLMEntityExtractor",
-            "ExtractionPipeline",
-            "MergeStrategy",
-            # Enrichment providers
-            "BackgroundEnrichmentService",
-            "WikimediaEnrichmentProvider",
-            "DiffbotEnrichmentProvider",
-            "WikimediaProvider",
-            "WikimediaEnricher",
-            "DiffbotProvider",
-            "EnrichmentResult",
-            "EnrichmentStatus",
-            # Integration classes (imported from submodules)
-            "Neo4jAgentMemory",
-            "Neo4jChatMessageHistory",
-            "Neo4jChatStore",
-            "Neo4jCrewMemory",
-            "Neo4jLlamaIndexMemory",
-            "Neo4jOpenAIMemory",
-            "Neo4jMemoryRetriever",
-            "Neo4jMemoryVectorStore",
-            "MemoryDependency",
-            "create_memory_tools",
-            "execute_memory_tool",
-            # Microsoft Agent integration classes
-            "Neo4jContextProvider",
-            "Neo4jChatMessageStore",
-            "Neo4jMicrosoftMemory",
-            "GDSConfig",
-            "GDSAlgorithm",
-            "GDSIntegration",
-            "record_agent_trace",
-            "get_similar_traces",
-            "format_traces_for_prompt",
-            # Schema config
-            "SchemaConfig",
-            "SchemaModel",
-            # Observability
-            "ObservabilityConfig",
-            "TracingProvider",
-            # Resolution
-            "DeduplicationStrategy",
-            # AWS/Strands integration classes (imported from submodules)
-            "BedrockEmbedder",
-            "context_graph_tools",
-            "nams_context_graph_tools",
-            "Neo4jSessionManager",
-            "Neo4jRetrievalConfig",
-            "Neo4jMemoryStore",
-            "Neo4jMemoryStoreConfig",
-            "HybridMemoryProvider",
-            "StrandsConfig",
-            "MemoryType",
-            # Observability (imported from neo4j_agent_memory.observability)
-            "get_tracer",
-            # v0.3 reasoning models (imported from neo4j_agent_memory.schema.models)
-            "EntityRef",
-            "TraceOutcome",
-            "AdoptionLabelReport",
-            "AdoptionReport",
-            # v0.3 pluggable LLM/embedding providers
-            # (from neo4j_agent_memory.llm and neo4j_agent_memory.llm.adapters.*)
-            "ChatMessage",
-            "from_provider",
-            "schema_aligned_extract",
-            "ProviderRateLimitError",
-            "ProviderTimeoutError",
-            "AnthropicProvider",
-            "LiteLLMProvider",
-            "OpenAIEmbeddingProvider",
-            "BedrockEmbeddingProvider",
-            "VertexAIEmbeddingProvider",
-            # CrewAI bridge (from neo4j_agent_memory.integrations.crewai)
-            "llm_provider_from_crewai",
-            # v0.7 ontology package. The checker only probes the extraction /
-            # models / config / memory submodules, and these two are not
-            # re-exported at the package root.
-            "get_template",
-            "list_templates",
-            # Evaluation harness cases live in neo4j_agent_memory.memory.eval,
-            # which the `memory` package does not re-export (the probe checks
-            # `neo4j_agent_memory.memory`, not its submodules).
-            "EvalSuite",
-            "RetrievalCase",
-            "AuditCase",
-            "PreferenceCase",
-            "ExtractionCase",
-            "ResolutionCase",
-        }
-        actual_missing = set(missing) - allowed_missing
-
-        if actual_missing:
-            pytest.fail(f"Imports not found in neo4j_agent_memory: {sorted(actual_missing)}")
+            if snippet.is_placeholder_snippet:
+                continue
+            try:
+                failures.extend(
+                    f"{snippet.file_path.name}:{snippet.line_number}: {error}"
+                    for error in local_import_errors(snippet.code, root)
+                )
+            except SyntaxError:
+                # The syntax test reports invalid program blocks separately.
+                continue
+        assert not failures, "Invalid source imports:\n" + "\n".join(failures)
 
 
 @pytest.mark.docs
@@ -375,8 +227,10 @@ class TestSnippetCoverage:
 @pytest.mark.imports
 class TestStrandsDocImports:
     """Guard: docs import these names from integrations.strands.
-    allowed_missing in TestSnippetImports would silently mask a rename, so
-    verify the real import path whenever strands-agents is installed."""
+
+    The static import check reads source declarations, which a lazy export or a
+    failing optional import can satisfy, so import the real path whenever
+    strands-agents is installed."""
 
     def test_strands_session_manager_doc_imports_resolve(self) -> None:
         pytest.importorskip("strands", reason="strands-agents not installed")
@@ -518,10 +372,10 @@ class TestSettingsFieldDrift:
         violations: list[str] = []
 
         for snippet in python_snippets:
-            if snippet.is_signature_doc or snippet.is_placeholder_snippet:
+            if snippet.is_placeholder_snippet:
                 continue
             try:
-                tree = ast.parse(snippet.get_syntax_checkable_code())
+                tree = snippet.parse()
             except SyntaxError:
                 # Syntax test owns this — skip here so we only report drift.
                 continue

@@ -1,33 +1,40 @@
-= NAMS Limits & Behavior
+= NAMS limits and behavior
 :page-product: agent-memory
 :toclevels: 2
 :icons: font
+
+[NOTE]
+====
+This page describes the service contract used by this checkout. The SDK source alone does not verify a deployed service, dashboard, quota or authentication configuration. Check the authenticated service response and current workspace settings when following operational instructions.
+====
 
 Operational limits, quotas, and runtime behavior for the hosted NAMS backend. These describe what to expect as a client — not internal service metrics. For the wire contract see xref:reference/rest-api.adoc[NAMS REST API]; for setup see xref:how-to/use-nams.adoc[Use NAMS].
 
 [NOTE]
 ====
-**Conformance tiers ≠ access tiers.** Bronze / Silver / Gold / Platinum are link:https://github.com/neo4j-labs/agent-memory-tck[agent-memory-tck] cross-language _conformance_ levels (how complete a client SDK is), **not** a NAMS pricing or access tier. Every capability listed as available in xref:explanation/backends.adoc#capability-matrix[the capability matrix] is reachable by any authenticated workspace.
+**Conformance tiers ≠ access tiers.** Bronze / Silver / Gold / Platinum are link:https://github.com/neo4j-labs/agent-memory-tck[agent-memory-tck] cross-language _conformance_ levels (how complete a client SDK is), **not** a NAMS pricing or access tier. Every NAMS capability listed in xref:reference/backend-capabilities.adoc[backend capabilities] is reachable by any authenticated workspace.
 ====
 
 == Client defaults (`NamsConfig`)
 
-These are SDK-side defaults you can override; they are not server limits.
+These are Python SDK defaults you can override; they are not server limits. The
+TypeScript client has no retry settings: it makes one attempt per request (see
+xref:reference/typescript-api.adoc#_errors[TypeScript errors]).
 
 [cols="2,1,3",options="header"]
 |===
 | Setting | Default | Notes
 
 | `timeout` | `30s` | Per-request HTTP timeout.
-| `max_retries` | `3` | Retries on network errors, 5xx, and 429.
-| `retry_backoff` | `0.5s` | Base for exponential backoff. `Retry-After` is honored on 429.
+| `max_retries` | `3` | Retries on network errors and on 429, 500, 502, 503 and 504.
+| `retry_backoff_seconds` | `0.5s` | Base for exponential backoff. `Retry-After` is honored on 429.
 | `validate_on_connect` | `true` | Sends a probe (with `X-Workspace-Id` when set) so misconfiguration fails fast.
-| `transport_mode` | `auto` | `rest` for `/v{n}` endpoints, `bridge` otherwise.
+| `transport_mode` | `auto` | `rest` for `/v\{n}` endpoints, `bridge` otherwise.
 |===
 
 == Rate limits
 
-A handful of endpoints enforce explicit rate limits. When you exceed one the service returns `429 Too Many Requests`; the SDK raises `RateLimitError` (carrying `retry_after`) after retries are exhausted, and honors any `Retry-After` header.
+A handful of endpoints enforce explicit rate limits. When you exceed one the service returns `429 Too Many Requests`. The Python SDK honors any `Retry-After` header while retrying and raises `RateLimitError` (carrying `retry_after`) after retries are exhausted. The TypeScript client does not retry; it raises `TransportError` with `statusCode` 429.
 
 [cols="2,2,2",options="header"]
 |===
@@ -38,11 +45,11 @@ A handful of endpoints enforce explicit rate limits. When you exceed one the ser
 | OAuth dynamic client registration (`/oauth/register`, MCP) | Per-source-IP sliding window | `429` with `Retry-After: 600`
 |===
 
-Beyond these guards there is no blanket per-request rate limiter today — but write your client to tolerate `429` regardless; the SDK already retries with backoff.
+Beyond these guards there is no blanket per-request rate limiter today — but write your client to tolerate `429` regardless.
 
 [TIP]
 ====
-Treat `429` as normal backpressure: the SDK already retries with backoff. For bulk ingestion prefer `bulk_add_messages(...)` over many single `add_message(...)` calls.
+Treat `429` as normal backpressure. The Python SDK already retries with backoff; with the TypeScript client, retry idempotent calls yourself (see xref:how-to/typescript/handle-errors.adoc[handling errors]). For bulk ingestion prefer `bulk_add_messages(...)` over many single `add_message(...)` calls.
 ====
 
 == Quotas
@@ -60,8 +67,8 @@ Treat `429` as normal backpressure: the SDK already retries with backoff. For bu
 
 [NOTE]
 ====
-NAMS has **no paid tiers or plan-based quotas** today: every capability in the
-xref:explanation/backends.adoc#capability-matrix[capability matrix] is available
+NAMS has **no paid tiers or plan-based quotas** today: every NAMS capability in
+xref:reference/backend-capabilities.adoc[backend capabilities] is available
 to any authenticated workspace, and the limits above apply uniformly. (A `plan`
 field appears on some workspace responses but is currently unused.)
 ====
@@ -69,7 +76,7 @@ field appears on some workspace responses but is currently unused.)
 == Runtime behavior
 
 Extraction is **asynchronous** on NAMS::
-When you add messages, entity/relationship extraction runs server-side. Writes are accepted immediately (`202 Accepted`); extracted entities become queryable a short time later. Poll `GET /v1/conversations/{id}/extraction-status`, or call `long_term.wait_for_extraction(...)` from the SDK, before asserting on extracted results. (On bolt, extraction is synchronous and `wait_for_extraction` is a no-op returning `True`.)
+When you add messages, entity/relationship extraction runs server-side. Writes are accepted immediately (`202 Accepted`); extracted entities become queryable a short time later. Poll `GET /v1/conversations/\{id}/extraction-status`, or call `long_term.wait_for_extraction(...)` from the SDK, before asserting on extracted results. (On bolt, extraction is synchronous and `wait_for_extraction` is a no-op returning `True`.)
 
 Read-only Cypher::
 `client.query.cypher(...)` runs against the workspace graph in Neo4j READ access mode. Write statements are rejected server-side (`400`). This is available to any authenticated workspace — it is not gated behind a tier.
@@ -80,3 +87,10 @@ Because extraction and resolution are asynchronous, a just-written message and i
 == Status codes & errors
 
 The service uses standard HTTP status codes; error bodies are JSON of the shape `{"error": "..."}` (some carry additional fields such as `message` and `limit`). See xref:reference/rest-api.adoc#errors[REST API → Errors] for the full mapping to SDK exceptions.
+
+== See also
+
+* xref:reference/rest-api.adoc[REST API reference] — the wire contract these limits apply to.
+* xref:reference/authentication.adoc[Authentication and API keys] — how a workspace and key are resolved.
+* xref:how-to/use-nams.adoc[Connect a Python application to NAMS] — hosted setup walkthrough.
+* xref:reference/backend-capabilities.adoc[Backend capabilities and data scope] — which operations each backend supports.

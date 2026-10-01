@@ -11,6 +11,32 @@ appear in minor versions with a callout in this file.
 
 ### Added
 
+- **`ActiveOntology.schemaHash`** — `ontology.getActive()` now returns the bound
+  version's schema hash alongside its other binding metadata.
+
+### Changed
+
+- **BREAKING (behavioural): `ontology.getActive()` reads the binding from the
+  active response.** It returns the `version` object the service sends with the
+  active document, which can be older than the ontology's latest revision.
+  0.5.0 instead composed `ontologyId`, `versionId`, `revision` and
+  `validationMode` with extra `list()` and `get()` calls and took the latest
+  revision, so it could report a version other than the one actually bound.
+  - When the response carries no version metadata (a legacy document-only
+    response, or `version: null`), `getActive()` now returns only `document`
+    and leaves `ontologyId`, `versionId`, `revision`, `validationMode` and
+    `schemaHash` undefined. 0.5.0 filled them in from the second lookup.
+  - Malformed version metadata (a missing `id` or `ontology_id`, a
+    non-positive `revision`, an unknown `validation_mode`, or a non-string
+    `schema_hash`, `created_at`, `message` or `schema_json`, or a
+    `schema_json` that is not an ontology document) throws a plain `Error`, as
+    does a version whose `schema_json` conflicts with the active document.
+    These are not `MemoryError` subclasses.
+
+## 0.5.0 — 2026-09-22
+
+### Added
+
 - **`registerMemoryTools`** (`@neo4j-labs/agent-memory/mcp/register`) — registers
   the 12-tool memory surface on a high-level MCP `McpServer` in one call.
   `McpServer.registerTool` validates arguments and therefore requires Zod input

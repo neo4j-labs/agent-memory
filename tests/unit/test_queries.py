@@ -380,6 +380,16 @@ class TestDeduplicationQueries:
         assert "status" in queries.GET_POTENTIAL_DUPLICATES
         assert "pending" in queries.GET_POTENTIAL_DUPLICATES
 
+    def test_get_potential_duplicates_returns_each_pair_once_with_confidence(self):
+        """A directed match returns each pair once; confidence is a scalar column.
+
+        Result.data() flattens a returned relationship, so reading confidence
+        off ``r`` always fell back to 0.0.
+        """
+        query = queries.GET_POTENTIAL_DUPLICATES
+        assert "-[r:SAME_AS]->" in query
+        assert "r.confidence AS confidence" in query
+
     def test_merge_entities_transfers_relationships(self):
         """MERGE_ENTITIES should transfer relationships."""
         query = queries.MERGE_ENTITIES

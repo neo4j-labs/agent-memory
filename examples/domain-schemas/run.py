@@ -82,7 +82,7 @@ RELATIONS_NOTE = """
         enable_llm_fallback=True)`.
 
     With `--store`, whatever relations were found are written as
-    `(:Entity)-[:RELATED_TO {{relation_type}}]->(:Entity)` edges.
+    `(:Entity)-[:RELATED_TO {{type}}]->(:Entity)` edges.
 """
 
 

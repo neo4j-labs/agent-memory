@@ -11,15 +11,15 @@ graph — no checkpointer, no in-process message buffer.
 > ⚠️ **Neo4j Labs Project**
 >
 > This project is part of Neo4j Labs and is actively maintained, but not
-> officially supported. There are no SLAs or guarantees around backwards
-> compatibility and deprecation. For questions and support, please use
+> officially supported. There are no SLAs, backward-compatibility guarantees,
+> or scheduled deprecation commitments. APIs may change without notice. For questions and support, please use
 > the [Neo4j Community Forum](https://community.neo4j.com).
 
 ## What it shows
 
 - **`namsMemoryMiddleware`** (`src/nams-memory.ts`) — a LangChain v1 middleware.
   `wrapModelCall` prepends the conversation's three-tier context (reflections,
-  observations, recent messages) plus recalled preferences to the system
+  observations, recent messages) plus workspace entity matches to the system
   message; `afterAgent` writes the turn back through
   `Neo4jChatMessageHistory`. The second turn is invoked with **only** the new
   user message, so everything it knows about turn one came back out of the graph.
@@ -28,9 +28,10 @@ graph — no checkpointer, no in-process message buffer.
 - **Extraction is asynchronous** — the script awaits
   `longTerm.waitForExtraction()` before querying entities, instead of racing a
   fixed delay.
-- **Graph, not buffer** — the run ends by printing three-tier context counts, a
-  preference recalled across conversations, and one `longTerm.expandGraph()` hop
-  out of the entity the retriever found.
+- **Graph, not buffer** — after the two turns the script reads the
+  conversation back from NAMS, scoped explicitly to its ID. The run ends by
+  printing three-tier context counts and one `longTerm.expandGraph()` hop out
+  of the entity the retriever found.
 
 ### The adapter bridge
 
@@ -44,15 +45,33 @@ rest of the example is unchanged.
 
 ## Prerequisites
 
-- Node.js 22+ (Node 20 is EOL)
+- Node.js 22+
 - A `MEMORY_API_KEY` from [memory.neo4jlabs.com](https://memory.neo4jlabs.com)
 - An `OPENAI_API_KEY` (or swap in any LangChain chat model — see below)
+
+## Build the shared SDK first
+
+This is a source-checkout example. Its `file:../..` dependency and shared
+`../tsconfig.base.json` require the repository layout. From the repository root:
+
+```bash
+cd typescript
+npm ci
+npm run build
+cd examples/langchain
+```
+
+Run the commands below from `typescript/examples/langchain/`. Build **before**
+installing this example; package exports point at `typescript/dist/` and npm does
+not build the local SDK on installation. For standalone copies, follow the
+[copy checklist](../README.md#copying-an-example) and verify the selected npm
+artifact supplies every API used here.
 
 ## Run it
 
 ```bash
 cp .env.example .env       # set MEMORY_API_KEY and OPENAI_API_KEY
-npm install
+npm ci
 npm start
 ```
 
@@ -65,8 +84,9 @@ than a transport 401.
 conversation: 0f4c…
 
 user> I'm evaluating graph databases for a recommendation engine. Neo4j is top of my list.
-memory: injected 4 lines of graph context
+memory: nothing recalled yet (first turn)
 tool search_memory_entities("graph database") -> 0 entities
+memory: nothing recalled yet (first turn)
 memory: persisted human message (84 chars)
 memory: persisted ai message (287 chars)
 agent> Neo4j is a strong fit for relationship-heavy recommendations …
@@ -90,13 +110,16 @@ Retriever returned 3 entities from the graph:
   graph database (concept) id=1d07…
 
 Three-tier context: 1 reflections, 2 observations, 4 recent messages
-Preferences recalled across conversations: 1
-  [database] Prefers graph databases for relationship-heavy workloads
 One hop from Neo4j: nodes=4 edges=3
 ```
 
-Exact wording varies with the model; the structure does not. Entity names come
-out of the messages the agent just persisted — nothing is hand-seeded.
+Exact wording varies with the model; the structure does not. The middleware
+logs once per model call, so a turn that calls the tool logs twice. In a fresh
+workspace turn one has nothing to recall; in a workspace that already holds
+matching entities it reads `memory: injected N lines of graph context` instead.
+Entity names come out of the messages the agent just persisted — nothing is
+hand-seeded. Entity search is workspace-wide, not a private user-profile lookup.
+Hosted preference/fact methods are deliberately excluded and rejected by the fake.
 
 ## Tests
 
@@ -161,5 +184,4 @@ This is a Neo4j Labs project — community supported, no SLA. Ask questions on t
 
 ---
 
-_Verified against @neo4j-labs/agent-memory 0.4.1 (in-tree), langchain 1.5.11,
-@langchain/core 1.2.10, @langchain/openai 1.5.12, Node 22+ — 2026-09-10._
+_Compatibility scope: this example targets the current source checkout and its committed package/lock files. Offline tests validate the exercised contracts; they do not establish published-package availability, a live model result, or deployed NAMS behavior. Use the runtime floor above; record the actual package/runtime versions when verifying a release or deployment._

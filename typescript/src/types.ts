@@ -334,7 +334,7 @@ export interface MemoryClientOptions {
   /** OAuth refresh-token-aware token provider. Overrides apiKey when supplied. */
   tokenProvider?: () => string | Promise<string>;
 
-  /** Shared entity namespace for multi-agent collaboration. */
+  /** Accepted but currently unused; does not scope requests or isolate entities. */
   namespace?: string;
 
   /** Request timeout in milliseconds. Default: 30000. */
@@ -375,6 +375,7 @@ export interface SearchMessagesOptions {
   threshold?: number;
 }
 
+/** Options for the conversation-id alias. @inline */
 export interface ClearSessionOptions {
   /** Alias for the positional `sessionId`. */
   conversationId?: string;
@@ -389,6 +390,7 @@ export interface SearchEntitiesOptions {
   type?: string;
 }
 
+/** Bounded entity-search polling options. @inline */
 export interface WaitForExtractionOptions {
   /** Search string to poll. Defaults to the first of `expectedNames`. */
   query?: string;

@@ -1,15 +1,14 @@
 /**
- * Hooks mode — runtime-controlled session memory.
+ * Hooks mode.
  *
- * Contract points:
- *  - loadSession restores user/assistant turns as ModelMessage[], skips tool
- *    audit records, never creates a conversation, returns [] on errors
- *  - onFinish persists prompt + assistant text + tool call/result audit
- *    records via bulkAddMessages, exactly once per generation
- *  - onFinish falls back to per-message writes when bulk fails
- *  - context mode: scope read from runtimeContext, winning over closure scope
- *  - missing userId throws (wiring bug, not a runtime condition)
- *  - the built callback is assignable to the AI SDK's onFinish slots
+ * Checks:
+ *  - loadSession returns user/assistant turns, skips tool records, never
+ *    creates a conversation, and returns [] on errors
+ *  - onFinish saves the prompt, text, and tool records once, in one bulk write
+ *  - onFinish falls back to single writes when the bulk write fails
+ *  - scope from runtimeContext wins over the factory scope
+ *  - a missing userId throws
+ *  - the callback type fits the AI SDK's onFinish
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -280,8 +279,7 @@ describe('createNams().hooks()', () => {
 describe('type compatibility', () => {
   it('the built callback is assignable to the AI SDK onFinish slots', () => {
     const hooks = createNamsHooks({ ...config, userId: 'u' });
-    // Compile-time check: these assignments fail typecheck if the structural
-    // event type drifts from the SDK's GenerateTextEndEvent.
+    // Type check: fails to compile if our event type drifts from GenerateTextEndEvent.
     type GenerateTextArgs = NonNullable<Parameters<typeof import('ai').generateText>[0]['onFinish']>;
     const asGenerateTextOnFinish: GenerateTextArgs = hooks.onFinish();
     expect(asGenerateTextOnFinish).toBeTypeOf('function');

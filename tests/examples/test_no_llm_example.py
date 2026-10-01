@@ -74,6 +74,7 @@ class TestNoLLMExample:
         monkeypatch.setenv("NEO4J_URI", "bolt://localhost:7687")
         monkeypatch.setenv("NEO4J_USERNAME", "neo4j")
         monkeypatch.setenv("NEO4J_PASSWORD", "test-password")
+        monkeypatch.setenv("NEO4J_DATABASE", "tutorial-db")
         # A stray MEMORY_API_KEY must not redirect this example to NAMS.
         monkeypatch.setenv("MEMORY_API_KEY", "nams_not_a_real_key")
 
@@ -83,6 +84,7 @@ class TestNoLLMExample:
             assert settings.llm is None
             assert settings.extraction.enable_llm_fallback is False
             assert settings.backend == "bolt"
+            assert settings.neo4j.database == "tutorial-db"
             # v0.3+: embedding is an EmbeddingProvider instance (the
             # resolved adapter), not the legacy EmbeddingConfig enum.
             from neo4j_agent_memory.llm.protocol import EmbeddingProvider
@@ -91,6 +93,19 @@ class TestNoLLMExample:
             assert "MiniLM" in settings.embedding.model
         finally:
             sys.modules.pop("no_llm_example_main", None)
+
+    @pytest.mark.parametrize("missing", ["NEO4J_URI", "NEO4J_USERNAME", "NEO4J_PASSWORD"])
+    def test_missing_connection_value_has_no_local_fallback(self, monkeypatch, missing):
+        for key, value in {
+            "NEO4J_URI": "neo4j+s://tutorial.example.invalid",
+            "NEO4J_USERNAME": "tutorial-user",
+            "NEO4J_PASSWORD": "synthetic-password",
+        }.items():
+            monkeypatch.setenv(key, value)
+        monkeypatch.delenv(missing)
+        module = _load_example()
+        with pytest.raises(KeyError, match=missing):
+            module.build_settings()
 
     def test_example_uses_explicit_llm_none(self):
         """Sanity check: the example demonstrates the ``llm=None`` opt-out."""

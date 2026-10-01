@@ -10,9 +10,9 @@ This guide walks you through setting up and running the Google Cloud Financial A
 |------------|---------|-------|
 | **Python** | 3.12+ | The backend declares `requires-python = ">=3.12"` |
 | **uv** | Latest | [Install](https://docs.astral.sh/uv/getting-started/installation/) |
-| **Node.js** | 20+ | For the frontend |
+| **Node.js** | 22.13+ on the 22 line, or 24 | For the frontend development toolchain |
 | **Google Cloud CLI** | Latest | Only for the Vertex AI path and Cloud Run — [install gcloud](https://cloud.google.com/sdk/docs/install) |
-| **Neo4j** | 5.26 LTS or Aura | Aura Free or `neo4j:5.26-community` with APOC |
+| **Neo4j AuraDB** | Managed Neo4j | Dedicated empty instance; see Step 2 |
 
 ### Google Cloud Setup
 
@@ -42,26 +42,11 @@ cd neo4j-agent-memory/examples/financial-services-advisor/google-cloud-financial
 
 ---
 
-## Step 2: Set Up Neo4j
+## Step 2: Set Up Neo4j Aura
 
-### Option A: Neo4j Aura Free (Recommended)
+Set up a dedicated empty AuraDB instance using [the shared Aura guide](../../AURA_SETUP.md), including its credential exports and connection check. Use the generated `neo4j+s://` URI. The starter data is synthetic; confirm capacity and any additional feature requirements before expanding it.
 
-1. Create a free account at [neo4j.io/aura](https://neo4j.io/aura)
-2. Create a new **Free** instance
-3. Save the URI (`neo4j+s://...`) and password
-
-### Option B: Local Docker
-
-```bash
-docker run -d --name neo4j \
-  -p 7687:7687 -p 7474:7474 \
-  -e NEO4J_AUTH=neo4j/password \
-  -e NEO4J_PLUGINS='["apoc"]' \
-  neo4j:5.26-community
-```
-
-This matches [`docker-compose.yml`](docker-compose.yml), which can bring up
-Neo4j, the backend and the frontend together with `docker compose up -d`.
+This application reads `NEO4J_USER` for the username. In the private configuration below, set it to the same value as `NEO4J_USERNAME` from the Aura setup. Replace all template connection values with the credentials for this instance. Keep the backend and frontend running locally against Aura.
 
 ---
 
@@ -97,8 +82,8 @@ CORS_ORIGINS=http://localhost:5173,http://localhost:3000
 LOG_LEVEL=INFO
 ```
 
-`backend/.env` is loaded afterwards as an optional developer override, so you
-can keep a local Neo4j there without touching the shared file. Embeddings always
+`backend/.env` is loaded afterwards as an optional developer override. Remove
+stale connection values there or update them to the same Aura instance. Embeddings always
 go through Vertex AI, so semantic search needs a GCP project with the Vertex AI
 API enabled even on Option A.
 

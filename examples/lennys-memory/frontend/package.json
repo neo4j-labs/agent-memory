@@ -19,7 +19,7 @@
     "@neo4j-nvl/base": "^1.2.1",
     "@neo4j-nvl/react": "^1.2.1",
     "@turf/turf": "^7.2.0",
-    "@vercel/analytics": "^1.6.1",
+    "@vercel/analytics": "^2.0.1",
     "leaflet": "^1.9.4",
     "next": "^16.3.4",
     "next-themes": "^0.4.6",
@@ -32,12 +32,12 @@
   },
   "devDependencies": {
     "@types/leaflet": "^1.9.21",
-    "@types/node": "^26.5.1",
+    "@types/node": "^26.6.2",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "eslint": "^9.39.5",
     "eslint-config-next": "^16.3.4",
     "typescript": "^5.9.3",
-    "vitest": "^5.0.0"
+    "vitest": "^5.0.1"
   }
 }

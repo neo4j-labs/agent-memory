@@ -1,16 +1,12 @@
 /**
- * Middleware mode demo — wrap an existing model instance with memory.
+ * Middleware mode demo. Keep your model and add memory with `createNams().wrap()`.
+ * MEMORY_API_KEY is for NAMS. OPENAI_API_KEY is for the OpenAI model.
  *
- * Unlike provider mode there is no ProviderV3 registration: you keep whatever
- * model you already configured and decorate it with `createNams().wrap()`.
- * MEMORY_API_KEY authenticates with NAMS; OPENAI_API_KEY authenticates the
- * base model call made by `@ai-sdk/openai` (swap for another provider's key
- * if you use a different `baseProvider`). 
  * Run with:
  *
  *   MEMORY_API_KEY=sk-nams-... OPENAI_API_KEY=sk-... npx tsx examples/middleware-chat.ts
  *
- * Expected output (assistant wording will vary):
+ * Expected output (wording varies):
  *
  *   ─── Turn 1 — teach it something
  *   user:      My favourite programming language is Rust.
@@ -20,8 +16,7 @@
  *   user:      What is my favourite programming language?
  *   assistant: Your favourite programming language is Rust.
  *
- * Turn 2 only answers correctly because the middleware injected the memory
- * persisted in turn 1 — the model instance itself is brand new.
+ * Turn 2 uses a new model instance, so the answer comes from NAMS memory.
  */
 
 import { openai } from '@ai-sdk/openai';
@@ -32,7 +27,7 @@ const userId = process.env.NAMS_DEMO_USER ?? 'demo-user-middleware-chat';
 const model = process.env.NAMS_DEMO_MODEL ?? 'gpt-5.4-mini';
 
 async function turn(label: string, message: string): Promise<void> {
-  // A fresh wrapped model per turn — memory continuity comes from NAMS.
+  // A new model each turn. Memory comes from NAMS.
   const nams = createNams({ apiKey: process.env.MEMORY_API_KEY! });
   const wrappedModel = nams.wrap(openai(model), { userId });
 

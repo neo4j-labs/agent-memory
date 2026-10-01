@@ -217,7 +217,7 @@ async def seed(client: Any, *, timeout: float) -> int:
             "MATCH (e:Entity) RETURN count(e) AS entities",
         )
     except NotSupportedError as exc:
-        # The Cypher endpoint is a Platinum-tier feature.
+        # Not every deployment exposes the read-only Cypher endpoint.
         print(f"Cypher is not available on this deployment: {exc}")
     else:
         print(f"Cypher round-trip: {rows}")

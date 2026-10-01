@@ -21,8 +21,3 @@ export type MastraInputMessage =
 export function toMastraMessages(history: MastraMemoryMessage[]): MastraInputMessage[] {
   return history.map((m) => ({ role: m.role, content: m.content }));
 }
-
-/** A system message carrying a recalled preference into a brand-new thread. */
-export function preferenceReminder(category: string, preference: string): MastraInputMessage {
-  return { role: "system", content: `Known preference (${category}): ${preference}` };
-}

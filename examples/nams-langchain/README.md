@@ -90,9 +90,11 @@ Entity counts depend on what the server extracts from your text; extraction is
 asynchronous, so the script polls with `long_term.wait_for_extraction(...)`
 before reading entities back.
 
-## Switching to your own Neo4j
+## Switching to AuraDB
 
 Swap the settings object; nothing else changes:
+
+Follow [Aura setup and cleanup](../AURA_SETUP.md) and export its connection variables before constructing the Bolt settings.
 
 ```python
 import os
@@ -103,7 +105,8 @@ from neo4j_agent_memory import BoltSettings, Neo4jConfig
 
 settings = BoltSettings(
     neo4j=Neo4jConfig(
-        uri=os.getenv("NEO4J_URI", "bolt://localhost:7687"),
+        uri=os.environ["NEO4J_URI"],
+        username=os.environ["NEO4J_USERNAME"],
         password=SecretStr(os.environ["NEO4J_PASSWORD"]),
     ),
     embedding="openai/text-embedding-3-small",
@@ -128,4 +131,6 @@ memory-backed agent tools and a reasoning-trace middleware.
 
 ---
 
-_Verified against `neo4j-agent-memory` 0.6.0-dev (branch `examples-updates`), `langchain` 1.4.0, `langchain-core` 1.6.2, with the NAMS transport mocked (`tests/examples/test_nams_langchain_example.py`) — 2026-09-10._
+**Historical verification report — 2026-09-10.** The following records a prior checkout/test report. Its development-version labels, passing counts, and release-availability statements are historical, not evidence of current package compatibility.
+
+> _Verified against `neo4j-agent-memory` 0.6.0-dev (branch `examples-updates`), `langchain` 1.4.0, `langchain-core` 1.6.2, with the NAMS transport mocked (`tests/examples/test_nams_langchain_example.py`) — 2026-09-10._

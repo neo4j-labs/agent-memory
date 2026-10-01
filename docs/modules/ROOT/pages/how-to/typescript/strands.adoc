@@ -1,5 +1,4 @@
-= How to: integrate with AWS Strands Agents
-:toc: left
+= Integrate with AWS Strands Agents
 :source-highlighter: rouge
 
 [NOTE]
@@ -22,10 +21,11 @@ all four of Strands' orthogonal extension surfaces:
   automatically. Real conversation messages land as `Message` graph
   nodes; non-message snapshot state (Strands' `data` minus messages,
   plus `appData`, plus manifests) rides on synthetic `role: "user"`
-  marker messages whose content is `__strands_state__:{base64-JSON}`.
-* **`ConversationManager`** — three-tier context (reflections + observations
-  from `getContext()`) is prepended to every model invocation, *on top of*
-  a configurable inner manager (defaults to `SlidingWindowConversationManager`).
+  marker messages whose content is `pass:[__strands_state__:{base64-JSON}]`.
+* **`ConversationManager`** — xref:explanation/context-tiers.adoc[three-tier
+  context] (reflections + observations from `getContext()`) is prepended to
+  every model invocation, *on top of* a configurable inner manager (defaults
+  to `SlidingWindowConversationManager`).
 * **`HookRegistry` events** — `BeforeInvocation`, `AfterInvocation`,
   `BeforeToolCall`, and `AfterToolCall` are wired to the reasoning subclient
   so every agent turn becomes a queryable `ReasoningStep` with tool calls
@@ -37,7 +37,15 @@ memory store feeds the agent loop.
 A runnable example lives at
 link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/strands[`typescript/examples/strands`].
 
-== Quick Start
+Prerequisites: a Strands JS agent, Node.js 22+ and NAMS test-workspace credentials.
+
+== Procedure
+
+. Build the shared SDK before installing the Strands example; its local dependency is copied by npm.
+. Use `connectMemoryToAgent` for session/context/reasoning wiring, as shown below.
+. Add the memory-store surface only when your application needs explicit entity recall, then inspect stored messages using the synthetic-message filter.
+
+== Quick start
 
 [source,typescript]
 ----
@@ -54,7 +62,7 @@ const agent = new Agent({
 });
 ----
 
-`extraction` is off by default and `MemoryManager`'s `add_memory` tool is
+`extraction` is off by default and ``MemoryManager``'s `add_memory` tool is
 opt-in, so a store left at both defaults recalls but never writes. Three ways
 to get memories in:
 
@@ -82,20 +90,16 @@ You want any of:
 `Neo4jMemoryStore` implements Strands' `MemoryStore` over a NAMS context
 graph.
 
-[options="header"]
-|===
-| Option | Meaning
-| `name` | Required. Identifies the store to `MemoryManager` (search/add tool targeting).
-| `client` / `clientOptions` | Exactly one. `client` borrows a live `MemoryClient` (left open on `close()`); `clientOptions` builds and owns one.
-| `description` | Shown in tool descriptions. Defaults to a generic "entities extracted from conversations" line.
-| `maxSearchResults` | Default result cap when a caller doesn't pass a per-call limit.
-| `writable` | Defaults to `true`.
-| `extraction` | `boolean \| ExtractionConfig`. Defaults to `false` (recall-only).
-| `conversationId` | Explicit write sink. Omit to use a deterministic, name-derived sink conversation.
-| `userId` | Scopes the *sink conversation*: it names the sink, is recorded on it, and filters the scan that finds it. Nothing else is narrowed — `searchEntities` takes no user filter, and `add({ kind: "entity" })` reaches the workspace-wide `addEntity`. Not tenant isolation.
-| `includeEntities` | Defaults to `true`. `false` turns off automatic recall only; set `graphTools: false` as well to stop the model reading the graph through the tool.
-| `graphTools` | Defaults to `true`. Exposes the store's `get_entity_graph` tool from `getTools()`.
-|===
+`name`:: Required. Identifies the store to `MemoryManager` (search/add tool targeting).
+`client` / `clientOptions`:: Exactly one. `client` borrows a live `MemoryClient` (left open on `close()`); `clientOptions` builds and owns one.
+`description`:: Shown in tool descriptions. Defaults to a generic "entities extracted from conversations" line.
+`maxSearchResults`:: Default result cap when a caller doesn't pass a per-call limit.
+`writable`:: Defaults to `true`.
+`extraction`:: `boolean | ExtractionConfig`. Defaults to `false` (recall-only).
+`conversationId`:: Explicit write sink. Omit to use a deterministic, name-derived sink conversation.
+`userId`:: Scopes the *sink conversation*: it names the sink, is recorded on it, and filters the scan that finds it. Nothing else is narrowed — `searchEntities` takes no user filter, and `add({ kind: "entity" })` reaches the workspace-wide `addEntity`. Not tenant isolation.
+`includeEntities`:: Defaults to `true`. `false` turns off automatic recall only; set `graphTools: false` as well to stop the model reading the graph through the tool.
+`graphTools`:: Defaults to `true`. Exposes the store's `get_entity_graph` tool from `getTools()`.
 
 **`search(query, options)`** — entities only. Returns each hit as a
 `MemoryEntry` with no `score` (NAMS returns no similarity for entity search).
@@ -112,7 +116,7 @@ graph.
   is never silently dropped.
 
 **`addMessages(messages, context)`** — the extraction write path. Chunks
-into batches of 100 (`bulkAddMessages`'s limit) and dedupes retried batches
+into batches of 100 (the `bulkAddMessages` limit) and dedupes retried batches
 using the manager's per-message sequence numbers, so a retried save doesn't
 double-write. The dedupe is **in-process**: the bookkeeping does not survive a
 restart, so a process that dies mid-retry can leave duplicate messages in the
@@ -224,6 +228,7 @@ For finer control:
 import {
   SessionManager,
   SlidingWindowConversationManager,
+  type ConversationManager,
 } from "@strands-agents/sdk";
 import {
   Neo4jSessionStorage,
@@ -243,7 +248,14 @@ const conversationManager = new Neo4jConversationManager(memory, {
   includeObservations: true,
 });
 
-const agent = new Agent({ sessionManager, conversationManager, model, tools });
+// Neo4jConversationManager matches ConversationManager's public surface but
+// does not extend Strands' abstract class, so strict TypeScript needs a cast.
+const agent = new Agent({
+  sessionManager,
+  conversationManager: conversationManager as unknown as ConversationManager,
+  model,
+  tools,
+});
 
 // If you skipped connectMemoryToAgent, attach reasoning hooks explicitly:
 await registerReasoningHooks(memory, agent, { conversationId: conv.id });
@@ -255,20 +267,20 @@ await registerReasoningHooks(memory, agent, { conversationId: conv.id });
 |===
 | Strands construct | Where it lands in NAMS
 | Conversation messages | `Message` nodes attached to the Conversation
-| Agent state (`Snapshot.data`, non-message fields) | synthetic `role: "user"` message with content `__strands_state__:{base64-JSON-blob}`
+| Agent state (`Snapshot.data`, non-message fields) | synthetic `role: "user"` message with content `pass:[__strands_state__:{base64-JSON-blob}]`
 | Application state (`Snapshot.appData`) | inside the same synthetic message's content blob
 | Tool calls | `ToolCall` nodes attached to a `ReasoningStep`
 | Per-turn reasoning | `ReasoningStep` nodes attached to the Conversation
-| Manifests (snapshot metadata) | synthetic `role: "user"` message with content `__strands_manifest__:{base64-JSON-blob}`
+| Manifests (snapshot metadata) | synthetic `role: "user"` message with content `pass:[__strands_manifest__:{base64-JSON-blob}]`
 |===
 
 NAMS exposes no endpoint to update a Conversation's `metadata` after
 creation, and we observed that per-message metadata doesn't reliably
-round-trip via `GET /conversations/{id}/messages` either. So the
+round-trip via `GET /conversations/\{id}/messages` either. So the
 integration stuffs the serialized blob directly into the message's
 `content` field, base64-encoded after a recognizable prefix. Each
 `saveSnapshot` writes one synthetic message; `listSnapshotIds` walks
-the message list, filters by the `__strands_state__:` content prefix,
+the message list, filters by the `pass:[__strands_state__:]` content prefix,
 and dedupes by `snapshotId` (last-write-wins for the `isLatest` flag).
 
 Synthetic markers are filtered out before the Snapshot is handed back
@@ -286,9 +298,9 @@ const conv = await memory.shortTerm.getConversation(conversationId);
 const realMessages = conv.messages.filter((m) => !isSyntheticStrandsMessage(m));
 ----
 
-The chat UI in `demo/agents/spool/` doesn't fetch raw conversation
-messages (it streams from `agent.invoke` directly) so it doesn't need
-to filter; consumers that DO fetch raw messages must.
+A UI rendering only the `agent.invoke` stream does not encounter stored
+snapshot messages. A consumer fetching the raw conversation must apply this
+filter before presenting messages to a user.
 
 == Behaviour details
 
@@ -319,15 +331,17 @@ in. An auth failure surfaces as `AuthenticationError` from
 
 == Version compatibility
 
-Verified against `@strands-agents/sdk` 1.17 (declared floor: `>=1.16 <2`) and
-Node.js 22, with `@neo4j-labs/agent-memory` 0.5.0-dev — 2026-09. Strands' v1 API
+The source declares `@strands-agents/sdk >=1.16 <2` and Node.js 22+.
+The tests check installed typings; this describes source compatibility, not
+a verified npm artifact. Strands' v1 API
 is stable under semver, and `typescript/test/unit/strands/type-compatibility.test.ts`
-asserts each of our classes still satisfies the interface it implements, so an
-`npm install` that reshapes one of them fails a test rather than drifting
-silently. We will not break the integration API across minor releases of
+asserts each of our classes still matches the Strands interface it implements
+(for `Neo4jConversationManager`, the `name`, `reduce` and `initAgent` members of
+the abstract `ConversationManager`), so an `npm install` that reshapes one of
+them fails a test rather than drifting silently. We will not break the integration API across minor releases of
 `@neo4j-labs/agent-memory` without a CHANGELOG callout.
 
-`Neo4jMemoryStore` needs `@strands-agents/sdk >= 1.6.0`, the release that
+`Neo4jMemoryStore` needs `@strands-agents/sdk >= 1.16.0`, the release that
 introduced `MemoryManager`/`MemoryStore`.
 
 === A note on `SnapshotStorage` vs the unified `Storage`
@@ -342,10 +356,17 @@ graph traversal over the transcript — the reasons to persist a session into a
 graph at all. If Strands removes the snapshot form, the integration will move to
 a unified `Storage` that keeps the hybrid message mapping behind it.
 
+== Verify the integration
+
+In `typescript/examples/strands/`, run `npm run lint` and `npm test` after the
+README's SDK-build/install sequence. The suite checks session replay, context,
+reasoning and memory-store behavior offline. A live test must use your selected
+Strands/model versions and inspect returned conversation ids.
+
 == See also
 
 - link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/strands[Runnable Strands example]
-- link:observability.adoc[Enable request logging]
-- link:handle-errors.adoc[Error handling]
+- xref:how-to/typescript/observability.adoc[Enable request logging]
+- xref:how-to/typescript/handle-errors.adoc[Error handling]
 - xref:how-to/integrations/aws-strands.adoc[AWS Strands Agents (Python)] — the Python guide
 - https://strandsagents.com[Strands Agents docs]

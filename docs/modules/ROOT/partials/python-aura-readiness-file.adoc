@@ -1,0 +1,11 @@
+Open the helper below and save its complete source as `wait_for_tutorial_neo4j.py` in `~/agent-memory-tutorials`.
+
+.Show `wait_for_tutorial_neo4j.py`
+[%collapsible]
+====
+.Save as `wait_for_tutorial_neo4j.py`
+[source,python]
+----
+include::example$wait_for_tutorial_neo4j.py[]
+----
+====

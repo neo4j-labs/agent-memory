@@ -1,400 +1,190 @@
-= Build a Knowledge Graph from Documents (TypeScript)
-:page-product: agent-memory
-:page-pagination:
-:toclevels: 3
-:sectanchors:
-:icons: font
-:source-highlighter: highlight.js
+= Ingest documents and inspect extracted entities (TypeScript)
+:page-role: code-nocollapse
+:ts-program: src/tutorials/knowledge-graph.ts
+:ts-seed: seed
+:ts-next-state: knowledge-graph-2.json
+:source-highlighter: rouge
 
-A step-by-step tutorial to extract entities and relationships from a corpus of text and persist them as a queryable knowledge graph using the TypeScript SDK and the hosted NAMS service.
+anchor:_what_youll_learn[]
+anchor:_time_required[]
+anchor:_what_were_building[]
+We will store two synthetic documents as conversation messages, wait for a
+specific extracted entity, and inspect graph records linked to those messages.
+This lesson demonstrates ingestion and inspection. The service's
+extraction pipeline decides which entities and relationships it produces; this
+lesson does not promise a particular relationship or multi-hop traversal result.
 
-[.lead]
-In this tutorial we will turn a small set of company / product / person descriptions into a knowledge graph: an LLM extracts structured entities and relationships from each document, we persist them via `@neo4j-labs/agent-memory`, and then we query the graph by semantic search and by relationship traversal. By the end you'll be able to point any TS agent at the same backend and have it use that graph.
+anchor:_prerequisites[]
+anchor:_step_1_project_setup[]
 
-== What You'll Learn
+== Step 1: Build the SDK and install the lesson project
 
-* How to use an LLM with structured output to extract entities from free-text.
-* How to persist entities and typed relationships via `memory.longTerm.addEntity` and `addRelationship`.
-* How to search the graph by semantic similarity (`searchEntities`).
-* How to walk relationships outward from a known entity (`getRelatedEntities`).
-* How another agent in the same backend reads what this one wrote.
+You need a workspace-scoped `MEMORY_API_KEY` for a dedicated test workspace on
+link:https://memory.neo4jlabs.com/[NAMS]. This lesson does not call a model, so `OPENAI_API_KEY` is not required.
 
-== Prerequisites
+include::partial$typescript-tutorial-project.adoc[]
 
-* Node.js 20 or later.
-* `OPENAI_API_KEY` and `MEMORY_API_KEY` set.
-* Basic familiarity with TypeScript and async/await.
+anchor:_step_2_prepare_sample_documents[]
+anchor:_step_5_persist_the_extraction_into_the_knowledge_graph[]
 
-== Time Required
+== Step 2: Inspect the complete ingestion program
 
-About 30 minutes.
+Open `src/tutorials/knowledge-graph.ts`. The program adds a run-specific
+suffix to the fictional organization name to reduce confusion with an earlier
+run. It obtains entity IDs from the saved messages' graph links, rather than
+searching unrelated workspace data. In general, the hosted service can merge a
+newly created entity onto an existing one it considers the same; when that
+happens, the entity you read back carries the canonical name rather than the
+one you passed in, and `metadata.nams_resolution` records the merge (see
+xref:reference/typescript-api.adoc[the TypeScript SDK reference]).
 
-== What We're Building
-
-A small "product / company / founder" knowledge graph built from five short documents. The schema we'll end up with:
-
-[listing]
+[source,typescript]
 ----
-(:Entity:Person {name})-[:FOUNDED]->(:Entity:Organization {name})
-(:Entity:Organization {name})-[:MAKES]->(:Entity:Product {name})
-(:Entity:Organization {name})-[:HEADQUARTERED_IN]->(:Entity:Location {name})
+import { TutorialRun, isTutorialEntryPoint } from "../../../shared/tutorial-state.js";
+import { inspectGraph, runTutorialCommand, waitForTerminalExtraction } from "../../../shared/tutorial-cleanup.js";
+
+export async function inspectDocuments(run: TutorialRun, timeoutMs = 60_000) {
+  const conversation = await run.createConversation();
+  console.log(`CONVERSATION_ID=${conversation.id}`);
+  await run.bulkAddMessages([
+    { role: "user", content: `${run.name} is a fictional organization that designs garden sensors.` },
+    { role: "user", content: `Mira Vale ${run.state.runId} is an engineer at ${run.name}.` },
+  ]);
+  return observeDocuments(run, timeoutMs);
+}
+
+// This phase reads the existing run; it never creates another conversation or message.
+export async function observeDocuments(run: TutorialRun, timeoutMs = 60_000) {
+  const stored = await run.verify();
+  console.log(`Stored document messages verified: ${stored.messages}`);
+  await waitForTerminalExtraction(run, timeoutMs);
+  const graph = await inspectGraph(run);
+  const entityIds = [...new Set(graph.map(row => String(row.entity_id)))];
+  let expectedNameFound = false;
+  for (const id of entityIds) {
+    // These IDs came from the owned messages' provenance edges, not workspace search.
+    run.retain({ kind: "entity", id, origin: "derived", disposition: "present" });
+    const entity = await run.client.longTerm.getEntity(id);
+    expectedNameFound ||= entity.name.toLowerCase() === run.name.toLowerCase();
+    console.log(`Linked entity: ${entity.id} ${entity.name} (${entity.type})`);
+  }
+  console.log(`Run graph: ${graph.length} message/entity links`);
+  if (!entityIds.length) throw new Error("Extraction finished without linked entities. Keep the state and inspect the messages before claiming graph success.");
+  if (!expectedNameFound) throw new Error("Linked entities did not include this run's expected organization name. Keep the state; graph presence alone is not the lesson's success condition.");
+  return { conversationId: run.conversationId, entityIds };
+}
+
+if (isTutorialEntryPoint(import.meta.url)) {
+  runTutorialCommand("knowledge-graph", process.argv.slice(2), "seed", ["seed", "observe"],
+    (mode, run) => mode === "observe" ? observeDocuments(run) : inspectDocuments(run))
+    .catch(error => { console.error(error); process.exitCode = 1; });
+}
 ----
 
-NAMS uses lowercase types (`"person"`, `"organization"`, `"location"`, `"concept"`); we'll use `"concept"` for products since NAMS doesn't have a built-in product type.
+The maintained state and cleanup helpers are in `typescript/examples/shared/`.
+Keep the private `.tutorial-state/` directory with this checkout. Each run binds
+its saved IDs to the endpoint, workspace selector and credential; a changed
+identity stops authenticated use of those IDs; local `inspect` remains available. Reseeding an existing state is refused.
 
-== Step 1: Project setup
+include::partial$typescript-tutorial-api.adoc[]
+
+anchor:_step_6_query_the_knowledge_graph[]
+anchor:_step_3_define_an_extraction_schema_with_zod[]
+anchor:_step_4_extract_structured_entities_with_the_llm[]
+
+anchor:_step_3_run_and_distinguish_storage_from_extraction[]
+
+== Step 3: Store documents and inspect extraction
 
 [source,bash]
 ----
-mkdir kg-from-docs && cd kg-from-docs
-npm init -y
-npm install @neo4j-labs/agent-memory ai @ai-sdk/openai zod
-npm install --save-dev typescript tsx @types/node
+npx tsx --env-file-if-exists=.env \
+  src/tutorials/knowledge-graph.ts seed .tutorial-state/knowledge-graph.json
 ----
 
-`tsconfig.json` and `package.json` `"type": "module"` as in the previous tutorial.
+Expect `Stored document messages verified: 2`. The program waits up to 60
+seconds for those messages' extraction to finish, then inspects graph links
+starting from only their saved IDs. At least one linked entity must match the
+run's exact organization name, ignoring case. A nonempty graph alone is not
+success.
 
-== Step 2: Prepare sample documents
+A timeout means terminal extraction was not observed in time; it does not mean
+the messages were not stored. Missing or unexpected entities also fail the
+lesson check and retain state. Do not seed another run to bypass either result.
 
-Create `src/documents.ts`:
-
-[source,typescript]
-----
-export const documents = [
-  {
-    id: "doc-1",
-    text: "Brian Chesky co-founded Airbnb in 2008. The company is headquartered in San Francisco and operates an online marketplace for short-term lodging.",
-  },
-  {
-    id: "doc-2",
-    text: "Phil Knight founded Nike in 1964. Nike, based in Beaverton, Oregon, makes the Air Max running shoes and the Vaporfly racing shoes.",
-  },
-  {
-    id: "doc-3",
-    text: "Steve Jobs co-founded Apple in 1976. Apple, headquartered in Cupertino, California, makes the iPhone and the MacBook.",
-  },
-  {
-    id: "doc-4",
-    text: "Reed Hastings co-founded Netflix in 1997. Based in Los Gatos, California, Netflix operates a streaming service.",
-  },
-  {
-    id: "doc-5",
-    text: "Travis Kalanick co-founded Uber in 2009. Uber is headquartered in San Francisco and operates ride-sharing and food-delivery services.",
-  },
-];
-----
-
-== Step 3: Define an extraction schema with Zod
-
-Create `src/schema.ts`:
-
-[source,typescript]
-----
-import { z } from "zod";
-
-export const ExtractionSchema = z.object({
-  people: z.array(
-    z.object({
-      name: z.string(),
-      description: z.string().optional(),
-    }),
-  ),
-  organizations: z.array(
-    z.object({
-      name: z.string(),
-      description: z.string().optional(),
-      headquartersLocation: z.string().optional(),
-    }),
-  ),
-  locations: z.array(
-    z.object({
-      name: z.string(),
-    }),
-  ),
-  products: z.array(
-    z.object({
-      name: z.string(),
-      makerOrganization: z.string(),
-    }),
-  ),
-  relationships: z.array(
-    z.object({
-      sourceName: z.string(),
-      targetName: z.string(),
-      type: z.enum(["FOUNDED", "MAKES", "HEADQUARTERED_IN"]),
-    }),
-  ),
-});
-
-export type Extraction = z.infer<typeof ExtractionSchema>;
-----
-
-The schema is what we'll hand to the LLM as a structured-output target. Zod gives us runtime validation _and_ a TypeScript type.
-
-== Step 4: Extract structured entities with the LLM
-
-Create `src/extract.ts`:
-
-[source,typescript]
-----
-import { generateObject } from "ai";
-import { openai } from "@ai-sdk/openai";
-import { ExtractionSchema, type Extraction } from "./schema.js";
-
-export async function extractFromDocument(text: string): Promise<Extraction> {
-  const { object } = await generateObject({
-    model: openai("gpt-4o-mini"),
-    schema: ExtractionSchema,
-    prompt: `Extract people, organizations, locations, products, and the
-relationships between them from the following text.
-
-For relationships use these types:
-- FOUNDED: person founded organization
-- MAKES: organization makes product
-- HEADQUARTERED_IN: organization is headquartered in location
-
-Text:
-${text}`,
-  });
-  return object;
-}
-----
-
-`generateObject` is the Vercel AI SDK's structured-output helper. It enforces our Zod schema on the model's response.
-
-== Step 5: Persist the extraction into the knowledge graph
-
-Create `src/build.ts`:
-
-[source,typescript]
-----
-import { MemoryClient } from "@neo4j-labs/agent-memory";
-import { documents } from "./documents.js";
-import { extractFromDocument } from "./extract.js";
-import type { Extraction } from "./schema.js";
-
-const memory = new MemoryClient();
-
-async function persist(extraction: Extraction): Promise<Map<string, string>> {
-  // Map entity name -> persisted entity id, for relationship wiring.
-  const nameToId = new Map<string, string>();
-
-  // 1. People
-  for (const person of extraction.people) {
-    const entity = await memory.longTerm.addEntity(person.name, "person", {
-      description: person.description,
-    });
-    nameToId.set(person.name, entity.id);
-  }
-
-  // 2. Organizations
-  for (const org of extraction.organizations) {
-    const entity = await memory.longTerm.addEntity(org.name, "organization", {
-      description: org.description,
-    });
-    nameToId.set(org.name, entity.id);
-  }
-
-  // 3. Locations
-  for (const loc of extraction.locations) {
-    const entity = await memory.longTerm.addEntity(loc.name, "location");
-    nameToId.set(loc.name, entity.id);
-  }
-
-  // 4. Products (NAMS doesn't have a built-in product type; use "concept")
-  for (const product of extraction.products) {
-    const entity = await memory.longTerm.addEntity(product.name, "concept", {
-      description: `Product made by ${product.makerOrganization}`,
-    });
-    nameToId.set(product.name, entity.id);
-  }
-
-  // 5. Relationships
-  for (const rel of extraction.relationships) {
-    const sourceId = nameToId.get(rel.sourceName);
-    const targetId = nameToId.get(rel.targetName);
-    if (!sourceId || !targetId) {
-      console.warn(`Skipping ${rel.type}: missing endpoint`);
-      continue;
-    }
-    await memory.longTerm.addRelationship(sourceId, targetId, rel.type);
-  }
-
-  return nameToId;
-}
-
-async function main() {
-  for (const doc of documents) {
-    process.stdout.write(`\nDocument ${doc.id} — extracting... `);
-    const extraction = await extractFromDocument(doc.text);
-    process.stdout.write(
-      `${extraction.people.length}p, ${extraction.organizations.length}o, ` +
-        `${extraction.locations.length}l, ${extraction.products.length}prod, ` +
-        `${extraction.relationships.length}rel\n`,
-    );
-    await persist(extraction);
-  }
-
-  console.log("\nKnowledge graph built. Move on to Step 6 to query it.");
-}
-
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
-----
-
-Run it:
+After a timeout, observe the same run again in a new process:
 
 [source,bash]
 ----
-npx tsx src/build.ts
+npx tsx --env-file-if-exists=.env \
+  src/tutorials/knowledge-graph.ts observe .tutorial-state/knowledge-graph.json
 ----
 
-Expected output:
+`observe` verifies the saved messages, waits for terminal extraction and repeats
+the exact-name and scoped graph checks. It creates no conversation, message or
+entity; it can add discovered entity IDs to the private local ledger. A normal
+exit establishes that the expected organization was found. If the named
+predicate still fails after extraction finishes, retain that result for review
+and cleanup; graph presence alone is insufficient.
 
-[listing]
-----
-Document doc-1 — extracting... 1p, 1o, 1l, 0prod, 2rel
-Document doc-2 — extracting... 1p, 1o, 1l, 2prod, 5rel
-Document doc-3 — extracting... 1p, 1o, 1l, 2prod, 5rel
-Document doc-4 — extracting... 1p, 1o, 1l, 0prod, 2rel
-Document doc-5 — extracting... 1p, 1o, 1l, 0prod, 2rel
+Inspect `Linked entity:` and `Run graph:` output alongside the saved message
+IDs and relationship names. This scoped view does not enumerate unrelated
+workspace data or promise a particular relationship or extraction-quality score.
+Cleanup independently rechecks terminal status before considering deletion.
 
-Knowledge graph built. Move on to Step 6 to query it.
-----
+anchor:_what_youve_built[]
 
-NAMS deduplicates entities server-side, so re-running this script is idempotent.
+== Verify in a fresh process
 
-== Step 6: Query the knowledge graph
-
-Create `src/query.ts`:
-
-[source,typescript]
-----
-import { MemoryClient } from "@neo4j-labs/agent-memory";
-
-const memory = new MemoryClient();
-
-async function main() {
-  // 1. Semantic search across people
-  console.log("\n=== Founders ===");
-  const founders = await memory.longTerm.searchEntities(
-    "company founder",
-    { type: "person", limit: 5 },
-  );
-  for (const f of founders) {
-    console.log(`  ${f.name} — ${f.description ?? "(no description)"}`);
-  }
-
-  // 2. Walk relationships outward from a known entity
-  console.log("\n=== What does Nike make? ===");
-  const nike = await memory.longTerm.getEntityByName("Nike");
-  if (nike) {
-    const products = await memory.longTerm.getRelatedEntities(nike.id, {
-      relationshipType: "MAKES",
-    });
-    for (const p of products) {
-      console.log(`  Nike makes: ${p.name}`);
-    }
-  }
-
-  // 3. Multi-hop traversal
-  console.log("\n=== Where is each founder's company headquartered? ===");
-  for (const founder of founders) {
-    const orgs = await memory.longTerm.getRelatedEntities(founder.id, {
-      relationshipType: "FOUNDED",
-    });
-    for (const org of orgs) {
-      const locations = await memory.longTerm.getRelatedEntities(org.id, {
-        relationshipType: "HEADQUARTERED_IN",
-      });
-      for (const loc of locations) {
-        console.log(`  ${founder.name} → ${org.name} → ${loc.name}`);
-      }
-    }
-  }
-}
-
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
-----
-
-Run it:
+Run these commands from the same directory, using the state created above:
 
 [source,bash]
 ----
-npx tsx src/query.ts
+npx tsx src/tutorials/knowledge-graph.ts \
+  inspect .tutorial-state/knowledge-graph.json
+npx tsx --env-file-if-exists=.env \
+  src/tutorials/knowledge-graph.ts verify .tutorial-state/knowledge-graph.json
 ----
 
-Expected output:
+`inspect` shows local saved IDs and operation status without loading `.env`
+or contacting NAMS. `verify` opens another authenticated client and reads the
+recorded conversation and exact message IDs, roles and content digests. Expect
+`Verified stored messages:` with the conversation ID and message count.
+Verification makes no model calls and creates no records. It establishes
+persistence across client processes; it does not imply that the hosted service
+restarted.
 
-[listing]
+anchor:_clean_up_the_conversation[]
+
+== Clean up and inspect the disposition
+
+From the same lesson directory, clean up this run using its saved state:
+
+[source,bash]
 ----
-=== Founders ===
-  Brian Chesky — co-founded Airbnb in 2008
-  Phil Knight — founded Nike in 1964
-  Steve Jobs — co-founded Apple in 1976
-  Reed Hastings — co-founded Netflix in 1997
-  Travis Kalanick — co-founded Uber in 2009
-
-=== What does Nike make? ===
-  Nike makes: Air Max
-  Nike makes: Vaporfly
-
-=== Where is each founder's company headquartered? ===
-  Brian Chesky → Airbnb → San Francisco
-  Phil Knight → Nike → Beaverton, Oregon
-  Steve Jobs → Apple → Cupertino, California
-  Reed Hastings → Netflix → Los Gatos, California
-  Travis Kalanick → Uber → San Francisco
-----
-
-We never wrote any Cypher. Two API calls — `searchEntities` and `getRelatedEntities` — covered semantic discovery and graph traversal.
-
-== Step 7: Use the graph from a different agent
-
-The whole point of a shared knowledge graph is that other agents can use what this one built. From any other process pointed at the same NAMS endpoint:
-
-[source,typescript]
-----
-const memory = new MemoryClient();
-
-// A chat agent now has access to the entire graph.
-const matches = await memory.longTerm.searchEntities(
-  "Who founded the company that makes the Vaporfly?",
-  { limit: 5 },
-);
-// matches[0] = Vaporfly (concept)
-// matches[1] = Nike (organization)
-// matches[2] = Phil Knight (person)
+npx tsx --env-file-if-exists=.env \
+  src/tutorials/knowledge-graph.ts cleanup .tutorial-state/knowledge-graph.json
+npx tsx src/tutorials/knowledge-graph.ts \
+  inspect .tutorial-state/knowledge-graph.json
 ----
 
-Try this from a Python agent on the same backend — entity types map (`PERSON`↔`person`) and the data is the same. See xref:explanation/multi-agent-sharing.adoc[Cross-Agent Memory Sharing].
+The cleanup command waits for the recorded messages' extraction to finish,
+checks the entities derived from those messages and any explicitly created
+entities, and deletes only records with proven exclusive ownership. It verifies
+deleted records are absent. Shared, merged or uncertain records remain listed;
+inspect their disposition instead of treating partial cleanup as a complete
+reset. A timeout or failed readback stops cleanup and preserves the state.
 
-== What You've Built
+Keep the state until every resource has a verified disposition. Closing the
+client alone does not delete data. Do not remove the state file to bypass an
+unfinished run or bulk-delete workspace entities.
 
-* A workflow for going **from documents → typed entities + relationships** using an LLM with structured output.
-* A queryable knowledge graph backed by NAMS — no Neo4j to operate, no extraction pipeline to maintain.
-* A graph that any other agent on the same backend can read.
+include::partial$typescript-tutorial-lifecycle.adoc[]
 
-== Extending the Knowledge Graph
+== Next steps
 
-* **Stream documents.** Pipe a larger corpus through `extractFromDocument` and persist in batches.
-* **Custom entity types.** NAMS's `"custom"` type accepts a free-text subtype — `addEntity(name, "custom", { description })` with a subtype convention in the description.
-* **Provenance.** After each extraction, record a reasoning trace tying entities back to the source document — `memory.reasoning.startTrace(documentId, "extract entities")` then `recordToolCall` per entity created. Query later with `getEntityProvenance(entityId)`.
-* **Wikipedia enrichment.** The bolt-side Python SDK can auto-enrich entities from Wikipedia. On NAMS, server-side enrichment is opt-in via account settings — see xref:how-to/use-nams.adoc[Use NAMS].
+anchor:_step_7_use_the_graph_from_a_different_agent[]anchor:_extending_the_knowledge_graph[]anchor:_see_also[]
 
-== Next Steps
-
-* xref:tutorials/mcp-server-typescript.adoc[Connect Claude Desktop to Your Memory (TypeScript)] — expose this graph through MCP so any MCP-aware client queries it.
-* xref:how-to/entities.adoc[Work with Entities] — full how-to with all the entity operations.
-* xref:how-to/reasoning-traces.adoc[Record Reasoning Traces] — tie reasoning steps to entities they touched.
-
-== See Also
-
-* xref:reference/typescript-api.adoc[TypeScript SDK API reference]
-* xref:explanation/poleo-model.adoc[The POLE+O Data Model] — the type taxonomy NAMS implements as `person` / `organization` / `location` / `concept` / `tool` / `custom`.
-* xref:explanation/multi-agent-sharing.adoc[Cross-Agent Memory Sharing]
+* xref:tutorials/mcp-server-typescript.adoc[Expose memory through MCP].
+* xref:reference/typescript-api.adoc[TypeScript entities and reasoning reference].
+* xref:explanation/multi-agent-sharing.adoc[Understand sharing within a workspace].

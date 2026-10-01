@@ -28,14 +28,7 @@ Those five calls are the library. Everything else in [`examples/`](../) is a var
 
 - Python 3.10+ and [uv](https://docs.astral.sh/uv/) (0.11+, for `uv run --script`)
 - **Either** a NAMS API key from <https://memory.neo4jlabs.com> (no database, no embedding key)
-- **Or** a Neo4j 5.x instance and an embedding provider:
-
-  ```bash
-  docker run -d --name neo4j-hello -p 7474:7474 -p 7687:7687 \
-    -e NEO4J_AUTH=neo4j/test-password \
-    -e NEO4J_PLUGINS='["apoc"]' \
-    neo4j:5.26-community
-  ```
+- **Or** a dedicated empty AuraDB instance and an embedding provider. Follow [Aura setup and cleanup](../AURA_SETUP.md), keeping its connection variables exported for the Aura commands below.
 
 ## Run
 
@@ -45,23 +38,24 @@ Hosted — one key, nothing to operate:
 MEMORY_API_KEY=nams_xxxxxxxxxxxxxxxx uv run examples/hello-memory/main.py
 ```
 
-Your own Neo4j, OpenAI embeddings:
+AuraDB, OpenAI embeddings:
 
 ```bash
-OPENAI_API_KEY=sk-xxxx NEO4J_PASSWORD=test-password uv run examples/hello-memory/main.py
+OPENAI_API_KEY=sk-xxxx uv run examples/hello-memory/main.py
 ```
 
-Your own Neo4j, **no API keys at all** (embeddings run locally, ~90 MB model on first use):
+AuraDB, **no inference API key** (embeddings run locally, ~90 MB model on first use; Aura credentials and network access are still required):
 
 ```bash
-NEO4J_PASSWORD=test-password EMBEDDING=sentence-transformers/all-MiniLM-L6-v2 \
+EMBEDDING=sentence-transformers/all-MiniLM-L6-v2 \
   uv run --with "neo4j-agent-memory[sentence-transformers]" examples/hello-memory/main.py
 ```
 
 Or keep the variables in a file:
 
 ```bash
-cp examples/hello-memory/.env.example examples/hello-memory/.env   # then edit it
+cp examples/hello-memory/.env.example examples/hello-memory/.env
+# Replace local NEO4J_* template values with your Aura settings before running.
 uv run --env-file examples/hello-memory/.env examples/hello-memory/main.py
 ```
 
@@ -120,4 +114,6 @@ One more difference is invisible here but worth knowing: on bolt `add_entity` re
 
 ---
 
-_Verified against `neo4j-agent-memory` 0.6.0-dev (branch `examples-updates`) **and** the released 0.5.0 that the PEP 723 header resolves from PyPI; Python 3.12, uv 0.11.29, Neo4j 5.26-community, sentence-transformers 6.x embeddings on bolt, NAMS transport mocked (`tests/examples/test_hello_memory_example.py`) — 2026-09-10. Unlike the other examples, this one uses only released surface on purpose, so a stranger can run it before cloning anything; add `--with-editable .` to the `uv run` command to exercise the working tree instead._
+**Historical verification report — 2026-09-10.** The following records a prior checkout/test report. Its development-version labels, passing counts, and release-availability statements are historical, not evidence of current package compatibility.
+
+> _Verified against `neo4j-agent-memory` 0.6.0-dev (branch `examples-updates`) **and** the released 0.5.0 that the PEP 723 header resolves from PyPI; Python 3.12, uv 0.11.29, Neo4j 5.26-community, sentence-transformers 6.x embeddings on bolt, NAMS transport mocked (`tests/examples/test_hello_memory_example.py`) — 2026-09-10. Unlike the other examples, this one uses only released surface on purpose, so a stranger can run it before cloning anything; add `--with-editable .` to the `uv run` command to exercise the working tree instead._

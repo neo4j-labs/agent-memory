@@ -1,14 +1,13 @@
 /**
- * ProviderV4 surface — what the Vercel AI SDK (and createProviderRegistry)
- * expects from a community provider:
+ * Provider surface the AI SDK expects:
  *
  *  - specificationVersion 'v4'
- *  - languageModel(id) delegates to the base provider and wraps it with memory
- *  - embeddingModel / imageModel throw NoSuchModelError (memory-only provider)
+ *  - languageModel(id) wraps the base provider's model with memory
+ *  - embeddingModel / imageModel throw NoSuchModelError
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { NoSuchModelError } from '@ai-sdk/provider';
+import { NoSuchModelError } from 'ai';
 import { makeFakeClient, makeFakeModel, type FakeClient } from './vercel-ai-provider-helpers';
 
 const holder = vi.hoisted(() => ({ client: undefined as unknown }));

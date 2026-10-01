@@ -23,10 +23,10 @@ surface. Getting this wrong is the single most common confusion:
 | | Hosted NAMS MCP server | Self-hosted `neo4j-agent-memory mcp serve` |
 |---|---|---|
 | Who runs it | Neo4j, at `https://mcp.memory.neo4jlabs.com/mcp` | You, as a local process |
-| Backend | Your NAMS workspace | Your own Neo4j (or NAMS, with `--backend nams`) |
-| Auth | OAuth 2.0 (+ PKCE, dynamic client registration) or a `nams_…` Bearer key | `NEO4J_PASSWORD`, or `MEMORY_API_KEY` for `--backend nams` |
-| Tools | **47**, scope-gated — `tools/list` returns only what your key's scopes permit, so a workspace key does not see the `workspace_*` admin tools | **6** (`--profile core`) or **16** (`--profile extended`) |
-| Setup cost | Paste a URL | Install the `[mcp]` extra, run a process |
+| Backend | Your NAMS workspace | Neo4j AuraDB with `--backend bolt` (or NAMS, with `--backend nams`) |
+| Auth | OAuth 2.0 (+ PKCE, dynamic client registration) or a `nams_…` Bearer key | Aura `NEO4J_URI`, `NEO4J_USER`, and `NEO4J_PASSWORD`; NAMS uses `MEMORY_API_KEY` |
+| Tools | Scope-dependent — an authenticated `tools/list` returns only what your key's scopes permit, so a workspace key does not see the `workspace_*` admin tools | **6** (`--profile core`) or **16** (`--profile extended`) |
+| Setup cost | Paste a URL | Install `[mcp,openai]`, set Aura credentials and `OPENAI_API_KEY`, run a process |
 
 Both are wired below, side by side, in every config file. Delete the entry you
 don't want. `doctor.py` prints both surfaces from the real registrar so the
@@ -50,10 +50,9 @@ numbers in this table cannot quietly drift.
 - Python 3.10+
 - A NAMS API key from <https://memory.neo4jlabs.com> (starts with `nams_`)
 - One of: Claude Code, Claude Desktop, Cursor
-- Only for the self-hosted half: a Neo4j 5.x instance you already run, plus `uvx`
-  (ships with [uv](https://docs.astral.sh/uv/))
+- Only for the self-hosted half: a dedicated empty AuraDB instance from [the shared Aura setup](../AURA_SETUP.md), plus `uvx` (ships with [uv](https://docs.astral.sh/uv/))
 
-No `OPENAI_API_KEY`: extraction and embeddings run server-side on NAMS.
+The hosted NAMS flow requires no `OPENAI_API_KEY`: extraction and embeddings run server-side. The Aura-backed templates install `[mcp,openai]` and use `OPENAI_API_KEY` for the default OpenAI models. For a local-model configuration, follow [the complete MCP tutorial](https://neo4j.com/labs/agent-memory/tutorials/mcp-server.html). The NAMS seed and diagnosis scripts below do not seed or validate the separate Aura instance.
 
 ## Setup
 
@@ -95,7 +94,12 @@ uv run python doctor.py
 uv run python doctor.py --check-installed
 ```
 
-Then wire an editor:
+Then wire an editor. Keep the server entry you intend to use; the hosted NAMS entry reads the workspace seeded above. The self-hosted entry needs the Aura URI, username and password and an OpenAI key, supplied differently per editor:
+
+- **Claude Code**: the template holds no credentials. It expands `${NEO4J_URI}`, `${NEO4J_USERNAME}`, `${NEO4J_PASSWORD}` and `${OPENAI_API_KEY}` from the shell that launches the editor, so export them there. The CLI reads `NEO4J_USER`, so the template maps it from `NEO4J_USERNAME`.
+- **Claude Desktop and Cursor**: the templates use literal placeholders, and Desktop does not inherit terminal exports. Replace each `REPLACE_WITH_…` value in your copy with the real credential. That copy is then a private file: keep it out of version control. The Cursor copy below lands in the repository's `.cursor/` directory, so confirm git ignores it before you fill it in — `git check-ignore .cursor/mcp.json`, run from the repository root, prints the path when it is ignored; otherwise add it to `.git/info/exclude`.
+
+Copy the appropriate template:
 
 ```bash
 # Claude Code (project scope — commit it, it holds no secret)
@@ -123,7 +127,7 @@ and fails on a pasted credential.
   is nothing to paste.
 - **Claude Code, headless**: `.mcp.json` expands `${MEMORY_API_KEY}` and
   `${VAR:-default}` from your environment, which is why the self-hosted entry
-  there reads `"NEO4J_PASSWORD": "${NEO4J_PASSWORD}"`.
+  there reads `"NEO4J_PASSWORD": "${NEO4J_PASSWORD}"` and requires the exported Aura URI and username instead of providing a local database fallback.
 - **Claude Desktop and Cursor**: treat `REPLACE_WITH_…` as literal. Desktop does
   not inherit your shell environment, so values go in the file — keep that file
   out of git, or prefer the OAuth entry. If your Cursor build does expand
@@ -153,7 +157,7 @@ neo4j-agent-memory — team memory doctor
          memory_add_entity, memory_add_fact, memory_add_preference, memory_get_context, memory_search, memory_store_message
   [PASS] self-hosted --profile extended: 16 tool(s) (documented: 16)
          graph_query, memory_add_entity, …, memory_start_trace, memory_store_message
-  [PASS] hosted NAMS MCP server: 47 scope-gated tools at https://mcp.memory.neo4jlabs.com/mcp — …
+  [PASS] hosted NAMS MCP server: scope-dependent tool surface at https://mcp.memory.neo4jlabs.com/mcp — …
 
 (--configs-only: skipped the live NAMS checks)
 
@@ -221,7 +225,7 @@ scripts with fixed payloads if you want to watch them run without a key.
 ## Going further
 
 - **How-to:** [Team memory in your editor](https://neo4j.com/labs/agent-memory/how-to/team-memory-in-your-editor) — this example, explained.
-- **Hosted MCP reference:** [The NAMS MCP server](https://neo4j.com/labs/agent-memory/reference/nams-mcp) — the 47-tool surface, OAuth endpoints, two hostnames.
+- **Hosted MCP reference:** [The NAMS MCP server](https://neo4j.com/labs/agent-memory/reference/nams-mcp) — the scope-dependent tool surface, OAuth endpoints, two hostnames.
 - **Self-hosted reference:** [MCP Tools](https://neo4j.com/labs/agent-memory/reference/mcp-tools) and the tutorial [Connect Claude Desktop to your knowledge graph](https://neo4j.com/labs/agent-memory/tutorials/mcp-server).
 - **Keys:** [Authentication & API keys](https://neo4j.com/labs/agent-memory/reference/authentication) — the two key categories in full.
 - **Next examples:** [`nams-quickstart/`](../nams-quickstart/) (the same memory graph from code), [`nams-fastapi/`](../nams-fastapi/) (NAMS inside a service).
@@ -234,4 +238,6 @@ scripts with fixed payloads if you want to watch them run without a key.
 
 ---
 
-_Verified against `neo4j-agent-memory` 0.6.0-dev (branch `examples-updates`), Python 3.12, FastMCP 4.0.3 (MCP Python SDK 2), and the hosted NAMS MCP server at `mcp.memory.neo4jlabs.com`, with the NAMS transport mocked (`tests/examples/test_claude_code_team_memory_example.py`) — 2026-09-10. `client.auth`, `NamsSettings`/`connect()`, `short_term.get_extraction_status` and `long_term.wait_for_extraction` ship in the 0.6 line; until it is released, install the library from this repository (`uv pip install -e ../..`) rather than from PyPI. Editor configs were validated as JSON against the documented schemas, not by launching each host._
+**Historical verification report — 2026-09-10.** The following records a prior checkout/test report. Its development-version labels, passing counts, and release-availability statements are historical, not evidence of current package compatibility.
+
+> _Verified against `neo4j-agent-memory` 0.6.0-dev (branch `examples-updates`), Python 3.12, FastMCP 4.0.3 (MCP Python SDK 2), and the hosted NAMS MCP server at `mcp.memory.neo4jlabs.com`, with the NAMS transport mocked (`tests/examples/test_claude_code_team_memory_example.py`) — 2026-09-10. `client.auth`, `NamsSettings`/`connect()`, `short_term.get_extraction_status` and `long_term.wait_for_extraction` ship in the 0.6 line; until it is released, install the library from this repository (`uv pip install -e ../..`) rather than from PyPI. Editor configs were validated as JSON against the documented schemas, not by launching each host._

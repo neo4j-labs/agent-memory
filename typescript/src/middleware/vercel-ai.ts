@@ -88,10 +88,10 @@ export interface AgentMemoryMiddlewareOptions {
   /** Maximum messages to include from flat history (bridge fallback). */
   historyLimit?: number;
 
-  /** Persist user input before generation. Default: true. */
+  /** Attempt to persist user input before generation. Write failures are non-fatal. Default: true. */
   persistInput?: boolean;
 
-  /** Persist assistant response after generation. Default: true. */
+  /** Attempt to persist the assistant response. Read back storage to verify success. Default: true. */
   persistResponses?: boolean;
 }
 

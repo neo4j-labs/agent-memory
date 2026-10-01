@@ -1,0 +1,54 @@
+{
+  "results": [
+    {
+      "name": "tutorials/nams-quickstart.adoc",
+      "oldSections": 15,
+      "missing": [],
+      "duplicateIds": [],
+      "missingFiles": []
+    },
+    {
+      "name": "tutorials/ontology-quickstart.adoc",
+      "oldSections": 8,
+      "missing": [],
+      "duplicateIds": [],
+      "missingFiles": []
+    },
+    {
+      "name": "tutorials/skills-quickstart.adoc",
+      "oldSections": 8,
+      "missing": [],
+      "duplicateIds": [],
+      "missingFiles": []
+    },
+    {
+      "name": "tutorials/mcp-server.adoc",
+      "oldSections": 15,
+      "missing": [],
+      "duplicateIds": [],
+      "missingFiles": []
+    },
+    {
+      "name": "tutorials/strands-agent-quickstart.adoc",
+      "oldSections": 16,
+      "missing": [],
+      "duplicateIds": [],
+      "missingFiles": []
+    },
+    {
+      "name": "tutorials/microsoft-agent-memory.adoc",
+      "oldSections": 16,
+      "missing": [],
+      "duplicateIds": [],
+      "missingFiles": []
+    },
+    {
+      "name": "tutorials/anthropic-and-local-embeddings.adoc",
+      "oldSections": 12,
+      "missing": [],
+      "duplicateIds": [],
+      "missingFiles": []
+    }
+  ],
+  "messages": []
+}

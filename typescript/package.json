@@ -1,6 +1,6 @@
 {
   "name": "@neo4j-labs/agent-memory",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Neo4j Labs: TypeScript client for the Neo4j Agent Memory Service (NAMS)",
   "type": "module",
   "license": "Apache-2.0",

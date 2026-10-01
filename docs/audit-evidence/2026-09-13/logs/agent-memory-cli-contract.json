@@ -1,0 +1,702 @@
+{
+  "extract": [
+    {
+      "name": "text",
+      "opts": [
+        "text"
+      ],
+      "secondary_opts": [],
+      "default": "Sentinel.UNSET",
+      "type": "text",
+      "choices": null,
+      "help": null,
+      "envvar": null,
+      "multiple": false,
+      "required": false
+    },
+    {
+      "name": "file",
+      "opts": [
+        "-f",
+        "--file"
+      ],
+      "secondary_opts": [],
+      "default": "Sentinel.UNSET",
+      "type": "path",
+      "choices": null,
+      "help": "Read text from a file instead of argument.",
+      "envvar": null,
+      "multiple": false,
+      "required": false
+    },
+    {
+      "name": "format",
+      "opts": [
+        "--format",
+        "-o"
+      ],
+      "secondary_opts": [],
+      "default": "table",
+      "type": "choice",
+      "choices": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "help": "Output format (default: table).",
+      "envvar": null,
+      "multiple": false,
+      "required": false
+    },
+    {
+      "name": "schema",
+      "opts": [
+        "--schema"
+      ],
+      "secondary_opts": [],
+      "default": "Sentinel.UNSET",
+      "type": "path",
+      "choices": null,
+      "help": "Path to a schema YAML file.",
+      "envvar": null,
+      "multiple": false,
+      "required": false
+    },
+    {
+      "name": "entity_types",
+      "opts": [
+        "--entity-types",
+        "-e"
+      ],
+      "secondary_opts": [],
+      "default": "Sentinel.UNSET",
+      "type": "text",
+      "choices": null,
+      "help": "Entity types to extract (can be specified multiple times).",
+      "envvar": null,
+      "multiple": true,
+      "required": false
+    },
+    {
+      "name": "extractor",
+      "opts": [
+        "--extractor"
+      ],
+      "secondary_opts": [],
+      "default": "gliner",
+      "type": "choice",
+      "choices": [
+        "gliner",
+        "llm",
+        "hybrid"
+      ],
+      "help": "Extractor to use (default: gliner).",
+      "envvar": null,
+      "multiple": false,
+      "required": false
+    },
+    {
+      "name": "model",
+      "opts": [
+        "--model"
+      ],
+      "secondary_opts": [],
+      "default": null,
+      "type": "text",
+      "choices": null,
+      "help": "Model name for GLiNER or LLM extractor.",
+      "envvar": null,
+      "multiple": false,
+      "required": false
+    },
+    {
+      "name": "relations",
+      "opts": [
+        "--relations"
+      ],
+      "secondary_opts": [
+        "--no-relations"
+      ],
+      "default": true,
+      "type": "boolean",
+      "choices": null,
+      "help": "Extract relations between entities.",
+      "envvar": null,
+      "multiple": false,
+      "required": false
+    },
+    {
+      "name": "preferences",
+      "opts": [
+        "--preferences"
+      ],
+      "secondary_opts": [
+        "--no-preferences"
+      ],
+      "default": false,
+      "type": "boolean",
+      "choices": null,
+      "help": "Extract preferences/sentiments.",
+      "envvar": null,
+      "multiple": false,
+      "required": false
+    },
+    {
+      "name": "confidence_threshold",
+      "opts": [
+        "--confidence-threshold"
+      ],
+      "secondary_opts": [],
+      "default": 0.5,
+      "type": "float",
+      "choices": null,
+      "help": "Minimum confidence threshold (default: 0.5).",
+      "envvar": null,
+      "multiple": false,
+      "required": false
+    },
+    {
+      "name": "quiet",
+      "opts": [
+        "--quiet",
+        "-q"
+      ],
+      "secondary_opts": [],
+      "default": false,
+      "type": "boolean",
+      "choices": null,
+      "help": "Suppress progress output.",
+      "envvar": null,
+      "multiple": false,
+      "required": false
+    }
+  ],
+  "schemas list": [
+    {
+      "name": "format",
+      "opts": [
+        "--format",
+        "-o"
+      ],
+      "secondary_opts": [],
+      "default": "table",
+      "type": "choice",
+      "choices": [
+        "table",
+        "json"
+      ],
+      "help": "Output format.",
+      "envvar": null,
+      "multiple": false,
+      "required": false
+    },
+    {
+      "name": "uri",
+      "opts": [
+        "--uri"
+      ],
+      "secondary_opts": [],
+      "default": "bolt://localhost:7687",
+      "type": "text",
+      "choices": null,
+      "help": "Neo4j URI (default: bolt://localhost:7687 or NEO4J_URI env var).",
+      "envvar": "NEO4J_URI",
+      "multiple": false,
+      "required": false
+    },
+    {
+      "name": "user",
+      "opts": [
+        "--user"
+      ],
+      "secondary_opts": [],
+      "default": "neo4j",
+      "type": "text",
+      "choices": null,
+      "help": "Neo4j username (default: neo4j or NEO4J_USER env var).",
+      "envvar": "NEO4J_USER",
+      "multiple": false,
+      "required": false
+    },
+    {
+      "name": "password",
+      "opts": [
+        "--password"
+      ],
+      "secondary_opts": [],
+      "default": "Sentinel.UNSET",
+      "type": "text",
+      "choices": null,
+      "help": "Neo4j password (or NEO4J_PASSWORD env var).",
+      "envvar": "NEO4J_PASSWORD",
+      "multiple": false,
+      "required": false
+    }
+  ],
+  "schemas show": [
+    {
+      "name": "name",
+      "opts": [
+        "name"
+      ],
+      "secondary_opts": [],
+      "default": "Sentinel.UNSET",
+      "type": "text",
+      "choices": null,
+      "help": null,
+      "envvar": null,
+      "multiple": false,
+      "required": true
+    },
+    {
+      "name": "version",
+      "opts": [
+        "--version",
+        "-v"
+      ],
+      "secondary_opts": [],
+      "default": "Sentinel.UNSET",
+      "type": "text",
+      "choices": null,
+      "help": "Schema version (default: active version).",
+      "envvar": null,
+      "multiple": false,
+      "required": false
+    },
+    {
+      "name": "format",
+      "opts": [
+        "--format",
+        "-o"
+      ],
+      "secondary_opts": [],
+      "default": "yaml",
+      "type": "choice",
+      "choices": [
+        "yaml",
+        "json"
+      ],
+      "help": "Output format.",
+      "envvar": null,
+      "multiple": false,
+      "required": false
+    },
+    {
+      "name": "uri",
+      "opts": [
+        "--uri"
+      ],
+      "secondary_opts": [],
+      "default": "bolt://localhost:7687",
+      "type": "text",
+      "choices": null,
+      "help": "Neo4j URI.",
+      "envvar": "NEO4J_URI",
+      "multiple": false,
+      "required": false
+    },
+    {
+      "name": "user",
+      "opts": [
+        "--user"
+      ],
+      "secondary_opts": [],
+      "default": "neo4j",
+      "type": "text",
+      "choices": null,
+      "help": "Neo4j username.",
+      "envvar": "NEO4J_USER",
+      "multiple": false,
+      "required": false
+    },
+    {
+      "name": "password",
+      "opts": [
+        "--password"
+      ],
+      "secondary_opts": [],
+      "default": "Sentinel.UNSET",
+      "type": "text",
+      "choices": null,
+      "help": "Neo4j password.",
+      "envvar": "NEO4J_PASSWORD",
+      "multiple": false,
+      "required": false
+    }
+  ],
+  "schemas validate": [
+    {
+      "name": "file",
+      "opts": [
+        "file"
+      ],
+      "secondary_opts": [],
+      "default": "Sentinel.UNSET",
+      "type": "path",
+      "choices": null,
+      "help": null,
+      "envvar": null,
+      "multiple": false,
+      "required": true
+    }
+  ],
+  "stats": [
+    {
+      "name": "format",
+      "opts": [
+        "--format",
+        "-o"
+      ],
+      "secondary_opts": [],
+      "default": "table",
+      "type": "choice",
+      "choices": [
+        "table",
+        "json"
+      ],
+      "help": "Output format.",
+      "envvar": null,
+      "multiple": false,
+      "required": false
+    },
+    {
+      "name": "uri",
+      "opts": [
+        "--uri"
+      ],
+      "secondary_opts": [],
+      "default": "bolt://localhost:7687",
+      "type": "text",
+      "choices": null,
+      "help": "Neo4j URI.",
+      "envvar": "NEO4J_URI",
+      "multiple": false,
+      "required": false
+    },
+    {
+      "name": "user",
+      "opts": [
+        "--user"
+      ],
+      "secondary_opts": [],
+      "default": "neo4j",
+      "type": "text",
+      "choices": null,
+      "help": "Neo4j username.",
+      "envvar": "NEO4J_USER",
+      "multiple": false,
+      "required": false
+    },
+    {
+      "name": "password",
+      "opts": [
+        "--password"
+      ],
+      "secondary_opts": [],
+      "default": "Sentinel.UNSET",
+      "type": "text",
+      "choices": null,
+      "help": "Neo4j password.",
+      "envvar": "NEO4J_PASSWORD",
+      "multiple": false,
+      "required": false
+    }
+  ],
+  "mcp serve": [
+    {
+      "name": "uri",
+      "opts": [
+        "--uri"
+      ],
+      "secondary_opts": [],
+      "default": "bolt://localhost:7687",
+      "type": "text",
+      "choices": null,
+      "help": "Neo4j connection URI.",
+      "envvar": "NEO4J_URI",
+      "multiple": false,
+      "required": false
+    },
+    {
+      "name": "user",
+      "opts": [
+        "--user"
+      ],
+      "secondary_opts": [],
+      "default": "neo4j",
+      "type": "text",
+      "choices": null,
+      "help": "Neo4j username.",
+      "envvar": "NEO4J_USER",
+      "multiple": false,
+      "required": false
+    },
+    {
+      "name": "password",
+      "opts": [
+        "--password"
+      ],
+      "secondary_opts": [],
+      "default": "Sentinel.UNSET",
+      "type": "text",
+      "choices": null,
+      "help": "Neo4j password (or NEO4J_PASSWORD env var).",
+      "envvar": "NEO4J_PASSWORD",
+      "multiple": false,
+      "required": false
+    },
+    {
+      "name": "database",
+      "opts": [
+        "--database"
+      ],
+      "secondary_opts": [],
+      "default": "neo4j",
+      "type": "text",
+      "choices": null,
+      "help": "Neo4j database name.",
+      "envvar": "NEO4J_DATABASE",
+      "multiple": false,
+      "required": false
+    },
+    {
+      "name": "transport",
+      "opts": [
+        "--transport"
+      ],
+      "secondary_opts": [],
+      "default": "stdio",
+      "type": "choice",
+      "choices": [
+        "stdio",
+        "http",
+        "streamable-http",
+        "sse"
+      ],
+      "help": "MCP transport (default: stdio). 'http' is Streamable HTTP; 'streamable-http' is a synonym. 'sse' is deprecated and serves Streamable HTTP with a warning.",
+      "envvar": null,
+      "multiple": false,
+      "required": false
+    },
+    {
+      "name": "host",
+      "opts": [
+        "--host"
+      ],
+      "secondary_opts": [],
+      "default": "127.0.0.1",
+      "type": "text",
+      "choices": null,
+      "help": "Host to bind for --transport http (use 0.0.0.0 to expose it).",
+      "envvar": null,
+      "multiple": false,
+      "required": false
+    },
+    {
+      "name": "port",
+      "opts": [
+        "--port"
+      ],
+      "secondary_opts": [],
+      "default": 8080,
+      "type": "integer",
+      "choices": null,
+      "help": "Port to bind for --transport http. The MCP endpoint is /mcp/.",
+      "envvar": null,
+      "multiple": false,
+      "required": false
+    },
+    {
+      "name": "profile",
+      "opts": [
+        "--profile"
+      ],
+      "secondary_opts": [],
+      "default": "extended",
+      "type": "choice",
+      "choices": [
+        "core",
+        "extended"
+      ],
+      "help": "Tool profile: core (6 tools) or extended (16 tools).",
+      "envvar": null,
+      "multiple": false,
+      "required": false
+    },
+    {
+      "name": "session_strategy",
+      "opts": [
+        "--session-strategy"
+      ],
+      "secondary_opts": [],
+      "default": "per_conversation",
+      "type": "choice",
+      "choices": [
+        "per_conversation",
+        "per_day",
+        "persistent"
+      ],
+      "help": "Session identity strategy.",
+      "envvar": null,
+      "multiple": false,
+      "required": false
+    },
+    {
+      "name": "user_id",
+      "opts": [
+        "--user-id"
+      ],
+      "secondary_opts": [],
+      "default": null,
+      "type": "text",
+      "choices": null,
+      "help": "User ID for per_day/persistent session strategies.",
+      "envvar": "MCP_USER_ID",
+      "multiple": false,
+      "required": false
+    },
+    {
+      "name": "observation_threshold",
+      "opts": [
+        "--observation-threshold"
+      ],
+      "secondary_opts": [],
+      "default": 30000,
+      "type": "integer",
+      "choices": null,
+      "help": "Token threshold for observational memory compression.",
+      "envvar": null,
+      "multiple": false,
+      "required": false
+    },
+    {
+      "name": "no_auto_preferences",
+      "opts": [
+        "--no-auto-preferences"
+      ],
+      "secondary_opts": [],
+      "default": false,
+      "type": "boolean",
+      "choices": null,
+      "help": "Disable automatic preference detection.",
+      "envvar": null,
+      "multiple": false,
+      "required": false
+    },
+    {
+      "name": "llm",
+      "opts": [
+        "--llm"
+      ],
+      "secondary_opts": [],
+      "default": null,
+      "type": "text",
+      "choices": null,
+      "help": "LLM provider string (e.g. 'openai/gpt-4o-mini', 'anthropic/claude-3-5-sonnet-latest', 'ollama/llama3.2'). Resolved via neo4j_agent_memory.llm.from_provider.",
+      "envvar": "NAM_LLM",
+      "multiple": false,
+      "required": false
+    },
+    {
+      "name": "llm_api_key",
+      "opts": [
+        "--llm-api-key"
+      ],
+      "secondary_opts": [],
+      "default": null,
+      "type": "text",
+      "choices": null,
+      "help": "API key for the LLM provider (overrides provider-default env var).",
+      "envvar": "NAM_LLM_API_KEY",
+      "multiple": false,
+      "required": false
+    },
+    {
+      "name": "llm_api_base",
+      "opts": [
+        "--llm-api-base"
+      ],
+      "secondary_opts": [],
+      "default": null,
+      "type": "text",
+      "choices": null,
+      "help": "Base URL for the LLM provider (e.g. for vLLM, Ollama, or an internal endpoint). Passed through to the adapter constructor.",
+      "envvar": null,
+      "multiple": false,
+      "required": false
+    },
+    {
+      "name": "embedding",
+      "opts": [
+        "--embedding"
+      ],
+      "secondary_opts": [],
+      "default": null,
+      "type": "text",
+      "choices": null,
+      "help": "Embedding provider string (e.g. 'openai/text-embedding-3-small', 'BAAI/bge-small-en-v1.5'). Resolved via from_provider.",
+      "envvar": "NAM_EMBEDDING",
+      "multiple": false,
+      "required": false
+    },
+    {
+      "name": "embedding_dimensions",
+      "opts": [
+        "--embedding-dimensions"
+      ],
+      "secondary_opts": [],
+      "default": null,
+      "type": "integer",
+      "choices": null,
+      "help": "Embedding dimensions override (for models not in the defaults table).",
+      "envvar": null,
+      "multiple": false,
+      "required": false
+    },
+    {
+      "name": "backend",
+      "opts": [
+        "--backend"
+      ],
+      "secondary_opts": [],
+      "default": null,
+      "type": "choice",
+      "choices": [
+        "bolt",
+        "nams"
+      ],
+      "help": "Storage backend (v0.4). 'bolt' uses direct Neo4j; 'nams' uses the hosted Neo4j Agent Memory Service REST API. Defaults to NAMS if MEMORY_API_KEY is set, otherwise bolt.",
+      "envvar": "NAM_BACKEND",
+      "multiple": false,
+      "required": false
+    },
+    {
+      "name": "api_key",
+      "opts": [
+        "--api-key"
+      ],
+      "secondary_opts": [],
+      "default": null,
+      "type": "text",
+      "choices": null,
+      "help": "NAMS API key (or set MEMORY_API_KEY env var). Required when --backend=nams.",
+      "envvar": "MEMORY_API_KEY",
+      "multiple": false,
+      "required": false
+    },
+    {
+      "name": "endpoint",
+      "opts": [
+        "--endpoint"
+      ],
+      "secondary_opts": [],
+      "default": null,
+      "type": "text",
+      "choices": null,
+      "help": "NAMS endpoint base URL. Defaults to MEMORY_ENDPOINT env var, or https://memory.neo4jlabs.com/v1 when neither is set.",
+      "envvar": "MEMORY_ENDPOINT",
+      "multiple": false,
+      "required": false
+    }
+  ]
+}

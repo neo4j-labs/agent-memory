@@ -1,11 +1,11 @@
 /**
  * Error hierarchy for the neo4j-agent-memory TypeScript client.
  *
- * Every error from a failed HTTP exchange carries a `requestId` when the
- * service emitted one. Quote it in support threads for fast log lookup.
+ * SDK errors constructed from HTTP responses carry a `requestId` when captured
+ * from the response. Raw fetch, parsing, and caller-provided errors may propagate.
  */
 
-/** Options accepted by every MemoryError subclass. */
+/** Options accepted by every MemoryError subclass. @inline */
 export interface MemoryErrorOptions extends ErrorOptions {
   /** Server-generated correlation id (x-request-id or equivalent). */
   requestId?: string;

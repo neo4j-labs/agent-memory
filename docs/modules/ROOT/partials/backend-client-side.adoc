@@ -1,0 +1,4 @@
+[NOTE]
+====
+icon:laptop[] *Runs client-side.* The extractors on this page run in your Python process and do not call a memory backend, so they work next to either backend. Configuring them as a `MemoryClient` extraction pipeline applies only to Bolt: NAMS extracts entities server-side and ignores the client's `extraction` settings with a `UserWarning`. See the xref:reference/backend-capabilities.adoc[backend capabilities reference].
+====

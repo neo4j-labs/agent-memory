@@ -8,7 +8,7 @@ every "the MCP server shows no tools" report:
 2.  Do the MCP config files in this directory parse, and do they name the
     documented command / URL — with no key pasted into them?
 3.  What tool surface will each server actually expose? (self-hosted
-    ``core`` = 6, ``extended`` = 16, hosted NAMS = 47 scope-gated)
+    ``core`` = 6, ``extended`` = 16; hosted NAMS is scope-dependent)
 4.  Is the endpoint reachable with that key, and is the workspace header
     being sent where the deployment requires it?
 5.  Has server-side extraction finished for the seeded conversation, and
@@ -50,9 +50,9 @@ from neo4j_agent_memory.core.exceptions import (
 )
 
 #: The tool counts this example documents, asserted against the real registrar
-#: rather than trusted. Hosted NAMS is a separate, larger surface — see README.
+#: rather than trusted. Hosted NAMS is a separate surface whose inventory depends
+#: on the key's scopes, so it has no fixed count here — see README.
 SELF_HOSTED_PROFILES = {"core": 6, "extended": 16}
-HOSTED_NAMS_TOOL_COUNT = 47
 HOSTED_NAMS_MCP_URL = "https://mcp.memory.neo4jlabs.com/mcp"
 
 #: Config files shipped with the example. Each is a ``*.json.example`` so it can
@@ -266,8 +266,8 @@ async def check_tool_surface() -> None:
     check(
         "hosted NAMS MCP server",
         True,
-        f"{HOSTED_NAMS_TOOL_COUNT} scope-gated tools at {HOSTED_NAMS_MCP_URL} — "
-        "a different, larger surface than the self-hosted profiles above; "
+        f"scope-dependent tool surface at {HOSTED_NAMS_MCP_URL} — "
+        "separate from the self-hosted profiles above; an authenticated "
         "tools/list returns only what your key's scopes permit",
     )
 

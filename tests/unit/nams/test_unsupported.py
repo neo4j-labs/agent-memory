@@ -15,6 +15,12 @@ from neo4j_agent_memory.core.exceptions import NotSupportedError
 from neo4j_agent_memory.nams._unsupported import _NamsUnsupported
 
 
+def test_legacy_module_reexports_the_shared_sentinel():
+    from neo4j_agent_memory.core._unsupported import _NamsUnsupported as SharedSentinel
+
+    assert _NamsUnsupported is SharedSentinel
+
+
 class TestAttributeAccess:
     def test_method_call_raises(self):
         shim = _NamsUnsupported("users", "User memory is bolt-only.")

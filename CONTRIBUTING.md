@@ -1,5 +1,7 @@
 # Contributing to Neo4j Agent Memory
 
+This is a Neo4j Labs project — for general questions and support, please use the [Neo4j Community Forum](https://community.neo4j.com).
+
 Contributions are welcome! Please read the guidelines below before submitting a pull request.
 
 ## Development Setup
@@ -7,7 +9,7 @@ Contributions are welcome! Please read the guidelines below before submitting a 
 ```bash
 # Clone the repository
 git clone https://github.com/neo4j-labs/agent-memory.git
-cd agent-memory/neo4j-agent-memory
+cd agent-memory
 
 # Install with uv
 uv sync --group dev
@@ -21,7 +23,7 @@ make install
 The project includes a comprehensive Makefile for common development tasks:
 
 ```bash
-# Run all tests (unit + integration with auto-Docker)
+# Run unit tests
 make test
 
 # Run unit tests only
@@ -229,12 +231,13 @@ This project uses GitHub Actions for continuous integration and deployment.
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
 | **Python CI** (`ci-python.yml`) | Push to `main`, PRs touching `src/**`, `tests/**`, `docs/**`, etc. | Linting, type checking, tests, build validation |
-| **TypeScript CI** (`ci-typescript.yml`) | Push to `main`, PRs touching `typescript/**` | Lint, vitest (unit + integration), build, packed-artifact check, per-example type-check matrix |
+| **TypeScript CI** (`ci-typescript.yml`) | Push to `main`, PRs touching TypeScript sources, examples or related docs | Lint, vitest (unit + integration), build, packed-artifact check, per-example type-check matrix |
 | **TypeScript E2E** (`e2e-typescript.yml`) | Push, PR, nightly | Run TypeScript SDK e2e suite against live NAMS sandbox (uses `MEMORY_API_KEY` secret) |
 | **Publish Python** (`publish-python.yml`) | Git tags `python-v*` | Build and publish to PyPI, create GitHub releases |
 | **Publish TypeScript** (`publish-typescript.yml`) | Git tags `typescript-v*` | Build and publish to npm with provenance |
+| **Publish NAMS AI provider** (`publish-nams-ai-provider.yml`) | Git tags `nams-ai-provider-v*` | Type-check, test, build and publish `@neo4j-labs/nams-ai-provider` to npm with provenance, then create a GitHub Release |
 | **TypeDoc** (`docs-typedoc.yml`) | Push to `main` (TS docs paths) | Regenerate TypeDoc API reference into `docs/modules/ROOT/attachments/api/typescript/`, commit to `main`, and dispatch the labs-pages docs rebuild |
-| **TCK Conformance** (`tck-conformance.yml`) | Nightly + workflow_dispatch | Run agent-memory-tck Bronze suite against the published `@neo4j-labs/agent-memory` package |
+| **TCK Conformance** (`tck-conformance.yml`) | workflow_dispatch (nightly schedule inactive) | Run agent-memory-tck Bronze suite against the published `@neo4j-labs/agent-memory` package |
 | **NAMS Integration** (`nams-integration.yml`) | Push, PR, nightly | Run NAMS sandbox integration tests (Python side, uses `NAMS_SANDBOX_KEY` secret) |
 
 ### CI Jobs
@@ -289,7 +292,7 @@ All PRs must pass these checks before merging:
 
 ## Publishing
 
-This repo ships two independently versioned packages. Each has its own
+This repo ships three independently versioned packages. Each has its own
 tag prefix and publish workflow.
 
 ### Python (neo4j-agent-memory → PyPI)
@@ -315,15 +318,35 @@ tag prefix and publish workflow.
 
 ### TypeScript (@neo4j-labs/agent-memory → npm)
 
-1. Update version in `typescript/package.json`
-2. Update `typescript/CHANGELOG.md`
-3. Create and push a tag with the **`typescript-v`** prefix:
-   ```bash
-   git tag typescript-v0.3.0
-   git push origin typescript-v0.3.0
-   ```
-4. `publish-typescript.yml` builds and publishes to npm with provenance,
-   then creates a GitHub Release.
+1. Choose the intended release version and update both `typescript/package.json`
+   and `typescript/src/version.ts`, plus applicable lockfile version entries.
+2. Update `typescript/CHANGELOG.md`; distinguish released behavior from source-only work.
+3. From `typescript/`, run `npm run check:version`, `npm run lint`, the applicable
+   tests, `npm run build` and `npm pack --dry-run`. The existing build rejects a
+   manifest/`VERSION` mismatch.
+4. Review the resulting artifact and release changes. Only an authorized release
+   should create and push the matching `typescript-v<X.Y.Z>` tag.
+   `publish-typescript.yml` publishes the package with npm provenance and creates
+   a GitHub Release. Do not infer publication from the source version alone.
+
+### NAMS AI provider (@neo4j-labs/nams-ai-provider → npm)
+
+The Vercel AI SDK provider in `typescript/packages/vercel-ai-provider/` is
+released independently of the SDK.
+
+1. Update `version` in `typescript/packages/vercel-ai-provider/package.json`
+   (and its `package-lock.json` entry). If the release needs a newer SDK, widen
+   the `@neo4j-labs/agent-memory` peer range there too.
+2. Add the release section to `typescript/packages/vercel-ai-provider/CHANGELOG.md`.
+3. From `typescript/packages/vercel-ai-provider/`, run `npm ci`,
+   `npm run typecheck`, `npm test`, `npm run build` and `npm pack --dry-run`.
+4. Update the hand-maintained `docs/modules/ROOT/pages/reference/nams-ai-provider.adoc`
+   if the provider's API changed; it has no TypeDoc generation.
+5. Only an authorized release should create and push the matching
+   `nams-ai-provider-v<X.Y.Z>` tag. `publish-nams-ai-provider.yml` publishes
+   the package with npm provenance and creates a GitHub Release. The workflow
+   does not compare the tag with `package.json`, so check that they match
+   before pushing.
 
 > Tag prefixes are enforced by the publish workflows. Plain `v*` tags
 > will not trigger a publish.
@@ -336,11 +359,12 @@ HTTP client over the NAMS REST API and ships five framework integrations
 
 ### Setup
 
-Requires Node.js 20+.
+Requires Node.js 22+.
 
 ```bash
 cd typescript
 npm ci
+npm run build   # required before installing any file:../.. example
 ```
 
 ### Common commands
@@ -368,10 +392,12 @@ npm pack --dry-run       # Verify the publishable artifact
 
 The TypeScript SDK is verified against the cross-language
 [`agent-memory-tck`](https://github.com/neo4j-labs/agent-memory-tck)
-behavioral spec. The in-tree suite at `typescript/test/tck/` runs in
-`ci-typescript.yml` on every PR. A nightly job
-(`tck-conformance.yml`) runs the TCK against the **published** npm
-package to catch packaging regressions.
+behavioral spec. The in-tree bridge suite at `typescript/test/tck/` is opt-in through
+`npm run test:tck`; the regular `npm test` command runs unit and integration tests.
+The `tck-conformance.yml` workflow runs the TCK Bronze suite against the
+**published** npm package to catch packaging regressions. It has a nightly
+schedule, but its job runs only on manual `workflow_dispatch` until the
+TCK-side package runner lands.
 
 To run the bridge server locally for cross-language testing:
 
@@ -382,12 +408,12 @@ make ts-conformance    # or: cd typescript && npm run conformance:server
 
 ### Code style (TypeScript)
 
-- **Formatter / Linter**: `tsc --noEmit` + `eslint src/` (run via
-  `npm run lint`)
+- **Lint/type checks**: `npm run lint` runs `tsc --noEmit` for source and
+  `tsc -p tsconfig.test.json` for tests/conformance; it does not invoke ESLint.
 - **Tests**: vitest (`test/unit`, `test/integration`, `test/e2e`,
   `test/tck`)
-- **Build**: tsup → `dist/` (CJS + ESM + type declarations)
-- **Engines**: Node 20+, but written to run on Bun, Deno, Cloudflare
+- **Build**: tsup → `dist/` (ESM + type declarations)
+- **Engines**: Node 22+, but written to run on Bun, Deno, Cloudflare
   Workers, and Vercel Edge
 
 ### Adding a new framework integration
@@ -400,56 +426,18 @@ make ts-conformance    # or: cd typescript && npm run conformance:server
    `docs/modules/ROOT/pages/sdks/typescript.adoc` and in
    `typescript/README.md`
 
-## Documentation Guidelines (Diataxis Framework)
+## Documentation
 
-The documentation follows the [Diataxis framework](https://diataxis.fr/), which organizes content into four distinct types based on user needs:
-
-| Type | Purpose | User Need | Location |
-|------|---------|-----------|----------|
-| **Tutorials** | Learning-oriented | "I want to learn" | `docs/tutorials/` |
-| **How-To Guides** | Task-oriented | "I want to accomplish X" | `docs/how-to/` |
-| **Reference** | Information-oriented | "I need to look up Y" | `docs/reference/` |
-| **Explanation** | Understanding-oriented | "I want to understand why" | `docs/explanation/` |
-
-### When to Include Documentation in a PR
-
-- **New public API?** --> Update `docs/reference/` with method signatures
-- **New user-facing feature?** --> Add how-to guide in `docs/how-to/`
-- **Major new capability?** --> Consider adding a tutorial in `docs/tutorials/`
-- **Architectural change?** --> Add explanation in `docs/explanation/`
-- **Code examples compile?** --> Run `make test-docs-syntax`
-
-### Building and Testing Documentation
+Follow the repository's four documentation skills in `.claude/skills` and [Maintain the documentation](docs/MAINTAINING.md). Pages follow Diataxis, with one path and observable outcomes in tutorials, complete verified procedures in how-tos, source-backed API contracts in reference, and rationale in explanations.
 
 ```bash
-# Build documentation locally
-cd docs && npm install && npm run build
-
-# Preview documentation
-cd docs && npm run serve
-
-# Run documentation tests
-make test-docs           # All doc tests
-make test-docs-syntax    # Validate Python code snippets compile
-make test-docs-build     # Test build pipeline
-make test-docs-links     # Validate internal links
+make docs-install
+make docs-render-install
+make docs
+make docs-lint
+make docs-serve
 ```
 
-### Diataxis Decision Tree
+The output is `docs/build/site`. The preview command builds once and serves static files; rebuild and refresh after edits. Add every page to its quadrant/subindex and sidebar, preserve existing URL/anchor routes, and check rendered fragments and image attributes. Keep complete tutorial programs in maintained example resources and run their targeted checks.
 
-```
-Is this about learning a concept from scratch?
-  --> Yes: Tutorial (docs/tutorials/)
-  --> No:
-
-Is this about accomplishing a specific task?
-  --> Yes: How-To Guide (docs/how-to/)
-  --> No:
-
-Is this describing what something is or how to use it?
-  --> Yes: Reference (docs/reference/)
-  --> No:
-
-Is this explaining why something works the way it does?
-  --> Yes: Explanation (docs/explanation/)
-```
+Publishing the site and releasing SDK artifacts are separate steps. Use the maintainer guide's publication handoff; do not edit generated TypeDoc HTML or OpenWiki by hand.

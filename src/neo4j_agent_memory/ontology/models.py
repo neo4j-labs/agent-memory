@@ -475,11 +475,10 @@ class Ontology(_Lenient):
 
 
 class ActiveOntology(_Lenient):
-    """The currently-bound ontology, with version metadata composed in.
+    """The currently bound document and authoritative active-version metadata.
 
-    ``validation_mode`` / ``revision`` / ``version_id`` are populated by a
-    second lookup (the ``/ontologies/active`` response itself carries no
-    version metadata).
+    Legacy responses without a version record leave binding metadata absent;
+    the latest revision is never inferred to be active.
     """
 
     document: OntologyDocument
@@ -487,6 +486,7 @@ class ActiveOntology(_Lenient):
     revision: int | None = None
     ontology_id: str | None = None
     version_id: str | None = None
+    schema_hash: str | None = None
 
 
 class _AllowExtra(BaseModel):

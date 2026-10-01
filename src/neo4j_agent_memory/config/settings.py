@@ -567,9 +567,11 @@ class MemoryConfig(BaseModel):
     audit_read: bool = Field(
         default=False,
         description=(
-            "When True, ``client.consolidation.audit_reads(...)`` records a "
-            ":MemoryReadAudit node for the supplied query string. Off by "
-            "default — auditing every read is opt-in."
+            "Read-audit preference for application code. The library does "
+            "not apply it automatically: call "
+            "``client.consolidation.record_read_audit(...)`` after a sensitive "
+            "read to record a :MemoryReadAudit node for it. Off by default — "
+            "auditing reads is opt-in."
         ),
     )
 

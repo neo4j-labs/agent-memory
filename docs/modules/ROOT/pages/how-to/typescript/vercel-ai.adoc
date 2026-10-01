@@ -1,5 +1,4 @@
-= How to: integrate with the Vercel AI SDK
-:toc: left
+= Integrate with the Vercel AI SDK
 :source-highlighter: rouge
 
 The TypeScript client ships a language-model middleware that auto-injects
@@ -14,22 +13,34 @@ link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/ve
 `ai` 7 requires Node.js 22 or newer, and so does this client.
 ====
 
+Prefer not to wire the middleware yourself?
+
 [TIP]
 ====
-This page covers the low-level middleware. For a provider wrapper, ready-made
-memory tools and a Next.js route handler built on the same service, see
-link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/packages/vercel-ai-provider[`@neo4j-labs/nams-ai-provider`],
-which uses the same NAMS backend at a higher level of abstraction.
+For cross-session search, graph-expanded retrieval, and explicit memory tools
+or lifecycle hooks, see xref:how-to/typescript/nams-ai-provider.adoc[choosing
+a NAMS AI provider mode] — a separate package built on the same NAMS backend.
+This middleware injects only the current conversation's three-tier context;
+the provider package also searches other conversations and expands matched
+entities' relationships into the prompt.
 ====
+
+Prerequisites: a configured model provider and NAMS test-workspace credentials.
+
+== Procedure
+
+. Build and install the current-source example using its README; use Node.js 22+.
+. Resolve an authorized conversation id before constructing the middleware.
+. Apply the wrapper below, then choose an explicit persistence lifecycle for streaming.
 
 == What the middleware does
 
 For every model invocation:
 
-1. Fetches three-tier context for the conversation (reflections,
-   observations, recent messages) and prepends it to the prompt —
-   reflections and observations as one `system` message, recent messages
-   replayed as `user`/`assistant` turns with `{ type: "text" }` parts.
+1. Fetches xref:explanation/context-tiers.adoc[three-tier context] for the
+   conversation and prepends it to the prompt — reflections and
+   observations as one `system` message, recent messages replayed as
+   `user`/`assistant` turns with `{ type: "text" }` parts.
 2. Persists the user's input message before generation. A multi-part user
    message (text interleaved with files) is flattened to its text parts.
 3. Persists the assistant's response after generation — for `generateText`
@@ -81,25 +92,28 @@ agentMemoryMiddleware(client, {
 });
 ----
 
-`conversationId` can be a string or a function. The function form is useful
-when the id is derived from request state (e.g., from `req.user.id` in a
-Next.js route handler).
+`conversationId` can be a string or a function. The function is evaluated when
+the middleware is constructed, not once per model call. Construct a middleware
+instance after resolving each request/conversation id; do not share one instance
+across users expecting the function to re-read request state.
 
 == Resuming instead of always creating
 
-Memory is only visible across sessions if the next process reaches for the same
-conversation. Resolve the id before wiring the middleware — `createConversation`
-on every run gives every run an empty graph:
+Conversation history is visible to this middleware when the next process selects
+the same conversation. Resolve the id before wiring the middleware — `createConversation`
+on every run gives every run new conversation context:
 
 [source,typescript]
 ----
 const userId = process.env.DEMO_USER_ID ?? "alice";
 
-// Prefer an explicit id, else the newest conversation for this user, else create.
+// Prefer an explicit id; otherwise choose a conversation in application code.
 const requested = process.env.CONVERSATION_ID;
 const existing = requested
   ? await memory.shortTerm.getConversationMetadata(requested)
-  : (await memory.shortTerm.listConversations({ userId }))[0];
+  : (await memory.shortTerm.listConversations({ userId }))
+      .filter((conversation) => conversation.metadata?.source === "my-app")
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
 
 const conv =
   existing ??
@@ -113,21 +127,39 @@ schema); the env-var form above is what a script uses.
 
 == Streaming
 
-`streamText` is persisted too. `wrapStream` pipes the provider's stream
-through a transform that accumulates every `text-delta` and writes one
-assistant message when the `finish` part arrives (or when the consumer
-cancels early), so nothing is lost and the consumer sees every part
-unchanged:
+The default `wrapStream` is fire-and-forget: it exposes no persistence-completion
+promise, so draining the model stream does not establish that NAMS stored the
+answer. See xref:how-to/typescript/edge-runtime.adoc#streaming-memory-persistence[the
+full derivation] for why and what that means for cancellation, errors and
+runtime shutdown.
+
+For a CLI that must finish storing before exit, own the streaming assistant write
+and disable automatic assistant persistence to avoid duplicates. Add `streamText`
+to the existing `ai` import, then use:
 
 [source,typescript]
 ----
-const { textStream } = streamText({ model, prompt: "Explain graph memory." });
-for await (const chunk of textStream) process.stdout.write(chunk);
-// the assembled response is now a Message node on the conversation
+const streamingModel = wrapLanguageModel({
+  model: openai(process.env.OPENAI_MODEL ?? "gpt-5-mini"),
+  middleware: agentMemoryMiddleware(memory, {
+    conversationId: conv.id,
+    persistResponses: false,
+  }),
+});
+const result = streamText({ model: streamingModel, prompt: "Explain graph memory." });
+let answer = "";
+for await (const chunk of result.textStream) {
+  answer += chunk;
+  process.stdout.write(chunk);
+}
+// The application owns and awaits this write; automatic assistant writes are off.
+await memory.shortTerm.addMessage(conv.id, "assistant", answer);
 ----
 
-The write is fire-and-forget — the stream is never held open waiting on
-the memory service.
+Handle model errors and cancellation before persisting a partial answer. At the
+edge, register the actual application write promise with the runtime lifecycle;
+see xref:how-to/typescript/edge-runtime.adoc[edge runtime persistence] and the
+Cloudflare example's explicit end/abort/error handlers.
 
 == Types
 
@@ -152,9 +184,18 @@ export default {
 };
 ----
 
-See link:edge-runtime.adoc[How-to: deploy to edge runtimes] for details.
+See xref:how-to/typescript/edge-runtime.adoc[deploy to edge runtimes] for details.
 
 == Compatibility
 
-Verified against `@neo4j-labs/agent-memory` 0.5.0-dev, `ai` 7.0,
-`@ai-sdk/provider` 4.0, Node.js 22 — 2026-09.
+The published `@neo4j-labs/agent-memory@0.5.0` package on npm implements
+provider specification v4 (`LanguageModelV4Middleware` from `@ai-sdk/provider`
+4.x), the specification `ai` 7 uses, on Node.js 22 or newer. Projects still
+on `ai` 4 to 6 should pin `@neo4j-labs/agent-memory` to a `0.4.x` release.
+
+== Verify the integration
+
+In `typescript/examples/vercel-ai/`, run `npm run lint` and `npm test`. The tests
+check real REST routing for the complete lessons and two-process recall with a
+mock model. For a live check, retain the conversation id and read back both
+messages after generation; model wording alone does not prove persistence.

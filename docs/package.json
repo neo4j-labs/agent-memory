@@ -10,7 +10,9 @@
     "build": "antora antora-playbook.yml",
     "build:local": "antora --fetch antora-playbook.yml",
     "clean": "rm -rf build",
-    "serve": "npm run build && npx http-server build/site -p 8080 -o"
+    "serve": "npm run build && npx http-server build/site -p 8080 -o",
+    "lint": "python3 ../scripts/check_docs.py --build",
+    "lint:source": "python3 ../scripts/check_docs.py"
   },
   "devDependencies": {
     "@antora/cli": "^3.1.0",

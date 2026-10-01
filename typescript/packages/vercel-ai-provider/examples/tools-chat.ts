@@ -1,13 +1,13 @@
 /**
- * Tools mode demo — the agent decides when to query/store memory, and every
- * memory operation is visible as a tool call. `enforceQueryMemory()` adds a
- * mechanical guarantee on top: the model cannot give its final answer until
- * `query_memory` has actually executed (other tools may still run first, in
- * any order). Run with:
+ * Tools mode demo. The model decides when to query and store memory, and each
+ * memory call shows up as a tool call. `enforceQueryMemory()` makes sure
+ * `query_memory` runs before the final answer.
  *
- * MEMORY_API_KEY=sk-nams-... OPENAI_API_KEY=sk-... npx tsx examples/tools-chat.ts
+ * Run with:
  *
- * Expected output (tool arguments and assistant wording will vary):
+ *   MEMORY_API_KEY=sk-nams-... OPENAI_API_KEY=sk-... npx tsx examples/tools-chat.ts
+ *
+ * Expected output (arguments and wording vary):
  *
  *   step 0 [enforced: some tool required]
  *     tool call: query_memory({"query":"user editor preferences","limit":5})
@@ -20,12 +20,6 @@
  *
  *   assistant: Try Telescope for fuzzy finding and Harpoon for quick file
  *   switching.
- *
- * Unlike provider/middleware mode, the memory operations appear here as
- * visible tool calls — but retrieval is still guaranteed: if the model spent
- * its grace window (default: 3 steps) on other tools without querying memory,
- * the next step would force query_memory directly instead of relying on the
- * tool description.
  */
 
 import { openai } from '@ai-sdk/openai';

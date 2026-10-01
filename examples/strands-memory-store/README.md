@@ -12,10 +12,6 @@
 >
 > This example is part of [`neo4j-agent-memory`](https://github.com/neo4j-labs/agent-memory), a Neo4j Labs project. It is actively maintained but not officially supported. APIs may change. Community support is available via the [Neo4j Community Forum](https://community.neo4j.com).
 
-> ℹ️ **Unreleased API.** `Neo4jMemoryStore` is not in PyPI 0.5.0 — it ships in
-> the next release. Until then, install the library from this repository (see
-> *In your own project* below).
-
 ## What this demonstrates
 
 - **`search()`** — fans out over entities, preferences, and facts (entities
@@ -36,10 +32,9 @@ manager" section for combining both on one agent.
 
 ## Prerequisites
 
-- Neo4j 5.26 (or later) reachable at `bolt://localhost:7687`, with the
-  credentials in `.env.example` — copy it and adjust, or export
-  `NEO4J_URI` / `NEO4J_USERNAME` / `NEO4J_PASSWORD`.
-- `strands-agents` 1.52–1.55 (the range this integration is pinned to).
+- A dedicated empty AuraDB instance with its connection variables exported; follow [Aura setup and cleanup](../AURA_SETUP.md).
+- `strands-agents` 1.52 or later, below 2 (the range the `strands` extra
+  pins).
 - No LLM or API key of any kind.
 
 ### From this repo
@@ -51,27 +46,21 @@ uv sync --all-extras
 ### In your own project
 
 ```bash
-uv pip install "neo4j-agent-memory[strands,sentence-transformers] @ git+https://github.com/neo4j-labs/agent-memory@main"
+uv pip install "neo4j-agent-memory[strands,sentence-transformers]==0.7.0"
 ```
 
-Switch to `uv pip install "neo4j-agent-memory[strands,sentence-transformers]>=0.6.0"`
-once the release carrying `Neo4jMemoryStore` is on PyPI.
+`Neo4jMemoryStore` ships in the 0.6.0 release on PyPI.
 
 ## Run
 
 ```bash
-make neo4j-start
-NEO4J_PASSWORD=test-password uv run python examples/strands-memory-store/main.py
+uv run python examples/strands-memory-store/main.py
 ```
 
 No LLM API key required — `llm=None` plus a local `sentence-transformers`
 embedder.
 
-The container's data volume persists across `make neo4j-stop` / `neo4j-start`
-(only `neo4j-clean` wipes it). If this container previously ran against a
-different-dimension embedder (e.g. OpenAI's 1536-dim default), connecting
-here fails with `EmbeddingDimensionMismatchError`, not a silent problem —
-run `make neo4j-clean && make neo4j-start` to reset.
+Start with an empty dedicated Aura instance. Existing vector indexes from a different embedding model can cause `EmbeddingDimensionMismatchError`; follow the shared cleanup/setup instructions to replace only an instance created for this example, or migrate an existing graph deliberately.
 
 Expected output **on a fresh database**. Recall is database-wide, not
 session-scoped, so an already-populated Neo4j adds its own `[entity]` /
@@ -158,7 +147,6 @@ agent = Agent(
 
 ---
 
-_Verified against `neo4j-agent-memory` 0.6.0-dev (branch `examples-updates`),
-`strands-agents` 1.55.1, `sentence-transformers` 6.0.1 and Neo4j 5.26
-(Docker, with APOC) on 2026-09-10. `Neo4jMemoryStore` is unreleased — it is
-not in PyPI 0.5.0._
+> _Verified against `neo4j-agent-memory` 0.6.0 from PyPI, `strands-agents`
+> 1.57.0, `sentence-transformers` 6.1.0 and Neo4j 5.26 (Docker, with APOC) on
+> 2026-09-24: `main.py` ran end to end against a live database, with no mocks._

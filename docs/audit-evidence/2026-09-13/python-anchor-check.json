@@ -1,0 +1,202 @@
+[
+  {
+    "file": "docs/modules/ROOT/pages/reference/api/adapters.adoc",
+    "oldIds": 13,
+    "currentIds": 13,
+    "lost": [],
+    "duplicates": [],
+    "literalHeadings": false
+  },
+  {
+    "file": "docs/modules/ROOT/pages/reference/api/factory.adoc",
+    "oldIds": 16,
+    "currentIds": 18,
+    "lost": [],
+    "duplicates": [],
+    "literalHeadings": false
+  },
+  {
+    "file": "docs/modules/ROOT/pages/reference/api/llm-provider.adoc",
+    "oldIds": 18,
+    "currentIds": 20,
+    "lost": [],
+    "duplicates": [],
+    "literalHeadings": false
+  },
+  {
+    "file": "docs/modules/ROOT/pages/reference/api/long-term.adoc",
+    "oldIds": 35,
+    "currentIds": 79,
+    "lost": [],
+    "duplicates": [],
+    "literalHeadings": false
+  },
+  {
+    "file": "docs/modules/ROOT/pages/reference/api/memory-client.adoc",
+    "oldIds": 20,
+    "currentIds": 31,
+    "lost": [],
+    "duplicates": [],
+    "literalHeadings": false
+  },
+  {
+    "file": "docs/modules/ROOT/pages/reference/api/reasoning.adoc",
+    "oldIds": 33,
+    "currentIds": 60,
+    "lost": [],
+    "duplicates": [],
+    "literalHeadings": false
+  },
+  {
+    "file": "docs/modules/ROOT/pages/reference/api/short-term.adoc",
+    "oldIds": 30,
+    "currentIds": 54,
+    "lost": [],
+    "duplicates": [],
+    "literalHeadings": false
+  },
+  {
+    "file": "docs/modules/ROOT/pages/reference/configuration.adoc",
+    "oldIds": 68,
+    "currentIds": 94,
+    "lost": [],
+    "duplicates": [],
+    "literalHeadings": false
+  },
+  {
+    "file": "docs/modules/ROOT/pages/reference/environment-variables.adoc",
+    "oldIds": 16,
+    "currentIds": 29,
+    "lost": [],
+    "duplicates": [],
+    "literalHeadings": false
+  },
+  {
+    "file": "docs/modules/ROOT/pages/reference/cli.adoc",
+    "oldIds": 20,
+    "currentIds": 21,
+    "lost": [],
+    "duplicates": [],
+    "literalHeadings": false
+  },
+  {
+    "file": "docs/modules/ROOT/pages/reference/extractors.adoc",
+    "oldIds": 30,
+    "currentIds": 76,
+    "lost": [],
+    "duplicates": [],
+    "literalHeadings": false
+  },
+  {
+    "file": "docs/modules/ROOT/pages/reference/schemas.adoc",
+    "oldIds": 21,
+    "currentIds": 43,
+    "lost": [],
+    "duplicates": [],
+    "literalHeadings": false
+  },
+  {
+    "file": "docs/modules/ROOT/pages/reference/schema-objects.adoc",
+    "oldIds": 7,
+    "currentIds": 7,
+    "lost": [],
+    "duplicates": [],
+    "literalHeadings": false
+  },
+  {
+    "file": "docs/modules/ROOT/pages/reference/rest-api.adoc",
+    "oldIds": 12,
+    "currentIds": 15,
+    "lost": [],
+    "duplicates": [],
+    "literalHeadings": false
+  },
+  {
+    "file": "docs/modules/ROOT/pages/tutorials/first-agent-memory.adoc",
+    "oldIds": 26,
+    "currentIds": 39,
+    "lost": [],
+    "duplicates": [],
+    "literalHeadings": false
+  },
+  {
+    "file": "docs/modules/ROOT/pages/tutorials/conversation-memory.adoc",
+    "oldIds": 15,
+    "currentIds": 32,
+    "lost": [],
+    "duplicates": [],
+    "literalHeadings": false
+  },
+  {
+    "file": "docs/modules/ROOT/pages/tutorials/knowledge-graph.adoc",
+    "oldIds": 18,
+    "currentIds": 36,
+    "lost": [],
+    "duplicates": [],
+    "literalHeadings": false
+  },
+  {
+    "file": "docs/modules/ROOT/pages/how-to/messages.adoc",
+    "oldIds": 28,
+    "currentIds": 33,
+    "lost": [],
+    "duplicates": [],
+    "literalHeadings": false
+  },
+  {
+    "file": "docs/modules/ROOT/pages/how-to/entities.adoc",
+    "oldIds": 34,
+    "currentIds": 40,
+    "lost": [],
+    "duplicates": [],
+    "literalHeadings": false
+  },
+  {
+    "file": "docs/modules/ROOT/pages/how-to/preferences.adoc",
+    "oldIds": 31,
+    "currentIds": 36,
+    "lost": [],
+    "duplicates": [],
+    "literalHeadings": false
+  },
+  {
+    "file": "docs/modules/ROOT/pages/how-to/reasoning-traces.adoc",
+    "oldIds": 26,
+    "currentIds": 31,
+    "lost": [],
+    "duplicates": [],
+    "literalHeadings": false
+  },
+  {
+    "file": "docs/modules/ROOT/pages/how-to/deduplication.adoc",
+    "oldIds": 25,
+    "currentIds": 30,
+    "lost": [],
+    "duplicates": [],
+    "literalHeadings": false
+  },
+  {
+    "file": "docs/modules/ROOT/pages/how-to/entity-extraction.adoc",
+    "oldIds": 12,
+    "currentIds": 17,
+    "lost": [],
+    "duplicates": [],
+    "literalHeadings": false
+  },
+  {
+    "file": "docs/modules/ROOT/pages/how-to/entity-extraction-schemas.adoc",
+    "oldIds": 12,
+    "currentIds": 18,
+    "lost": [],
+    "duplicates": [],
+    "literalHeadings": false
+  },
+  {
+    "file": "docs/modules/ROOT/pages/how-to/entity-extraction-batch.adoc",
+    "oldIds": 9,
+    "currentIds": 15,
+    "lost": [],
+    "duplicates": [],
+    "literalHeadings": false
+  }
+]

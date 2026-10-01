@@ -17,8 +17,8 @@ the entities already in the graph. It is the parity twin of the Python
 > ⚠️ **Neo4j Labs Project**
 >
 > This project is part of Neo4j Labs and is actively maintained, but not
-> officially supported. There are no SLAs or guarantees around backwards
-> compatibility and deprecation. For questions and support, please use
+> officially supported. There are no SLAs, backward-compatibility guarantees,
+> or scheduled deprecation commitments. APIs may change without notice. For questions and support, please use
 > the [Neo4j Community Forum](https://community.neo4j.com).
 
 ## Why this is a graph story
@@ -83,18 +83,36 @@ while (job.status === undefined || !["completed", "failed"].includes(job.status)
 
 ## Prerequisites
 
-- Node.js 22+ (Node 20 is EOL)
+- Node.js 22+
 - A `MEMORY_API_KEY` from [memory.neo4jlabs.com](https://memory.neo4jlabs.com),
   on an endpoint with a `/vN` segment — the ontology routes need the REST
   transport
 - **No `OPENAI_API_KEY` and no Neo4j.** `client.ontology` is hosted-only;
   extraction and embeddings run server-side
 
+## Build the shared SDK first
+
+This is a source-checkout example. Its `file:../..` dependency and shared
+`../tsconfig.base.json` require the repository layout. From the repository root:
+
+```bash
+cd typescript
+npm ci
+npm run build
+cd examples/ontology-lifecycle
+```
+
+Run the commands below from `typescript/examples/ontology-lifecycle/`. Build **before**
+installing this example; package exports point at `typescript/dist/` and npm does
+not build the local SDK on installation. For standalone copies, follow the
+[copy checklist](../README.md#copying-an-example) and verify the selected npm
+artifact supplies every API used here.
+
 ## Run it
 
 ```bash
 cp .env.example .env       # set MEMORY_API_KEY
-npm install
+npm ci
 MEMORY_API_KEY=nams_xxxxxxxxxxxxxxxx npm start
 ```
 
@@ -194,10 +212,10 @@ This is a Neo4j Labs project — community supported, no SLA. Ask questions on t
 
 ## See also
 
-- [Tutorial: Ontology quickstart](https://neo4j.com/labs/agent-memory/tutorials/ontology-quickstart) (`docs/modules/ROOT/pages/tutorials/ontology-quickstart.adoc`) — cloning a system template, strict-mode rejections, cleanup.
+- [Tutorial: Ontology quickstart](https://neo4j.com/labs/agent-memory/tutorials/ontology-quickstart) (`docs/modules/ROOT/pages/tutorials/ontology-quickstart.adoc`) — cloning a system template, strict revision activation, exact restoration, and clone cleanup.
 - [Ontology API reference](https://neo4j.com/labs/agent-memory/reference/ontology-api).
 - [Python parity example](../../../examples/ontology-lifecycle/) — the same eight steps through `client.ontology`.
 
 ---
 
-_Verified against the in-tree `@neo4j-labs/agent-memory` (`file:../..`, `package.json` version 0.4.1, carrying the unreleased 0.6.0-dev ontology surface), TypeScript 5.9.3, vitest 5.0, tsx 4, Node 22+ — 2026-09-10, with the NAMS transport mocked (`npm test`). `ontology.import`, `diff`, `migrate` and `getMigration` are not in any published npm release, so this example must use the `file:` dependency rather than a version range. The migration path has not been exercised against the production deployment — run the dry run first._
+_Compatibility scope: this example targets the current source checkout and its committed package/lock files. Offline tests validate the exercised contracts; they do not establish published-package availability, a live model result, or deployed NAMS behavior. Use the runtime floor above; record the actual package/runtime versions when verifying a release or deployment._

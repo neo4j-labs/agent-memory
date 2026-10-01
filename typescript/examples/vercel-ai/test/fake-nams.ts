@@ -5,9 +5,7 @@
  * no API key and no network. Only the operations this example performs are
  * implemented; anything else throws, so a drifting example fails loudly.
  *
- * The fake stores messages per conversation and preferences per workspace —
- * the split that makes the cross-session assertions meaningful: a new
- * conversation starts with no history but still recalls the preference.
+ * The fake stores messages by conversation and rejects bridge-only preferences.
  */
 
 import type { Transport } from "@neo4j-labs/agent-memory";
@@ -30,7 +28,6 @@ interface StoredConversation {
 export class FakeNamsTransport implements Transport {
   readonly calls: Array<{ method: string; params: Record<string, unknown> }> = [];
   readonly conversations = new Map<string, StoredConversation>();
-  readonly preferences: Array<{ id: string; category: string; preference: string }> = [];
   closed = false;
 
   private counter = 0;
@@ -153,18 +150,10 @@ export class FakeNamsTransport implements Transport {
         };
       }
 
-      case "add_preference": {
-        const pref = {
-          id: this.nextId("pref"),
-          category: String(params.category),
-          preference: String(params.preference),
-        };
-        this.preferences.push(pref);
-        return pref;
-      }
-
+      case "add_preference":
       case "search_preferences":
-        return this.preferences;
+      case "add_fact":
+        throw new Error("Unsupported on hosted REST; this fake must not implement it.");
 
       case "search_entities":
         return this.entities;

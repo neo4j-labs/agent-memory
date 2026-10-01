@@ -34,7 +34,7 @@ pytest.importorskip("respx", reason="respx not installed")
 import httpx  # noqa: E402
 import respx  # noqa: E402
 
-from tests.examples._manifests import assert_library_pin  # noqa: E402
+from tests.examples._manifests import _parse_requirement, assert_library_pin  # noqa: E402
 
 REPO_ROOT = Path(__file__).parent.parent.parent
 EXAMPLE_DIR = REPO_ROOT / "examples" / "claude-code-team-memory"
@@ -230,12 +230,54 @@ class TestStructure:
 
     @pytest.mark.parametrize("filename", CONFIG_FILES)
     def test_config_file_names_the_documented_servers(self, filename):
-        """Both halves are wired in every file: hosted NAMS and self-hosted."""
-        raw = (EXAMPLE_DIR / filename).read_text(encoding="utf-8")
-        assert "https://mcp.memory.neo4jlabs.com/mcp" in raw, "hosted NAMS entry missing"
-        assert "neo4j-agent-memory[mcp]" in raw, "self-hosted uvx entry missing"
-        assert '"mcp",' in raw and '"serve",' in raw, "not the documented `mcp serve` command"
-        assert "--session-strategy" in raw and "per_day" in raw
+        """Hosted NAMS and the Aura/OpenAI stdio server have complete configurations."""
+        path = EXAMPLE_DIR / filename
+        servers = json.loads(path.read_text(encoding="utf-8"))["mcpServers"]
+        hosted = servers["team-memory"]
+        hosted_url = "https://mcp.memory.neo4jlabs.com/mcp"
+        assert hosted.get("url") == hosted_url or hosted_url in hosted.get("args", [])
+
+        entry = servers["team-memory-self-hosted"]
+        assert entry["command"] == "uvx"
+        args = entry["args"]
+        assert args[0] == "--from"
+        requirement = _parse_requirement(args[1], path, "neo4j-agent-memory")
+        assert requirement is not None, "uvx must install neo4j-agent-memory"
+        assert requirement.specifiers == (("==", "0.7.0"),), "match the documentation release"
+        assert {"mcp", "openai"} <= set(requirement.extras), (
+            "the selected server requires both its MCP runtime and OpenAI embedding adapter"
+        )
+        assert args[2:5] == ["neo4j-agent-memory", "mcp", "serve"]
+        options = dict(zip(args[5::2], args[6::2], strict=True))
+        assert options["--backend"] == "bolt"
+        assert options["--transport"] == "stdio"
+        assert options["--profile"] in {"core", "extended"}
+        assert options["--session-strategy"] == "per_day"
+
+        env = entry["env"]
+        required = {
+            "NEO4J_URI",
+            "NEO4J_USER",
+            "NEO4J_PASSWORD",
+            "NEO4J_DATABASE",
+            "OPENAI_API_KEY",
+            "MCP_USER_ID",
+        }
+        assert required <= env.keys()
+        assert all(isinstance(env[name], str) and env[name].strip() for name in required)
+        if filename == ".mcp.json.example":
+            assert env["NEO4J_URI"] == "${NEO4J_URI}"
+            # The shell exports USERNAME; the MCP CLI consumes NEO4J_USER.
+            assert env["NEO4J_USER"] == "${NEO4J_USERNAME}"
+            assert env["NEO4J_PASSWORD"] == "${NEO4J_PASSWORD}"
+            assert env["NEO4J_DATABASE"] == "${NEO4J_DATABASE:-neo4j}"
+            assert env["OPENAI_API_KEY"] == "${OPENAI_API_KEY}"
+        else:
+            assert env["NEO4J_URI"].startswith("neo4j+s://")
+            assert env["NEO4J_USER"] == "neo4j"
+            assert env["NEO4J_DATABASE"] == "neo4j"
+            for name in ("NEO4J_PASSWORD", "OPENAI_API_KEY"):
+                assert env[name].startswith("REPLACE_WITH_"), "keep credential placeholders"
 
     def test_bundle_build_script_wraps_the_repo_manifest(self):
         """One manifest, in deploy/mcpb — not a second copy in the example."""
@@ -282,9 +324,9 @@ class TestStructure:
         assert "docs/.../" not in readme, "no placeholder doc paths"
 
     def test_readme_states_the_two_tool_surfaces_once(self):
-        """ts-mcp-F01: the hosted surface is 47 tools, not the self-hosted 6/16."""
+        """ts-mcp-F01: the hosted surface is scope-dependent, not the self-hosted 6/16."""
         readme = (EXAMPLE_DIR / "README.md").read_text(encoding="utf-8")
-        assert "**47**" in readme or "47" in readme
+        assert "Scope-dependent" in readme
         assert "`--profile core`" in readme and "`--profile extended`" in readme
         # One table, one place: the count must not be restated in WALKTHROUGH as
         # a competing claim.
@@ -325,7 +367,7 @@ class TestClaims:
 
     def test_hosted_count_is_distinct_from_the_self_hosted_profiles(self, script):
         doctor = script("doctor.py")
-        assert doctor.HOSTED_NAMS_TOOL_COUNT not in doctor.SELF_HOSTED_PROFILES.values()
+        assert not hasattr(doctor, "HOSTED_NAMS_TOOL_COUNT"), "the hosted count is scope-dependent"
         assert doctor.HOSTED_NAMS_MCP_URL == "https://mcp.memory.neo4jlabs.com/mcp"
 
     def test_seed_data_is_synthetic_and_fits_one_bulk_call(self, script):
@@ -353,7 +395,7 @@ class TestDoctorOffline:
             assert f"[PASS] {filename}" in out
         assert "self-hosted --profile core: 6 tool(s)" in out
         assert "self-hosted --profile extended: 16 tool(s)" in out
-        assert "47 scope-gated tools" in out
+        assert "scope-dependent tool surface" in out
         assert "skipped the live NAMS checks" in out
 
     async def test_missing_key_fails_a_full_run(self, script, monkeypatch, capsys):

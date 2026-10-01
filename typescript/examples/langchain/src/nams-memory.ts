@@ -6,7 +6,7 @@
  *
  * 1. `namsMemoryMiddleware()` — `wrapModelCall` prepends the conversation's
  *    three-tier context (reflections, observations, recent messages) plus any
- *    recalled preferences to the system message, and `afterAgent` writes the
+ *    workspace entity matches to the system message, and `afterAgent` writes the
  *    turn's messages back to the graph through `Neo4jChatMessageHistory`.
  *    The agent therefore needs no checkpointer: the graph *is* the store.
  * 2. `createEntityLookupTool()` — wraps `Neo4jEntityRetriever` as a tool so the
@@ -100,8 +100,8 @@ export interface NamsMemoryOptions {
   conversationId: string;
   /** History adapter bound to `conversationId`. */
   history: Neo4jChatMessageHistory;
-  /** How many recalled preferences to inject. Set to 0 to skip the lookup. */
-  preferenceLimit?: number;
+  /** How many workspace entity matches to inject. Set to 0 to skip the lookup. */
+  entityLimit?: number;
   /** Called with each line of memory bookkeeping; defaults to no output. */
   log?: (line: string) => void;
 }
@@ -115,11 +115,11 @@ export async function buildMemoryBlock(
   options: NamsMemoryOptions,
   query: string,
 ): Promise<string> {
-  const { client, conversationId, preferenceLimit = 3 } = options;
+  const { client, conversationId, entityLimit = 3 } = options;
   const context = await client.shortTerm.getContext(conversationId);
-  const preferences =
-    preferenceLimit > 0 && query.trim() !== ""
-      ? await client.longTerm.searchPreferences(query, { limit: preferenceLimit })
+  const entities =
+    entityLimit > 0 && query.trim() !== ""
+      ? await client.longTerm.searchEntities(query, { limit: entityLimit })
       : [];
 
   const sections: string[] = [];
@@ -140,10 +140,10 @@ export async function buildMemoryBlock(
         .join("\n")}`,
     );
   }
-  if (preferences.length > 0) {
+  if (entities.length > 0) {
     sections.push(
-      `Known user preferences:\n${preferences
-        .map((p) => `- [${p.category}] ${p.preference}`)
+      `Relevant workspace entities:\n${entities
+        .map((entity) => `- ${entity.name}: ${entity.description ?? ""}`)
         .join("\n")}`,
     );
   }

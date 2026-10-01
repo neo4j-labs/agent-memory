@@ -1,5 +1,4 @@
-= How to: store Mastra threads in NAMS
-:toc: left
+= Store Mastra threads in NAMS
 :source-highlighter: rouge
 
 The `@neo4j-labs/agent-memory/integrations/mastra` subpath exports
@@ -13,8 +12,16 @@ link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/ma
 ====
 This is **not** a Mastra `Memory` implementation and **not** a Mastra storage
 adapter. It cannot be passed to `new Agent({ memory })` or
-`new Memory({ storage })`. See <<Why not a storage adapter yet>>.
+`new Memory({ storage })`. See <<why-not-a-storage-adapter-yet,Why not a storage adapter yet>>.
 ====
+
+Prerequisites: a Mastra agent, Node.js 22+ and NAMS test-workspace credentials.
+
+== Procedure
+
+. Build/install the example using its README and create or select a thread id.
+. Map stored history into the model input with the functions below.
+. Save the new user and assistant messages under that thread id; explicitly select any prior thread you combine.
 
 == Wiring
 
@@ -81,7 +88,8 @@ There is no in-process buffer: reuse the same thread id across requests and
 processes and a restarted server picks the thread up where it left off.
 
 Everything written this way is a real NAMS conversation, so entity extraction,
-three-tier context and Cypher queries all apply to it — which is the reason to
+xref:explanation/context-tiers.adoc[three-tier context] and Cypher queries all
+apply to it — which is the reason to
 mirror turns here rather than leave them in Mastra's own store:
 
 [source,typescript]
@@ -91,11 +99,22 @@ const hits = await client.shortTerm.searchMessages("where is the trip to", {
   sessionId: thread.id,
 });
 
-// Preferences are scoped to the resource, not the thread, so a second thread
-// for "alice" recalls what the first one learned.
+// The application explicitly selects and reads an authorized earlier thread.
+// Reusing resourceId alone does not inject that thread into the new one.
 const second = await memory.createThread({ resourceId: "alice", title: "Follow-up" });
-const recalled = await client.longTerm.searchPreferences("trip style", { limit: 3 });
+const prior = await memory.getMessages(thread.id, { limit: 20 });
+const question = "What did I want to book first?";
+const followUp = await agent.generate([
+  ...toMastraMessages(prior),
+  { role: "user", content: question },
+]);
+await memory.saveMessage({ threadId: second.id, role: "user", content: question });
+await memory.saveMessage({ threadId: second.id, role: "assistant", content: followUp.text });
 ----
+
+`searchPreferences` and `addPreference` have no hosted REST route. Resource ids
+map to conversation user metadata, not a resource-scoped preference store.
+Authorize both selected thread ids before combining context in an application.
 
 == What the adapter implements
 
@@ -112,37 +131,30 @@ const recalled = await client.longTerm.searchPreferences("trip style", { limit: 
 
 A transport with no `createConversation` (a TCK conformance server, the local
 reference adapter) makes `createThread` synthesize a session id of the form
-`{resourceId}:{uuid}`. It is per-thread, not per-resource: a resource owns many
+`\{resourceId}:\{uuid}`. It is per-thread, not per-resource: a resource owns many
 threads, and reusing the `resourceId` would collapse them into one.
 
-[[Why not a storage adapter yet]]
+[#why-not-a-storage-adapter-yet]
 == Why not a storage adapter yet
 
-Mastra 1.x takes a custom backend as a **storage adapter**: a
-`MastraCompositeStore` whose `memory` domain extends the abstract
-`MemoryStorage` class from `@mastra/core/storage`. That contract is nine abstract
-methods over `MastraDBMessage` and `StorageListMessagesInput` —
-`getThreadById`, `saveThread`, `updateThread`, `deleteThread`, `listThreads`,
-`listMessages`, `listMessagesById`, `saveMessages`, `updateMessages` — plus
-resource-scoped working memory.
-
-Two of those (`listMessagesById`, `updateMessages`) have no equivalent on the
-NAMS API today, so a half-implemented domain would fail inside Mastra's own
-recall paths rather than at wiring time. Until the API covers them, this adapter
-stays explicitly outside Mastra's extension points.
-`typescript/test/unit/mastra.test.ts` pins that gap against the installed
-`@mastra/core` typings, so a rename on either side fails a test instead of
-quietly making this page wrong.
-
-Track the full storage adapter in
-link:https://github.com/neo4j-labs/agent-memory/issues[the issue tracker]; if you
-need it, say which Mastra recall features you depend on.
+Two methods of Mastra 1.x's nine-method `MastraCompositeStore` contract
+(`listMessagesById`, `updateMessages`) have no NAMS equivalent today, so this
+adapter stays outside Mastra's extension points rather than half-implementing
+that contract; track it in
+link:https://github.com/neo4j-labs/agent-memory/issues[the issue tracker] and say
+which Mastra recall features you depend on.
 
 == Compatibility
 
-Verified against `@neo4j-labs/agent-memory` 0.5.0-dev, `@mastra/core` 1.66,
-`@mastra/memory` 1.29, Node.js 22 — 2026-09. The published adapter imports
+This page describes the in-tree adapter and its declared `@mastra/core` 1.x
+contracts, with Node.js 22+ for the example. The adapter imports
 nothing from Mastra (`import type` only), so it adds no dependency to your
 project; `@mastra/core` is a devDependency of this repository and a real
-dependency of `typescript/examples/mastra`, so both the gap above and the wiring
-snippets are type-checked against the installed Mastra typings in CI.
+dependency of `typescript/examples/mastra`, so the adapter gap and executable example are checked against installed typings.
+This does not establish the contents of a published npm artifact.
+
+== Verify the integration
+
+In `typescript/examples/mastra/`, run `npm run lint` and `npm test`. The offline
+suite checks history replay and explicit prior-thread selection, rejects hosted
+preference/fact calls, and verifies cleanup of only the run-created threads.

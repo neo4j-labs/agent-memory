@@ -1,0 +1,151 @@
+= Choose a NAMS AI provider mode
+:source-highlighter: rouge
+
+`@neo4j-labs/nams-ai-provider` is a separate npm package that wraps the
+TypeScript SDK (`@neo4j-labs/agent-memory`) for the
+https://ai-sdk.dev[Vercel AI SDK]. It talks only to the hosted Neo4j Agent
+Memory Service (NAMS) — there is no bolt/self-hosted mode. It is an
+experimental Neo4j Labs package: actively maintained and community-supported,
+with no SLA and no backward-compatibility guarantee — the same Labs terms as
+the core SDK — and versioned and released independently of it.
+
+The package offers four integration modes: a drop-in provider, middleware you
+wrap around an existing model, explicit memory tools the model calls, and
+lifecycle hooks your application code drives. All four read from the same NAMS
+workspace and the same configuration — the difference is who controls
+retrieval and persistence, and how visible memory activity is.
+
+Prerequisites: a Vercel AI SDK (`ai` 7) project and a NAMS API key from
+https://memory.neo4jlabs.com[memory.neo4jlabs.com].
+
+To add NAMS memory to an AI SDK application:
+
+. Install the package and its peers.
+. Pick a mode from the comparison below.
+. Decide which NAMS conversation each instance writes to.
+. Follow that mode's how-to page, which has a complete runnable program and
+  the output to check it against.
+
+== Install
+
+[source,bash]
+----
+npm install @neo4j-labs/nams-ai-provider@0.3.0 @neo4j-labs/agent-memory@0.5.0 ai@^7 zod@^4
+----
+
+Requires Node.js 22 or newer. The package is ESM-only — it ships one entry
+point (`@neo4j-labs/nams-ai-provider`, no subpaths) — so your project needs
+`"type": "module"` in `package.json` (`npm pkg set type=module` sets it).
+
+== Pick a mode
+
+[cols="1,2,2,2,3", options="header"]
+|===
+| Mode | Entry call | Who controls retrieval | Who controls persistence | Pick it when
+
+| xref:how-to/typescript/nams-ai-provider-provider-mode.adoc[Provider]
+| `+createNamsProvider({ baseProvider, scope, ... })+`
+| Automatic, every call
+| Automatic, every call
+| Swapping the model is the only change you want — fully transparent, no tool-schema changes.
+
+| xref:how-to/typescript/nams-ai-provider-middleware-mode.adoc[Middleware]
+| `createNams(config).wrap(model, scope)`
+| Automatic, every call
+| Automatic, every call
+| You already construct or configure the model elsewhere and just want to decorate it.
+
+| xref:how-to/typescript/nams-ai-provider-tools-mode.adoc[Tools]
+| `createNams(config).tools(scope)`
+| Model-decided — the model calls `query_memory`
+| Model-decided — the model calls `store_memory` (or `enforceQueryMemory`/`ensureMemoryStored` makes it mechanical)
+| You want memory activity visible in the UI or tool trace, or you want the model's own judgement about what to store.
+
+| xref:how-to/typescript/nams-ai-provider-hooks-mode.adoc[Hooks]
+| `createNams(config).hooks(scope)`
+| Your code — `session.loadSession()` / `session.prepare()`, before every generation
+| Your code — `session.onFinish()`, exactly once per generation
+| You need deterministic, application-controlled transcript capture — for example, production session memory.
+|===
+
+Switching modes is a code-level choice; all four read the same API key and
+configuration. Middleware and tools modes can also be combined on one agent —
+injected baseline context plus explicit memory tools.
+
+.The four NAMS AI provider modes and what triggers each one's calls to the hosted workspace
+image::diagrams/nams-ai-provider-modes.svg["The four NAMS AI provider modes -- provider, middleware, tools, and hooks -- each connecting the application to the NAMS workspace, which retrieves relevant memory and stores turns with their extracted entities: automatically on every call in provider and middleware modes, when the model calls a memory tool in tools mode, and when your code calls prepare or onFinish in hooks mode",width=100%,link=self]
+
+[[choose-conversation]]
+== Choose the conversation each instance writes to
+
+Every mode is scoped by a `NamsScope`, `{ userId: string; conversationId?:
+string }`. Construct one provider, middleware, tools, or hooks instance per
+user session, and choose its conversation deliberately:
+
+* *Leave out `conversationId`* to continue the user's most recent NAMS
+  conversation. A new conversation is created only when the user has none, so
+  every session for that user writes to the same conversation. A fresh
+  JavaScript object is not a fresh conversation.
+* *Pass a `conversationId`* to read and write a specific conversation — to
+  resume one you stored earlier, or to start a separate one. To start one,
+  create it with the SDK and pass its `id`. This partial snippet shows both
+  cases in provider mode and uses `@ai-sdk/openai` as the base provider:
+
+[source,typescript]
+----
+import { MemoryClient } from '@neo4j-labs/agent-memory';
+import { createNamsProvider } from '@neo4j-labs/nams-ai-provider';
+import { openai } from '@ai-sdk/openai';
+
+const apiKey = process.env.MEMORY_API_KEY ?? '';
+const userId = 'alice';
+
+// No conversationId: continues alice's most recent conversation (or creates her first).
+const resumed = createNamsProvider({ apiKey, baseProvider: openai, scope: { userId } });
+
+// A separate conversation: create it, then pass its id.
+const memory = new MemoryClient({ endpoint: 'https://memory.neo4jlabs.com/v1', apiKey });
+const { id: conversationId } = await memory.shortTerm.createConversation({ userId });
+const fresh = createNamsProvider({ apiKey, baseProvider: openai, scope: { userId, conversationId } });
+----
+
+The same `scope` shape goes to `createNams(config).wrap(model, scope)`,
+`.tools(scope)`, and `+.hooks({ userId, conversationId, ... })+`. Cross-session retrieval
+(`crossSessionLimit`) searches the user's *other* recent conversations, so it
+only finds something once the user has more than one.
+
+== Configure the connection
+
+All four modes take the same `NamsConfig`. `apiKey` is required, and nothing
+in the package reads an environment variable for you — pass
+`process.env.MEMORY_API_KEY` explicitly. No environment variable selects the
+mode either; it is chosen entirely in code. `endpoint` defaults to the hosted
+service, and `workspaceId`, `crossSessionLimit`, `graphExpansionLimit`, and
+`logger` are optional. The
+xref:reference/nams-ai-provider.adoc#_namsconfig[API reference] lists every
+field and default, plus the mode-specific options (`maxMemories`,
+`persistInteractions`, `sessionLimit`, `graceSteps`, hook `timeout`, and the
+rest).
+
+== When to use the SDK middleware instead
+
+If you only need xref:explanation/context-tiers.adoc[three-tier context] for
+the *current* conversation — recent messages, observations, and reflections —
+and you would rather not add a second package, the SDK's own
+`@neo4j-labs/agent-memory/middleware/vercel-ai` covers that with no extra
+install. See xref:how-to/typescript/vercel-ai.adoc[Integrate with the Vercel
+AI SDK]. Reach for a NAMS AI provider mode instead when you also want
+cross-session search, graph-expanded retrieval, explicit memory tools, or
+lifecycle hooks.
+
+== See also
+
+* xref:how-to/typescript/nams-ai-provider-provider-mode.adoc[Wrap a model in provider mode]
+* xref:how-to/typescript/nams-ai-provider-middleware-mode.adoc[Wrap a model in middleware mode]
+* xref:how-to/typescript/nams-ai-provider-tools-mode.adoc[Expose memory as tools]
+* xref:how-to/typescript/nams-ai-provider-hooks-mode.adoc[Control memory with lifecycle hooks]
+* xref:reference/nams-ai-provider.adoc[NAMS AI provider API reference]
+* xref:explanation/nams-ai-provider-retrieval.adoc[How the NAMS AI provider retrieves memory]
+* xref:how-to/typescript/vercel-ai.adoc[Integrate with the Vercel AI SDK]
+* link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/nams-ai-provider[Runnable examples for all four modes]
+* link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/packages/vercel-ai-provider[Package source and README on GitHub]

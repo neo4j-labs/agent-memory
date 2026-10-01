@@ -1,0 +1,161 @@
+{
+  "python": {
+    "source": "https://pypi.org/pypi/neo4j-agent-memory/json",
+    "version": "0.5.0",
+    "requires_python": ">=3.10",
+    "artifacts": [
+      {
+        "filename": "neo4j_agent_memory-0.5.0-py3-none-any.whl",
+        "url": "https://files.pythonhosted.org/packages/d1/ce/7d4c146c925027291cdc95f6342ceecb6a0836954541eebba60a1e982112/neo4j_agent_memory-0.5.0-py3-none-any.whl",
+        "sha256": "d054fcdc34fbbe70d0e405e9349f1ad0fd57159d45a87e2624b5fb54a1761384",
+        "uploaded": "2026-05-30T23:23:11.162611Z"
+      },
+      {
+        "filename": "neo4j_agent_memory-0.5.0.tar.gz",
+        "url": "https://files.pythonhosted.org/packages/0b/51/7f5a7d707a710154ce27175ce53a7694531d231c13a4eb50dba78d688731/neo4j_agent_memory-0.5.0.tar.gz",
+        "sha256": "5244840e9d50899439b01029ad1c2859cfb23186014f64140098902ead5c62d3",
+        "uploaded": "2026-05-30T23:23:13.005642Z"
+      }
+    ],
+    "download_sha256_verified": true,
+    "python_files": 133,
+    "files_differing_from_checkout": [
+      "neo4j_agent_memory/__init__.py",
+      "neo4j_agent_memory/integration.py",
+      "neo4j_agent_memory/cli/main.py",
+      "neo4j_agent_memory/config/settings.py",
+      "neo4j_agent_memory/core/__init__.py",
+      "neo4j_agent_memory/core/exceptions.py",
+      "neo4j_agent_memory/core/memory.py",
+      "neo4j_agent_memory/core/protocols.py",
+      "neo4j_agent_memory/embeddings/__init__.py",
+      "neo4j_agent_memory/embeddings/base.py",
+      "neo4j_agent_memory/embeddings/bedrock.py",
+      "neo4j_agent_memory/embeddings/openai.py",
+      "neo4j_agent_memory/embeddings/sentence_transformers.py",
+      "neo4j_agent_memory/embeddings/vertex_ai.py",
+      "neo4j_agent_memory/enrichment/background.py",
+      "neo4j_agent_memory/enrichment/base.py",
+      "neo4j_agent_memory/enrichment/factory.py",
+      "neo4j_agent_memory/extraction/__init__.py",
+      "neo4j_agent_memory/extraction/factory.py",
+      "neo4j_agent_memory/extraction/gliner_extractor.py",
+      "neo4j_agent_memory/extraction/llm_extractor.py",
+      "neo4j_agent_memory/extraction/pipeline.py",
+      "neo4j_agent_memory/extraction/spacy_extractor.py",
+      "neo4j_agent_memory/graph/client.py",
+      "neo4j_agent_memory/graph/queries.py",
+      "neo4j_agent_memory/graph/schema.py",
+      "neo4j_agent_memory/integrations/_passthrough.py",
+      "neo4j_agent_memory/integrations/base.py",
+      "neo4j_agent_memory/integrations/agentcore/memory_provider.py",
+      "neo4j_agent_memory/integrations/agentcore/types.py",
+      "neo4j_agent_memory/integrations/crewai/__init__.py",
+      "neo4j_agent_memory/integrations/crewai/memory.py",
+      "neo4j_agent_memory/integrations/google_adk/__init__.py",
+      "neo4j_agent_memory/integrations/google_adk/memory_service.py",
+      "neo4j_agent_memory/integrations/langchain/__init__.py",
+      "neo4j_agent_memory/integrations/langchain/memory.py",
+      "neo4j_agent_memory/integrations/langchain/retriever.py",
+      "neo4j_agent_memory/integrations/llamaindex/__init__.py",
+      "neo4j_agent_memory/integrations/llamaindex/memory.py",
+      "neo4j_agent_memory/integrations/microsoft_agent/__init__.py",
+      "neo4j_agent_memory/integrations/microsoft_agent/chat_store.py",
+      "neo4j_agent_memory/integrations/microsoft_agent/context_provider.py",
+      "neo4j_agent_memory/integrations/microsoft_agent/gds.py",
+      "neo4j_agent_memory/integrations/microsoft_agent/memory.py",
+      "neo4j_agent_memory/integrations/microsoft_agent/tools.py",
+      "neo4j_agent_memory/integrations/microsoft_agent/tracing.py",
+      "neo4j_agent_memory/integrations/openai_agents/__init__.py",
+      "neo4j_agent_memory/integrations/openai_agents/memory.py",
+      "neo4j_agent_memory/integrations/openai_agents/tracing.py",
+      "neo4j_agent_memory/integrations/pydantic_ai/__init__.py",
+      "neo4j_agent_memory/integrations/pydantic_ai/memory.py",
+      "neo4j_agent_memory/integrations/strands/__init__.py",
+      "neo4j_agent_memory/integrations/strands/config.py",
+      "neo4j_agent_memory/integrations/strands/tools.py",
+      "neo4j_agent_memory/llm/factory.py",
+      "neo4j_agent_memory/llm/structured.py",
+      "neo4j_agent_memory/llm/adapters/anthropic.py",
+      "neo4j_agent_memory/llm/adapters/instructor.py",
+      "neo4j_agent_memory/mcp/_common.py",
+      "neo4j_agent_memory/mcp/_observer.py",
+      "neo4j_agent_memory/mcp/_tools.py",
+      "neo4j_agent_memory/mcp/server.py",
+      "neo4j_agent_memory/memory/buffered.py",
+      "neo4j_agent_memory/memory/eval.py",
+      "neo4j_agent_memory/memory/long_term.py",
+      "neo4j_agent_memory/memory/reasoning.py",
+      "neo4j_agent_memory/memory/short_term.py",
+      "neo4j_agent_memory/nams/__init__.py",
+      "neo4j_agent_memory/nams/client.py",
+      "neo4j_agent_memory/nams/long_term.py",
+      "neo4j_agent_memory/nams/ontology.py",
+      "neo4j_agent_memory/nams/reasoning.py",
+      "neo4j_agent_memory/nams/short_term.py",
+      "neo4j_agent_memory/nams/transport.py",
+      "neo4j_agent_memory/observability/base.py",
+      "neo4j_agent_memory/observability/opik.py",
+      "neo4j_agent_memory/observability/otel.py",
+      "neo4j_agent_memory/resolution/exact.py",
+      "neo4j_agent_memory/resolution/fuzzy.py",
+      "neo4j_agent_memory/resolution/semantic.py",
+      "neo4j_agent_memory/schema/persistence.py",
+      "neo4j_agent_memory/services/geocoder.py",
+      "neo4j_agent_memory/testing/fixtures.py",
+      "neo4j_agent_memory/testing/mocks.py"
+    ]
+  },
+  "typescript": {
+    "source": "https://registry.npmjs.org/@neo4j-labs%2Fagent-memory/latest",
+    "version": "0.4.1",
+    "engines": {
+      "node": ">=20.0.0"
+    },
+    "dist": {
+      "shasum": "a3961f988d2dac58e7f9e1a100e3a6ab2d5d16b6",
+      "tarball": "https://registry.npmjs.org/@neo4j-labs/agent-memory/-/agent-memory-0.4.1.tgz",
+      "fileCount": 31,
+      "integrity": "sha512-93e47GTUyQ/HxzwXM1h+iZtZtaUyUX1Bcd7yBpUm0SYqC/qE1MB5QO0/jP0pnPNtBwYq+nZac23Hsht5NpCMQA==",
+      "signatures": [
+        {
+          "sig": "MEUCIQD3VJItex0XCZpV0E6N4JhJAGc9luIGx8jE2MvDGXWFjQIgKjSZgsc0eudoBD224uo7vLV3mg8FwI+mtHUSedaTi1Q=",
+          "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
+        }
+      ],
+      "unpackedSize": 415944
+    },
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      },
+      "./mcp": {
+        "types": "./dist/mcp/index.d.ts",
+        "import": "./dist/mcp/index.js"
+      },
+      "./testing": {
+        "types": "./dist/testing.d.ts",
+        "import": "./dist/testing.js"
+      },
+      "./integrations/mastra": {
+        "types": "./dist/integrations/mastra.d.ts",
+        "import": "./dist/integrations/mastra.js"
+      },
+      "./integrations/strands": {
+        "types": "./dist/integrations/strands.d.ts",
+        "import": "./dist/integrations/strands.js"
+      },
+      "./middleware/vercel-ai": {
+        "types": "./dist/middleware/vercel-ai.d.ts",
+        "import": "./dist/middleware/vercel-ai.js"
+      },
+      "./integrations/langchain": {
+        "types": "./dist/integrations/langchain.d.ts",
+        "import": "./dist/integrations/langchain.js"
+      }
+    },
+    "download_sha1_verified": true
+  },
+  "checked_utc": "2026-09-13T17:56:44.381259+00:00"
+}

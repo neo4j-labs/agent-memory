@@ -10,8 +10,8 @@
  *   2. Entity recall. NAMS extracts entities from the persisted messages in the
  *      background; the script awaits that with `waitForExtraction()` and then
  *      queries them through `Neo4jEntityRetriever`.
- *   3. The graph, not the buffer: three-tier context counts, a preference
- *      recalled across conversations, and one `expandGraph()` hop.
+ *   3. The graph, not the buffer: three-tier context counts and one
+ *      `expandGraph()` hop over returned workspace entities.
  *
  * Run: `cp .env.example .env && npm install && npm start`
  */
@@ -88,14 +88,6 @@ export async function main(options: RunOptions = {}): Promise<RunResult> {
     });
     log(`conversation: ${conversation.id}`);
 
-    // A preference written once is recalled in every later conversation — this
-    // is the cross-session half of long-term memory.
-    await memory.longTerm.addPreference(
-      "database",
-      "Prefers graph databases for relationship-heavy workloads",
-      { context: "Stated while evaluating a recommendation engine" },
-    );
-
     const history = new Neo4jChatMessageHistory(memory, conversation.id);
     const retriever = new Neo4jEntityRetriever(memory, { topK: 5 });
 
@@ -152,12 +144,6 @@ export async function main(options: RunOptions = {}): Promise<RunResult> {
         `${context.observations.length} observations, ` +
         `${context.recentMessages.length} recent messages`,
     );
-
-    const preferences = await memory.longTerm.searchPreferences("database choice", { limit: 3 });
-    log(`Preferences recalled across conversations: ${preferences.length}`);
-    for (const preference of preferences) {
-      log(`  [${preference.category}] ${preference.preference}`);
-    }
 
     const firstId = docs[0]?.metadata.id;
     if (typeof firstId === "string" && firstId !== "") {

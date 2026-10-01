@@ -36,7 +36,7 @@ echo "manifest : ${manifest}"
 echo "server   : $(python3 -c "
 import json, sys
 m = json.load(open(sys.argv[1]))
-s = m['server']
+s = m['server']['mcp_config']
 print(s['command'], ' '.join(s['args']))
 " "${manifest}" 2>/dev/null || echo '(python3 unavailable — not inspected)')"
 
@@ -54,8 +54,8 @@ echo "built    : ${out_file}"
 echo
 echo "The bundle starts the same server as the 'team-memory-self-hosted' entry in"
 echo "claude_desktop_config.json.example — the manifest uses the short uvx spec"
-echo "form ('uvx neo4j-agent-memory[mcp] mcp serve') and takes the default"
-echo "profile, where the config file spells out --from, --profile and"
-echo "--session-strategy. Either way NEO4J_PASSWORD (bolt) or MEMORY_API_KEY"
-echo "(hosted NAMS) still has to be supplied; Claude Desktop prompts for the"
-echo "manifest's env_required values rather than storing them in JSON."
+echo "form ('uvx neo4j-agent-memory[mcp,openai]==0.7.0 mcp serve --backend bolt')"
+echo "and takes the default profile, where the config file spells out --from,"
+echo "--profile and --session-strategy. The bundle is bolt-only: Claude Desktop"
+echo "prompts for the manifest's user_config fields (Neo4j URI, username,"
+echo "password, database, OpenAI API key) rather than storing them in JSON."

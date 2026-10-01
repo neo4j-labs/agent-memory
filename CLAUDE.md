@@ -39,10 +39,14 @@ is built and released independently.
 
 Releases are tag-namespaced so they cannot collide:
 
-- `python-v*` (e.g. `python-v0.4.1`) → publishes to PyPI via
+- `python-v*` (e.g. `python-v0.6.0`) → publishes to PyPI via
   `.github/workflows/publish-python.yml`
-- `typescript-v*` (e.g. `typescript-v0.3.0`) → publishes to npm via
+- `typescript-v*` (e.g. `typescript-v0.5.0`) → publishes to npm via
   `.github/workflows/publish-typescript.yml`
+- `nams-ai-provider-v*` (e.g. `nams-ai-provider-v0.3.0`) → publishes
+  `@neo4j-labs/nams-ai-provider` (`typescript/packages/vercel-ai-provider/`)
+  to npm via `.github/workflows/publish-nams-ai-provider.yml`, versioned
+  independently of the SDK
 
 Plain `v*` tags do not trigger any publish.
 
@@ -56,12 +60,21 @@ Plain `v*` tags do not trigger any publish.
   `changed-paths` job narrows that matrix with plain `git diff`, so a
   Python-only PR skips it.
 - `.github/workflows/ci-typescript.yml` fires on changes under
-  `typescript/**`. **Python-only PRs do not trigger TypeScript CI.** Its
-  `type-check-examples` matrix covers all nine `typescript/examples/*`
-  directories on Node 24 (`eve-commerce-agent` requires `>=24`; the rest
-  require `>=22`) and runs `tsc --noEmit`, `npm test --if-present` and
+  `typescript/**` and on the TypeScript docs pages it verifies: the
+  `tutorials/*typescript.adoc` pages and `typescript-tutorial*` partials,
+  `how-to/typescript/**`, `reference/typescript-api.adoc`,
+  `reference/nams-ai-provider.adoc`,
+  `explanation/nams-ai-provider-retrieval.adoc` and `sdks/typescript.adoc`
+  (all under `docs/modules/ROOT/`; those pages also trigger Python CI
+  through `docs/**`). **Python-only PRs do not trigger TypeScript CI.** Its
+  `type-check-examples` matrix covers all ten `typescript/examples/*`
+  directories on Node 24, with extra Node 22 legs for `vercel-ai`, `mcp`,
+  `nams-ai-provider` and `ontology-lifecycle` (`eve-commerce-agent` requires
+  `>=24`; the rest require `>=22`) and runs `tsc --noEmit`, `npm test --if-present` and
   `npm run build --if-present` for each — including the Next.js flagship,
-  `nextjs-memory-chat`.
+  `nextjs-memory-chat`. Its `vercel-ai-provider` job builds
+  `typescript/packages/vercel-ai-provider` on Node 22 and 24, running
+  typecheck, test, build, and `npm pack --dry-run`.
 
 If you touch a cross-cutting file (e.g. `.gitignore`, top-level
 `README.md`), expect neither workflow to fire — surface the change in
@@ -89,10 +102,13 @@ The cross-language behavioral spec lives in
 [`neo4j-labs/agent-memory-tck`](https://github.com/neo4j-labs/agent-memory-tck).
 The TCK certifies clients against Bronze, Silver, Gold, and Platinum
 tiers. After the relocation, the TCK consumes the published
-`@neo4j-labs/agent-memory` npm package as an external dependency. An
-in-tree TCK suite (`typescript/test/tck/`) runs in TS CI on every PR;
-the nightly `tck-conformance.yml` workflow runs the full TCK against
-the published package to catch packaging regressions.
+`@neo4j-labs/agent-memory` npm package as an external dependency. The
+in-tree TCK bridge suite (`typescript/test/tck/`) is opt-in through
+`npm run test:tck`; TS CI does not run it (`npm test` runs the unit and
+integration suites). The `tck-conformance.yml` workflow runs the TCK
+Bronze suite against the published package to catch packaging
+regressions; it has a nightly schedule, but its job runs only on manual
+`workflow_dispatch` until the TCK-side package runner lands.
 
 ## Project Overview
 
@@ -589,19 +605,23 @@ make test-docs-build
 
 ### Diagram Management
 
-Documentation diagrams use Excalidraw JSON format stored in `docs/assets/images/diagrams/excalidraw/`.
+Documentation diagrams use Excalidraw JSON format. Editable scenes live in
+`docs/assets/diagrams/excalidraw/`; `scripts/export_diagrams.mjs` exports them
+as SVG to `docs/modules/ROOT/images/diagrams/`, and every export is tracked in
+the provenance manifest `docs/diagrams/manifest.json`. Pages embed the SVG with a
+caption line above the `image::` macro (see `docs/MAINTAINING.md`).
 
 ```bash
 # List all diagram placeholders in documentation
 make docs-diagrams-list
 
-# Check status of diagrams (which are implemented, missing, etc.)
+# Check published exports against the manifest (fails on untracked images)
 make docs-diagrams-status
 
 # Show only missing diagrams that need to be created
 make docs-diagrams-missing
 
-# Generate manifest.json for diagram tracking
+# Print the manifest plus the placeholder list as JSON
 make docs-diagrams-manifest
 
 # Add image references to .adoc files for existing diagrams
@@ -663,7 +683,7 @@ neo4j-agent-memory stats --password $NEO4J_PASSWORD --format json
 
 # MCP server (requires mcp extra)
 neo4j-agent-memory mcp serve --password $NEO4J_PASSWORD
-neo4j-agent-memory mcp serve --profile core --transport sse --port 8080
+neo4j-agent-memory mcp serve --profile core --transport http --port 8080
 neo4j-agent-memory mcp serve --session-strategy per_day --user-id alice
 ```
 
@@ -1820,8 +1840,9 @@ The MCP server exposes tools organized into two profiles:
 # stdio transport (for Claude Desktop)
 neo4j-agent-memory mcp serve --password secret
 
-# SSE transport (for Cloud Run/HTTP deployment)
-neo4j-agent-memory mcp serve --transport sse --port 8080 --password secret
+# Streamable HTTP (for Cloud Run/HTTP deployment; endpoint /mcp)
+# No authentication: with --host 0.0.0.0, keep it on a private network or behind an authenticating proxy
+neo4j-agent-memory mcp serve --transport http --host 0.0.0.0 --port 8080 --password secret
 
 # Core profile (fewer tools, less context overhead)
 neo4j-agent-memory mcp serve --profile core --password secret
@@ -1896,7 +1917,7 @@ Session strategies:
 - `PER_DAY`: `"{user_id}-YYYY-MM-DD"` for daily continuity
 - `PERSISTENT`: Fixed `user_id` for maximum continuity
 
-**Desktop Extension:** The `deploy/mcpb/` directory contains a `.mcpb` manifest for Claude Desktop's extension directory.
+**Desktop Extension:** The `deploy/mcpb/` directory contains the `.mcpb` manifest (MCPB 0.3) for a Claude Desktop extension. Pack it with `npx @anthropic-ai/mcpb pack deploy/mcpb` (which validates the manifest) or `examples/claude-code-team-memory/bundle/build.sh`, then install the bundle through Claude Desktop's **Install from file**. It is not published to the extension directory.
 
 #### Cloud Run Deployment
 
@@ -2216,13 +2237,16 @@ no README footer, no index row, or no test module. The shape of the tree:
 | Runtime + tooling | `no_llm/`, `domain-schemas/` |
 | Framework integrations | `strands-session-manager/`, `strands-memory-store/`, `google_adk_demo/`, `google_cloud_integration/`, `microsoft_agent_retail_assistant/` |
 | Full-stack apps | `full-stack-chat-agent/`, `lennys-memory/`, `financial-services-advisor/` (AWS Strands + Google ADK twins) |
-| TypeScript | `typescript/examples/` — nine examples, flagship `nextjs-memory-chat/` |
+| TypeScript | `typescript/examples/` — ten examples, flagship `nextjs-memory-chat/` |
 
 `hello-memory/` is the only example allowed to use a PEP 723 header; every other
 one pins `neo4j-agent-memory[...]>=0.5.0,<0.7` in a `requirements.txt` or
 `pyproject.toml` so the pin is reviewable.
 
-Examples can be run via Makefile targets or directly:
+The example READMEs point readers at a dedicated AuraDB instance
+(`examples/AURA_SETUP.md`); the Docker Neo4j from `docker-compose.test.yml` is
+the key-free local alternative, and it is what the Makefile targets use when
+`NEO4J_URI` is unset. Examples can be run via Makefile targets or directly:
 
 ```bash
 # Via Makefile (auto-starts Docker Neo4j if NEO4J_URI not set)
@@ -2241,8 +2265,7 @@ cp examples/.env.example examples/.env
 ```
 
 Key variables:
-- `NEO4J_URI` - If set, uses this Neo4j instance; if not set, auto-starts Docker
-- `NEO4J_PASSWORD` - Neo4j password (use `test-password` for Docker)
+- `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD` - If `NEO4J_URI` is set (for example to an Aura instance), the examples use it; if not, the Makefile targets auto-start Docker
 - `OPENAI_API_KEY` - Optional. Without it the examples fall back to a local sentence-transformers embedder and turn LLM extraction off
 - `MEMORY_API_KEY` - Required by the hosted (NAMS) examples only
 - `OPENAI_MODEL`, `EMBEDDING_MODEL`, `LOCAL_EMBEDDING_MODEL` - model ids, so no example hard-codes one
@@ -2252,7 +2275,7 @@ The shared loader is `examples/_env.py`: single-file examples do
 (via `python-dotenv` when installed, otherwise a small built-in parser).
 Directory examples that ship their own `.env.example` load that file instead.
 
-If `NEO4J_URI` is not set, the Makefile targets automatically start the Docker Neo4j container with `test-password`. `make examples` is key-free by design; anything needing credentials lives under `make examples-with-keys`.
+If `NEO4J_URI` is not set, the Makefile targets automatically start the Docker Neo4j container and export `NEO4J_URI=bolt://localhost:7687`, `NEO4J_USERNAME=neo4j` and `NEO4J_PASSWORD=test-password` for the script (`no_llm/` and `eval-harness/` read all three with no fallback). `make examples` is key-free by design; anything needing credentials lives under `make examples-with-keys`.
 
 ## Full-Stack Chat Agent Example
 
@@ -2712,7 +2735,6 @@ When adding or modifying documentation:
 - **Output**: Static HTML in `docs/build/site/`
 - **Deployment**: Neo4j Labs Pages — pushes to `main` touching `docs/**` dispatch a rebuild of `neo4j-contrib/labs-pages` (`.github/workflows/trigger-labs-build.yml`), which consumes this repo's Antora component and publishes to `neo4j.com/labs/agent-memory`
 - **TypeScript API reference**: TypeDoc output is generated into `docs/modules/ROOT/attachments/api/typescript/` (Antora attachments, published verbatim with the docs site) and kept fresh by `.github/workflows/docs-typedoc.yml`, which commits regenerated output to `main` and dispatches the labs-pages rebuild. `typescript/typedoc.json` sets the output path; run `npm run docs:api` in `typescript/` to regenerate locally.
-- **Deployment**: Vercel (`docs/vercel.json`, `outputDirectory: build/site`; auto-deploys on push to main)
 
 <!-- OPENWIKI:START -->
 

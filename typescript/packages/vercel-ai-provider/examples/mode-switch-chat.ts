@@ -1,23 +1,18 @@
 /**
- * Mode-switch demo — all four integration modes behind one env var, so the
- * deployment (not the code) decides how memory attaches:
+ * Mode switch demo. NAMS_MODE picks how memory is added:
  *
- *   NAMS_MODE=provider    memory wraps the provider          (transparent)
- *   NAMS_MODE=middleware  memory wraps the model instance    (transparent)
- *   NAMS_MODE=tools       memory is query_memory/store_memory (model-driven)
- *   NAMS_MODE=hooks       memory brackets the generation      (runtime-driven)
+ *   NAMS_MODE=provider    wraps the provider                 (automatic)
+ *   NAMS_MODE=middleware  wraps the model                    (automatic)
+ *   NAMS_MODE=tools       query_memory / store_memory tools  (model decides)
+ *   NAMS_MODE=hooks       load before, save after            (your code decides)
  *
  * Run with:
  *
  *   NAMS_MODE=hooks MEMORY_API_KEY=sk-nams-... OPENAI_API_KEY=sk-... \
  *     npx tsx examples/mode-switch-chat.ts
  *
- * Every mode runs the same two turns — teach a fact, then recall it — and all
- * four share one API key and one memory backend, so you can switch modes
- * between runs and the memories carry over. What changes is *where* the
- * retrieve-and-persist cycle happens: inside the model call (provider,
- * middleware), inside the agent loop as visible tool calls (tools), or around
- * the whole generation with nothing shown to the model (hooks).
+ * Each mode teaches a fact, then recalls it. All modes share one backend, so
+ * memories carry over when you switch.
  */
 
 import { openai } from '@ai-sdk/openai';
@@ -43,7 +38,7 @@ const apiKey = process.env.MEMORY_API_KEY!;
 const userId = process.env.NAMS_DEMO_USER ?? `demo-user-mode-switch`;
 const model = process.env.NAMS_DEMO_MODEL ?? 'gpt-5.4-mini';
 
-/** One shape per mode: a send() the turn runner below can call uniformly. */
+/** Every mode exposes the same send(). */
 interface Chat {
   send: (message: string) => Promise<string>;
 }
@@ -53,7 +48,7 @@ function buildChat(): Chat {
 
   switch (mode) {
     case 'provider': {
-      // Memory as a ProviderV4 — the swap lands at the model constructor.
+      // Memory wraps the provider.
       const nams = createNamsProvider({ apiKey, baseProvider: openai, scope });
       const agent = new ToolLoopAgent({
         model: nams.languageModel(model),
@@ -64,7 +59,7 @@ function buildChat(): Chat {
     }
 
     case 'middleware': {
-      // Memory as middleware — same guarantee, wraps an already-resolved model.
+      // Memory wraps an existing model.
       const nams = createNams({ apiKey });
       const agent = new ToolLoopAgent({
         model: nams.wrap(openai(model), scope),
@@ -75,7 +70,7 @@ function buildChat(): Chat {
     }
 
     case 'tools': {
-      // Memory as tools — the model drives, with guards on read and write.
+      // The model calls memory tools. Guards make sure it reads and writes.
       const tools = createNams({ apiKey }).tools(scope);
       const agent = new ToolLoopAgent({
         model: openai(model),
@@ -92,9 +87,7 @@ function buildChat(): Chat {
     }
 
     case 'hooks': {
-      // Memory as generation lifecycle hooks — the runtime reads and writes
-      // the transcript around every generation; the model sees no memory
-      // surface at all.
+      // Your code loads and saves the transcript. The model sees no memory tools.
       const session = createNams({ apiKey }).hooks(scope);
       const agent = new ToolLoopAgent({
         model: openai(model),

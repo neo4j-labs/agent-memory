@@ -1,0 +1,154 @@
+= Memory, search, geocoding, and enrichment settings
+:page-product: agent-memory
+:page-pagination:
+:toclevels: 2
+
+Operational and runtime-behavior settings for xref:reference/configuration.adoc[Configuration reference]: `MemoryConfig`, `SearchConfig`, `GeocodingConfig`, `EnrichmentConfig`, and the integration-limits summary.
+
+anchor:memory[]
+
+anchor:_python_configuration_7[]
+anchor:_environment_variables_7[]
+anchor:_memory_configuration[]
+
+== Memory behavior
+
+The tables distinguish declared values from automatic runtime behavior. MemoryClient forwards `multi_tenant`, `write_mode`, and `max_pending`. Its ordinary store operations use their own method defaults. The remaining fields are not automatically applied; call the relevant operation explicitly.
+
+`multi_tenant` guards selected writes accepting `user_identifier`; it does not enforce read isolation. `write_mode` controls `client.buffered.submit(...)`, not ordinary store calls. TTL and auditing require explicit consolidation calls.
+
+// settings-fields: MemoryConfig:memory:python
+[cols="4,2,2,2,3,5",options="header"]
+|===
+| Field | Type / values | Default | Constraints | Env var | Description
+| `default_conversation_limit` | `int` | `50` | ge 1 | pass:[<code>NAM_<wbr>MEMORY__<wbr>DEFAULT_<wbr>CONVERSATION_<wbr>LIMIT</code>] | Default conversation message limit †
+| `message_embedding_enabled` | `bool` | `True` | — | pass:[<code>NAM_<wbr>MEMORY__<wbr>MESSAGE_<wbr>EMBEDDING_<wbr>ENABLED</code>] | Enable message embeddings †
+| `preference_confidence_threshold` | `float` | `0.7` | ge 0.0, le 1.0 | pass:[<code>NAM_<wbr>MEMORY__<wbr>PREFERENCE_<wbr>CONFIDENCE_<wbr>THRESHOLD</code>] | Preference confidence threshold †
+| `fact_deduplication_enabled` | `bool` | `True` | — | pass:[<code>NAM_<wbr>MEMORY__<wbr>FACT_<wbr>DEDUPLICATION_<wbr>ENABLED</code>] | Enable fact deduplication †
+| `trace_embedding_enabled` | `bool` | `True` | — | pass:[<code>NAM_<wbr>MEMORY__<wbr>TRACE_<wbr>EMBEDDING_<wbr>ENABLED</code>] | Enable reasoning trace embeddings †
+| `tool_stats_enabled` | `bool` | `True` | — | pass:[<code>NAM_<wbr>MEMORY__<wbr>TOOL_<wbr>STATS_<wbr>ENABLED</code>] | Enable tool usage statistics †
+| `multi_tenant` | `bool` | `False` | — | pass:[<code>NAM_<wbr>MEMORY__<wbr>MULTI_<wbr>TENANT</code>] | Require user_identifier on the guarded bolt writes; does not add read authorization or scope semantic search.
+| `write_mode` | `Literal['sync', 'buffered']` | `'sync'` | — | `NAM_MEMORY__WRITE_MODE` | How fire-and-forget writes via `client.buffered.submit(...)` are persisted. `'sync'` (default): each submit awaits the underlying execute_write — useful for tests and small loads. `'buffered'`: submits enqueue and a background task drains to Neo4j; callers use `client.flush()` / `client.wait_for_pending()` at shutdown.
+| `max_pending` | `int` | `200` | ge 1 | `NAM_MEMORY__MAX_PENDING` | Maximum number of buffered writes that can be in flight. When the queue is full, `client.buffered.submit(...)` blocks until a worker drains an item.
+| `conversation_ttl_days` | `int \| None` | `None` | ge 1 | pass:[<code>NAM_<wbr>MEMORY__<wbr>CONVERSATION_<wbr>TTL_<wbr>DAYS</code>] | Available to application code as a TTL value; pass it explicitly as `archive_expired_conversations(ttl_days=settings.memory.conversation_ttl_days)`. †
+| `audit_read` | `bool` | `False` | — | `NAM_MEMORY__AUDIT_READ` | Available to application code as an audit preference; call `client.consolidation.record_read_audit(...)` explicitly. †
+|===
+
+† Not automatically applied by MemoryClient; see <<integration-limits,Integration limits>>.
+
+anchor:search[]
+
+anchor:_python_configuration_8[]
+anchor:_environment_variables_8[]
+
+== Search configuration
+
+These fields are accepted settings values but are not automatically read by the memory stores. Pass `limit`, `threshold`, and other supported options on individual search/traversal calls. NAMS honors a narrower option set; see the API references.
+
+// settings-fields: SearchConfig:search:python
+[cols="4,2,2,2,3,5",options="header"]
+|===
+| Field | Type / values | Default | Constraints | Env var | Description
+| `default_limit` | `int` | `10` | ge 1 | pass:[<code>NAM_<wbr>SEARCH__<wbr>DEFAULT_<wbr>LIMIT</code>] | Default search limit †
+| `default_threshold` | `float` | `0.7` | ge 0.0, le 1.0 | pass:[<code>NAM_<wbr>SEARCH__<wbr>DEFAULT_<wbr>THRESHOLD</code>] | Default similarity threshold †
+| `hybrid_search_enabled` | `bool` | `True` | — | pass:[<code>NAM_<wbr>SEARCH__<wbr>HYBRID_<wbr>SEARCH_<wbr>ENABLED</code>] | Enable hybrid search †
+| `graph_depth` | `int` | `2` | ge 1 | `NAM_SEARCH__GRAPH_DEPTH` | Graph traversal depth for search †
+|===
+
+† Not automatically applied by MemoryClient; see <<integration-limits,Integration limits>>.
+
+anchor:geocoding[]
+
+anchor:_python_configuration_nominatim_free[]
+anchor:_python_configuration_google_maps_higher_accuracy[]
+anchor:_environment_variables_9[]
+anchor:_parameters_3[]
+anchor:_geocoding_providers[]
+anchor:_usage_example[]
+anchor:_geospatial_queries[]
+
+== Geocoding configuration
+
+Bolt only. When enabled, MemoryClient creates the selected geocoder and can enrich Location entities with coordinates. `nominatim` uses OpenStreetMap lookup; `google` requires a key. Provider usage limits/costs are separate from SDK defaults.
+
+[source,python]
+----
+from neo4j_agent_memory.config.settings import GeocodingConfig
+
+geocoding = GeocodingConfig(
+    enabled=True, provider="nominatim", user_agent="my-memory-app/1.0",
+    rate_limit_per_second=1.0, cache_results=True,
+)
+----
+
+Store explicit coordinates with `add_entity(..., coordinates=(latitude, longitude))`, or query them through `search_locations_near` and `search_locations_in_bounding_box`. See xref:reference/api/long-term.adoc[Long-term API] for exact arguments and result types.
+
+// settings-fields: GeocodingConfig:geocoding:python
+[cols="4,2,2,2,3,5",options="header"]
+|===
+| Field | Type / values | Default | Constraints | Env var | Description
+| `enabled` | `bool` | `False` | — | `NAM_GEOCODING__ENABLED` | Enable automatic geocoding of Location entities
+| `provider` | `nominatim / google` | `'nominatim'` | — | `NAM_GEOCODING__PROVIDER` | Geocoding provider to use
+| `api_key` | `SecretStr \| None` | `None` | — | `NAM_GEOCODING__API_KEY` | API key for geocoding provider (required for Google)
+| `cache_results` | `bool` | `True` | — | pass:[<code>NAM_<wbr>GEOCODING__<wbr>CACHE_<wbr>RESULTS</code>] | Cache geocoding results to avoid repeated API calls
+| `rate_limit_per_second` | `float` | `1.0` | gt 0 | pass:[<code>NAM_<wbr>GEOCODING__<wbr>RATE_<wbr>LIMIT_<wbr>PER_<wbr>SECOND</code>] | Client request rate limit for the configured geocoder; honor the provider service policy.
+| `user_agent` | `str` | `'neo4j-agent-memory'` | — | pass:[<code>NAM_<wbr>GEOCODING__<wbr>USER_<wbr>AGENT</code>] | User-Agent sent by the configured geocoder.
+|===
+
+anchor:enrichment[]
+
+anchor:_python_configuration_9[]
+anchor:_environment_variables_10[]
+anchor:_parameters_4[]
+anchor:_enrichment_providers[]
+
+== Enrichment configuration
+
+Bolt only. Enabled providers enrich entities with external descriptions/identifiers; provider settings govern caching, rate control, and background work. An injected `enrichment_provider` can replace construction from these settings. `providers` is a JSON list in environment variables.
+
+[source,python]
+----
+from neo4j_agent_memory.config.settings import EnrichmentConfig
+
+enrichment = EnrichmentConfig(
+    enabled=True, providers=["wikimedia"], background_enabled=True,
+    entity_types=["PERSON", "ORGANIZATION", "LOCATION", "EVENT"],
+    min_confidence=0.7, cache_ttl_hours=168,
+)
+----
+
+// settings-fields: EnrichmentConfig:enrichment:python
+[cols="4,2,2,2,3,5",options="header"]
+|===
+| Field | Type / values | Default | Constraints | Env var | Description
+| `enabled` | `bool` | `False` | — | `NAM_ENRICHMENT__ENABLED` | Enable automatic entity enrichment
+| `providers` | `list[EnrichmentProvider]` | `["wikimedia"]` | — | pass:[<code>NAM_<wbr>ENRICHMENT__<wbr>PROVIDERS</code>] | Enrichment providers to use (in priority order)
+| `diffbot_api_key` | `SecretStr \| None` | `None` | — | pass:[<code>NAM_<wbr>ENRICHMENT__<wbr>DIFFBOT_<wbr>API_<wbr>KEY</code>] | API key for Diffbot Knowledge Graph
+| `wikimedia_rate_limit` | `float` | `0.5` | gt 0 | pass:[<code>NAM_<wbr>ENRICHMENT__<wbr>WIKIMEDIA_<wbr>RATE_<wbr>LIMIT</code>] | Seconds between Wikimedia API requests
+| `diffbot_rate_limit` | `float` | `0.2` | gt 0 | pass:[<code>NAM_<wbr>ENRICHMENT__<wbr>DIFFBOT_<wbr>RATE_<wbr>LIMIT</code>] | Seconds between Diffbot API requests
+| `cache_results` | `bool` | `True` | — | pass:[<code>NAM_<wbr>ENRICHMENT__<wbr>CACHE_<wbr>RESULTS</code>] | Cache enrichment results to avoid repeated API calls
+| `cache_ttl_hours` | `int` | `168` | ge 1 | pass:[<code>NAM_<wbr>ENRICHMENT__<wbr>CACHE_<wbr>TTL_<wbr>HOURS</code>] | Hours to cache enrichment results
+| `background_enabled` | `bool` | `True` | — | pass:[<code>NAM_<wbr>ENRICHMENT__<wbr>BACKGROUND_<wbr>ENABLED</code>] | Run enrichment in background (non-blocking)
+| `queue_max_size` | `int` | `1000` | ge 1 | pass:[<code>NAM_<wbr>ENRICHMENT__<wbr>QUEUE_<wbr>MAX_<wbr>SIZE</code>] | Maximum enrichment queue size
+| `max_retries` | `int` | `3` | ge 0 | pass:[<code>NAM_<wbr>ENRICHMENT__<wbr>MAX_<wbr>RETRIES</code>] | Maximum retry attempts for failed enrichments
+| `retry_delay_seconds` | `float` | `60.0` | ge 1 | pass:[<code>NAM_<wbr>ENRICHMENT__<wbr>RETRY_<wbr>DELAY_<wbr>SECONDS</code>] | Delay between retry attempts
+| `entity_types` | `list[str]` | `["PERSON", "ORGANIZATION", "LOCATION", "EVENT"]` | — | pass:[<code>NAM_<wbr>ENRICHMENT__<wbr>ENTITY_<wbr>TYPES</code>] | Entity types to enrich (empty = all types)
+| `min_confidence` | `float` | `0.7` | ge 0.0, le 1.0 | pass:[<code>NAM_<wbr>ENRICHMENT__<wbr>MIN_<wbr>CONFIDENCE</code>] | Minimum entity confidence to trigger enrichment
+| `language` | `str` | `'en'` | — | pass:[<code>NAM_<wbr>ENRICHMENT__<wbr>LANGUAGE</code>] | Preferred language for enrichment data
+| `user_agent` | `str` | `'neo4j-agent-memory/1.0'` | — | pass:[<code>NAM_<wbr>ENRICHMENT__<wbr>USER_<wbr>AGENT</code>] | User-Agent for API requests
+|===
+
+anchor:integration-limits[]
+
+== Integration limits
+
+An accepted configuration field is not a guarantee that MemoryClient forwards it to a store or provider. The tables mark currently unapplied values. In particular, changing memory/search defaults does not override method defaults, TTL does not schedule cleanup, and `audit_read` does not instrument every query. Use explicit method arguments and verify the behavior you rely on.
+
+On NAMS, local extraction, schema, resolution, geocoding, and enrichment settings do not configure the hosted pipeline. Client settings validation still runs, so an incompatible explicit `llm=None` can fail before the backend connects. Configure hosted ontologies through `client.ontology`; see xref:reference/ontology-api.adoc[Ontology API].
+
+
+== See also
+
+* xref:reference/configuration.adoc[Configuration reference]
+* xref:reference/api/long-term-geospatial.adoc[Geospatial operations and NAMS behavior]
+* xref:how-to/entities.adoc[Store entities, relationships, and facts]

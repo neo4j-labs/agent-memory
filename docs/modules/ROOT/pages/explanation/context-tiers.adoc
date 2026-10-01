@@ -1,0 +1,110 @@
+= Understanding the three-tier context model
+:page-product: agent-memory
+:toclevels: 2
+
+The hosted service (NAMS) assembles a conversation's context as three tiers
+of increasing compression: recent messages, observations, and reflections.
+Every TypeScript how-to page that calls `getContext()` or wires the Vercel AI
+SDK, Mastra, or AWS Strands integration assumes this model. This page explains
+what each tier is, where it comes from, and how the three fit together.
+
+Both SDKs read the tiers from NAMS. The TypeScript client exposes
+`client.shortTerm.getContext()`, `getObservations()`, and `getReflections()`.
+The Python client on the NAMS backend exposes `client.short_term.get_context()`,
+`get_observations()`, and `get_reflections()`; its `get_context()` returns the
+three sections formatted as one text block rather than a structured object.
+
+NOTE: This is a hosted-service concept. The tiers are computed by NAMS, so
+they are not available on Python's Bolt backend, where `get_observations()`
+and `get_reflections()` raise `NotSupportedError`, or to a TypeScript client on
+`BridgeTransport`, since the TCK bridge protocol has no equivalent operation.
+The Python MCP server has a separate, local observational memory with its own
+observations and reflections; see <<_mcp_observations,the MCP server's observational memory>>.
+
+== The three tiers
+
+* *Recent messages* — the raw, persisted turns of the conversation
+  (`Message[]`), returned uncompressed. This is the same data
+  `addMessage`/`getConversation` work with elsewhere in the client.
+* *Observations* — auto-generated summaries of a window of messages
+  (`getObservations(conversationId)`). An `Observation` may carry optional
+  `windowStart`/`windowEnd` timestamps identifying the message span it
+  summarizes.
+* *Reflections* — higher-level syntheses derived from observations
+  (`getReflections(conversationId)`), generated once the conversation's
+  accumulated context crosses a compression threshold. A reflection
+  summarizes a set of observations the way an observation summarizes a set
+  of messages — one more level of compression, one step further from the
+  original wording.
+
+Compression increases from top to bottom: messages are exact, observations
+compress spans of messages, and reflections compress spans of observations.
+An application reading only reflections gets the most condensed view of a
+long conversation; reading recent messages gets the most literal one.
+
+.Context assembly narrows from raw messages to synthesized reflections
+image::diagrams/context-tiers-funnel.svg["Three-stage funnel from recent messages (raw, persisted turns kept verbatim) to observations (auto-generated summaries of a window of messages) to reflections (higher-level syntheses derived from observations), with compression increasing left to right",width=100%,link=self]
+
+== How `getContext()` assembles them
+
+`client.shortTerm.getContext(conversationId)` returns all three tiers
+together as a `ConversationContext`:
+
+[source,typescript]
+----
+interface ConversationContext {
+  reflections: Reflection[];
+  observations: Observation[];
+  recentMessages: Message[];
+}
+----
+
+The TypeScript integrations use it in different ways:
+
+* The xref:how-to/typescript/vercel-ai.adoc[Vercel AI SDK] middleware folds
+  reflections and observations into one prepended system message
+  ("Relevant memory for this conversation") and replays `recentMessages` as
+  ordinary turns. If `getContext()` fails, or the client is on the bridge
+  transport, or the context comes back empty, it falls back to flat
+  conversation history from `getConversation()` instead of failing the model
+  call.
+* The xref:how-to/typescript/strands.adoc[AWS Strands] `ConversationManager`
+  prepends one system message per reflection and one per observation to the
+  messages that its inner manager (a sliding window by default) already
+  holds. It does not replay `recentMessages`. If `getContext()` fails, it
+  injects nothing and leaves the inner manager's messages unchanged.
+* The xref:how-to/typescript/mastra.adoc[Mastra] recipe does no prompt
+  assembly: the application calls `getContext()` itself and decides what to
+  do with the result.
+
+See xref:how-to/typescript/troubleshooting.adoc[Troubleshooting] for what to
+do when the context tiers are unavailable.
+
+== Other senses of "observation"
+
+The reasoning-memory layer also records an "observation" on each reasoning
+step, alongside the step's thought and action (see
+xref:explanation/memory-types.adoc[Understanding the three memory types]
+and the xref:glossary.adoc[glossary]'s Reasoning memory entry). A step
+observation is often derived from a tool result, for example with
+`record_tool_call(auto_observation=True)`, but it describes one recorded task
+execution, not a compressed summary of a conversation. Nothing here implies
+that reasoning-step observations feed the context-tier observations
+described above.
+
+[[_mcp_observations]]
+The Python MCP server's `memory_get_observations` tool uses a third sense. Its
+local observational memory tracks each session inside the server process,
+extracts observations (facts and decisions) from stored user
+messages, and generates reflections once the session's accumulated context
+crosses a token threshold. It works on the Bolt backend and does not call the
+NAMS tiers. See xref:reference/mcp-tools.adoc[MCP tools].
+
+== See also
+
+* xref:reference/typescript-api.adoc[TypeScript API reference]
+* xref:how-to/typescript/vercel-ai.adoc[Vercel AI SDK middleware]
+* xref:how-to/typescript/strands.adoc[AWS Strands integration]
+* xref:how-to/typescript/mastra.adoc[Mastra recipe]
+* xref:how-to/typescript/troubleshooting.adoc[TypeScript troubleshooting]
+* xref:glossary.adoc[Glossary]

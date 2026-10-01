@@ -31,7 +31,7 @@ help:
 	@echo "  make run            Start both backend and frontend (recommended)"
 	@echo "  make run-backend    Start FastAPI backend only (port 8000)"
 	@echo "  make run-frontend   Start Next.js frontend only (port 3000)"
-	@echo "  make mcp-server     Start MCP server for Claude Desktop"
+	@echo "  make mcp-server     Start MCP server for Claude Desktop (NEO4J_* from backend/.env or the shell)"
 	@echo ""
 	@echo "Testing:"
 	@echo "  make test           Run the backend unit tests"
@@ -157,10 +157,18 @@ run-backend:
 run-frontend:
 	cd frontend && npm run dev
 
-# Start MCP server for Claude Desktop
+# Start MCP server for Claude Desktop.
+# Connection settings come from backend/.env (the same file the backend reads);
+# NEO4J_* variables already exported in the shell take precedence over it. The
+# CLI reads NEO4J_USER, so fall back to the backend's NEO4J_USERNAME.
 mcp-server:
-	cd backend && uv run neo4j-agent-memory mcp serve \
-		--password $${NEO4J_PASSWORD:-password} \
+	cd backend && \
+	if [ -f .env ]; then \
+		_exported="$$(export -p)"; set -a; . ./.env; set +a; eval "$$_exported"; \
+	fi; \
+	NEO4J_USER="$${NEO4J_USER:-$${NEO4J_USERNAME:-neo4j}}" \
+	uv run neo4j-agent-memory mcp serve \
+		--backend bolt \
 		--profile extended \
 		--session-strategy per_day \
 		--user-id lenny-desktop

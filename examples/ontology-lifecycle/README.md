@@ -68,13 +68,21 @@ job = await client.ontology.migrate(
     dry_run=True,           # counts only, touches nothing
     batch_size=500,
 )
+deadline = time.monotonic() + 120.0
 while job.status not in {"completed", "failed"}:
+    if time.monotonic() >= deadline:
+        raise TimeoutError(f"Inspect migration {job.id} before continuing")
     await asyncio.sleep(1.0)
     job = await client.ontology.get_migration(job.id)
+if job.status == "failed" or job.errored:
+    raise RuntimeError(f"Migration {job.id} did not complete without errors")
 ```
 
-Run it once with `dry_run=True` to see the node count it would touch, then again
-with `dry_run=False`. The example does both.
+This excerpt uses `asyncio` and `time`; the complete imports and helper are in
+`main.py`. The example runs a dry run before the real migration. A timeout, failed
+job, or errored nodes raises an exception and prevents the next lifecycle operation.
+A client timeout does not cancel a queued server job; inspect its printed ID before
+retrying.
 
 ## Prerequisites
 
@@ -103,9 +111,14 @@ development/staging service); leave it unset on production keys.
 MEMORY_API_KEY=nams_xxxxxxxxxxxxxxxx uv run python main.py
 ```
 
-Re-running is safe: the script reuses the `support-desk` ontology if the
-workspace already owns one and mints the next revision instead of creating a
-duplicate. Clean up with `await client.ontology.delete(ontology_id)`.
+Use a **disposable workspace**. The script binds a new active ontology and
+migrates stored entities in place. A rerun reuses `support-desk` and creates
+another revision; it is not a no-op. The resulting version stays active for
+inspection. Deleting the ontology alone does not restore the previous active
+version or reverse migrated labels. The output records any previous active
+version ID. Restore that version explicitly if needed, after planning how to
+handle the migrated data. For a smaller exercise that restores the previous
+version without migrating entities, follow the ontology tutorial linked below.
 
 ## Expected output
 
@@ -153,10 +166,10 @@ Migrating existing entities onto revision 2:
 Active: Support Desk revision 2 (strict)
 Label counts after migration: [{'labels': ['Entity', 'SupportCase'], 'count': 2}]
 
-Done. Inspect support-desk at https://memory.neo4jlabs.com. Clean up with: await client.ontology.delete('ont_01J…')
+Done. Inspect support-desk at https://memory.neo4jlabs.com. Retained ontology: ont_01J…. The new version remains active; deleting it alone does not restore the previous schema or migrated entities.
 ```
 
-That is the line-for-line shape of a run; the numbers depend on your workspace.
+This is illustrative output for the successful path, not a captured live run; the numbers depend on your workspace.
 Extracted-entity counts depend on what the server pulls out of the transcript,
 the system-template count on the deployment, and job ids are per-run. The
 offline smoke test (`tests/examples/test_ontology_lifecycle_example.py`) drives
@@ -187,7 +200,7 @@ bolt — you own the Cypher.
 
 ## Going further
 
-- **Step-by-step walkthrough:** [Ontology Quickstart](https://neo4j.com/labs/agent-memory/tutorials/ontology-quickstart) (`docs/modules/ROOT/pages/tutorials/ontology-quickstart.adoc`) — cloning a system template, strict-mode rejections, and cleanup.
+- **Step-by-step walkthrough:** [Ontology Quickstart](https://neo4j.com/labs/agent-memory/tutorials/ontology-quickstart) (`docs/modules/ROOT/pages/tutorials/ontology-quickstart.adoc`) — cloning a system template, strict revision activation, exact restoration, and clone cleanup.
 - **API surface:** [Ontology API reference](https://neo4j.com/labs/agent-memory/reference/ontology-api).
 - **TypeScript parity:** [`typescript/examples/ontology-lifecycle/`](../../typescript/examples/ontology-lifecycle/) runs this same lifecycle through `OntologyClient`.
 - **First steps on NAMS:** [`nams-quickstart/`](../nams-quickstart/).
@@ -200,4 +213,6 @@ bolt — you own the Cypher.
 
 ---
 
-_Verified against `neo4j-agent-memory` 0.6.0-dev (branch `examples-updates`), Python 3.12, with the NAMS transport mocked (`tests/examples/test_ontology_lifecycle_example.py`) — 2026-09-10. `ontology.import_`, `ontology.diff`, `ontology.migrate` and `ontology.get_migration` ship in the 0.6 line; until it is released, install the library from this repository (`uv pip install -e ../..`) rather than from PyPI. The migration path has not been exercised against the production deployment — run the dry run first._
+**Historical verification report — 2026-09-10.** The following records a prior checkout/test report. Its development-version labels, passing counts, and release-availability statements are historical, not evidence of current package compatibility.
+
+> _Verified against `neo4j-agent-memory` 0.6.0-dev (branch `examples-updates`), Python 3.12, with the NAMS transport mocked (`tests/examples/test_ontology_lifecycle_example.py`) — 2026-09-10. `ontology.import_`, `ontology.diff`, `ontology.migrate` and `ontology.get_migration` ship in the 0.6 line; until it is released, install the library from this repository (`uv pip install -e ../..`) rather than from PyPI. The migration path has not been exercised against the production deployment — run the dry run first._

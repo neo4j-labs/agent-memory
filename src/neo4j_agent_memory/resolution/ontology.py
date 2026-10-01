@@ -722,6 +722,7 @@ class OntologyResolver(BaseResolver):
         entities: Sequence[ExtractedEntity],
         *,
         user_identifier: str | None = None,
+        embeddings: Sequence[list[float] | None] | None = None,
     ) -> list[EntityResolution]:
         """Resolve every mention extracted from one message.
 
@@ -739,6 +740,11 @@ class OntologyResolver(BaseResolver):
             entities: Mentions in the order the caller will persist them.
             user_identifier: Tenant whose entities to block against, when
                 ``config.scope == "user"``.
+            embeddings: Embeddings of the mention names the caller already
+                computed, in input order. When given, the resolver does not
+                call its embedder; a ``None`` entry resolves that mention
+                without the embedding component. Omitted, the names are
+                embedded in one batch.
 
         Returns:
             One :class:`EntityResolution` per input mention, in input order.
@@ -747,7 +753,11 @@ class OntologyResolver(BaseResolver):
             return []
 
         mentions = [self._to_mention(index, entity) for index, entity in enumerate(entities)]
-        await self._attach_embeddings(mentions)
+        if embeddings is None:
+            await self._attach_embeddings(mentions)
+        else:
+            for mention, embedding in zip(mentions, embeddings, strict=True):
+                mention.embedding = embedding
 
         by_type: dict[str, list[_Mention]] = defaultdict(list)
         for mention in mentions:

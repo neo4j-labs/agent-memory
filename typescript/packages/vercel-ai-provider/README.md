@@ -4,16 +4,18 @@
 ![Status: Experimental](https://img.shields.io/badge/Status-Experimental-F59E0B)
 ![Community Supported](https://img.shields.io/badge/Support-Community-6B7280)
 
-Community provider for the [Vercel AI SDK](https://sdk.vercel.ai) that adds persistent cross-session memory to any language model, backed by the [Neo4j Agent Memory Service (NAMS)](https://memory.neo4jlabs.com).
+Community provider for the [Vercel AI SDK](https://ai-sdk.dev) that adds persistent cross-session memory to any language model, backed by the [Neo4j Agent Memory Service (NAMS)](https://memory.neo4jlabs.com) — a **knowledge graph**, not a flat vector store: what the model recalls includes the relationships between the things it remembers.
 
 > ⚠️ **Neo4j Labs Project**
 >
 > This project is part of Neo4j Labs and is actively maintained, but not
-> officially supported. There are no SLAs or guarantees around backwards
-> compatibility and deprecation. For questions and support, please use
+> officially supported. There are no SLAs, backward-compatibility guarantees,
+> or scheduled deprecation commitments. APIs may change without notice. For questions and support, please use
 > the [Neo4j Community Forum](https://community.neo4j.com).
 
-On every turn, NAMS automatically retrieves relevant memories from the user's history and injects them into the prompt — then persists the response so future sessions remember it. No Neo4j infrastructure to manage.
+The wrapper retrieves selected conversation history, workspace entities and
+configured cross-conversation results, then attempts to store the exchange.
+Retrieval scope and persistence/error behavior depend on the selected mode. No Neo4j infrastructure to manage.
 
 ## What does it do?
 
@@ -21,18 +23,21 @@ Without this package, every chat session starts fresh — the model has no recol
 
 `@neo4j-labs/nams-ai-provider` wraps your existing AI model and transparently adds memory to every call:
 
-1. **Before the model responds** — NAMS searches its memory store for facts, preferences, and past interactions relevant to the current message, then injects them into the prompt automatically.
+1. **Before the model responds** — NAMS searches its memory store for facts, preferences, and past interactions relevant to the current message, reads back the relationships around whatever matched, and injects both into the prompt automatically.
 2. **After the model responds** — NAMS persists the exchange so the next session can recall it, and extracts entities from those messages into a Neo4j knowledge graph server-side.
 
-The result: your AI remembers users across sessions without you changing your application logic.
+Cross-conversation selection is this package's application policy, not automatic
+behavior of the core middleware. Workspace entity retrieval can return shared
+data; do not treat a user id or conversation id as authorization. Verify failure
+handling and stream completion before promising durable storage to callers.
 
 ```
 User message
      │
      ▼
 ┌─────────────────────────────┐
-│  NAMS: fetch relevant       │  ← searches long-term graph,
-│  memories from Neo4j        │    past sessions, reasoning traces
+│  NAMS: fetch relevant       │  ← searches long-term graph, past
+│  memories + their edges     │    sessions, traces; expands matches
 └────────────┬────────────────┘
              │  memories injected into prompt
              ▼
@@ -51,27 +56,20 @@ User message
 
 **1. Install the provider and its peer dependencies**
 
-```bash
-npm install @neo4j-labs/nams-ai-provider ai @ai-sdk/provider @neo4j-labs/agent-memory zod
-```
-
-<details>
-<summary>Working from source (package not yet on npm)</summary>
+Requires Node.js 22+. Install version 0.3.0 with the core SDK it builds on:
 
 ```bash
-# from the repo root
-cd typescript/packages/vercel-ai-provider
-npm install
-npm run build
-npm pack   # then `npm install ../path/to/neo4j-labs-nams-ai-provider-0.1.0.tgz` in your app
+npm install @neo4j-labs/nams-ai-provider@0.3.0 @neo4j-labs/agent-memory@0.5.0 ai@^7 zod@^4
 ```
 
-</details>
+The peer dependencies are `ai` `^7.0.0`, `zod` `^3.25.76 || ^4.1.8` and
+`@neo4j-labs/agent-memory` `~0.4.0 || ~0.5.0`. `@ai-sdk/mcp` `^2.0.0` is an
+optional peer, needed only for [MCP tool merging](#tools-mode-with-mcp-optional).
 
 **2. Get a free API key** at [memory.neo4jlabs.com](https://memory.neo4jlabs.com)
 
 ```env
-MEMORY_API_KEY=sk-nams-...
+MEMORY_API_KEY=nams_...
 ```
 
 ---
@@ -140,7 +138,7 @@ return createUIMessageStreamResponse({ stream });
 ```
 
 **What happens automatically on every call:**
-- Relevant memories for `user-123` are fetched and prepended to the prompt
+- Relevant memories for `user-123` — and the relationships around them — are fetched and prepended to the prompt
 - The model's response is saved back to memory for future sessions
 - No other code changes needed
 
@@ -155,7 +153,7 @@ There are four ways to integrate NAMS depending on how much control you want:
 | **Provider** | Swap your model for a NAMS-wrapped one | Simplest integration, fully transparent |
 | **Middleware** | Wrap an existing model instance | When you already have a model configured |
 | **Tools** | Expose memory as explicit AI SDK tools (optionally merged with tools from an MCP server) | When you want the model to decide when to remember |
-| **Hooks** | The runtime reads/writes the session transcript around every generation via AI SDK hooks — nothing memory-related is shown to the LLM | Production agents that need a deterministic, complete transcript |
+| **Hooks** | The runtime reads/writes the session transcript around every generation via AI SDK hooks — nothing memory-related is shown to the LLM | Applications that explicitly coordinate transcript writes |
 
 Switching modes is purely a code-level choice — all four use the same API key
 and environment variables (see [Environment variables](#environment-variables)).
@@ -168,11 +166,12 @@ Middleware and tools modes can also be
 injected baseline context plus explicit memory tools.
 
 > **How does this relate to `@neo4j-labs/agent-memory/middleware/vercel-ai`?**
-> The core SDK ships a minimal middleware for the AI SDK 4.x-era
-> `LanguageModelV1Middleware` shape that injects current-conversation context.
-> This package targets AI SDK v7 / `LanguageModelV4` and adds a registrable
-> `ProviderV4`, cross-session retrieval, optional graph extraction, explicit
-> memory tools, and MCP tool merging. New projects should prefer this package.
+> Both the current core middleware and this provider package target AI SDK 7 /
+> provider specification 4. The core middleware reads the selected conversation
+> and persists messages. This separate package adds a registrable `ProviderV4`,
+> retrieval policies, optional graph extraction, explicit tools, and MCP tool
+> merging. Choose by those features and validate the selected artifact; the
+> core middleware is not obsolete because of its model-interface version.
 
 ---
 
@@ -315,7 +314,7 @@ without the query having run; `{ graceSteps: 0 }` forces it as the literal
 first step. Keep `graceSteps` at least two below your `stopWhen` budget so the
 forced query and the final answer both fit.
 
-### Guaranteeing persistence with `ensureMemoryStored()`
+### Requesting fallback persistence with `ensureMemoryStored()`
 
 `prepareStep` cannot guarantee the *write* side: the loop ends when the model
 emits final text, so there is no later step to force `store_memory` into.
@@ -329,8 +328,8 @@ const tools = nams.tools({ userId: session.userId });
 const agent = new ToolLoopAgent({
   model:       openai('gpt-5.4-mini'),
   tools,
-  prepareStep: enforceQueryMemory(),      // retrieval guaranteed mid-loop
-  onFinish:    ensureMemoryStored(tools), // persistence guaranteed after it
+  prepareStep: enforceQueryMemory(),      // requests retrieval mid-loop
+  onFinish:    ensureMemoryStored(tools), // attempts storage after the loop
   stopWhen:    stepCountIs(10),
 });
 ```
@@ -421,7 +420,7 @@ const agent = new ToolLoopAgent({
 });
 ```
 
-In this setup, skip `enforceQueryMemory()` — the middleware already guarantees
+In this setup, skip `enforceQueryMemory()` — the middleware already attempts
 retrieval unconditionally in code, so forcing `query_memory` as well would
 just spend an extra step re-fetching similar context. The enforcement hook is
 for pure tools mode, where the tool call is the *only* retrieval path.
@@ -535,6 +534,108 @@ example, or run it side by side with the other modes via
 
 ---
 
+## Lifecycle Hooks
+
+`loadSession` / `onFinish` cover the transcript. Lifecycle hooks cover
+everything around it: gate a prompt, deny a tool call, rewrite tool arguments,
+redact a memory write, add context for the next turn. The model will be
+familiar from editor hook systems — events, matcher groups, and decision
+fields — with plain functions in place of shell commands, so there is no stdin
+JSON and no exit codes.
+
+```ts
+const session = nams.hooks({
+  userId,
+  hooks: {
+    // A bare function matches every occurrence.
+    SessionStart: [({ reason }) => ({ additionalContext: `Session ${reason}.` })],
+
+    // A group adds a matcher: a plain name, `a|b`, or a regex.
+    PreToolUse: [{
+      matcher: 'delete_account|drop_table',
+      hooks: [() => ({
+        permissionDecision: 'deny',
+        permissionDecisionReason: 'Destructive tools are disabled.',
+      })],
+    }],
+
+    // Redact before anything reaches the graph.
+    PreMemoryWrite: [({ turns }) => ({
+      updatedTurns: turns.map(t => ({ ...t, content: redact(t.content) })),
+    })],
+  },
+});
+```
+
+### Events
+
+| Event | Fires | Matches on | Can |
+|-------|-------|-----------|-----|
+| `SessionStart` | First `prepare()` for a scope | `created` \| `resumed` | add context |
+| `UserPromptSubmit` | Inside `prepare()`, before history loads | — | **block**, rewrite the prompt, add context |
+| `PreToolUse` | Before a wrapped tool runs | tool name | **deny**, rewrite the arguments, add context |
+| `PostToolUse` | After the tool returns | tool name | rewrite the result, add context |
+| `PostToolUseFailure` | After the tool throws | tool name | ask for one retry, add context |
+| `PreMemoryWrite` | Inside `onFinish()`, before saving | — | **block** the write, rewrite the turns |
+| `Stop` | After the turn is saved | — | add context |
+| `SessionEnd` | `session.end()` | your reason string | add context |
+
+Every handler can also return `systemMessage`, which goes to `onSystemMessage`
+or the logger.
+
+### Wiring
+
+| Method | Runs | Notes |
+|--------|------|-------|
+| `session.prepare({ userId, prompt })` | `SessionStart`, `UserPromptSubmit`, then `loadSession` | Returns `{ messages, instructions, prompt, blocked, blockReason }`. Check `blocked` before calling the model. |
+| `session.withHooks(tools)` | `PreToolUse`, `PostToolUse`, `PostToolUseFailure` | Wraps an AI SDK tool set. Returns it untouched when no tool hooks are registered. |
+| `session.onFinish()` | `PreMemoryWrite`, then `Stop` | Unchanged otherwise. |
+| `session.end({ reason })` | `SessionEnd` | Also forgets the scope, so the next `prepare()` is a new session. |
+
+Hook context reaches the model through `instructions`:
+
+```ts
+const prepared = await session.prepare({ userId, prompt });
+if (prepared.blocked) return prepared.blockReason;
+
+const { text } = await agent.generate({
+  messages: prepared.messages,
+  options: { userId, prompt: prepared.prompt, memoryContext: prepared.instructions },
+});
+
+// ...and in the agent, prepareCall folds it into the instructions:
+prepareCall: ({ options, ...settings }) => ({
+  ...settings,
+  instructions: [MY_INSTRUCTIONS, options?.memoryContext].filter(Boolean).join('\n\n'),
+  runtimeContext: options,
+}),
+```
+
+### Rules
+
+- **Matchers** omitted or `*` matches everything, plain
+  names match exactly, `|` separates alternatives, anything else is a regular
+  expression. A bad expression is reported at startup and never matches.
+- **Rewrites chain.** Each handler sees the previous handler's replacement, and
+  the final value is what the tool, the model, or the write actually gets.
+- **The first deny wins** and skips the handlers after it.
+- **A hook can never break a generation.** One that throws is logged and
+  skipped; one that outruns its timeout, 30 seconds by default, is abandoned.
+- **`additionalContext` comes back as `instructions`,** never as a message. The
+  AI SDK rejects system messages inside `messages`, so `prepare()` hands you the
+  text to append to your own instructions. Context from a tool hook is queued
+  for the scope and arrives on the next `prepare()`, capped at the 20 most
+  recent entries. Ignore the field and that context is dropped.
+- **A denied tool returns `{ blocked: true, toolName, reason }`** to the model
+  rather than throwing, so the loop continues and the model can explain itself.
+- **`Stop` cannot block.** The generation is already finished when `onFinish`
+  runs. Use `UserPromptSubmit` or `PreToolUse` for control.
+
+See [`examples/advanced-hooks-chat.ts`](examples/advanced-hooks-chat.ts) for a
+runnable example covering every event.
+
+---
+
 ## Configuration
 
 ```ts
@@ -550,8 +651,13 @@ createNamsProvider({
   logger?:              NamsLogger, // warn/error sink for non-fatal errors. Default: console
   maxMemories?:         number,   // Max memories retrieved and injected into the prompt per turn (capped at 12). Default: 6
   persistInteractions?: boolean,  // Save each turn. Default: true
+  crossSessionLimit?:   number,   // Other recent conversations each lookup also searches, 2 requests each. 0 = off. Default: 5
+  graphExpansionLimit?: number,   // Matched entities whose relationships are read back, 1 request each. 0 = off. Default: 2
 });
 ```
+
+`crossSessionLimit` and `graphExpansionLimit` also apply to `createNams`
+(middleware, tools, and hooks modes).
 
 `extractionModel` / `extractionOptions` live on `createNams` and apply to tools
 mode only — see [Graph Extraction](#graph-extraction-tools-mode).
@@ -586,7 +692,7 @@ const nams = createNams({
 const tools = nams.tools({ userId });
 ```
 
-A `store_memory` write of type `fact`, `preference`, or `pattern` turns
+A `store_memory` write of type `fact`, `user_preference`, or `pattern` turns
 `"User is named Alex, works at TechCorp"` into `(Alex)-[:WORKS_AT]->(TechCorp)`
 instead of one sentence-shaped node.
 
@@ -595,11 +701,20 @@ instead of one sentence-shaped node.
 > again from the client would just duplicate that work. Setting
 > `extractionModel` and using another mode logs a warning.
 
-> **Note:** relationship persistence depends on backend support. Where the
-> NAMS API does not yet expose a relationship endpoint (the hosted REST API
-> currently doesn't), extracted entities are stored and relationship writes
-> are skipped with a warning — the graph gains edges automatically once the
-> endpoint is available.
+An extracted entity that is already stored under the same name and type is
+reused rather than created again, so every memory about "Alex" adds its edges
+to the same Alex node. Hosted NAMS has no lookup-by-name route, so the match is
+made through entity search; because that search is nearest-neighbour, only an
+exact name or canonical name is treated as the same entity, and "Alexandra"
+stays a separate node.
+
+> **Note:** hosted NAMS does not accept relationship *writes* from a client
+> today — `add_relationship` has no REST route, so client-extracted edges are
+> skipped with a single warning while the entities themselves are stored. The
+> edges the model reads back (see [Graph Retrieval](#graph-retrieval)) are the
+> ones NAMS builds server-side from persisted turns. Against a backend that
+> does accept them — a self-hosted bridge — the extractor writes its edges
+> directly.
 
 Extraction skips **self-referential** entities: when the agent answers "what do
 you remember about me?" and stores its own answer, extraction would otherwise
@@ -619,14 +734,60 @@ extractionOptions: {
 
 ## Memory Sources
 
-NAMS searches four sources in parallel per turn:
+NAMS searches four sources in parallel, once per turn, then expands the
+entities that matched into a fifth. In middleware and provider modes, later
+steps of a tool loop reuse the turn's memories instead of searching again.
 
 | Source | What it stores |
 |--------|---------------|
-| Long-term graph | Facts, preferences, patterns (Neo4j entities + relationships) |
-| Current conversation | Messages in the active session (vector search) |
-| Cross-session | Messages from past conversations for the same user |
+| Long-term graph | Facts, preferences, patterns (Neo4j entities) |
+| Graph | The relationships around the entities that matched — see below |
+| Current conversation | Messages in the active session |
+| Cross-session | Messages from the user's 5 most recent other conversations (`crossSessionLimit`) |
 | Reasoning traces | Prior step-by-step reasoning from agent runs |
+
+NAMS uses vector search where the workspace has embeddings, and a text match
+otherwise. For a text match, a question that finds nothing is retried with its
+longest words.
+
+The sources are merged by **taking turns**, not by concatenating: with
+`maxMemories: 6`, five entity matches cannot fill the prompt and leave one slot
+for everything else. Each source keeps the order the backend returned it in.
+
+### Graph Retrieval
+
+This is the part a vector memory cannot do. Entity search returns entities
+without their edges, so after the search the top matches are expanded — one
+request each — and their stored relationships are added to the prompt as
+triples:
+
+```
+Relevant long-term memory about this user (use it to personalise your answer):
+1. [long-term] Alex — The user
+2. [graph] (Alex)-[WORKS_AT]->(TechCorp)
+3. [graph] (Alex)-[USES]->(Neovim)
+4. [conversation] I need something that runs in the terminal
+A [graph] line is a stored relationship, written (subject)-[RELATIONSHIP]->(object).
+```
+
+The model is told what the notation means only when a triple is actually
+present. In tools mode the same triples come back from `query_memory` as hits
+with `source: 'graph'`.
+
+So a question like *"who else works where I work?"* is answerable from one
+turn's context: the edge is in the prompt, not left sitting in the database
+behind a similarity score.
+
+| Setting | Effect |
+|---------|--------|
+| `graphExpansionLimit: 2` | Default. The two best entity matches are expanded. |
+| `graphExpansionLimit: 0` | No graph reads. Entities stay flat text. |
+| `graphExpansionLimit: 4` | Wider graph context, at four extra requests per turn. |
+
+At most five relationships are taken from any one entity, so a hub node cannot
+crowd out the rest of the prompt. An edge whose target has no stored name is
+dropped rather than shown as a bare id, and an entity that cannot be read is
+logged and skipped — the other sources still answer.
 
 ---
 

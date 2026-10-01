@@ -1,0 +1,131 @@
+= How the NAMS AI provider retrieves memory
+:page-product: agent-memory
+:toclevels: 2
+
+`@neo4j-labs/nams-ai-provider` is a separate, experimental Neo4j Labs package
+that talks only to the hosted NAMS backend (see
+xref:how-to/typescript/nams-ai-provider.adoc[choosing a mode]). Provider and
+middleware modes retrieve memory on every model call automatically; tools
+mode exposes the same retrieval as a `query_memory` tool the model calls
+explicitly. This page explains what that retrieval actually does — which
+sources it searches, how it merges them, and why — so the shape of what
+lands in the prompt is not a mystery.
+
+== Five sources, one search each
+
+On every turn, the provider queries five sources in parallel:
+
+* *Current conversation* — `searchMessages(query, { sessionId: convId })` against the active conversation.
+* *Long-term entities* — `searchEntities(query, { limit: 5 })` over the workspace's Neo4j entity graph (facts, preferences, patterns).
+* *Reasoning traces* — `listSteps(convId)`, filtered to steps whose `actionTaken` is `"direct response"` and that carry a `reasoning` field, capped at 6.
+* *Cross-session messages* — up to `crossSessionLimit` (default 5) of the user's other recent conversations, 2 requests each (`searchMessages` plus `listSteps`, so a relevant reasoning step from a past session counts too).
+* *Graph* — relationships around the long-term entities that matched. See below; this is the one source that depends on another source's results, so it cannot run in the very first batch.
+
+NAMS uses vector search where the workspace has embeddings, and a text match
+otherwise. Provider and middleware modes cache one turn's memories and reuse
+them across the steps of a tool-calling loop, so a multi-step turn does not
+re-run all five searches per step.
+
+== Graph expansion
+
+Entity search returns entities without their edges — a name and a
+description, nothing about how that entity connects to anything else. This is
+the retrieval a flat vector store cannot do: after the entity search, the
+`graphExpansionLimit` best matches (default 2) are expanded with one
+`getEntity` request each, and their stored relationships are turned into
+triples added to the prompt as `+(from)-[TYPE]->(target)+` lines — the entity's
+canonical name, the relationship type, and the related entity's name.
+
+Two caps keep this bounded: at most 5 relationships are taken from any one
+entity, so a single hub node cannot crowd out the rest of the prompt, and an
+edge whose target has no stored name is dropped rather than shown as a bare
+id. An entity that fails to expand is logged and skipped — the other four
+sources still answer. `graphExpansionLimit: 0` turns graph expansion off
+entirely, leaving entities as flat text.
+
+== Merging without ranking
+
+The five sources are not concatenated and then trimmed — they are merged by
+*taking turns*: one hit from long-term entities, one from graph triples, one
+from the current conversation, one from cross-session, one from reasoning,
+then back to the start, each source keeping the order NAMS itself returned it
+in, until the merged list reaches the cap.
+
+This replaced an earlier design that sorted every hit by the entity's stored
+extraction confidence. That score measures how sure the extractor was that a
+mention *was* an entity, not how relevant that entity is to the current
+query — sorting by it discarded the backend's own relevance ranking, and
+because entities routinely scored higher than conversation messages, a small
+`maxMemories` could fill entirely with entities and leave no room for the
+conversation at all. Taking turns guarantees every source gets a chance
+regardless of how the other sources happened to score.
+
+The total is capped at `maxMemories` (default 6), itself hard-capped at 12
+regardless of what a caller configures — `Math.min(maxMemories, 12)`.
+
+.The five memory sources merged into one prompt-ready memory block.
+image::diagrams/nams-ai-provider-retrieval.svg["The five memory sources -- current conversation, cross-session messages, long-term entities, graph triples, and reasoning steps -- each queried once per turn and merged round-robin, one hit per source in turn, into a memory block capped at maxMemories, which is prepended to the last user message",width=100%,link=self]
+
+== The prompt block
+
+The merged hits are formatted as a numbered list — `` 1. [source] content ``
+— with a trailing note explaining the `[graph]` triple notation, but only
+when a graph hit is actually present (there is nothing to explain otherwise).
+That block is prepended to the *last user message's* content: for a
+plain-text message, the memory block and a blank line go in front of the
+original text in one string; for a multi-part message, a new text part
+holding the memory block is inserted ahead of the existing parts. No memory
+block is added when retrieval finds nothing.
+
+== What gets persisted after the call
+
+Provider and middleware modes persist the turn automatically —
+`persistInteractions` (default `true`) is the only switch. Hooks mode always
+persists what `onFinish()` is given: `persistUserPrompt: false` on its scope
+drops only the user turn, and a `PreMemoryWrite` hook can block or rewrite
+the write. In provider and middleware modes the user's message is saved once
+per turn, not once per step of a tool-calling loop, and the assistant's
+answer is saved from the step that produces it. A step that calls an app
+tool (one your application executes, not one the model provider runs) saves
+no assistant text, even if that step also produced text — persistence waits
+for a step with no app tool calls. With `streamText`, the text deltas are
+accumulated and saved when the stream finishes. In tools mode, the model
+decides whether to call `store_memory` at all — `enforceQueryMemory()` and
+`ensureMemoryStored()` narrow but do not remove that gap; see
+xref:reference/nams-ai-provider.adoc[the API reference].
+
+Entity extraction itself happens server-side, inside NAMS, from whatever
+short-term messages get persisted — provider, middleware, and hooks modes
+never call an extraction model. Tools mode is the exception: a `store_memory`
+write of type `fact`, `user_preference`, or `pattern` goes straight to the
+entity graph rather than through a conversation message, so there is no
+server-side turn for NAMS to extract from. Passing `extractionModel` to
+`createNams`/`createNamsMemoryTools` in tools mode runs a real entity
+extraction over that memory and stores each named entity it finds. The
+relationships it proposes are dropped with one logged warning, because the
+hosted REST API accepts no relationship writes. `createNamsProvider`
+and `createNamsMemory` do not accept it at all (removed in 0.3.0); setting it
+on `createNams()` and then calling `.wrap()` or `.hooks()` is a no-op that
+logs one warning, because extracting again on
+the client would just duplicate what NAMS already does after persisting the
+turn.
+
+== The literal-substring fallback
+
+A whole natural-language question — `"where do I work?"` — often does not
+match stored text well under a plain text search, and not every workspace has
+embeddings configured for vector search. So the current-conversation and
+long-term-entity searches retry when the full query returns nothing: they
+take the query's up to four longest significant words (at least 3 characters,
+punctuation and trailing possessives stripped), search each one both as
+typed and in Title Case, run those searches in parallel, deduplicate the
+results, and then rank what is left by how many of the query's words each
+result shares. Cross-session and reasoning-step lookups do not retry this
+way — they run once, as given.
+
+== See also
+
+* xref:how-to/typescript/nams-ai-provider.adoc[Choose a NAMS AI provider mode]
+* xref:how-to/typescript/nams-ai-provider-tools-mode.adoc[Expose memory as tools] — where this retrieval surfaces as `query_memory` hits
+* xref:reference/nams-ai-provider.adoc[NAMS AI provider API reference]
+* xref:explanation/context-tiers.adoc[Understanding the three-tier context model] — the single-conversation retrieval the SDK's own middleware uses instead

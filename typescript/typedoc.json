@@ -11,8 +11,8 @@
     "src/testing.ts"
   ],
   "out": "../docs/modules/ROOT/attachments/api/typescript",
-  "name": "@neo4j-labs/agent-memory",
-  "includeVersion": true,
+  "name": "@neo4j-labs/agent-memory (source; unreleased changes since 0.5.0)",
+  "includeVersion": false,
   "excludePrivate": true,
   "excludeInternal": true,
   "excludeExternals": true,

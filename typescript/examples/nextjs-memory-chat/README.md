@@ -13,21 +13,35 @@ operate, no vector store, no database migrations.
 > ⚠️ **Neo4j Labs Project**
 >
 > This project is part of Neo4j Labs and is actively maintained, but not
-> officially supported. There are no SLAs or guarantees around backwards
-> compatibility and deprecation. For questions and support, please use the
+> officially supported. There are no SLAs, backward-compatibility guarantees,
+> or scheduled deprecation commitments. APIs may change without notice. For questions and support, please use the
 > [Neo4j Community Forum](https://community.neo4j.com).
 
 ## What it shows
 
-- **Memory is one wrapped model.** `app/api/chat/route.ts` wraps
-  `openai(…)` with `agentMemoryMiddleware` and calls `streamText`. After that
-  line there is no memory-specific code in the request path: context injection,
-  user-turn persistence and assistant-turn persistence (streamed included) are
-  the middleware's job.
+- **Memory is one wrapped model.** `lib/handlers.ts` wraps `openai(…)` in a
+  `createNamsProvider(...)` from `@neo4j-labs/nams-ai-provider` and calls
+  `streamText`. After that line there is no memory-specific code in the
+  request path: retrieval, user-turn persistence and assistant-turn
+  persistence (streamed included) are the provider's job. Before each call the
+  provider searches with the new question — messages in this conversation,
+  matching entities and their graph relationships, and messages in the
+  user's other conversations — and also reads back reasoning steps recorded
+  with `actionTaken: 'direct response'` in this and the user's recent
+  conversations, which are not matched against the question (this app's own
+  steps use `generate_answer`, so the provider skips them). It prepends at
+  most `maxMemories` (default 6) of those hits. It does not replay recent
+  turns, observations or reflections.
+  The SDK's own `agentMemoryMiddleware` (see
+  [How-to: Vercel AI SDK](https://neo4j.com/labs/agent-memory/how-to/typescript/vercel-ai))
+  does replay a conversation's reflections, observations and recent messages;
+  use it instead when that continuity matters more than cross-session,
+  graph-expanded search.
 - **The browser is not the source of truth.** The route forwards *only the newest
-  user turn* to the model; the history the model sees comes back out of the graph.
-  Reload the tab, or open the same `/c/<id>` URL on another device, and the
-  thread is intact — the panel rehydrates from `shortTerm.getContext`.
+  user turn* to the model; anything earlier reaches the model only when the
+  provider's retrieval brings it back from the graph. Reload the tab, or open the
+  same `/c/<id>` URL on another device, and the thread is intact — the panel
+  rehydrates from `shortTerm.getContext`.
 - **The memory rail is the argument.** Entities appear on the right from the
   traveller's own sentences. Double-click one and
   `longTerm.expandGraph(nodeId, loadedIds)` fetches *only* the neighbours not
@@ -66,7 +80,7 @@ reasoning-trace drawer open, one step per answered turn.
 app/
   page.tsx                     mint a conversation → redirect to /c/<id>
   c/[conversationId]/page.tsx  the app (Next 16: params is a promise)
-  api/chat/route.ts            wrapLanguageModel + agentMemoryMiddleware + streamText
+  api/chat/route.ts            createNamsProvider + streamText
   api/conversation/route.ts    shortTerm.createConversation
   api/memory/context/route.ts  shortTerm.getContext        → the three tiers
   api/memory/graph/route.ts    GET  longTerm.getEntityGraph
@@ -76,7 +90,7 @@ app/
 components/
   Workspace, ChatPanel, MemoryRail, GraphView, ExtractionBadge, TraceDrawer
 lib/
-  memory.ts    the MemoryClient, the model, the user id (server-only)
+  memory.ts    the MemoryClient, the provider config, the model, the user id (server-only)
   handlers.ts  every route's behaviour as (deps, Request) => Response
   types.ts     the DTOs shared by the routes and the components
 ```
@@ -96,11 +110,62 @@ booting Next.
 - Optionally a **`MEMORY_WORKSPACE_ID`** to scope the conversations and entities
   to one workspace.
 
+## Streaming persistence boundary
+
+`createNamsProvider`'s stream wrapper awaits the assistant-turn write as part of
+closing the response stream, so a fully-drained client stream implies the write
+was attempted — not skipped, unlike a plain fire-and-forget write. It is still
+best-effort: a failed write is logged and swallowed, not surfaced to the caller,
+and nothing in the response tells the client whether it succeeded. For
+application-owned writes whose completion and errors the server observes, follow
+the [Cloudflare lifecycle example](../cloudflare-agents-edge/README.md) and adapt
+its runtime hook to your deployment. That example awaits the write in
+`streamText`'s `onEnd` and logs a failure on the server; the client still is not
+told. If you move persistence into your own code, pass
+`persistInteractions: false` to `createNamsProvider`. That flag turns off the
+provider's writes for **both** the user turn and the assistant turn, so your
+explicit write must store both. (The Cloudflare example uses the SDK
+middleware's `persistResponses: false`, which turns off only the assistant
+write.)
+
+## Build the shared packages first
+
+This is a source-checkout example. Its `file:../..` and
+`file:../../packages/vercel-ai-provider` dependencies require the repository
+layout. In an application (not this checkout) these are two separate npm
+installs — `@neo4j-labs/nams-ai-provider@0.3.0` (the provider `lib/handlers.ts`
+wraps the chat model in) and `@neo4j-labs/agent-memory@0.5.0` (the SDK the
+memory rail's routes call directly). This example links both to the packages in
+this repository instead. The memory rail's routes therefore run against the
+in-tree SDK. The provider link is a symlink, so the provider loads
+`@neo4j-labs/agent-memory` from its own `node_modules`: the npm release it
+installs as a development dependency, not the in-tree SDK. From the repository
+root:
+
+```bash
+cd typescript
+npm ci
+npm run build
+cd packages/vercel-ai-provider
+npm ci
+npm run build
+cd ../../examples/nextjs-memory-chat
+```
+
+Run the commands below from `typescript/examples/nextjs-memory-chat/`. Build **both
+packages before** installing this example; their exports point at
+`typescript/dist/` and `typescript/packages/vercel-ai-provider/dist/`, and npm
+does not build local `file:` dependencies on installation. For standalone
+copies, follow the [copy checklist](../README.md#copying-an-example), install
+`@neo4j-labs/nams-ai-provider@0.3.0` and `@neo4j-labs/agent-memory@0.5.0` from
+npm instead of the `file:` links, and verify the selected artifacts supply
+every API used here.
+
 ## Run it
 
 ```bash
 cp .env.example .env.local     # set MEMORY_API_KEY and OPENAI_API_KEY
-npm install
+npm ci
 npm run dev                    # http://localhost:3000
 ```
 
@@ -161,8 +226,9 @@ Open http://localhost:3000/c/6b21f0ac-…
 
 In the browser, after the three suggested turns:
 
-- the rail reads **0 reflections · 1 observation · 6 recent messages** — exactly
-  what the next model call will have prepended to it;
+- the rail reads **0 reflections · 1 observation · 6 recent messages** — what
+  NAMS stores for the conversation, not what the next model call receives (that
+  is the provider's search hits for the new question);
 - the badge turns green (**new entities**) and reports how many entities matched
   the last turn;
 - the graph holds the places and organisations from your own sentences, and
@@ -184,20 +250,23 @@ npm run build     # next build (Turbopack)
 network**:
 
 - NAMS is a mock REST service served by [msw](https://mswjs.io)
-  (`test/nams-server.ts`), driven through the *real* `MemoryClient` and
-  `RestTransport` — so a wrong URL, verb or body shape fails the suite, and any
-  endpoint the example starts calling without a handler answers 501 rather than
-  passing silently;
+  (`test/nams-server.ts`), driven through the *real* `MemoryClient`,
+  `RestTransport` **and** `createNamsProvider` from `@neo4j-labs/nams-ai-provider`
+  — so a wrong URL, verb or body shape fails the suite, and any endpoint the
+  example starts calling without a handler answers 501 rather than passing
+  silently;
 - the model is the AI SDK's own `MockLanguageModelV4` from `ai/test`, which
   records every call it receives.
 
 The assertions are the ones that fail if memory stops working: both sides of a
-turn are persisted, the prompt carries history the request never sent,
-`expandGraph` receives the accumulated `loadedIds` (and the delta excludes what
-is already loaded), the extraction probe waits for an entity it has not seen
-before the rail refetches, and the answered turn lands in the reasoning trace. A
-source-level check also asserts no `node:` imports reach `app/`, `components/` or
-`lib/`, so the app stays edge-deployable.
+turn are persisted, the prompt carries memory the request never sent —
+conversation history retrieved by the provider's search, plus a matching
+entity's graph relationship — `expandGraph` receives the accumulated
+`loadedIds` (and the delta excludes what is already loaded), the extraction
+probe waits for an entity it has not seen before the rail refetches, and the
+answered turn lands in the reasoning trace. A source-level check also asserts
+no `node:` imports reach `app/`, `components/` or `lib/`, so the app stays
+edge-deployable.
 
 ## Where this sits
 
@@ -223,7 +292,4 @@ This is a Neo4j Labs project — community supported, no SLA. Ask questions on t
 
 ---
 
-_Verified against @neo4j-labs/agent-memory 0.6.0-dev (in-tree `file:../..`),
-next 16.3.4, react 19.3.0, ai 7.0.97, @ai-sdk/openai 4.0.65, @ai-sdk/react
-4.0.100, @chakra-ui/react 3.37.0, @neo4j-nvl/react 1.2.2, msw 2.15.0, vitest
-5.0.0, Node 22+ — 2026-09-10._
+_Compatibility scope: this example targets the current source checkout and its committed package/lock files. Offline tests validate the exercised contracts; they do not establish published-package availability, a live model result, or deployed NAMS behavior. Use the runtime floor above; record the actual package/runtime versions when verifying a release or deployment._

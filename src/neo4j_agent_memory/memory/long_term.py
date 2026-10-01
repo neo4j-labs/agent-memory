@@ -1860,7 +1860,8 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
     ) -> list[tuple[Entity, Entity, float]]:
         """Find entities that are flagged as potential duplicates.
 
-        Returns pairs of entities with SAME_AS relationships in 'pending' status.
+        Returns pairs of entities with SAME_AS relationships in 'pending' status,
+        one tuple per pair: the flagged (newly added) entity, then its existing match.
 
         Args:
             limit: Maximum number of duplicate pairs to return
@@ -1884,8 +1885,8 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
             # ``Result.data()``, which flattens a relationship to a
             # ``(start_props, type, end_props)`` tuple and drops its
             # properties, so they could never be read back from a bare ``r``.
-            confidence = row.get("confidence", 0.0)
-            duplicates.append((entity1, entity2, confidence))
+            confidence = row.get("confidence")
+            duplicates.append((entity1, entity2, float(confidence or 0.0)))
 
         return duplicates
 
@@ -1911,9 +1912,16 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
         Edges are *copied*, not moved: the merged-away source keeps its own
         edges so the merge stays reversible and auditable, and the source is
         marked with ``merged_into`` / ``merged_at`` to exclude it from
-        deduplication candidate scans. A copied edge keeps the source edge's
-        ``id`` and gains ``migrated_from``, so the pair is identifiable — the
-        two share an id, and nothing looks a ``RELATED_TO`` edge up by it.
+        deduplication candidate scans. How a copy is marked depends on its type:
+
+        * ``RELATED_TO`` copies keep the source edge's ``id`` and gain
+          ``migrated_from`` (the source entity id), so the pair is
+          identifiable; nothing looks a ``RELATED_TO`` edge up by its id.
+        * ``EXTRACTED_FROM``, ``EXTRACTED_BY``, ``APPLIES_TO`` and ``TOUCHED``
+          copies gain ``migrated_from`` only.
+        * ``SAME_AS`` copies carry ``match_type: 'merged'`` and the source
+          edge's ``confidence``, with no ``migrated_from``.
+        * ``MENTIONS`` copies carry no marker.
 
         Args:
             source_id: ID of entity to merge from (will be marked as merged)

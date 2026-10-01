@@ -158,7 +158,8 @@ export function MemoryRail({
           </Text>
         </HStack>
         <Text fontSize="xs" color="fg.subtle">
-          These three tiers are what `agentMemoryMiddleware` prepends to the next model call.
+          The NAMS provider searches messages, entities and graph relationships
+          like these to decide what to prepend to the next model call.
         </Text>
 
         <ExtractionBadge state={extraction} entityCount={entityCount} />

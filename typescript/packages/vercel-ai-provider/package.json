@@ -1,6 +1,6 @@
 {
   "name": "@neo4j-labs/nams-ai-provider",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Neo4j Agent Memory (NAMS) provider for the Vercel AI SDK — persistent cross-session memory backed by Neo4j",
   "keywords": [
     "ai",
@@ -23,7 +23,7 @@
   "license": "Apache-2.0",
   "sideEffects": false,
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "publishConfig": {
     "access": "public"
@@ -40,6 +40,7 @@
   "files": [
     "dist",
     "src",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {
@@ -52,8 +53,7 @@
   },
   "peerDependencies": {
     "@ai-sdk/mcp": "^2.0.0",
-    "@ai-sdk/provider": "^4.0.0",
-    "@neo4j-labs/agent-memory": "~0.4.0",
+    "@neo4j-labs/agent-memory": "~0.4.0 || ~0.5.0",
     "ai": "^7.0.0",
     "zod": "^3.25.76 || ^4.1.8"
   },
@@ -65,9 +65,8 @@
   "devDependencies": {
     "@ai-sdk/mcp": "^2.0.19",
     "@ai-sdk/openai": "^4.0.24",
-    "@ai-sdk/provider": "^4.0.4",
     "@neo4j-labs/agent-memory": "^0.4.0",
-    "@types/node": "^20",
+    "@types/node": "^22",
     "ai": "^7.0.42",
     "tsup": "^8.0.0",
     "typescript": "^5.0.0",

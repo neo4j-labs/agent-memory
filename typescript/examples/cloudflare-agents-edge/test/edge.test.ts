@@ -153,6 +153,66 @@ describe("POST /chat", () => {
     expect(nams.rolesOf(conversationId)).toEqual(["user", "assistant"]);
   });
 
+  it("settles the deferred write without a partial response when the client disconnects", async () => {
+    // A model that sends one delta and then waits, like a long generation the
+    // client walks away from.
+    const model = new MockLanguageModelV4({
+      provider: "mock",
+      modelId: "mock-model",
+      doStream: async () => ({
+        stream: new ReadableStream<LanguageModelV4StreamPart>({
+          start(controller) {
+            controller.enqueue({ type: "stream-start", warnings: [] });
+            controller.enqueue({ type: "text-start", id: "0" });
+            controller.enqueue({ type: "text-delta", id: "0", delta: DELTAS[0]! });
+          },
+        }),
+      }),
+    });
+    const h = harness(nams, model);
+    const response = await handleChat(h.deps, chatRequest("Where should I stay in Kyoto?"));
+    const conversationId = response.headers.get("X-Conversation-Id")!;
+
+    const reader = response.body!.getReader();
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe(DELTAS[0]);
+    await reader.cancel(); // the client disconnects mid-stream
+
+    await h.settle(); // resolves: the runtime is not held for its whole budget
+    expect(nams.rolesOf(conversationId)).not.toContain("assistant");
+    expect(nams.steps).toHaveLength(0);
+  });
+
+  it.each([
+    ["fails its stream", (controller: ReadableStreamDefaultController<LanguageModelV4StreamPart>) => controller.error(new Error("model unavailable"))],
+    ["reports an error part", (controller: ReadableStreamDefaultController<LanguageModelV4StreamPart>) => {
+      controller.enqueue({ type: "error", error: new Error("model unavailable") });
+      controller.close();
+    }],
+  ] as const)("settles the deferred write and logs the failure when the model %s", async (_, fail) => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const model = new MockLanguageModelV4({
+      provider: "mock",
+      modelId: "mock-model",
+      doStream: async () => ({
+        stream: new ReadableStream<LanguageModelV4StreamPart>({
+          start(controller) {
+            controller.enqueue({ type: "stream-start", warnings: [] });
+            fail(controller);
+          },
+        }),
+      }),
+    });
+    const h = harness(nams, model);
+    const response = await handleChat(h.deps, chatRequest("Where should I stay in Kyoto?"));
+    const conversationId = response.headers.get("X-Conversation-Id")!;
+    await response.text().catch(() => undefined); // the stream may end or fail
+
+    await h.settle();
+    expect(nams.rolesOf(conversationId)).not.toContain("assistant");
+    expect(nams.steps).toHaveLength(0);
+    expect(error).toHaveBeenCalledWith("memory write failed", expect.anything());
+  });
+
   it("records a reasoning step and its tool call", async () => {
     const h = harness(nams);
     const response = await handleChat(h.deps, chatRequest("Where should I stay in Kyoto?"));

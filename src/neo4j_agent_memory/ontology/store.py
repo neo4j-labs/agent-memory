@@ -311,7 +311,7 @@ class BoltOntology:
 
         Returns:
             The :class:`ActiveOntology` with ``validation_mode``, ``revision``,
-            ``ontology_id`` and ``version_id`` populated.
+            ``ontology_id``, ``version_id`` and ``schema_hash`` populated.
 
         Raises:
             NotSupportedError: No active ontology is bound in this database.
@@ -341,6 +341,7 @@ class BoltOntology:
             revision=version.revision,
             ontology_id=version.ontology_id or ontology_node.get("id"),
             version_id=version.id,
+            schema_hash=version.schema_hash,
         )
 
     # -- writes ---------------------------------------------------------------

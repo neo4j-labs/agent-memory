@@ -1,0 +1,1497 @@
+{
+  "faq.adoc": {
+    "source": "= Frequently Asked Questions\n:page-product: agent-memory\n:page-pagination:\n:toclevels: 3\n:sectanchors:\n:icons: font\n:source-highlighter: highlight.js\n:experimental:\n:page-ad-icon: mortarboard\n:page-ad-title: Context Graphs: Agent Memory with Neo4j\n:page-ad-description: Build an AI agent that records its reasoning into Neo4j and query the trace to understand what it did and why.\n:page-ad-link: https://graphacademy.neo4j.com/courses/genai-context-graphs/?ref=docs-ad-genai-context-graphs\n:page-ad-underline-role: button\n:page-ad-underline: Enroll now\n\n++++\n<style>\n.doc h3 { font-size: 1.15em; font-weight: 700; margin-top: 1.75rem; margin-bottom: 0.4rem; }\n.doc .hdlist dt { font-weight: 700; }\n</style>\n++++\n\nThis document answers common questions about neo4j-agent-memory, with a focus on the entity extraction pipeline and domain schemas.\n\n== General Questions\n\n[[what-is-neo4j-agent-memory]]\n=== What is neo4j-agent-memory?\n\nneo4j-agent-memory is a Python package that provides a comprehensive memory system for AI agents using Neo4j as the backend. It implements three memory types:\n\n* *Short-Term Memory* \u2014 Conversations and messages\n* *Long-Term Memory* \u2014 Entities, preferences, and facts (using the POLE+O data model)\n* *Reasoning Memory* \u2014 Reasoning traces and tool usage patterns\n\nSee xref:index.adoc[Overview] for more details.\n\n[[what-is-poleo]]\n=== What is the POLE+O data model?\n\nPOLE+O stands for **P**erson, **O**bject, **L**ocation, **E**vent, **O**rganization. It's a data model commonly used in law enforcement and intelligence analysis for organizing entities and their relationships.\n\nThe package extends this with optional subtypes (e.g., `OBJECT:VEHICLE`, `LOCATION:ADDRESS`).\n\nSee xref:explanation/poleo-model.adoc[POLE+O Data Model] for complete documentation.\n\n[[need-neo4j]]\n=== Do I need my own Neo4j to use this package?\n\nNo \u2014 you have two options. Use the hosted **NAMS** backend (sign up at link:https://memory.neo4jlabs.com[memory.neo4jlabs.com], set `MEMORY_API_KEY`, and there's nothing to run), or run your own Neo4j and use the **bolt** backend. The `MemoryClient` API is identical either way; see xref:explanation/backends.adoc[Bolt vs NAMS].\n\nYou can also use the **entity extraction features independently** without any backend \u2014 the bolt-side extraction pipeline works standalone and returns Python objects.\n\n[[whats-not-on-nams]]\n=== What's not available on the NAMS backend?\n\nNAMS runs embedding, extraction, resolution, and enrichment server-side, so the client-side configs for those are ignored. A handful of bolt-only accessors raise `NotSupportedError` on NAMS: `client.users`, `client.buffered`, `client.consolidation`, `client.graph`, `schema.adopt_existing_graph()`, the geospatial methods, and the manual dedup-review methods. See the xref:explanation/backends.adoc#capability-matrix[capability matrix] for the full list and what NAMS does instead.\n\n[[which-sdk]]\n=== Which SDK should I use \u2014 Python or TypeScript?\n\nBoth share the same memory model and the same NAMS backend, so pick by stack. The **Python SDK** supports *both* backends (bolt and NAMS) and the full extraction/enrichment pipeline. The **TypeScript SDK** is **NAMS-only** (a `fetch`-based HTTP client) and ideal for Node, Bun, Deno, Cloudflare Workers, and Vercel Edge. Mixed Python + TypeScript agents can read and write the same memory on a shared workspace. See xref:sdks/python.adoc[Python SDK] and xref:sdks/typescript.adoc[TypeScript SDK].\n\n[[what-are-skills]]\n=== What are NAMS Agent Skills? _(Preview)_\n\nSkills are a NAMS feature that *distils* a scoped slice of a workspace's accumulated memory \u2014 messages, entities, and reasoning traces \u2014 into a portable, provenance-grounded **Agent Skill** (an agentskills.io `SKILL.md` package) that another agent can load and reuse. Every claim and step is grounded in specific source nodes, so a skill is auditable rather than invented. Skills are exposed over REST and MCP only (there is no SDK method yet), and the feature is in **Preview**. See xref:explanation/skills.adoc[Agent Skills] and xref:reference/skills-api.adoc[Skills API].\n\n[[run-a-skill]]\n=== Can I run a distilled skill? _(Preview)_\n\nNot automatically \u2014 skill *execution* is **dry-run planning only** and gated off by default (`SKILL_EXECUTION_ENABLED=false`). The intended path is to **download** a published skill's `SKILL.md` package and load it into your agent like any other Agent Skill. NAMS handles distillation, review, and publishing; running the procedure is the agent's job. See xref:reference/skills-api.adoc[Skills API].\n\n[[neo4j-versions]]\n=== Which Neo4j versions are supported?\n\nNeo4j 5.x is supported, with **5.11+ recommended** for vector index support (used for semantic search).\n\n\n[[aws-support]]\n=== Does neo4j-agent-memory work with AWS?\n\nYes. The package provides full AWS support including:\n\n* *Amazon Bedrock Embeddings* \u2014 Use Bedrock embedding models (Titan, Cohere) instead of OpenAI. Install with `pip install neo4j-agent-memory[bedrock]`.\n* *Strands Agents SDK* \u2014 Pre-built tools for context graph operations with the AWS Strands Agents framework. Install with `pip install neo4j-agent-memory[strands]`.\n* *AgentCore Memory* \u2014 `HybridMemoryProvider` for routing between short-term and long-term memory stores.\n\nSee xref:how-to/integrations/aws-strands.adoc[Strands Integration] and xref:how-to/integrations/aws-bedrock-embeddings.adoc[Bedrock Embeddings] for details.\n\n[[bedrock-credentials]]\n=== How do I configure AWS credentials for Bedrock embeddings?\n\nThe Bedrock embedder uses standard AWS credential resolution (environment variables, `~/.aws/credentials`, IAM roles). You can configure the region and profile:\n\n[source,bash]\n----\n# Via environment variables\nexport NAM_EMBEDDING__PROVIDER=bedrock\nexport NAM_EMBEDDING__AWS_REGION=us-east-1\nexport NAM_EMBEDDING__AWS_PROFILE=my-profile\n----\n\nOr in Python:\n\n[source,python]\n----\nfrom neo4j_agent_memory import MemorySettings\n\nsettings = MemorySettings(\n    embedding={\"provider\": \"bedrock\", \"aws_region\": \"us-east-1\"}\n)\n----\n\nNo API keys are needed if you're running on an AWS resource with an appropriate IAM role.\n\n[[strands-vs-direct]]\n=== Should I use Strands tools or the MemoryClient directly?\n\nUse **Strands tools** (`context_graph_tools()`) when building agents with the AWS Strands Agents SDK -- the tools are designed to be called by the agent autonomously.\n\nUse the **MemoryClient directly** when you need programmatic control over memory operations outside of an agent loop, or when using a non-Strands framework.\n\nYou can combine both: use Strands tools for agent-facing operations and the MemoryClient for background tasks like batch processing.\n\n== Entity Extraction Pipeline\n\n[[how-pipeline-works]]\n=== How does the extraction pipeline work?\n\nThe pipeline runs multiple extractors in sequence and merges their results:\n\n[source]\n----\nText \u2192 [spaCy] \u2192 [GLiNER] \u2192 [LLM] \u2192 Merge \u2192 Filter \u2192 Results\n----\n\n[cols=\"1,2,1\"]\n|===\n|Stage |Purpose |Speed\n\n|**spaCy**\n|Statistical NER for common entity types\n|~1ms\n\n|**GLiNER**\n|Zero-shot NER with custom types\n|~50ms\n\n|**LLM**\n|Context-aware extraction for complex cases\n|~500ms\n|===\n\nEach stage is optional and configurable. See xref:how-to/entity-extraction.adoc[Entity Extraction] for details.\n\n[[single-extractor]]\n=== Can I use just one extractor instead of the full pipeline?\n\nYes, you can use any extractor individually:\n\n[source,python]\n----\nfrom neo4j_agent_memory.extraction import (\n    SpacyEntityExtractor,\n    GLiNEREntityExtractor,\n    LLMEntityExtractor,\n)\n\n# Just spaCy\nextractor = SpacyEntityExtractor()\n\n# Just GLiNER\nextractor = GLiNEREntityExtractor.for_schema(\"podcast\")\n\n# Just LLM\nextractor = LLMEntityExtractor(model=\"gpt-4o-mini\")\n\nresult = await extractor.extract(\"Your text here\")\n----\n\n[[merge-strategies]]\n=== What are merge strategies?\n\nWhen using multiple extractors, you need to combine their results. Available strategies:\n\n[cols=\"1,3\"]\n|===\n|Strategy |Description\n\n|`union`\n|Keep all unique entities from all stages\n\n|`intersection`\n|Only keep entities found by multiple extractors\n\n|`confidence`\n|Keep highest confidence result per entity (default)\n\n|`cascade`\n|Use first extractor's results, fill gaps with others\n\n|`first_success`\n|Stop at first stage that returns results\n|===\n\n[[which-extractor]]\n=== Which extractor should I use?\n\n[cols=\"2,3\"]\n|===\n|Use Case |Recommended Extractor\n\n|Fast, basic NER (names, orgs, places)\n|spaCy alone\n\n|Domain-specific extraction\n|GLiNER with domain schema\n\n|Custom entity types without training\n|GLiNER with custom schema\n\n|Complex text with context\n|Full pipeline with LLM fallback\n\n|Relationship extraction\n|LLM extractor\n\n|Cost-sensitive applications\n|spaCy + GLiNER (no LLM)\n|===\n\n\n== GLiNER and Domain Schemas\n\n[[schemas-gliner-only]]\n=== Are domain schemas only used with GLiNER?\n\n[IMPORTANT]\n====\n**Yes, domain schemas are specific to GLiNER.** They leverage GLiNER's ability to accept entity type descriptions at inference time, which helps the model understand what to extract.\n====\n\n[cols=\"1,3\"]\n|===\n|Extractor |Schema Support\n\n|**spaCy**\n|Uses a fixed set of trained entity types (PERSON, ORG, GPE, etc.) -- cannot use domain schemas\n\n|**LLM**\n|Uses a prompt-based approach with entity type names but not the detailed descriptions from schemas\n\n|**GLiNER**\n|The only extractor that uses the full schema with descriptions\n|===\n\n[[labels-vs-schemas]]\n=== What's the difference between entity labels and domain schemas?\n\n**Entity labels** are simple strings:\n\n[source,python]\n----\nextractor = GLiNEREntityExtractor(entity_labels=[\"person\", \"company\"])\n----\n\n**Domain schemas** include descriptions that help GLiNER understand what to extract:\n\n[source,python]\n----\n# Schema includes detailed descriptions\nextractor = GLiNEREntityExtractor.for_schema(\"podcast\")\n# {\"person\": \"A person mentioned in the podcast, including hosts, guests...\", ...}\n----\n\nDomain schemas significantly improve extraction accuracy, especially for ambiguous terms.\n\n[[schemas-with-pipeline]]\n=== Can I use domain schemas with the full pipeline?\n\nYes, when using the `ExtractorBuilder`, the schema applies to the GLiNER stage:\n\n[source,python]\n----\nextractor = (\n    ExtractorBuilder()\n    .with_spacy()                              # Uses spaCy's built-in types\n    .with_gliner_schema(\"podcast\", threshold=0.5)  # Uses podcast schema\n    .with_llm_fallback()                       # Uses entity type names\n    .merge_by_confidence()\n    .build()\n)\n----\n\n[[which-schema]]\n=== Which schema should I use?\n\n[cols=\"2,1\"]\n|===\n|Content Type |Schema\n\n|General purpose, investigations\n|`poleo`\n\n|Podcast transcripts, interviews\n|`podcast`\n\n|News articles, press releases\n|`news`\n\n|Research papers, academic content\n|`scientific`\n\n|Business reports, earnings calls\n|`business`\n\n|Movie/TV reviews, entertainment news\n|`entertainment`\n\n|Clinical notes, medical literature\n|`medical`\n\n|Legal documents, court cases\n|`legal`\n|===\n\n[[custom-schemas]]\n=== Can I create custom schemas?\n\nYes, create a `DomainSchema` with your entity types and descriptions:\n\n[source,python]\n----\nfrom neo4j_agent_memory.extraction.domain_schemas import DomainSchema\n\nmy_schema = DomainSchema(\n    name=\"real_estate\",\n    entity_types={\n        \"property\": \"A real estate property, building, or land parcel\",\n        \"agent\": \"A real estate agent or broker\",\n        \"price\": \"A property price, asking price, or sale price\",\n        \"neighborhood\": \"A neighborhood, district, or area\",\n    },\n)\n\nextractor = GLiNEREntityExtractor(schema=my_schema)\n----\n\nSee xref:how-to/entity-extraction.adoc#custom-schemas[Creating Custom Schemas] for more examples.\n\n[[poleo-mapping]]\n=== Do schema entity types map to POLE+O types?\n\nYes, GLiNER entity types are automatically mapped to POLE+O types for Neo4j storage:\n\n* `person`, `author`, `actor`, `director` \u2192 `PERSON`\n* `company`, `organization`, `institution` \u2192 `ORGANIZATION`\n* `location`, `city`, `country` \u2192 `LOCATION`\n* `event`, `meeting`, `case` \u2192 `EVENT`\n* Everything else \u2192 `OBJECT` (with subtype from the label)\n\nYou can also add custom mappings:\n\n[source,python]\n----\nextractor.add_label_mapping(\"podcast_episode\", \"EVENT\", \"PODCAST_EPISODE\")\n----\n\n\n== spaCy Extraction\n\n[[spacy-entity-types]]\n=== What entity types does spaCy recognize?\n\nspaCy's English models recognize:\n\n[cols=\"1,2\"]\n|===\n|Label |Description\n\n|`PERSON`\n|Named persons\n\n|`ORG`\n|Organizations, companies\n\n|`GPE`\n|Geopolitical entities (countries, cities)\n\n|`LOC`\n|Non-GPE locations\n\n|`DATE`\n|Dates and time expressions\n\n|`MONEY`\n|Monetary values\n\n|`PRODUCT`\n|Products\n|===\n\n[[spacy-custom-types]]\n=== Can I use custom entity types with spaCy?\n\nNot without training a custom model. spaCy's NER is based on statistical models trained on specific entity types.\n\nTIP: For custom entity types, use GLiNER instead.\n\n[[spacy-model-choice]]\n=== Which spaCy model should I use?\n\n[cols=\"2,1,1,1\"]\n|===\n|Model |Size |Speed |Accuracy\n\n|`en_core_web_sm`\n|12MB\n|Fastest\n|Good\n\n|`en_core_web_md`\n|40MB\n|Fast\n|Better\n\n|`en_core_web_lg`\n|560MB\n|Medium\n|Best\n\n|`en_core_web_trf`\n|400MB\n|Slow\n|Best (transformer)\n|===\n\nFor most use cases, `en_core_web_sm` is sufficient and fastest.\n\n\n== LLM Extraction\n\n[[when-use-llm]]\n=== When should I use the LLM extractor?\n\nUse LLM extraction when you need:\n\n* *Relationship extraction* \u2014 LLM is the only extractor that can extract relationships between entities\n* *Complex context* \u2014 When entity identification requires understanding context\n* *Highest accuracy* \u2014 When cost is not a concern\n\n[[llm-models]]\n=== What LLM models are supported?\n\nAny OpenAI-compatible model:\n\n* `gpt-4o-mini` (recommended for cost/performance balance)\n* `gpt-4o` (highest accuracy)\n* `gpt-3.5-turbo` (faster, cheaper)\n\n[[local-llms]]\n=== Can I use local LLMs?\n\nThe current implementation uses OpenAI's API. For local LLMs, you would need to:\n\n. Run a local server with OpenAI-compatible API (e.g., using Ollama, vLLM)\n. Point the `OPENAI_BASE_URL` environment variable to your local server\n\n[[llm-slow]]\n=== Why is LLM extraction slow?\n\nLLM extraction requires an API call to the language model provider, which adds network latency (~200-500ms).\n\nFor high-throughput scenarios, consider:\n\n* Using spaCy + GLiNER without LLM fallback\n* Batching texts and processing in parallel\n* Using a faster model like `gpt-3.5-turbo`\n\n\n== Batch and Streaming Extraction\n\n[[batch-extraction]]\n=== How do I process multiple documents at once?\n\nUse the batch extraction API:\n\n[source,python]\n----\nfrom neo4j_agent_memory.extraction import ExtractionPipeline\n\npipeline = ExtractionPipeline()\n\n# Extract from multiple texts in parallel\nresults = await pipeline.extract_batch(\n    texts=[\"Document 1...\", \"Document 2...\", \"Document 3...\"],\n    batch_size=10,           # Process 10 at a time\n    on_progress=lambda done, total: print(f\"{done}/{total}\"),\n)\n----\n\nBenefits:\n* Parallel processing with configurable concurrency\n* Progress tracking callback\n* GPU batch processing for GLiNER (native batch support)\n\n[[streaming-extraction]]\n=== How do I handle very long documents?\n\nUse streaming extraction for documents over 100K tokens:\n\n[source,python]\n----\nfrom neo4j_agent_memory.extraction import StreamingExtractor\n\nextractor = StreamingExtractor(\n    chunk_size=4000,      # Tokens per chunk\n    chunk_overlap=200,    # Overlap to preserve context\n)\n\n# Stream results as they're extracted\nasync for partial_result in extractor.stream(long_document):\n    print(f\"Found {len(partial_result.entities)} entities in chunk\")\n\n# Or get all results with automatic deduplication\nresult = await extractor.extract(long_document)\n----\n\n[[relation-extraction-llm-free]]\n=== Can I extract relationships without LLM calls?\n\nYes, use GLiREL (GLiNER + Relation Extraction):\n\n[source,python]\n----\nfrom neo4j_agent_memory.extraction import (\n    ExtractorBuilder,\n    GLiNEREntityExtractor,\n)\n\n# Enable GLiREL for relation extraction\nextractor = (\n    ExtractorBuilder()\n    .with_gliner_schema(\"podcast\")\n    .with_gliner_relations(threshold=0.3)  # GLiREL for relations\n    .build()\n)\n\nresult = await extractor.extract(text)\n# result.relations populated without LLM calls\n----\n\nGLiREL extracts relations using a fine-tuned model -- no API costs.\n\n\n== Entity Resolution and Deduplication\n\n[[what-is-resolution]]\n=== What is entity resolution?\n\nEntity resolution identifies when different text mentions refer to the same entity. For example, \"John Smith\", \"J. Smith\", and \"John\" might all refer to the same person.\n\n[[resolution-strategies]]\n=== What resolution strategies are available?\n\n[cols=\"1,3,2\"]\n|===\n|Strategy |Description |Best For\n\n|`exact`\n|Case-insensitive string match\n|Exact duplicates\n\n|`fuzzy`\n|RapidFuzz similarity matching\n|Typos, abbreviations\n\n|`semantic`\n|Embedding-based similarity\n|Synonyms, paraphrases\n\n|`composite`\n|Tries exact \u2192 fuzzy \u2192 semantic\n|General use (default)\n|===\n\n[[resolution-type-aware]]\n=== Is resolution type-aware?\n\nYes, the `CompositeResolver` is type-aware. Entities of different types (e.g., a PERSON named \"Paris\" vs a LOCATION named \"Paris\") are never merged, even if they have identical names.\n\n[[deduplication-on-ingest]]\n=== How does entity deduplication on ingest work?\n\nEntity deduplication automatically merges similar entities during extraction:\n\n[source,python]\n----\nfrom neo4j_agent_memory.memory.long_term import (\n    DeduplicationConfig,\n    LongTermMemory,\n)\n\n# Deduplication is configured at the memory layer, not on MemorySettings.\ndedup_config = DeduplicationConfig(\n    enabled=True,\n    auto_merge_threshold=0.95,    # High similarity = auto-merge\n    flag_threshold=0.85,          # Medium similarity = flagged SAME_AS link\n    use_fuzzy_matching=True,\n)\n\n# Pass into LongTermMemory when constructing it manually, or rely on the\n# defaults when using MemoryClient.\n----\n\n* **High confidence matches** (>0.92) are automatically merged\n* **Medium confidence matches** (0.85-0.92) create `SAME_AS` relationships for manual review\n* **Type-aware** -- only compares entities of the same type\n\n[[same-as-relationships]]\n=== What are SAME_AS relationships?\n\n`SAME_AS` relationships link entities that may refer to the same real-world entity but weren't merged automatically due to lower confidence:\n\n[source,cypher]\n----\n// Find potential duplicates\nMATCH (e1:Entity)-[r:SAME_AS]->(e2:Entity)\nRETURN e1.name, e2.name, r.confidence\nORDER BY r.confidence DESC\n----\n\nYou can manually merge or keep them separate based on your domain knowledge.\n\n\n== Neo4j and Storage\n\n[[indexes]]\n=== What indexes does the package create?\n\nThe package automatically creates:\n\n* Unique constraints on ID fields\n* Vector indexes for semantic search (requires Neo4j 5.11+)\n* Regular indexes on frequently queried properties\n* Point index on `Entity.location` for geospatial queries\n\n[[entity-labels]]\n=== How are entities labeled in Neo4j?\n\nEntities get multiple labels based on their type:\n\n* *Base label* \u2014 `:Entity`\n* *Type label* \u2014 `:Person`, `:Organization`, `:Location`, `:Event`, `:Object`\n* *Subtype label* \u2014 `:Vehicle`, `:Address`, `:Company`, etc. (if specified)\n\n.Example\n====\nAn entity of type `OBJECT` with subtype `VEHICLE` gets labels: `:Entity:Object:Vehicle`\n====\n\n[[query-by-type]]\n=== Can I query entities by type directly?\n\nYes, the type labels enable efficient Cypher queries:\n\n[source,cypher]\n----\n// Find all people\nMATCH (p:Person) RETURN p\n\n// Find all vehicles\nMATCH (v:Vehicle) RETURN v\n\n// Find organizations in a specific location\nMATCH (o:Organization)-[:LOCATED_IN]->(l:Location {name: \"New York\"})\nRETURN o\n----\n\n\n== CLI Tool\n\n[[cli-installation]]\n=== How do I install the CLI?\n\nInstall with the CLI extra:\n\n[source,bash]\n----\npip install neo4j-agent-memory[cli]\n----\n\n[[cli-usage]]\n=== How do I use the CLI?\n\n[source,bash]\n----\n# Extract entities from text\nneo4j-agent-memory extract \"John works at Acme Corp in New York\"\n\n# Extract with specific schema\nneo4j-agent-memory extract --schema podcast \"...\"\n\n# Extract from file\nneo4j-agent-memory extract --input document.txt\n\n# Output as table\nneo4j-agent-memory extract --format table \"...\"\n\n# List available schemas\nneo4j-agent-memory schemas list\n\n# Get statistics\nneo4j-agent-memory stats\n----\n\n[[cli-configuration]]\n=== How do I configure the CLI?\n\nThe CLI reads from environment variables or a `.neo4j-memory.yaml` config file:\n\n[source,yaml]\n----\n# .neo4j-memory.yaml\nneo4j:\n  uri: bolt://localhost:7687\n  username: neo4j\n  password: your-password\n\nextraction:\n  extractor_type: pipeline\n  enable_gliner: true\n\ncli:\n  output_format: json\n----\n\n\n== Geocoding and Geospatial Queries\n\n[[geocoding-enable]]\n=== How do I enable geocoding for LOCATION entities?\n\nConfigure geocoding in your settings:\n\n[source,python]\n----\nfrom neo4j_agent_memory import (\n    MemorySettings,\n    GeocodingConfig,\n    GeocodingProvider,\n)\n\nsettings = MemorySettings(\n    geocoding=GeocodingConfig(\n        enabled=True,\n        provider=GeocodingProvider.NOMINATIM,  # Free, 1 req/sec limit\n    )\n)\n----\n\nOr use environment variables:\n\n[source,bash]\n----\nNAM_GEOCODING__ENABLED=true\nNAM_GEOCODING__PROVIDER=nominatim\n----\n\n[[geocoding-providers]]\n=== What geocoding providers are supported?\n\n[cols=\"1,2,2\"]\n|===\n|Provider |Pros |Cons\n\n|**Nominatim**\n|Free, no API key needed\n|Rate-limited to 1 request/second\n\n|**Google Maps**\n|Higher accuracy, better address parsing\n|Requires API key, pay-per-use\n|===\n\nFor Google Maps:\n\n[source,python]\n----\nfrom pydantic import SecretStr\n\nsettings = MemorySettings(\n    geocoding=GeocodingConfig(\n        enabled=True,\n        provider=GeocodingProvider.GOOGLE,\n        api_key=SecretStr(\"your-google-api-key\"),\n    )\n)\n----\n\n[[geocoding-batch]]\n=== How do I geocode existing locations?\n\nUse the batch geocoding method for LOCATION entities without coordinates:\n\n[source,python]\n----\nasync with MemoryClient(settings) as memory:\n    stats = await memory.long_term.geocode_locations(\n        batch_size=50,\n        skip_existing=True,  # Don't re-geocode\n    )\n    print(f\"Geocoded {stats['geocoded']} of {stats['processed']} locations\")\n----\n\n[[geospatial-queries]]\n=== What geospatial queries are supported?\n\nOnce locations are geocoded, you can:\n\n[source,python]\n----\n# Find locations near a point\nnearby = await memory.long_term.search_locations_near(\n    latitude=40.7128,\n    longitude=-74.0060,\n    radius_km=10.0,\n    limit=20,\n)\n\n# Find locations within a bounding box\nin_area = await memory.long_term.search_locations_in_bounds(\n    min_lat=40.70,\n    max_lat=40.80,\n    min_lon=-74.02,\n    max_lon=-73.95,\n)\n\n# Get coordinates for a specific location\ncoords = await memory.long_term.get_entity_coordinates(entity_id)\n----\n\n[[geocoding-skip]]\n=== Can I disable geocoding for specific entities?\n\nYes, use the `geocode=False` parameter:\n\n[source,python]\n----\nentity, _ = await memory.long_term.add_entity(\n    name=\"Custom Location\",\n    entity_type=\"LOCATION\",\n    geocode=False,  # Skip geocoding\n    coordinates=(40.7128, -74.0060),  # Provide coordinates directly\n)\n----\n\n\n== Observability and Tracing\n\n[[observability-setup]]\n=== How do I enable tracing?\n\nInstall and configure a tracing provider:\n\n[source,bash]\n----\n# For OpenTelemetry\npip install neo4j-agent-memory[opentelemetry]\n\n# For Opik (LLM-focused)\npip install neo4j-agent-memory[opik]\n----\n\n[source,python]\n----\nfrom neo4j_agent_memory.observability import get_tracer\n\n# Observability tracers are obtained from\n# ``neo4j_agent_memory.observability.get_tracer(...)``, not from\n# ``MemorySettings``.\ntracer = get_tracer(\n    provider=\"opik\",            # or \"opentelemetry\"\n    project_name=\"my-agent\",\n)\n----\n\n[[what-is-traced]]\n=== What operations are traced?\n\nWith tracing enabled, you get visibility into:\n\n* **Memory operations** -- reads, writes, searches with timing\n* **Extraction pipeline** -- each stage (spaCy, GLiNER, LLM) with duration\n* **LLM calls** -- tokens, latency, costs\n* **Entity resolution** -- matches, merges, SAME_AS creation\n\n[[opik-vs-otel]]\n=== Should I use OpenTelemetry or Opik?\n\n[cols=\"1,2,2\"]\n|===\n|Aspect |OpenTelemetry |Opik\n\n|Focus\n|General observability\n|LLM-specific observability\n\n|Best for\n|Existing APM infrastructure\n|LLM application monitoring\n\n|Dashboard\n|Jaeger, Zipkin, Datadog\n|Opik UI (local or cloud)\n\n|LLM metrics\n|Basic spans\n|Token counts, costs, evaluations\n|===\n\n\n== Performance and Optimization\n\n[[speed-up-extraction]]\n=== How can I speed up extraction?\n\n. **Disable unused extractors**:\n+\n[source,python]\n----\nconfig = ExtractionConfig(\n    enable_spacy=True,\n    enable_gliner=True,\n    enable_llm_fallback=False,  # Skip LLM\n)\n----\n\n. **Use GPU acceleration for GLiNER**:\n+\n[source,python]\n----\nextractor = GLiNEREntityExtractor(device=\"cuda\")  # or \"mps\" for Mac\n----\n\n. **Use batch extraction for multiple documents**:\n+\n[source,python]\n----\nresults = await pipeline.extract_batch(texts, batch_size=10)\n----\n\n. **Use GLiREL instead of LLM for relations**:\n+\n[source,python]\n----\nextractor = ExtractorBuilder().with_gliner_relations().build()\n----\n\n. **Use a smaller GLiNER model**:\n+\n[source,python]\n----\nextractor = GLiNEREntityExtractor(model=\"gliner-community/gliner_small-v2.5\")\n----\n\n[[memory-footprint]]\n=== What's the memory footprint?\n\n[cols=\"1,2\"]\n|===\n|Component |Memory\n\n|spaCy (`en_core_web_sm`)\n|~50MB RAM\n\n|GLiNER (`medium-v2.5`)\n|~500MB RAM + ~500MB disk for model\n\n|LLM\n|Minimal (API-based)\n|===\n\n[[caching]]\n=== Can I cache extraction results?\n\nThe package doesn't include built-in caching, but you can implement it:\n\n[source,python]\n----\nimport hashlib\nfrom functools import lru_cache\n\n@lru_cache(maxsize=1000)\nasync def cached_extract(text_hash: str, text: str):\n    return await extractor.extract(text)\n\n# Use hash as cache key\ntext_hash = hashlib.md5(text.encode()).hexdigest()\nresult = await cached_extract(text_hash, text)\n----\n\n\n== Troubleshooting\n\n[[gliner-download-fails]]\n=== GLiNER model download fails\n\nIf the model download fails, try:\n\n. Check your internet connection\n. Set `HF_HUB_OFFLINE=0` to allow downloads\n. Manually download from HuggingFace and set local path\n\n[[spacy-model-not-found]]\n=== spaCy model not found\n\nInstall the model:\n\n[source,bash]\n----\npython -m spacy download en_core_web_sm\n----\n\n[[low-accuracy]]\n=== Low extraction accuracy\n\n. **Use the right schema** -- Domain schemas significantly improve accuracy\n. **Lower the threshold** -- Try `threshold=0.3` instead of `0.5`\n. **Check for noise** -- Filter results with `result.filter_invalid_entities()`\n. **Consider LLM fallback** -- Enable for complex texts\n\n[[filtered-incorrectly]]\n=== Entities being filtered incorrectly\n\nCheck if your entity is in the stopword list:\n\n[source,python]\n----\nfrom neo4j_agent_memory.extraction import is_valid_entity_name, ENTITY_STOPWORDS\n\nis_valid_entity_name(\"your entity\")  # Check if it passes\nprint(\"they\" in ENTITY_STOPWORDS)    # Check specific word\n----\n\n[[memory-errors]]\n=== Memory errors with large texts\n\nGLiNER has a context window limit. For large texts:\n\n. Split into smaller chunks\n. Process chunks separately\n. Merge and deduplicate results\n\n[[extra-forbidden-from-env]]\n=== Why does `MemorySettings(...)` raise `extra_forbidden` for `neo4j_uri` / `openai_api_key`?\n\nYou see an error like:\n\n[source,text]\n----\nValidationError: 1 validation error for MemorySettings\nneo4j_uri\n  Extra inputs are not permitted [type=extra_forbidden, input_value='neo4j://localhost:7687']\n----\n\n\u2026even though you only passed `neo4j={...}` as a kwarg. The cause is unrelated keys in your `.env` file (e.g. plain `NEO4J_URI=...` from a Docker setup, or `OPENAI_API_KEY=...` for a different tool). pydantic-settings 2.x leaks unmatched `.env` keys into the validation payload regardless of `env_prefix`, and `MemorySettings` uses `extra=\"forbid\"` to catch code-level typos.\n\n**Fix:** upgrade to the next `0.2.x` patch release of `neo4j-agent-memory` (not `0.2.0`) or later -- `MemorySettings` filters non-`NAM_`-matching keys before they reach validation. No code change needed.\n\n**On older versions:** subclass `MemorySettings` (or your own settings class) with `extra=\"ignore\"`:\n\n[source,python]\n----\nfrom pydantic_settings import SettingsConfigDict\nfrom neo4j_agent_memory import MemorySettings\n\nclass MySettings(MemorySettings):\n    model_config = SettingsConfigDict(\n        env_prefix=\"NAM_\",\n        env_nested_delimiter=\"__\",\n        env_file=\".env\",\n        env_file_encoding=\"utf-8\",\n        extra=\"ignore\",\n    )\n----\n\n[[gliner-not-installed]]\n=== ImportError: GLiNER not installed\n\nGLiNER is an optional dependency. Install with:\n\n[source,bash]\n----\npip install neo4j-agent-memory[gliner]\n# or\nuv sync --all-extras\n----\n\nCheck availability in code:\n\n[source,python]\n----\nfrom neo4j_agent_memory.extraction import is_gliner_available\n\nif is_gliner_available():\n    extractor = GLiNEREntityExtractor.for_schema(\"podcast\")\nelse:\n    print(\"GLiNER not available, using spaCy only\")\n    extractor = SpacyEntityExtractor()\n----\n\n\n== See Also\n\n* xref:getting-started.adoc[Getting Started] -- Quick start guide\n* xref:how-to/entity-extraction.adoc[Entity Extraction Guide] -- Detailed extraction documentation\n* xref:explanation/memory-types.adoc[Memory Types] -- Short-term, long-term, and reasoning memory\n* xref:explanation/poleo-model.adoc[POLE+O Data Model] -- Entity type classification\n* xref:reference/configuration.adoc[Configuration Reference] -- All configuration options\n* xref:how-to/integrations/index.adoc[Framework Integrations] -- PydanticAI, LangChain, LlamaIndex, CrewAI, Strands\n* xref:how-to/integrations/aws-strands.adoc[Strands Integration] -- AWS Strands Agents\n* xref:how-to/integrations/aws-bedrock-embeddings.adoc[Bedrock Embeddings] -- Amazon Bedrock embedding models\n* link:../examples/domain-schemas/[Domain Schema Examples] -- Working code examples\n* https://github.com/neo4j-labs/agent-memory/issues[GitHub Issues] -- Report bugs or request features\n",
+    "sections": [
+      {
+        "id": "_general_questions",
+        "title": "General Questions",
+        "level": 1
+      },
+      {
+        "id": "what-is-neo4j-agent-memory",
+        "title": "What is neo4j-agent-memory?",
+        "level": 2
+      },
+      {
+        "id": "what-is-poleo",
+        "title": "What is the POLE+O data model?",
+        "level": 2
+      },
+      {
+        "id": "need-neo4j",
+        "title": "Do I need my own Neo4j to use this package?",
+        "level": 2
+      },
+      {
+        "id": "whats-not-on-nams",
+        "title": "What's not available on the NAMS backend?",
+        "level": 2
+      },
+      {
+        "id": "which-sdk",
+        "title": "Which SDK should I use \u2014 Python or TypeScript?",
+        "level": 2
+      },
+      {
+        "id": "what-are-skills",
+        "title": "What are NAMS Agent Skills? _(Preview)_",
+        "level": 2
+      },
+      {
+        "id": "run-a-skill",
+        "title": "Can I run a distilled skill? _(Preview)_",
+        "level": 2
+      },
+      {
+        "id": "neo4j-versions",
+        "title": "Which Neo4j versions are supported?",
+        "level": 2
+      },
+      {
+        "id": "aws-support",
+        "title": "Does neo4j-agent-memory work with AWS?",
+        "level": 2
+      },
+      {
+        "id": "bedrock-credentials",
+        "title": "How do I configure AWS credentials for Bedrock embeddings?",
+        "level": 2
+      },
+      {
+        "id": "strands-vs-direct",
+        "title": "Should I use Strands tools or the MemoryClient directly?",
+        "level": 2
+      },
+      {
+        "id": "_entity_extraction_pipeline",
+        "title": "Entity Extraction Pipeline",
+        "level": 1
+      },
+      {
+        "id": "how-pipeline-works",
+        "title": "How does the extraction pipeline work?",
+        "level": 2
+      },
+      {
+        "id": "single-extractor",
+        "title": "Can I use just one extractor instead of the full pipeline?",
+        "level": 2
+      },
+      {
+        "id": "merge-strategies",
+        "title": "What are merge strategies?",
+        "level": 2
+      },
+      {
+        "id": "which-extractor",
+        "title": "Which extractor should I use?",
+        "level": 2
+      },
+      {
+        "id": "_gliner_and_domain_schemas",
+        "title": "GLiNER and Domain Schemas",
+        "level": 1
+      },
+      {
+        "id": "schemas-gliner-only",
+        "title": "Are domain schemas only used with GLiNER?",
+        "level": 2
+      },
+      {
+        "id": "labels-vs-schemas",
+        "title": "What's the difference between entity labels and domain schemas?",
+        "level": 2
+      },
+      {
+        "id": "schemas-with-pipeline",
+        "title": "Can I use domain schemas with the full pipeline?",
+        "level": 2
+      },
+      {
+        "id": "which-schema",
+        "title": "Which schema should I use?",
+        "level": 2
+      },
+      {
+        "id": "custom-schemas",
+        "title": "Can I create custom schemas?",
+        "level": 2
+      },
+      {
+        "id": "poleo-mapping",
+        "title": "Do schema entity types map to POLE+O types?",
+        "level": 2
+      },
+      {
+        "id": "_spacy_extraction",
+        "title": "spaCy Extraction",
+        "level": 1
+      },
+      {
+        "id": "spacy-entity-types",
+        "title": "What entity types does spaCy recognize?",
+        "level": 2
+      },
+      {
+        "id": "spacy-custom-types",
+        "title": "Can I use custom entity types with spaCy?",
+        "level": 2
+      },
+      {
+        "id": "spacy-model-choice",
+        "title": "Which spaCy model should I use?",
+        "level": 2
+      },
+      {
+        "id": "_llm_extraction",
+        "title": "LLM Extraction",
+        "level": 1
+      },
+      {
+        "id": "when-use-llm",
+        "title": "When should I use the LLM extractor?",
+        "level": 2
+      },
+      {
+        "id": "llm-models",
+        "title": "What LLM models are supported?",
+        "level": 2
+      },
+      {
+        "id": "local-llms",
+        "title": "Can I use local LLMs?",
+        "level": 2
+      },
+      {
+        "id": "llm-slow",
+        "title": "Why is LLM extraction slow?",
+        "level": 2
+      },
+      {
+        "id": "_batch_and_streaming_extraction",
+        "title": "Batch and Streaming Extraction",
+        "level": 1
+      },
+      {
+        "id": "batch-extraction",
+        "title": "How do I process multiple documents at once?",
+        "level": 2
+      },
+      {
+        "id": "streaming-extraction",
+        "title": "How do I handle very long documents?",
+        "level": 2
+      },
+      {
+        "id": "relation-extraction-llm-free",
+        "title": "Can I extract relationships without LLM calls?",
+        "level": 2
+      },
+      {
+        "id": "_entity_resolution_and_deduplication",
+        "title": "Entity Resolution and Deduplication",
+        "level": 1
+      },
+      {
+        "id": "what-is-resolution",
+        "title": "What is entity resolution?",
+        "level": 2
+      },
+      {
+        "id": "resolution-strategies",
+        "title": "What resolution strategies are available?",
+        "level": 2
+      },
+      {
+        "id": "resolution-type-aware",
+        "title": "Is resolution type-aware?",
+        "level": 2
+      },
+      {
+        "id": "deduplication-on-ingest",
+        "title": "How does entity deduplication on ingest work?",
+        "level": 2
+      },
+      {
+        "id": "same-as-relationships",
+        "title": "What are SAME_AS relationships?",
+        "level": 2
+      },
+      {
+        "id": "_neo4j_and_storage",
+        "title": "Neo4j and Storage",
+        "level": 1
+      },
+      {
+        "id": "indexes",
+        "title": "What indexes does the package create?",
+        "level": 2
+      },
+      {
+        "id": "entity-labels",
+        "title": "How are entities labeled in Neo4j?",
+        "level": 2
+      },
+      {
+        "id": "query-by-type",
+        "title": "Can I query entities by type directly?",
+        "level": 2
+      },
+      {
+        "id": "_cli_tool",
+        "title": "CLI Tool",
+        "level": 1
+      },
+      {
+        "id": "cli-installation",
+        "title": "How do I install the CLI?",
+        "level": 2
+      },
+      {
+        "id": "cli-usage",
+        "title": "How do I use the CLI?",
+        "level": 2
+      },
+      {
+        "id": "cli-configuration",
+        "title": "How do I configure the CLI?",
+        "level": 2
+      },
+      {
+        "id": "_geocoding_and_geospatial_queries",
+        "title": "Geocoding and Geospatial Queries",
+        "level": 1
+      },
+      {
+        "id": "geocoding-enable",
+        "title": "How do I enable geocoding for LOCATION entities?",
+        "level": 2
+      },
+      {
+        "id": "geocoding-providers",
+        "title": "What geocoding providers are supported?",
+        "level": 2
+      },
+      {
+        "id": "geocoding-batch",
+        "title": "How do I geocode existing locations?",
+        "level": 2
+      },
+      {
+        "id": "geospatial-queries",
+        "title": "What geospatial queries are supported?",
+        "level": 2
+      },
+      {
+        "id": "geocoding-skip",
+        "title": "Can I disable geocoding for specific entities?",
+        "level": 2
+      },
+      {
+        "id": "_observability_and_tracing",
+        "title": "Observability and Tracing",
+        "level": 1
+      },
+      {
+        "id": "observability-setup",
+        "title": "How do I enable tracing?",
+        "level": 2
+      },
+      {
+        "id": "what-is-traced",
+        "title": "What operations are traced?",
+        "level": 2
+      },
+      {
+        "id": "opik-vs-otel",
+        "title": "Should I use OpenTelemetry or Opik?",
+        "level": 2
+      },
+      {
+        "id": "_performance_and_optimization",
+        "title": "Performance and Optimization",
+        "level": 1
+      },
+      {
+        "id": "speed-up-extraction",
+        "title": "How can I speed up extraction?",
+        "level": 2
+      },
+      {
+        "id": "memory-footprint",
+        "title": "What's the memory footprint?",
+        "level": 2
+      },
+      {
+        "id": "caching",
+        "title": "Can I cache extraction results?",
+        "level": 2
+      },
+      {
+        "id": "_troubleshooting",
+        "title": "Troubleshooting",
+        "level": 1
+      },
+      {
+        "id": "gliner-download-fails",
+        "title": "GLiNER model download fails",
+        "level": 2
+      },
+      {
+        "id": "spacy-model-not-found",
+        "title": "spaCy model not found",
+        "level": 2
+      },
+      {
+        "id": "low-accuracy",
+        "title": "Low extraction accuracy",
+        "level": 2
+      },
+      {
+        "id": "filtered-incorrectly",
+        "title": "Entities being filtered incorrectly",
+        "level": 2
+      },
+      {
+        "id": "memory-errors",
+        "title": "Memory errors with large texts",
+        "level": 2
+      },
+      {
+        "id": "extra-forbidden-from-env",
+        "title": "Why does `MemorySettings(...)` raise `extra_forbidden` for `neo4j_uri` / `openai_api_key`?",
+        "level": 2
+      },
+      {
+        "id": "gliner-not-installed",
+        "title": "ImportError: GLiNER not installed",
+        "level": 2
+      },
+      {
+        "id": "_see_also",
+        "title": "See Also",
+        "level": 1
+      }
+    ]
+  },
+  "glossary.adoc": {
+    "source": "= Glossary\n:page-product: agent-memory\n:toclevels: 2\n\nA reference for the terminology used in `neo4j-agent-memory` and how it\nrelates to terms from neighbouring projects in the agent-memory space.\n\n== Library terminology\n\n[cols=\"1,3\"]\n|===\n| Term | Meaning in `neo4j-agent-memory`\n\n| Short-term memory\n| Conversations and messages, with sequential `FIRST_MESSAGE` /\n`NEXT_MESSAGE` linking and embedded message content for similarity\nsearch. Accessed via `client.short_term`.\n\n| Long-term memory\n| Entities (POLE+O or custom typed), preferences, and facts. The\ndeclarative knowledge layer. Accessed via `client.long_term`.\n\n| Reasoning memory\n| Reasoning traces, reasoning steps, and tool calls \u2014 captured per\nagent task. The \"how did we get there\" layer that complements the\n\"what we know\" of long-term memory. Accessed via `client.reasoning`.\n\n| POLE+O\n| The default entity ontology \u2014 Person, Object, Location, Event,\nOrganization. See xref:explanation/poleo-model.adoc[POLE+O Model].\n\n| `:Entity` super-label\n| The label every long-term memory entity carries in addition to its\ntype/subtype labels (e.g. `:Entity:Person:Individual`). The library\nMERGEs on `(:Entity {name, type})` for deduplication.\n\n| Adoption\n| The process of attaching the `:Entity` super-label and library-managed\nproperties (`id`, `type`, `name`) to nodes from a pre-existing domain\ngraph, so the library's writes link to the existing nodes instead of\nduplicating them. See xref:how-to/adopt-existing-graph.adoc[].\n\n| Backend\n| Which storage `MemoryClient` talks to: *bolt* (your own Neo4j, the\nhistorical default) or *NAMS* (the hosted service). Selected at config\ntime; the high-level API is identical. See\nxref:explanation/backends.adoc[Bolt vs NAMS].\n\n| NAMS\n| Neo4j Agent Memory Service \u2014 the hosted, multi-tenant backend at\nlink:https://memory.neo4jlabs.com[memory.neo4jlabs.com]. A managed REST\nAPI; you bring an API key, not a database.\n\n| Workspace\n| The unit of hard isolation on NAMS \u2014 its own graph. A *workspace key* is\nbound to one workspace; an *admin key* selects it per request via the\n`X-Workspace-Id` header. The `user_identifier=` axis sub-divides users\nwithin a workspace. See xref:explanation/backends.adoc#tenancy[Tenancy &\nscoping] and xref:reference/authentication.adoc[key categories].\n\n| Bridge protocol\n| The non-REST wire format (`POST /{snake_case_method}`) used by the\ncross-language link:https://github.com/neo4j-labs/agent-memory-tck[TCK]\nreference clients. The SDK transport auto-selects REST (for `/v{n}`\nendpoints) or bridge; override with `NamsConfig(transport_mode=...)`.\n\n| Provider string\n| A shorthand for an LLM or embedding model \u2014 `\"anthropic/claude-3-5-sonnet-latest\"`,\n`\"openai/text-embedding-3-small\"` \u2014 resolved to a native adapter or\nLiteLLM. Used on the bolt backend; on NAMS, embedding runs server-side.\nSee xref:how-to/bring-your-own-model.adoc[Bring Your Own Model].\n\n| Agent Skill _(Preview)_\n| A portable, self-contained procedure \u2014 an agentskills.io `SKILL.md`\npackage \u2014 that NAMS distils from a workspace's accumulated memory so\nanother agent can load and reuse it. See xref:explanation/skills.adoc[Agent Skills].\n\n| Skill distillation _(Preview)_\n| The server-side NAMS pipeline that turns a scoped slice of memory\n(messages, entities, reasoning traces) into an Agent Skill: scope \u2192\nsnapshot \u2192 grounded synthesis \u2192 quality gates \u2192 package. Reachable over\nREST + MCP only.\n\n| Provenance grounding\n| The rule that every claim and procedure step in a distilled skill is\n`GROUNDED_IN` specific source nodes \u2014 the graph is the authority and the\nLLM only writes from cited sources, so a skill is auditable, not invented.\n\n| Attestation\n| A detached JWS signature over a published skill's contents, verifiable\noffline against the public JWKS at `/.well-known/skill-attest-jwks.json`.\n|===\n\n== Industry-glossary alignment\n\nThe agent-memory space uses overlapping terminology. Mappings to closely\nrelated concepts in other ecosystems:\n\n[cols=\"1,1,3\"]\n|===\n| External term | Closest concept here | Notes\n\n| Context graph\n| The full three-layer graph this library builds (short-term + long-term\n+ reasoning).\n| Zep uses \"context graph\" to describe a persisted graph attached to a\nsession. `neo4j-agent-memory`'s closest analogue is the unified graph\nspanning the three memory layers, with cross-layer edges like\n`(ReasoningTrace)-[:INITIATED_BY]->(Message)`.\n\n| Memify / memification\n| Long-term memory ingestion (`add_entity`, `add_preference`,\n`add_fact`) plus the entity-extraction pipeline.\n| Cognee's \"memify\" pipeline corresponds roughly to entity extraction +\ndeduplication + embedding here. The library does not bundle a\nsingle-call \"memify(text)\" entry point \u2014 extraction and storage are\nseparate by design.\n\n| Core memory\n| Long-term memory (entities, preferences, facts) \u2014 the persistent,\nqueryable layer.\n| Letta's \"core memory\" maps to long-term memory, especially preferences\nand entity-attached attributes that persist across sessions.\n\n| Episodic memory\n| Short-term memory (messages and conversations).\n| Several agent frameworks distinguish \"semantic\" (long-term) from\n\"episodic\" (per-session). `neo4j-agent-memory` uses short-term /\nlong-term, with reasoning memory as a third axis that doesn't fit\neither label cleanly.\n\n| Working memory\n| Not a first-class concept here.\n| What other systems call \"working memory\" (current-turn context) is\ntypically assembled per-call via `client.get_context(...)` rather than\npersisted as its own layer.\n|===\n\n== See Also\n\n* xref:explanation/memory-types.adoc[Memory Types] \u2014 concept-level\ndescription of short-term, long-term, and reasoning memory.\n* xref:explanation/poleo-model.adoc[POLE+O Model] \u2014 the default\nentity ontology.\n* xref:explanation/framework-comparison.adoc[Framework Comparison] \u2014\nhow the library compares to other agent-memory tools.\n",
+    "sections": [
+      {
+        "id": "_library_terminology",
+        "title": "Library terminology",
+        "level": 1
+      },
+      {
+        "id": "_industry_glossary_alignment",
+        "title": "Industry-glossary alignment",
+        "level": 1
+      },
+      {
+        "id": "_see_also",
+        "title": "See Also",
+        "level": 1
+      }
+    ]
+  },
+  "explanation/multi-agent-sharing.adoc": {
+    "source": "= Cross-Agent Memory Sharing\n:page-product: agent-memory\n:toc:\n:toclevels: 2\n\nHow multiple agents \u2014 written in different languages, using different frameworks, deployed as separate services \u2014 read and write the same memory graph.\n\n[.lead]\n**Conversations are private. Knowledge is shared.** That's the design contract that makes Neo4j Agent Memory natural for multi-agent systems.\n\n== The capability in one sentence\n\nIf two agents point at the same backend (NAMS API key, or the same Neo4j cluster), an entity created by Agent A is queryable by Agent B as soon as the write returns \u2014 with no copy step, no message bus, no cache invalidation.\n\n== The two namespaces\n\nEvery memory operation lives in one of two namespaces:\n\n[cols=\"1,2,3\", options=\"header\"]\n|===\n|Namespace |Scoped by |What's in it\n\n|*Conversation namespace* (private)\n|`session_id` (and optionally `user_identifier=`)\n|`Conversation`, `Message`, `ReasoningTrace`, `ReasoningStep`, `ToolCall`. Each agent sees only the sessions it wrote to. One agent's chat history is invisible to another by default.\n\n|*Entity namespace* (shared)\n|Global (within a backend / workspace)\n|`Entity` (POLE+O), `Preference`, `Fact`, `Relationship` between entities. Any agent on the same backend reads what any other agent wrote.\n|===\n\nThis split is the load-bearing design choice. It mirrors how human teams work: individual notebooks (conversations) plus a shared wiki (knowledge).\n\nOn **NAMS**, the shared boundary is the **workspace** (bound to your API key): every agent using the same workspace shares the entity graph, while different workspaces are fully isolated from one another. On **bolt**, the shared boundary is the Neo4j database. Either way, `user_identifier=` sub-divides users *within* that boundary. See xref:explanation/backends.adoc#tenancy[Tenancy & scoping].\n\n== Multi-tenant scoping with `user_identifier`\n\nFor SaaS-style deployments where one backend serves many end-users, every memory call accepts a `user_identifier=` kwarg:\n\n[source,python]\n----\n# Agent code, identical for every end-user\nasync def handle_request(user_id: str, message: str):\n    async with MemoryClient() as memory:\n        await memory.short_term.add_message(\n            session_id=f\"chat-{user_id}\",\n            role=\"user\",\n            content=message,\n            user_identifier=user_id,  # scopes the write\n        )\n        # Subsequent reads with the same user_identifier only see this user's data\n        prefs = await memory.long_term.search_preferences(\n            \"communication style\",\n            user_identifier=user_id,\n        )\n----\n\n`user_identifier` is stored as a property on every node and used as a WHERE filter on every read. See xref:how-to/multi-tenancy.adoc[Multi-tenant memory] for the full pattern.\n\n== Cross-language sharing: same contract, different SDKs\n\nThe Python SDK (`neo4j-agent-memory`) and the TypeScript SDK (`@neo4j-labs/agent-memory`) both implement the same xref:reference/rest-api.adoc[NAMS REST contract]. So an agent in either language can read what an agent in the other wrote.\n\nExample: a Python ingestion agent and a TypeScript chat agent sharing entities:\n\n[source,python]\n----\n# ingestion-agent (Python) \u2014 runs on a cron, scrapes podcasts\nasync with MemoryClient() as memory:\n    entity, _ = await memory.long_term.add_entity(\n        \"Alice Johnson\", \"PERSON\",\n        description=\"Former CTO of Acme, speaker on Lenny's podcast Ep. 42\",\n    )\n----\n\n[source,typescript]\n----\n// chat-agent (TypeScript) \u2014 runs on Cloudflare Workers\nconst memory = new MemoryClient();\nconst matches = await memory.longTerm.searchEntities(\"Alice Johnson\", { topK: 3 });\n// matches[0].description includes the entity the Python agent created.\n----\n\nBoth SDKs write nodes with the same labels, property names, and relationship types. The graph doesn't know which language produced it.\n\n== A typical multi-agent architecture\n\n[cols=\"1,3\", options=\"header\"]\n|===\n|Layer |Responsibility\n\n|*Backend* (NAMS or Neo4j)\n|Single source of truth for the memory graph. NAMS is the natural choice when you don't want to operate Neo4j; self-hosted Bolt is the choice when you need write-Cypher or geospatial features.\n\n|*Agents* (any language, any framework)\n|Each agent is a separate process or service. Each holds its own `MemoryClient` pointed at the same backend. Each owns its session IDs but reads the shared entity graph.\n\n|*Orchestrator* (optional)\n|A coordinating agent that reads all sub-agents' reasoning traces, queries the shared entity graph, and synthesizes a response. Can be a workflow engine (LangGraph, Mastra) or a simple supervisor agent.\n|===\n\nWhen agents are independent services (containerized, on different runtimes), NAMS removes the \"who runs Neo4j?\" question \u2014 every service just needs an API key.\n\n== Worked example: ingestion + chat + analytics\n\nThree agents that never talk to each other directly but cooperate via shared memory:\n\n[cols=\"1,1,1,3\", options=\"header\"]\n|===\n|Agent |Language |Framework |What it does\n\n|**Ingestion**\n|Python\n|PydanticAI\n|Cron job. Reads podcast transcripts, extracts `Person`/`Organization` entities, writes them to long-term memory.\n\n|**Chat**\n|TypeScript\n|Vercel AI SDK on Cloudflare Workers\n|User-facing chat. On every turn, reads relevant entities and preferences from the shared graph, persists the conversation in its own session namespace.\n\n|**Analytics**\n|Python\n|Plain script + `client.query.cypher(...)`\n|Nightly. Reads all entities, computes co-mention graphs, surfaces trends.\n|===\n\nEach agent is its own deployment. None imports the others. They cooperate solely through reads and writes against the shared backend.\n\n== When agents collide: avoiding write conflicts\n\nBecause the entity namespace is shared, two agents *can* try to create the same entity at the same time. Neo4j Agent Memory handles this with:\n\n* **Entity deduplication on ingest** \u2014 `add_entity()` checks for embedding-similar and fuzzy-name matches before creating a new node. Above the `auto_merge_threshold` (default 0.95), the new write merges into the existing node and the name is added as an alias.\n* **`SAME_AS` flagged pairs** \u2014 between `flag_threshold` (0.85) and the auto-merge threshold, the new entity is created but linked via a `SAME_AS` relationship for human review.\n* **Server-side dedup on NAMS** \u2014 the hosted backend performs dedup transparently.\n\nSee xref:how-to/deduplication.adoc[Handle duplicates] for the configuration knobs.\n\n== Reasoning trace isolation\n\nWhile entities are shared, reasoning traces are per-session by design:\n\n[source,python]\n----\n# Agent A starts a trace\ntrace_a = await memory.reasoning.start_trace(\n    session_id=\"agent-a-session-1\",\n    task=\"Plan a trip\",\n)\n\n# Agent B in the same process \u2014 its traces don't show up in A's session\ntrace_b = await memory.reasoning.start_trace(\n    session_id=\"agent-b-session-1\",\n    task=\"Book a flight\",\n)\n\n# A's get_session_traces returns only A's traces\nawait memory.reasoning.get_session_traces(\"agent-a-session-1\")\n----\n\nBut if an orchestrator wants cross-agent visibility for audit, it can query Cypher (Bolt) or the read-only Cypher endpoint (NAMS):\n\n[source,cypher]\n----\n// All traces created in the last hour, across all sessions and agents\nMATCH (t:ReasoningTrace)\nWHERE t.created_at > datetime() - duration('PT1H')\nRETURN t.session_id, t.task, t.outcome, t.success\nORDER BY t.created_at DESC\n----\n\nSee xref:how-to/audit-reasoning.adoc[Audit reasoning with TOUCHED edges] for the full audit pattern.\n\n== Why this matters for AI engineering\n\nThe hardest problem in multi-agent systems is not coordination \u2014 it's coherence. Two agents that \"know\" different things will give the user contradictory answers. A shared memory graph keeps every agent's worldview in sync without bolting on a separate state management layer.\n\nThe architecture also degrades gracefully: a single-agent prototype written against `MemoryClient` becomes a multi-agent system by adding more agents that point at the same backend. No refactor.\n\n== See Also\n\n* xref:explanation/memory-types.adoc[Understanding the Three Memory Types] \u2014 what conversations, entities, and traces are\n* xref:explanation/backends.adoc[Bolt vs NAMS] \u2014 which backend to pick\n* xref:how-to/multi-tenancy.adoc[Multi-tenant memory] \u2014 `user_identifier=` patterns\n* xref:how-to/use-nams.adoc[Use NAMS] \u2014 the hosted-service operational guide\n* xref:tutorials/nams-quickstart.adoc[NAMS Quickstart] \u2014 end-to-end deployment\n* xref:reference/rest-api.adoc[NAMS REST API] \u2014 the wire-level contract both SDKs implement\n",
+    "sections": [
+      {
+        "id": "_the_capability_in_one_sentence",
+        "title": "The capability in one sentence",
+        "level": 1
+      },
+      {
+        "id": "_the_two_namespaces",
+        "title": "The two namespaces",
+        "level": 1
+      },
+      {
+        "id": "_multi_tenant_scoping_with_user_identifier",
+        "title": "Multi-tenant scoping with `user_identifier`",
+        "level": 1
+      },
+      {
+        "id": "_cross_language_sharing_same_contract_different_sdks",
+        "title": "Cross-language sharing: same contract, different SDKs",
+        "level": 1
+      },
+      {
+        "id": "_a_typical_multi_agent_architecture",
+        "title": "A typical multi-agent architecture",
+        "level": 1
+      },
+      {
+        "id": "_worked_example_ingestion_chat_analytics",
+        "title": "Worked example: ingestion + chat + analytics",
+        "level": 1
+      },
+      {
+        "id": "_when_agents_collide_avoiding_write_conflicts",
+        "title": "When agents collide: avoiding write conflicts",
+        "level": 1
+      },
+      {
+        "id": "_reasoning_trace_isolation",
+        "title": "Reasoning trace isolation",
+        "level": 1
+      },
+      {
+        "id": "_why_this_matters_for_ai_engineering",
+        "title": "Why this matters for AI engineering",
+        "level": 1
+      },
+      {
+        "id": "_see_also",
+        "title": "See Also",
+        "level": 1
+      }
+    ]
+  },
+  "explanation/poleo-model.adoc": {
+    "source": "= POLE+O Data Model\n:page-product: agent-memory\n:page-pagination:\n:toclevels: 3\n:sectanchors:\n:icons: font\n:source-highlighter: highlight.js\n\nThe POLE+O data model is the default entity classification system in neo4j-agent-memory. It provides a structured, extensible framework for categorizing entities extracted from text.\n\nNOTE: POLE+O applies to both backends. On the bolt backend you can also define custom schemas (`SchemaModel.CUSTOM`); on NAMS, typed domain ontologies are managed server-side via xref:how-to/use-ontologies.adoc[`client.ontology`].\n\nimage::diagrams/poleo-model.png[POLE+O entity model: Person, Object, Location, Event, and Organization node types with their subtypes,width=600,align=left]\n\n== What is POLE+O?\n\nPOLE+O stands for **Person, Object, Location, Event + Organization**. Originally developed for law enforcement and intelligence analysis, it has been adapted for general-purpose entity extraction in AI applications.\n\n[source]\n----\n\u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510\n\u2502                      POLE+O Model                           \u2502\n\u251c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u252c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u252c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u252c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u252c\u2500\u2500\u2500\u2500\u2500\u2524\n\u2502   PERSON    \u2502   OBJECT    \u2502  LOCATION   \u2502    EVENT    \u2502 ORG \u2502\n\u251c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u253c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u253c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u253c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u253c\u2500\u2500\u2500\u2500\u2500\u2524\n\u2502 Individuals \u2502 Physical/   \u2502 Places &    \u2502 Things that \u2502 Com-\u2502\n\u2502 & people    \u2502 digital     \u2502 geographic  \u2502 happen or   \u2502 pan-\u2502\n\u2502 mentioned   \u2502 items       \u2502 areas       \u2502 occurred    \u2502 ies \u2502\n\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2518\n----\n\n== Entity Types & Subtypes\n\n=== PERSON\n\nIndividuals mentioned by name, role, or description.\n\n[cols=\"1,3\"]\n|===\n|Subtype |Description\n\n|`INDIVIDUAL`\n|A specific named person\n\n|`ALIAS`\n|An alternative name or identity\n\n|`PERSONA`\n|A role or character\n\n|`SUSPECT`\n|Person of interest (law enforcement context)\n\n|`WITNESS`\n|Someone who observed an event\n\n|`VICTIM`\n|Someone affected by an event\n|===\n\n**Examples:**\n[source]\n----\n\"John Smith\"          \u2192 PERSON\n\"CEO\"                 \u2192 PERSON (role)\n\"@johndoe\"           \u2192 PERSON:ALIAS\n\"Dr. Jane Wilson\"    \u2192 PERSON:INDIVIDUAL\n----\n\n=== OBJECT\n\nPhysical or digital items, artifacts, or things.\n\n[cols=\"1,3\"]\n|===\n|Subtype |Description\n\n|`VEHICLE`\n|Cars, trucks, boats, aircraft\n\n|`PHONE`\n|Phone numbers and devices\n\n|`EMAIL`\n|Email addresses\n\n|`DOCUMENT`\n|Papers, files, records\n\n|`DEVICE`\n|Electronic devices\n\n|`WEAPON`\n|Weapons and armaments\n\n|`MONEY`\n|Currency and financial instruments\n\n|`DRUG`\n|Controlled substances\n\n|`SOFTWARE`\n|Applications and programs\n\n|`PRODUCT`\n|Commercial products\n|===\n\n**Examples:**\n[source]\n----\n\"Tesla Model 3\"       \u2192 OBJECT:VEHICLE\n\"555-123-4567\"        \u2192 OBJECT:PHONE\n\"john@example.com\"    \u2192 OBJECT:EMAIL\n\"passport\"            \u2192 OBJECT:DOCUMENT\n\"iPhone 15\"           \u2192 OBJECT:DEVICE\n----\n\n=== LOCATION\n\nPlaces, addresses, and geographic areas.\n\n[cols=\"1,3\"]\n|===\n|Subtype |Description\n\n|`ADDRESS`\n|Street addresses\n\n|`CITY`\n|Cities and towns\n\n|`REGION`\n|States, provinces, regions\n\n|`COUNTRY`\n|Countries and nations\n\n|`LANDMARK`\n|Notable places and monuments\n\n|`FACILITY`\n|Buildings and structures\n|===\n\n**Examples:**\n[source]\n----\n\"123 Main Street\"     \u2192 LOCATION:ADDRESS\n\"San Francisco\"       \u2192 LOCATION:CITY\n\"California\"          \u2192 LOCATION:REGION\n\"United States\"       \u2192 LOCATION:COUNTRY\n\"Eiffel Tower\"        \u2192 LOCATION:LANDMARK\n\"JFK Airport\"         \u2192 LOCATION:FACILITY\n----\n\n=== EVENT\n\nThings that happened, meetings, transactions, or temporal occurrences.\n\n[cols=\"1,3\"]\n|===\n|Subtype |Description\n\n|`INCIDENT`\n|Accidents, crimes, occurrences\n\n|`MEETING`\n|Scheduled gatherings\n\n|`TRANSACTION`\n|Financial or business exchanges\n\n|`COMMUNICATION`\n|Calls, messages, correspondence\n\n|`DATE`\n|Calendar dates\n\n|`TIME`\n|Times of day\n|===\n\n**Examples:**\n[source]\n----\n\"car accident\"        \u2192 EVENT:INCIDENT\n\"board meeting\"       \u2192 EVENT:MEETING\n\"wire transfer\"       \u2192 EVENT:TRANSACTION\n\"January 15, 2024\"    \u2192 EVENT:DATE\n\"3:30 PM\"             \u2192 EVENT:TIME\n----\n\n=== ORGANIZATION\n\nCompanies, institutions, groups, and collective entities.\n\n[cols=\"1,3\"]\n|===\n|Subtype |Description\n\n|`COMPANY`\n|Businesses and corporations\n\n|`NONPROFIT`\n|Charitable organizations\n\n|`GOVERNMENT`\n|Government agencies\n\n|`EDUCATIONAL`\n|Schools and universities\n\n|`GROUP`\n|Informal groups and associations\n|===\n\n**Examples:**\n[source]\n----\n\"Apple Inc.\"          \u2192 ORGANIZATION:COMPANY\n\"Red Cross\"           \u2192 ORGANIZATION:NONPROFIT\n\"FBI\"                 \u2192 ORGANIZATION:GOVERNMENT\n\"MIT\"                 \u2192 ORGANIZATION:EDUCATIONAL\n\"Book Club\"           \u2192 ORGANIZATION:GROUP\n----\n\n== Neo4j Schema\n\nEntities are stored as nodes in Neo4j with multiple labels for efficient querying.\nEach entity has the base `:Entity` label plus the type and subtype as additional labels.\n\n[source,cypher]\n----\n(:Entity:Person:Individual {\n    id: \"uuid\",\n    name: \"John Smith\",\n    type: \"PERSON\",                    // POLE+O type (stored as uppercase)\n    subtype: \"INDIVIDUAL\",             // Optional subtype (stored as uppercase)\n    canonical_name: \"John Smith\",      // Resolved name\n    description: \"CEO of Acme Corp\",\n    confidence: 0.92,\n    embedding: [0.1, 0.2, ...],       // Vector for search\n    created_at: datetime(),\n    metadata: \"{...}\"                  // JSON metadata\n})\n----\n\nNOTE: Entity types and subtypes are stored as uppercase properties (e.g., `type: \"PERSON\"`) but labels use PascalCase (e.g., `:Person`) following Neo4j naming conventions.\n\n=== Label Structure\n\nEach entity has:\n\n* `:Entity` - Base label (always present)\n* `:<Type>` - Entity type as PascalCase label (e.g., `:Person`, `:Object`, `:Location`, `:Event`, `:Organization`)\n* `:<Subtype>` - Subtype as PascalCase label when present (e.g., `:Vehicle`, `:Address`, `:Company`)\n\nBoth POLE+O types and custom types are added as PascalCase labels, as long as they are valid Neo4j label identifiers (start with a letter, contain only letters, numbers, and underscores).\n\nThis enables efficient queries like:\n\n[source,cypher]\n----\n// Find all people\nMATCH (p:Person) RETURN p\n\n// Find all vehicles (regardless of whether they're Object type)\nMATCH (v:Vehicle) RETURN v\n\n// Find all entities (any type)\nMATCH (e:Entity) RETURN e\n\n// Find people who are individuals\nMATCH (p:Person:Individual) RETURN p\n\n// Combine with relationship traversal\nMATCH (p:Person)-[:WORKS_AT]->(o:Organization:Company)\nRETURN p.name, o.name\n----\n\n==== Custom Entity Types\n\nCustom entity types outside the POLE+O model also become PascalCase labels:\n\n[source,python]\n----\n# Custom types become PascalCase labels\nentity, _ = await client.long_term.add_entity(\n    name=\"Widget Pro\",\n    entity_type=\"PRODUCT\",\n    subtype=\"ELECTRONICS\",\n)\n\n# Creates: (:Entity:Product:Electronics {name: \"Widget Pro\", ...})\n----\n\nQuery by custom type:\n\n[source,cypher]\n----\nMATCH (p:Product) RETURN p\nMATCH (e:Electronics) RETURN e\n----\n\nNOTE: For POLE+O types, subtypes are validated against the known subtypes for that type. For custom types, any valid Neo4j label identifier can be used as a subtype.\n\n=== Relationships\n\nEntities can have relationships to other entities:\n\n[source,cypher]\n----\n// Person works at organization\n(:Person)-[:WORKS_AT]->(:Organization)\n\n// Person lives at location\n(:Person)-[:LIVES_IN]->(:Location)\n\n// Organization located at location\n(:Organization)-[:LOCATED_AT]->(:Location)\n\n// Person owns object\n(:Person)-[:OWNS]->(:Object)\n\n// Person participated in event\n(:Person)-[:PARTICIPATED_IN]->(:Event)\n----\n\n=== Message Links\n\nEntities are linked to the messages that mention them:\n\n[source,cypher]\n----\n(:Message)-[:MENTIONS {\n    confidence: 0.85,\n    start_pos: 10,\n    end_pos: 20\n}]->(:Entity)\n----\n\n== Configuring POLE+O\n\n=== Using Default POLE+O\n\n[source,python]\n----\nfrom neo4j_agent_memory import MemoryClient, MemorySettings\n\n# Default configuration uses POLE+O\nsettings = MemorySettings()\n\nasync with MemoryClient(settings) as memory:\n    # Entities extracted using POLE+O types\n    await memory.short_term.add_message(\n        session_id=\"session-1\",\n        role=\"user\",\n        content=\"I work at Acme Corp in San Francisco\"\n    )\n    # Extracts: \"Acme Corp\" (ORGANIZATION), \"San Francisco\" (LOCATION)\n----\n\n=== Selecting Specific POLE+O Types\n\n[source,python]\n----\nfrom neo4j_agent_memory import MemorySettings, ExtractionConfig\n\n# Only extract people and organizations\nsettings = MemorySettings(\n    extraction=ExtractionConfig(\n        entity_types=[\"PERSON\", \"ORGANIZATION\"]\n    )\n)\n----\n\n=== Using Subtypes\n\nSubtypes are automatically extracted by the LLM extractor and can be specified when manually adding entities:\n\n[source,python]\n----\nasync with MemoryClient(settings) as memory:\n    # Add entity with subtype\n    entity, _ = await memory.long_term.add_entity(\n        name=\"Tesla Model 3\",\n        entity_type=\"OBJECT\",\n        subtype=\"VEHICLE\",\n        description=\"Electric sedan\"\n    )\n\n    # Query by type and subtype\n    vehicles = await memory.long_term.search_entities(\n        query=\"cars\",\n        entity_types=[\"OBJECT\"]\n    )\n----\n\n== Custom Schema Models\n\nWhile POLE+O is the default, you can use alternative schema models:\n\n=== SchemaModel Options\n\n[cols=\"1,3\"]\n|===\n|Model |Description\n\n|`POLEO`\n|Default POLE+O model with all subtypes\n\n|`LEGACY`\n|Backward-compatible with older EntityType enum\n\n|`CUSTOM`\n|User-defined entity types\n|===\n\n=== Using Custom Entity Types\n\n[source,python]\n----\nfrom neo4j_agent_memory import MemorySettings, SchemaConfig, SchemaModel, ExtractionConfig\n\n# E-commerce domain example\nsettings = MemorySettings(\n    schema_config=SchemaConfig(\n        model=SchemaModel.CUSTOM,\n        entity_types=[\"CUSTOMER\", \"PRODUCT\", \"ORDER\", \"STORE\", \"REVIEW\"],\n        strict_types=True  # Reject unknown types\n    ),\n    extraction=ExtractionConfig(\n        entity_types=[\"CUSTOMER\", \"PRODUCT\", \"ORDER\", \"STORE\", \"REVIEW\"]\n    )\n)\n----\n\n=== Loading Schema from File\n\nCreate a JSON schema file:\n\n[source,json]\n----\n{\n    \"name\": \"ecommerce_schema\",\n    \"version\": \"1.0\",\n    \"entity_types\": [\n        {\n            \"name\": \"CUSTOMER\",\n            \"description\": \"A person who purchases products\",\n            \"subtypes\": [\"PREMIUM\", \"REGULAR\", \"NEW\"],\n            \"attributes\": [\"name\", \"email\", \"tier\"]\n        },\n        {\n            \"name\": \"PRODUCT\",\n            \"description\": \"An item available for purchase\",\n            \"subtypes\": [\"ELECTRONICS\", \"CLOTHING\", \"FOOD\"],\n            \"attributes\": [\"sku\", \"price\", \"category\"]\n        }\n    ],\n    \"relationship_types\": [\n        {\n            \"name\": \"PURCHASED\",\n            \"source\": \"CUSTOMER\",\n            \"target\": \"PRODUCT\"\n        }\n    ]\n}\n----\n\nLoad it in configuration:\n\n[source,python]\n----\nfrom neo4j_agent_memory import MemorySettings, SchemaConfig, SchemaModel\n\nsettings = MemorySettings(\n    schema_config=SchemaConfig(\n        model=SchemaModel.CUSTOM,\n        custom_schema_path=\"./ecommerce_schema.json\"\n    )\n)\n----\n\n== Working with Entities\n\n=== Searching Entities\n\n[source,python]\n----\nasync with MemoryClient(settings) as memory:\n    # Semantic search across all entities\n    entities = await memory.long_term.search_entities(\n        query=\"companies in technology\",\n        limit=10\n    )\n\n    # Filter by type\n    people = await memory.long_term.search_entities(\n        query=\"engineers\",\n        entity_types=[\"PERSON\"],\n        limit=10\n    )\n\n    # Get entity by name\n    entity = await memory.long_term.get_entity_by_name(\n        name=\"Acme Corp\",\n        entity_type=\"ORGANIZATION\"\n    )\n----\n\n=== Entity Resolution\n\nEntity resolution merges duplicate entities and links aliases:\n\n[source,python]\n----\nfrom neo4j_agent_memory import MemorySettings, ResolutionConfig, ResolverStrategy\n\nsettings = MemorySettings(\n    resolution=ResolutionConfig(\n        strategy=ResolverStrategy.COMPOSITE,\n        exact_threshold=1.0,      # Exact match\n        fuzzy_threshold=0.85,     # Fuzzy match threshold\n        semantic_threshold=0.9,   # Embedding similarity\n    )\n)\n\nasync with MemoryClient(settings) as memory:\n    # These might resolve to the same entity\n    await memory.short_term.add_message(\n        session_id=\"s1\", role=\"user\",\n        content=\"I talked to John Smith\"\n    )\n    await memory.short_term.add_message(\n        session_id=\"s1\", role=\"user\",\n        content=\"Johnny Smith called me back\"\n    )\n    # \"John Smith\" and \"Johnny Smith\" may be resolved as the same person\n----\n\n== POLE+O in the Extraction Pipeline\n\nEach extractor maps to POLE+O types differently:\n\n=== spaCy Mapping\n\n[source,python]\n----\nSPACY_TO_POLEO = {\n    \"PERSON\": \"PERSON\",\n    \"ORG\": \"ORGANIZATION\",\n    \"GPE\": \"LOCATION\",     # Geopolitical entities\n    \"LOC\": \"LOCATION\",     # Other locations\n    \"FAC\": \"LOCATION\",     # Facilities\n    \"EVENT\": \"EVENT\",\n    \"PRODUCT\": \"OBJECT\",\n    \"WORK_OF_ART\": \"OBJECT\",\n    \"DATE\": \"EVENT\",\n    \"TIME\": \"EVENT\",\n    \"MONEY\": \"OBJECT\",\n}\n----\n\n=== GLiNER Labels\n\nGLiNER uses lowercase labels that map to POLE+O:\n\n[source,python]\n----\nGLINER_LABELS = [\n    \"person\",           # \u2192 PERSON\n    \"organization\",     # \u2192 ORGANIZATION\n    \"company\",          # \u2192 ORGANIZATION:COMPANY\n    \"location\",         # \u2192 LOCATION\n    \"city\",             # \u2192 LOCATION:CITY\n    \"country\",          # \u2192 LOCATION:COUNTRY\n    \"event\",            # \u2192 EVENT\n    \"meeting\",          # \u2192 EVENT:MEETING\n    \"object\",           # \u2192 OBJECT\n    \"vehicle\",          # \u2192 OBJECT:VEHICLE\n    \"document\",         # \u2192 OBJECT:DOCUMENT\n]\n----\n\n=== LLM Prompt\n\nThe LLM extractor uses explicit POLE+O instructions:\n\n[source]\n----\nExtract entities using the POLE+O model:\n\n- PERSON: Individuals, people mentioned by name or role\n- OBJECT: Physical or digital items (vehicles, phones, documents)\n- LOCATION: Places, addresses, geographic areas\n- EVENT: Incidents, meetings, transactions, things that happened\n- ORGANIZATION: Companies, groups, institutions\n\nFor each entity, also identify:\n- Subtype (e.g., VEHICLE for OBJECT, COMPANY for ORGANIZATION)\n- Confidence score (0.0 to 1.0)\n- Description (brief context)\n----\n\n== Best Practices\n\n=== Choosing Entity Types\n\n1. **Start with POLE+O** - The default types cover most use cases\n2. **Add subtypes** - Use subtypes for finer classification without changing core types\n3. **Custom types** - Only create custom types for domain-specific needs\n\n=== Entity Naming\n\n1. **Canonical names** - Use full, proper names when possible\n2. **Consistency** - Use consistent capitalization and formatting\n3. **Aliases** - Store alternative names as separate entities with ALIAS_OF relationships\n\n=== Performance\n\n1. **Limit types** - Extract only the types you need\n2. **Use subtypes** - Subtypes are more efficient than many custom types\n3. **Index entities** - Neo4j indexes are created automatically for name+type\n\n== Next Steps\n\n* xref:how-to/entity-extraction.adoc[Configure the extraction pipeline]\n* xref:explanation/memory-types.adoc[Work with entities in long-term memory]\n* xref:reference/configuration.adoc[Full configuration reference]\n",
+    "sections": [
+      {
+        "id": "_what_is_poleo",
+        "title": "What is POLE+O?",
+        "level": 1
+      },
+      {
+        "id": "_entity_types_subtypes",
+        "title": "Entity Types & Subtypes",
+        "level": 1
+      },
+      {
+        "id": "_person",
+        "title": "PERSON",
+        "level": 2
+      },
+      {
+        "id": "_object",
+        "title": "OBJECT",
+        "level": 2
+      },
+      {
+        "id": "_location",
+        "title": "LOCATION",
+        "level": 2
+      },
+      {
+        "id": "_event",
+        "title": "EVENT",
+        "level": 2
+      },
+      {
+        "id": "_organization",
+        "title": "ORGANIZATION",
+        "level": 2
+      },
+      {
+        "id": "_neo4j_schema",
+        "title": "Neo4j Schema",
+        "level": 1
+      },
+      {
+        "id": "_label_structure",
+        "title": "Label Structure",
+        "level": 2
+      },
+      {
+        "id": "_custom_entity_types",
+        "title": "Custom Entity Types",
+        "level": 3
+      },
+      {
+        "id": "_relationships",
+        "title": "Relationships",
+        "level": 2
+      },
+      {
+        "id": "_message_links",
+        "title": "Message Links",
+        "level": 2
+      },
+      {
+        "id": "_configuring_poleo",
+        "title": "Configuring POLE+O",
+        "level": 1
+      },
+      {
+        "id": "_using_default_poleo",
+        "title": "Using Default POLE+O",
+        "level": 2
+      },
+      {
+        "id": "_selecting_specific_poleo_types",
+        "title": "Selecting Specific POLE+O Types",
+        "level": 2
+      },
+      {
+        "id": "_using_subtypes",
+        "title": "Using Subtypes",
+        "level": 2
+      },
+      {
+        "id": "_custom_schema_models",
+        "title": "Custom Schema Models",
+        "level": 1
+      },
+      {
+        "id": "_schemamodel_options",
+        "title": "SchemaModel Options",
+        "level": 2
+      },
+      {
+        "id": "_using_custom_entity_types",
+        "title": "Using Custom Entity Types",
+        "level": 2
+      },
+      {
+        "id": "_loading_schema_from_file",
+        "title": "Loading Schema from File",
+        "level": 2
+      },
+      {
+        "id": "_working_with_entities",
+        "title": "Working with Entities",
+        "level": 1
+      },
+      {
+        "id": "_searching_entities",
+        "title": "Searching Entities",
+        "level": 2
+      },
+      {
+        "id": "_entity_resolution",
+        "title": "Entity Resolution",
+        "level": 2
+      },
+      {
+        "id": "_poleo_in_the_extraction_pipeline",
+        "title": "POLE+O in the Extraction Pipeline",
+        "level": 1
+      },
+      {
+        "id": "_spacy_mapping",
+        "title": "spaCy Mapping",
+        "level": 2
+      },
+      {
+        "id": "_gliner_labels",
+        "title": "GLiNER Labels",
+        "level": 2
+      },
+      {
+        "id": "_llm_prompt",
+        "title": "LLM Prompt",
+        "level": 2
+      },
+      {
+        "id": "_best_practices",
+        "title": "Best Practices",
+        "level": 1
+      },
+      {
+        "id": "_choosing_entity_types",
+        "title": "Choosing Entity Types",
+        "level": 2
+      },
+      {
+        "id": "_entity_naming",
+        "title": "Entity Naming",
+        "level": 2
+      },
+      {
+        "id": "_performance",
+        "title": "Performance",
+        "level": 2
+      },
+      {
+        "id": "_next_steps",
+        "title": "Next Steps",
+        "level": 1
+      }
+    ]
+  },
+  "explanation/ontologies.adoc": {
+    "source": "= Ontologies\n:description: What a NAMS ontology is, how it extends POLE+O, and how validation modes and versioning work.\n\n[NOTE]\n====\nOntologies are a *NAMS (hosted backend)* capability. On the bolt backend the\n`client.ontology` methods raise `NotSupportedError`; define a custom schema with\n`SchemaModel.CUSTOM` instead. See xref:explanation/backends.adoc[Backends].\n====\n\n== What is an ontology?\n\nAn *ontology* is a typed, versioned, validated schema for your knowledge graph.\nWhere the base xref:explanation/poleo-model.adoc[POLE+O model] gives you five\ncoarse entity categories (Person, Organization, Location, Event, Object), an\nontology refines them into a concrete domain vocabulary:\n\n* **Entity types** \u2014 each carries a `pole_type` (one of the POLE+O categories),\n  an optional `subtype`, display metadata (`color`, `icon`), and a list of typed\n  **properties**.\n* **Properties** \u2014 a `name`, a `type` (`string`, `datetime`, `date`, `float`,\n  `integer`), and optional `required`, `unique`, and `enum` constraints.\n* **Relationships** \u2014 a typed edge (`UPPER_SNAKE`) with `source` and `target`\n  entity labels.\n\nNAMS ships ~28 *system templates* (healthcare, legal, cybersecurity,\nfinancial-services, software-engineering, and more). Activating one makes\nserver-side extraction produce a clean, predictable graph \u2014 `Patient`,\n`Provider`, `Diagnosis` with enforced fields and enumerations \u2014 instead of\ngeneric, loosely-typed nodes.\n\n== Templates vs. workspace-owned ontologies\n\nSystem templates are read-only (`is_system = true`). To customize one you\n*clone* it into a workspace-owned copy, which you can then revise. A workspace\nalso has exactly one *active* ontology at a time; until you activate one, the\n`nams-default` template is implicitly bound.\n\n== Versioning and immutability\n\nEvery change produces a new *immutable revision*. `clone` yields revision 1;\neach `update` yields revision n+1. A version records its `revision`,\n`validation_mode`, a `schema_hash`, and provenance. You `activate` a specific\n*version* (by its `ov_\u2026` id) \u2014 activation is what binds a schema to the\nworkspace and starts validating writes against it.\n\n== Validation modes\n\nEach version has a `validation_mode`:\n\n[cols=\"1,3\",options=\"header\"]\n|===\n| Mode | Behavior\n| `permissive` | (default) Non-conforming entity writes are accepted and recorded.\n| `strict` | Writes that violate the schema are rejected. The SDK surfaces the rejection as `ValidationError`.\n|===\n\n`permissive` favors ingestion tolerance; `strict` favors graph cleanliness. You\nchoose per version, and `get_active()` reports the active mode.\n\n== Relationship to server-side extraction\n\nOntologies shape the *server-side* GraphRAG extraction pipeline. Once a version\nis active, entities extracted from stored messages \u2014 and entities you write\ndirectly with `add_entity` \u2014 are validated against the active schema. Extraction\nis asynchronous; use\nxref:how-to/use-ontologies.adoc[`wait_for_extraction`] when you need to observe\nthe result deterministically.\n\n== See also\n\n* xref:how-to/use-ontologies.adoc[How-to: Use ontologies]\n* xref:reference/ontology-api.adoc[Reference: Ontology API]\n* xref:tutorials/ontology-quickstart.adoc[Tutorial: Ontology quickstart]\n",
+    "sections": [
+      {
+        "id": "_what_is_an_ontology",
+        "title": "What is an ontology?",
+        "level": 1
+      },
+      {
+        "id": "_templates_vs_workspace_owned_ontologies",
+        "title": "Templates vs. workspace-owned ontologies",
+        "level": 1
+      },
+      {
+        "id": "_versioning_and_immutability",
+        "title": "Versioning and immutability",
+        "level": 1
+      },
+      {
+        "id": "_validation_modes",
+        "title": "Validation modes",
+        "level": 1
+      },
+      {
+        "id": "_relationship_to_server_side_extraction",
+        "title": "Relationship to server-side extraction",
+        "level": 1
+      },
+      {
+        "id": "_see_also",
+        "title": "See also",
+        "level": 1
+      }
+    ]
+  },
+  "explanation/why-provider-protocol.adoc": {
+    "source": "= Why the Provider Protocol?\n:page-product: agent-memory\n:page-pagination:\n:toclevels: 3\n:sectanchors:\n:icons: font\n:source-highlighter: highlight.js\n\nA conceptual look at the design choices behind v0.3's pluggable LLM and embedding providers \u2014 why three protocols instead of one, why native-first resolution, why schema-aligned retry instead of an Instructor-only path.\n\n[.lead]\nv0.3 reshapes the LLM and embedding surface from a single hard-coded OpenAI client into three structural Protocols backed by adapters. This page explains *why* the design landed where it did. For task-oriented use, see xref:how-to/bring-your-own-model.adoc[Bring Your Own Model].\n\n== The problem v0.2 had\n\nIn v0.2, `LLMEntityExtractor` directly imported `from openai import AsyncOpenAI`. Even if a user passed `LLMConfig(provider=LLMProvider.ANTHROPIC, ...)`, the extractor still constructed an OpenAI client. That meant:\n\n* Anthropic users had to monkey-patch or fork the library.\n* Bedrock-only deployments (with no internet egress to OpenAI) couldn't run the extractor.\n* Custom local models (vLLM, Ollama, Together) were unreachable.\n* Costs were locked to OpenAI pricing.\n\nThe fix had three constraints:\n\n. **Backward compatibility.** Every line of v0.2 code in the wild must keep working.\n. **No abstraction over abstraction.** LiteLLM already abstracts 100+ providers. Wrapping LiteLLM with our own \"neo4j-agent-memory layer over LiteLLM\" would have been pure cost \u2014 no value-add.\n. **Quality must not regress.** OpenAI's strict-mode JSON output and Anthropic's forced tool use produce materially better extraction than LiteLLM's normalised `response_format`. The design has to preserve that.\n\n== Three Protocols, not one\n\n[source,python]\n----\nclass LLMProvider(Protocol):\n    model: str\n    async def complete(self, messages, *, temperature=0.0, ...) -> Completion: ...\n\nclass StructuredExtractor(Protocol):\n    async def complete_structured(\n        self, messages, response_model, *, temperature=0.0, max_retries=2, ...\n    ) -> T: ...\n\nclass EmbeddingProvider(Protocol):\n    model: str\n    dimensions: int\n    async def embed(self, texts) -> list[list[float]]: ...\n    async def embed_one(self, text) -> list[float]: ...\n----\n\nWhy three rather than one combined \"Provider\" interface?\n\n* **Embedding is genuinely a different concern.** It has no chat messages, no temperature, no completion. Folding it into `LLMProvider` would force every embedding-only adapter (`SentenceTransformersProvider`, `OpenAIEmbeddingProvider`) to no-op a `complete()` method.\n* **Structured extraction is opt-in.** A thin adapter (or an experimental local-model adapter) can satisfy the Bronze tier (`LLMProvider`) without committing to the Silver tier (`StructuredExtractor`). The library's entity extractor inspects the provider with `isinstance(provider, StructuredExtractor)` at runtime and chooses the appropriate path. Adapters get to participate at the level they support.\n* **Runtime-checkable Protocols give us free duck typing.** Users with their own custom LLM client can implement `LLMProvider` without inheriting from a base class. `isinstance(my_provider, LLMProvider)` works on structural typing, and Pydantic validates Provider instances against the Protocol in `MemorySettings._resolve_providers`.\n\nThe cost of three Protocols is a bit more conceptual surface area. The win is precision: every adapter declares exactly which capabilities it provides, and the entity extractor can pick the best available path.\n\n== Native-first resolution\n\nWhen you write `from_provider(\"openai/gpt-4o-mini\")`:\n\n* If the `[openai]` extra is installed, you get `OpenAIProvider`.\n* If only `[litellm]` is installed, you get `LiteLLMProvider`.\n* If both are installed, you get `OpenAIProvider` (the native adapter wins).\n\nWhy?\n\n* Native adapters preserve provider-specific features that LiteLLM normalises away \u2014 OpenAI strict-mode JSON, Anthropic prompt caching (opt-in via `cache_system=True`), Bedrock Converse streaming. These are quality and cost wins.\n* LiteLLM is the universal fallback. We want LiteLLM to *just work* for the long tail of providers without needing 50 native adapter files in the package.\n* Users who want consistent behaviour across providers \u2014 for example, observability tooling that depends on LiteLLM's normalised cost-tracking \u2014 can override with `prefer_litellm=True`.\n\nThe escape hatch is intentional. The default is \"best available\" because that's what produces the best agent quality.\n\n== Schema-aligned retry (SAP) as the safety net\n\nOpenAI has strict mode. Anthropic has forced tool use. LiteLLM has... `response_format` that works on some providers and not others. What do you do for a provider that has no native structured output mode?\n\n`schema_aligned_extract` is the answer. The algorithm is simple:\n\n. Send the prompt with the JSON schema as system context.\n. Parse the response tolerantly (strip markdown fences, smart quotes, trailing commas; find the largest balanced `{...}` block).\n. Validate against the Pydantic schema.\n. On `ValidationError` or `JSONDecodeError`, append the failed response and a feedback message naming the violated field paths, then retry.\n. After `max_retries + 1` attempts, raise `StructuredExtractionError` carrying every attempt for diagnosability.\n\nIt's a coarse path. But the validation-error feedback message is the secret: models respond to \"the field `entities[0].type` is invalid\" much better than \"your response was invalid.\" Empirically, second-attempt success rates are very high on capable models.\n\nWe considered making Instructor (https://python.useinstructor.com/[instructor library]) the only structured-output path. We rejected it because:\n\n* Instructor is great for users *already on Instructor*, but it's a heavy dependency for users who aren't.\n* Native adapters (OpenAI, Anthropic, Bedrock) already do better than Instructor for their own provider because they use vendor-specific features.\n* We expose Instructor as an *optional* adapter (`InstructorProvider` in `[instructor]`) for users who want it.\n\n== Why a separate exception hierarchy\n\n`neo4j_agent_memory.llm.errors` defines `ProviderError`, `ProviderRateLimitError`, etc. \u2014 completely separate from `neo4j_agent_memory.core.exceptions.MemoryError`.\n\nProvider errors are about LLM/embedding API calls. Memory errors are about Neo4j storage. A user's `except ProviderRateLimitError` should never inadvertently catch a Neo4j connection failure. Separation keeps the \"what went wrong\" surface clean.\n\nEach adapter translates its SDK's exceptions to the agnostic hierarchy. The translation table is documented in each adapter's module docstring; the goal is that `except ProviderRateLimitError` works identically across OpenAI, Anthropic, Bedrock, and LiteLLM.\n\n== Why `dimensions: int` is required on `EmbeddingProvider`\n\nNeo4j vector indexes are sized at creation time. If your embedder reports `dimensions=384` but the existing index is sized for `1536`, every insert silently fails (or, worse, succeeds with truncated/garbage vectors).\n\n`MemoryClient.connect()` introspects the embedder's `dimensions` attribute and validates every managed vector index. A mismatch raises `EmbeddingDimensionMismatchError` with the offending index list and a pointer to xref:how-to/migrate-embedding-model.adoc[the migration runbook] \u2014 fail fast, with actionable guidance.\n\nThis is why `EmbeddingProvider.dimensions` is a required attribute, not a method. It must be available at construction time, not lazily after the first `embed()` call. Adapters auto-populate it from the defaults table for known models; for unknown models the user must pass `dimensions=N` explicitly. Sentence-transformers is the one exception: it can introspect itself after model load.\n\n== Why the legacy `EmbeddingConfig` / `LLMConfig` types are deprecated, not removed\n\nTwo reasons:\n\n. **Backward compatibility is non-negotiable.** Removing the types in v0.3 would break every v0.2.x user. The plan is v0.3 deprecates, v0.4 escalates to `FutureWarning`, v0.5 removes.\n. **The new surface is strictly better.** Provider strings are shorter, easier to type, easier to switch. Provider instances offer more control than the legacy enum allowed (api_base override, batch_size, prompt caching). There's no reason to keep the legacy path long-term.\n\nThe migration cost is minimal \u2014 see xref:how-to/migrate-to-providers.adoc[Migrate to Pluggable Providers] for side-by-side examples \u2014 and the warning fires exactly once per `MemoryClient` construction.\n\n== What we deliberately did not build\n\nOut of scope for v0.3:\n\n* **Multimodal content** \u2014 `ChatMessage.content` is `str` only. Introducing `content: str | list[ContentPart]` is non-breaking and can land in v0.4.\n* **Streaming responses** \u2014 `complete()` returns the final `Completion`. Streaming is a v0.4+ concern.\n* **LiteLLM Router** \u2014 users who want LiteLLM's fallback / retry / load-balancing features can wrap their own Provider.\n* **Embedding caching** \u2014 content-addressed cache layer is a v0.4+ optimisation.\n* **A hosted gateway / proxy** \u2014 outside the library's scope.\n* **Synchronous API** \u2014 the library remains async-only, by design.\n\n== Why this design helps the TCK\n\nThe Provider Protocol is the canonical specification for the `agent-memory-tck` certification tiers:\n\n* **Bronze**: implements `LLMProvider` + `EmbeddingProvider`.\n* **Silver**: also implements `StructuredExtractor`.\n* **Gold**: meets the Bronze + Silver behavioural tests in the TCK harness against real cassettes.\n\nThe Python protocol module is small (`llm/protocol.py` is ~80 lines), has no SDK dependency, and serves as the source-of-truth specification. Polyglot ports (TypeScript, Go) target the same shape.\n\n== Summary\n\n* Three Protocols make capability tiers explicit and let adapters declare what they support.\n* Native-first resolution gets the best output quality per provider, with LiteLLM as the universal fallback.\n* SAP is the structured-output safety net for providers without native modes.\n* A separate exception hierarchy keeps provider errors distinct from storage errors.\n* `dimensions: int` is required at construction time so vector indexes fail fast on mismatches.\n* Backward compatibility is preserved through v0.4; legacy types are deprecated, not removed.\n\n== Related\n\n* xref:how-to/bring-your-own-model.adoc[Bring Your Own Model] \u2014 the task-oriented version of this page.\n* xref:how-to/migrate-to-providers.adoc[Migrate to Pluggable Providers].\n* xref:explanation/extraction-pipeline.adoc[Extraction Pipeline] \u2014 how the entity extractor uses the Protocol.\n",
+    "sections": [
+      {
+        "id": "_the_problem_v0_2_had",
+        "title": "The problem v0.2 had",
+        "level": 1
+      },
+      {
+        "id": "_three_protocols_not_one",
+        "title": "Three Protocols, not one",
+        "level": 1
+      },
+      {
+        "id": "_native_first_resolution",
+        "title": "Native-first resolution",
+        "level": 1
+      },
+      {
+        "id": "_schema_aligned_retry_sap_as_the_safety_net",
+        "title": "Schema-aligned retry (SAP) as the safety net",
+        "level": 1
+      },
+      {
+        "id": "_why_a_separate_exception_hierarchy",
+        "title": "Why a separate exception hierarchy",
+        "level": 1
+      },
+      {
+        "id": "_why_dimensions_int_is_required_on_embeddingprovider",
+        "title": "Why `dimensions: int` is required on `EmbeddingProvider`",
+        "level": 1
+      },
+      {
+        "id": "_why_the_legacy_embeddingconfig_llmconfig_types_are_deprecated_not_removed",
+        "title": "Why the legacy `EmbeddingConfig` / `LLMConfig` types are deprecated, not removed",
+        "level": 1
+      },
+      {
+        "id": "_what_we_deliberately_did_not_build",
+        "title": "What we deliberately did not build",
+        "level": 1
+      },
+      {
+        "id": "_why_this_design_helps_the_tck",
+        "title": "Why this design helps the TCK",
+        "level": 1
+      },
+      {
+        "id": "_summary",
+        "title": "Summary",
+        "level": 1
+      },
+      {
+        "id": "_related",
+        "title": "Related",
+        "level": 1
+      }
+    ]
+  },
+  "explanation/resolution-deduplication.adoc": {
+    "source": "= Entity Resolution and Deduplication\n:page-product: agent-memory\n:page-pagination:\n:toclevels: 3\n:sectanchors:\n:icons: font\n:source-highlighter: highlight.js\n\nUnderstanding how agent memory systems handle duplicate and variant entity references to maintain data quality.\n\nNOTE: The resolution and deduplication strategies here are *client-side*, configurable on the *bolt* backend. On *NAMS*, resolution and dedup run server-side automatically: `add_entity` runs the full resolution cascade synchronously and reports a `resolution` outcome (`created` / `merged` / `review_pending`), with ambiguous matches landing in a `SAME_AS` review queue. The manual review APIs (`find_potential_duplicates`, `merge_duplicate_entities`) are bolt-only. See xref:explanation/backends.adoc#capability-matrix[Bolt vs NAMS].\n\n== The Entity Resolution Problem\n\nWhen agents process conversations and documents, the same real-world entity often appears with different names, spellings, or references:\n\n.Financial Services Examples\n[cols=\"2,3\"]\n|===\n|Mentions |Same Entity\n\n|\"JPMorgan\", \"JP Morgan Chase\", \"Chase Bank\", \"JPMC\"\n|JPMorgan Chase & Co.\n\n|\"John Smith\", \"Mr. Smith\", \"J. Smith\", \"the client\"\n|Client ID: 12345\n\n|\"S&P 500\", \"SPX\", \"the index\", \"Standard & Poor's 500\"\n|S&P 500 Index\n\n|\"Q4 earnings\", \"fourth quarter results\", \"FY24 Q4\"\n|Q4 2024 Earnings Report\n|===\n\n.Ecommerce Retail Examples\n[cols=\"2,3\"]\n|===\n|Mentions |Same Entity\n\n|\"iPhone 15 Pro\", \"Apple iPhone 15 Pro Max\", \"the new iPhone\"\n|Apple iPhone 15 Pro Max\n\n|\"Nike Air Max\", \"Air Max 90\", \"Nike AM90\"\n|Nike Air Max 90 Sneakers\n\n|\"free shipping\", \"complimentary delivery\", \"no shipping cost\"\n|Free Shipping Promotion\n\n|\"John's order\", \"order #12345\", \"the package\"\n|Order ID: 12345\n|===\n\nWithout entity resolution, the knowledge graph becomes fragmented\u2014the same entity exists as multiple disconnected nodes, losing the relationships that make graph memory powerful.\n\n== Why Entity Resolution Matters\n\n=== 1. Relationship Integrity\n\nConsider tracking a customer's brand preferences:\n\n[source]\n----\nWithout Resolution:\n(Customer)-[:PURCHASED]->(Product)-[:MADE_BY]->(\"Nike\")\n(Customer)-[:MENTIONED_PREFERENCE]->(\"Nike Inc\")\n(Customer)-[:VIEWED]->(Product)-[:MADE_BY]->(\"NIKE\")\n\nResult: Three separate \"Nike\" nodes with no connection\n----\n\n[source]\n----\nWith Resolution:\n(Customer)-[:PURCHASED]->(Product)-[:MADE_BY]->(Nike:Organization)\n(Customer)-[:MENTIONED_PREFERENCE]->(Nike)\n(Customer)-[:VIEWED]->(Product)-[:MADE_BY]->(Nike)\n\nResult: Single Nike node with all relationships connected\n----\n\n=== 2. Accurate Analytics\n\nDuplicate entities skew metrics:\n\n- **Entity frequency**: \"Apple Inc\" appears 50 times, but \"Apple\", \"AAPL\", and \"Apple Computer\" appear 100 more times\u2014total mentions should be 150\n- **Relationship counts**: A customer appears to have relationships with 3 different \"Microsoft\" entities instead of 1\n- **Trend detection**: Duplicate entities hide the true importance of concepts\n\n=== 3. Context Quality\n\nWhen agents retrieve context for responses, duplicate entities mean:\n\n- Incomplete context (missing related information on variant nodes)\n- Redundant context (same information repeated under different names)\n- Confused reasoning (treating variants as different entities)\n\n== Resolution Strategies\n\n=== Embedding-Based Similarity\n\nThe primary resolution method uses vector embeddings to find semantically similar entities:\n\nimage::diagrams/embedding-based-similarity.png[Embedding-based entity resolution: new entity \u2192 embedding \u2192 vector similarity search \u2192 similarity scores \u2192 merge/flag/create,width=540,align=left]\n\n.How It Works\n1. New entity text is converted to a vector embedding\n2. Neo4j vector index finds nearest neighbors\n3. Similarity scores determine action:\n   - **Above auto-merge threshold**: Automatically merge with existing entity\n   - **Between flag and merge thresholds**: Create `SAME_AS` link for human review\n   - **Below flag threshold**: Create as new entity\n\n=== Fuzzy String Matching\n\nComplements embedding similarity for handling typos and abbreviations:\n\n[source,python]\n----\nfrom rapidfuzz import fuzz\n\n# Token-based comparison handles word order\nfuzz.token_sort_ratio(\"JP Morgan Chase\", \"Chase JP Morgan\")  # 100\n\n# Partial matching handles abbreviations\nfuzz.partial_ratio(\"JPMC\", \"JPMorgan Chase\")  # 80\n\n# Combined scoring\nembedding_score = 0.92\nfuzzy_score = fuzz.token_sort_ratio(new_name, existing_name) / 100\ncombined_score = (embedding_score * 0.7) + (fuzzy_score * 0.3)\n----\n\n=== Type-Constrained Matching\n\nOnly match entities of the same type to avoid false positives:\n\n[cols=\"2,2,2\"]\n|===\n|Entity |Type |Should Match?\n\n|\"Apple\" (company)\n|ORGANIZATION\n|\u2705 Yes with \"Apple Inc\"\n\n|\"Apple\" (fruit)\n|PRODUCT\n|\u274c No with \"Apple Inc\"\n\n|\"Chase\" (bank)\n|ORGANIZATION\n|\u2705 Yes with \"JPMorgan Chase\"\n\n|\"Chase\" (verb)\n|\u2014\n|\u274c Not an entity\n|===\n\n== The SAME_AS Pattern\n\nWhen automatic merging isn't confident enough, the system creates `SAME_AS` relationships for human review:\n\n[source,cypher]\n----\n// Structure of SAME_AS relationships\n(e1:Entity)-[:SAME_AS {\n    confidence: 0.89,\n    status: 'pending',      // pending, confirmed, rejected\n    created_at: datetime(),\n    method: 'embedding+fuzzy',\n    reviewed_by: null,\n    reviewed_at: null\n}]->(e2:Entity)\n----\n\n=== Review Workflow\n\n.Financial Services Example\n[source,python]\n----\n# Get pending duplicates for compliance review\nduplicates = await memory.long_term.find_potential_duplicates(limit=50)\n\nfor entity1, entity2, confidence in duplicates:\n    print(f\"Potential duplicate: '{entity1.name}' \u2194 '{entity2.name}'\")\n    print(f\"  Confidence: {confidence:.2%}\")\n    print(f\"  Entity 1 context: {entity1.description}\")\n    print(f\"  Entity 2 context: {entity2.description}\")\n\n    # Compliance officer reviews\n    if user_confirms_same_entity():\n        await memory.long_term.review_duplicate(entity1.id, entity2.id, confirm=True)\n    else:\n        await memory.long_term.review_duplicate(entity1.id, entity2.id, confirm=False)\n----\n\n.Ecommerce Retail Example\n[source,python]\n----\n# Get pending product duplicates for catalog team\nduplicates = await memory.long_term.find_potential_duplicates(limit=100)\n\nfor product1, product2, confidence in duplicates:\n    # Show products side by side\n    print(f\"'{product1.name}' vs '{product2.name}'\")\n    print(f\"  SKU 1: {product1.metadata.get('sku')}\")\n    print(f\"  SKU 2: {product2.metadata.get('sku')}\")\n\n    # If same SKU, definitely merge\n    if product1.metadata.get('sku') == product2.metadata.get('sku'):\n        await memory.long_term.review_duplicate(product1.id, product2.id, confirm=True)\n----\n\n== Merge Strategies\n\nWhen entities are confirmed as duplicates, they must be merged. Several strategies handle different scenarios:\n\n=== Keep Primary (Default)\n\nKeep the existing entity, transfer all relationships from the duplicate:\n\n[source,cypher]\n----\n// Before merge\n(Customer)-[:MENTIONED]->(\"Nike Inc\")\n(Customer)-[:PURCHASED]->(Product)-[:MADE_BY]->(\"Nike\")\n\n// After merge (Nike Inc is primary)\n(Customer)-[:MENTIONED]->(Nike:Organization {name: \"Nike Inc\"})\n(Customer)-[:PURCHASED]->(Product)-[:MADE_BY]->(Nike)\n\n// Duplicate node deleted, relationships transferred\n----\n\n=== Merge Properties\n\nCombine properties from both entities:\n\n[source,python]\n----\n# Original entities\nprimary = {\n    \"name\": \"Apple Inc\",\n    \"type\": \"ORGANIZATION\",\n    \"description\": \"Technology company\",\n    \"stock_symbol\": \"AAPL\"\n}\n\nduplicate = {\n    \"name\": \"Apple\",\n    \"type\": \"ORGANIZATION\",\n    \"description\": \"Consumer electronics and software company\",\n    \"founded\": \"1976\",\n    \"headquarters\": \"Cupertino, CA\"\n}\n\n# Merged result\nmerged = {\n    \"name\": \"Apple Inc\",  # Keep primary name\n    \"type\": \"ORGANIZATION\",\n    \"description\": \"Consumer electronics and software company\",  # Longer description\n    \"stock_symbol\": \"AAPL\",\n    \"founded\": \"1976\",\n    \"headquarters\": \"Cupertino, CA\",\n    \"aliases\": [\"Apple\"]  # Track alternate names\n}\n----\n\n=== Keep Aliases\n\nMaintain a list of known aliases for future matching:\n\n[source,cypher]\n----\n(Entity:Organization {\n    name: \"JPMorgan Chase & Co.\",\n    aliases: [\"JPMorgan\", \"JP Morgan\", \"Chase\", \"JPMC\", \"Chase Bank\"],\n    canonical: true\n})\n----\n\nFuture mentions of any alias immediately resolve to the canonical entity without embedding search.\n\n== Configuration Options\n\n=== Threshold Tuning\n\nDifferent domains require different thresholds:\n\n.Financial Services (High Precision)\n[source,python]\n----\n# Conservative settings for compliance-sensitive data\nconfig = DeduplicationConfig(\n    auto_merge_threshold=0.98,    # Very high confidence required\n    flag_threshold=0.90,          # Review more candidates\n    match_same_type_only=True,    # Strict type matching\n    use_fuzzy_matching=True,      # Catch abbreviations\n)\n----\n\n.Ecommerce Retail (Balanced)\n[source,python]\n----\n# Balance precision and recall for product catalog\nconfig = DeduplicationConfig(\n    auto_merge_threshold=0.95,    # Standard confidence\n    flag_threshold=0.85,          # Flag likely duplicates\n    match_same_type_only=True,\n    use_fuzzy_matching=True,\n)\n----\n\n.Content/Media (High Recall)\n[source,python]\n----\n# Aggressive deduplication for content entities\nconfig = DeduplicationConfig(\n    auto_merge_threshold=0.92,    # More automatic merging\n    flag_threshold=0.75,          # Cast wider net\n    match_same_type_only=False,   # Cross-type matching allowed\n    use_fuzzy_matching=True,\n)\n----\n\n=== Per-Entity Control\n\nDisable deduplication for specific entities:\n\n[source,python]\n----\n# Some entities should never be deduplicated\n# (e.g., intentionally similar product variants)\n\nentity, result = await memory.long_term.add_entity(\n    name=\"iPhone 15 Pro - Titanium Blue\",\n    entity_type=\"PRODUCT\",\n    deduplicate=False  # Skip deduplication\n)\n----\n\n== Handling Edge Cases\n\n=== Ambiguous Entities\n\nSome names are inherently ambiguous:\n\n[source,python]\n----\n# \"Apple\" could be a company or a fruit\n# Context determines correct resolution\n\n# In financial context\nentity, _ = await memory.long_term.add_entity(\n    name=\"Apple\",\n    entity_type=\"ORGANIZATION\",\n    metadata={\n        \"context\": \"stock market discussion\",\n        \"related_terms\": [\"AAPL\", \"Tim Cook\", \"iPhone\"]\n    }\n)\n\n# In grocery context\nentity, _ = await memory.long_term.add_entity(\n    name=\"Apple\",\n    entity_type=\"PRODUCT\",\n    metadata={\n        \"context\": \"produce section\",\n        \"related_terms\": [\"Granny Smith\", \"organic\", \"fruit\"]\n    }\n)\n----\n\n=== Historical Name Changes\n\nCompanies and products change names over time:\n\n[source,cypher]\n----\n// Model name changes explicitly\n(Facebook:Organization {\n    name: \"Meta Platforms, Inc.\",\n    aliases: [\"Facebook\", \"Facebook, Inc.\"],\n    former_names: [\n        {name: \"Facebook, Inc.\", until: date(\"2021-10-28\")}\n    ]\n})\n\n// Or use time-bounded relationships\n(Facebook)-[:KNOWN_AS {from: date(\"2004\"), to: date(\"2021-10-28\")}]->\n    (Name {value: \"Facebook, Inc.\"})\n(Facebook)-[:KNOWN_AS {from: date(\"2021-10-28\")}]->\n    (Name {value: \"Meta Platforms, Inc.\"})\n----\n\n=== Subsidiary Relationships\n\nDistinguish between same entity vs. related entities:\n\n[source,cypher]\n----\n// These are the SAME entity (should merge)\n\"Chase Bank\" \u2194 \"JPMorgan Chase\"\n\n// These are RELATED but DIFFERENT entities (should NOT merge)\n(JPMorgan:Organization)-[:OWNS]->(Chase:Organization)\n(Alphabet:Organization)-[:OWNS]->(Google:Organization)\n(LVMH:Organization)-[:OWNS]->(LouisVuitton:Organization)\n----\n\n== Monitoring and Quality\n\n=== Deduplication Statistics\n\nTrack resolution quality over time:\n\n[source,python]\n----\nstats = await memory.long_term.get_deduplication_stats()\n\nprint(f\"Total entities: {stats.total_entities}\")\nprint(f\"Auto-merged: {stats.auto_merged_count}\")\nprint(f\"Pending review: {stats.pending_review_count}\")\nprint(f\"Confirmed merges: {stats.confirmed_count}\")\nprint(f\"Rejected merges: {stats.rejected_count}\")\nprint(f\"Rejection rate: {stats.rejection_rate:.2%}\")  # If high, adjust thresholds\n----\n\n=== Quality Signals\n\nHigh rejection rates indicate thresholds need adjustment:\n\n[cols=\"1,2,2\"]\n|===\n|Metric |Healthy Range |Action if Outside\n\n|Auto-merge rejection rate\n|< 2%\n|Raise auto_merge_threshold\n\n|Flag-to-confirm rate\n|60-90%\n|Adjust flag_threshold\n\n|Orphan entity rate\n|< 10%\n|Lower flag_threshold\n\n|Review queue size\n|Manageable\n|Raise auto_merge_threshold\n|===\n\n== Best Practices\n\n=== 1. Start Conservative\n\nBegin with high thresholds and lower them based on observed quality:\n\n[source,python]\n----\n# Initial deployment\nconfig = DeduplicationConfig(\n    auto_merge_threshold=0.98,\n    flag_threshold=0.92,\n)\n\n# After validating quality, can relax\nconfig = DeduplicationConfig(\n    auto_merge_threshold=0.95,\n    flag_threshold=0.85,\n)\n----\n\n=== 2. Use Domain-Specific Entity Types\n\nMore specific types improve matching accuracy:\n\n[source,python]\n----\n# Too generic - leads to false matches\n\"ORGANIZATION\"  # Bank \u2194 Tech company \u2194 Retailer\n\n# More specific - better matching\n\"FINANCIAL_INSTITUTION\"\n\"TECHNOLOGY_COMPANY\"\n\"RETAIL_BRAND\"\n----\n\n=== 3. Leverage Aliases Early\n\nAdd known aliases when creating entities:\n\n[source,python]\n----\nentity, _ = await memory.long_term.add_entity(\n    name=\"Amazon.com, Inc.\",\n    entity_type=\"ORGANIZATION\",\n    metadata={\n        \"aliases\": [\"Amazon\", \"AMZN\", \"AWS parent company\"]\n    }\n)\n----\n\n=== 4. Regular Review Cycles\n\nEstablish a cadence for reviewing flagged duplicates:\n\n[source,python]\n----\n# Daily review of high-confidence flags\ndaily_review = await memory.long_term.find_potential_duplicates(limit=50)\n\n# Weekly review of lower-confidence flags\nweekly_review = await memory.long_term.find_potential_duplicates(limit=200)\n----\n\n== See Also\n\n* xref:explanation/extraction-pipeline.adoc[How Entity Extraction Works]\n* xref:explanation/poleo-model.adoc[The POLE+O Data Model]\n* xref:how-to/deduplication.adoc[Configure Entity Deduplication]\n* xref:reference/configuration.adoc#deduplication[Deduplication Configuration Reference]\n",
+    "sections": [
+      {
+        "id": "_the_entity_resolution_problem",
+        "title": "The Entity Resolution Problem",
+        "level": 1
+      },
+      {
+        "id": "_why_entity_resolution_matters",
+        "title": "Why Entity Resolution Matters",
+        "level": 1
+      },
+      {
+        "id": "_1_relationship_integrity",
+        "title": "1. Relationship Integrity",
+        "level": 2
+      },
+      {
+        "id": "_2_accurate_analytics",
+        "title": "2. Accurate Analytics",
+        "level": 2
+      },
+      {
+        "id": "_3_context_quality",
+        "title": "3. Context Quality",
+        "level": 2
+      },
+      {
+        "id": "_resolution_strategies",
+        "title": "Resolution Strategies",
+        "level": 1
+      },
+      {
+        "id": "_embedding_based_similarity",
+        "title": "Embedding-Based Similarity",
+        "level": 2
+      },
+      {
+        "id": "_fuzzy_string_matching",
+        "title": "Fuzzy String Matching",
+        "level": 2
+      },
+      {
+        "id": "_type_constrained_matching",
+        "title": "Type-Constrained Matching",
+        "level": 2
+      },
+      {
+        "id": "_the_same_as_pattern",
+        "title": "The SAME_AS Pattern",
+        "level": 1
+      },
+      {
+        "id": "_review_workflow",
+        "title": "Review Workflow",
+        "level": 2
+      },
+      {
+        "id": "_merge_strategies",
+        "title": "Merge Strategies",
+        "level": 1
+      },
+      {
+        "id": "_keep_primary_default",
+        "title": "Keep Primary (Default)",
+        "level": 2
+      },
+      {
+        "id": "_merge_properties",
+        "title": "Merge Properties",
+        "level": 2
+      },
+      {
+        "id": "_keep_aliases",
+        "title": "Keep Aliases",
+        "level": 2
+      },
+      {
+        "id": "_configuration_options",
+        "title": "Configuration Options",
+        "level": 1
+      },
+      {
+        "id": "_threshold_tuning",
+        "title": "Threshold Tuning",
+        "level": 2
+      },
+      {
+        "id": "_per_entity_control",
+        "title": "Per-Entity Control",
+        "level": 2
+      },
+      {
+        "id": "_handling_edge_cases",
+        "title": "Handling Edge Cases",
+        "level": 1
+      },
+      {
+        "id": "_ambiguous_entities",
+        "title": "Ambiguous Entities",
+        "level": 2
+      },
+      {
+        "id": "_historical_name_changes",
+        "title": "Historical Name Changes",
+        "level": 2
+      },
+      {
+        "id": "_subsidiary_relationships",
+        "title": "Subsidiary Relationships",
+        "level": 2
+      },
+      {
+        "id": "_monitoring_and_quality",
+        "title": "Monitoring and Quality",
+        "level": 1
+      },
+      {
+        "id": "_deduplication_statistics",
+        "title": "Deduplication Statistics",
+        "level": 2
+      },
+      {
+        "id": "_quality_signals",
+        "title": "Quality Signals",
+        "level": 2
+      },
+      {
+        "id": "_best_practices",
+        "title": "Best Practices",
+        "level": 1
+      },
+      {
+        "id": "_1_start_conservative",
+        "title": "1. Start Conservative",
+        "level": 2
+      },
+      {
+        "id": "_2_use_domain_specific_entity_types",
+        "title": "2. Use Domain-Specific Entity Types",
+        "level": 2
+      },
+      {
+        "id": "_3_leverage_aliases_early",
+        "title": "3. Leverage Aliases Early",
+        "level": 2
+      },
+      {
+        "id": "_4_regular_review_cycles",
+        "title": "4. Regular Review Cycles",
+        "level": 2
+      },
+      {
+        "id": "_see_also",
+        "title": "See Also",
+        "level": 1
+      }
+    ]
+  },
+  "explanation/memory-types.adoc": {
+    "source": "= Understanding the Three Memory Types\n:page-product: agent-memory\n:page-pagination:\n:toclevels: 2\n:page-ad-icon: mortarboard\n:page-ad-title: Context Graphs: Agent Memory with Neo4j\n:page-ad-description: Build an AI agent that records its reasoning into Neo4j and query the trace to understand what it did and why.\n:page-ad-link: https://graphacademy.neo4j.com/courses/genai-context-graphs/?ref=docs-ad-genai-context-graphs\n:page-ad-underline-role: button\n:page-ad-underline: Enroll now\n\nWhy agent memory is divided into short-term, long-term, and reasoning layers, and how they work together.\n\nNOTE: The three-layer model is identical on both backends. See xref:explanation/backends.adoc[Bolt vs NAMS] for what differs operationally.\n\n== The Problem with Stateless Agents\n\nMost AI agents today are stateless. Each conversation starts fresh. The agent doesn't remember:\n\n* What you discussed yesterday\n* Your preferences and interests\n* How it solved similar problems before\n* Facts it learned about your domain\n\nThis leads to repetitive interactions, missed context, and agents that never truly learn from experience.\n\n== A Three-Layer Solution\n\nneo4j-agent-memory addresses this with three distinct memory layers, each serving a different purpose:\n\nimage::diagrams/the-three-layer-memory-architecture.png[Three-layer memory architecture: short-term, long-term, and reasoning memory backed by Neo4j,width=600,align=left]\n\nimage::diagrams/three-memory-types-diagram.png[Detailed breakdown of all three memory types: short-term (Conversation/Message chain), long-term (POLE+O entities, Preference, Fact), and reasoning (Trace, Step, ToolCall) with their key capabilities,width=600,align=left]\n\n=== Short-Term Memory: What Happened\n\nShort-term memory stores *experiences* - the conversations, messages, and interactions your agent has with users.\n\n[cols=\"1,2\"]\n|===\n| Characteristic | Description\n\n| *Temporal*\n| Messages are ordered in time, forming conversation threads\n\n| *Ephemeral-ish*\n| Recent messages matter most; older ones may be summarized or archived\n\n| *Searchable*\n| Semantic search finds relevant past exchanges\n\n| *Scoped*\n| Organized by session/user for context isolation\n|===\n\nThink of it as the agent's \"working memory\" - what's been happening in the current and recent conversations.\n\n=== Long-Term Memory: What the Agent Knows\n\nLong-term memory stores *declarative knowledge* - entities, facts, and preferences that persist across sessions.\n\n[cols=\"1,2\"]\n|===\n| Characteristic | Description\n\n| *Structured*\n| Entities have types (POLE+O), relationships, and attributes\n\n| *Persistent*\n| Knowledge accumulates over time and across users\n\n| *Connected*\n| Entities relate to each other in a graph\n\n| *Enrichable*\n| Entities can be enhanced with external data (Wikipedia, etc.)\n|===\n\nThis is the agent's \"semantic memory\" - the facts and concepts it has learned.\n\n=== Reasoning Memory: How to Solve Problems\n\nReasoning memory stores *procedural knowledge* - traces of how the agent reasoned through problems and which tools it used.\n\n[cols=\"1,2\"]\n|===\n| Characteristic | Description\n\n| *Trace-based*\n| Records sequences of thoughts, actions, and observations\n\n| *Tool-aware*\n| Tracks which tools were called, with what arguments, and what results\n\n| *Outcome-linked*\n| Associates reasoning paths with success/failure\n\n| *Searchable*\n| Find similar past reasoning for new problems\n|===\n\nThis is the agent's \"episodic memory\" for problem-solving - remembering *how* it did things, not just *what* it knows.\n\n== Why Three Layers?\n\n=== Different Lifetimes\n\nEach memory type has a different lifecycle:\n\n* *Short-term*: Active during conversation, may be summarized after\n* *Long-term*: Persists indefinitely, grows over time\n* *Reasoning*: Archival - useful for analysis and pattern learning\n\n=== Different Access Patterns\n\nEach type is queried differently:\n\n* *Short-term*: \"What did we just discuss?\" \u2192 Recent messages in sequence\n* *Long-term*: \"What do I know about X?\" \u2192 Graph traversal and semantic search\n* *Reasoning*: \"How did I solve similar problems?\" \u2192 Trace similarity search\n\n=== Different Schemas\n\nEach type has different structure:\n\n* *Short-term*: Linear sequences of messages\n* *Long-term*: Graph of typed entities with relationships\n* *Reasoning*: Trees of traces \u2192 steps \u2192 tool calls\n\n== How They Connect\n\nThe three memory types aren't isolated - they're connected in the same graph:\n\n.Graph Schema\n[listing]\n....\n(Conversation)-[:HAS_MESSAGE]->(Message)\n(Message)-[:NEXT_MESSAGE]->(Message)\n(Message)-[:MENTIONS]->(Entity)\n(Entity)-[:WORKS_AT]->(Entity)\n(Entity)-[:LOCATED_IN]->(Entity)\n(ReasoningTrace)-[:INITIATED_BY]->(Message)\n(ToolCall)-[:TRIGGERED_BY]->(Message)\n....\n\n=== Messages \u2192 Entities\n\nWhen you store a message, entity extraction can automatically identify and link entities mentioned in the text. This populates long-term memory from short-term interactions.\n\n=== Traces \u2192 Messages\n\nReasoning traces can link back to the message that triggered them. This connects \"what the user asked\" to \"how the agent reasoned about it.\"\n\n=== Unified Context\n\nThe `get_context()` method combines all three memory types into a single context for LLM prompts:\n\n[source,python]\n----\ncontext = await client.get_context(\"restaurant recommendation\", session_id=\"user-123\")\n# Returns:\n# - Recent relevant messages (short-term)\n# - Related entities and preferences (long-term)\n# - Similar past reasoning traces (reasoning)\n----\n\n== The Graph Advantage\n\nAll three memory types live in Neo4j, which provides unique capabilities:\n\n=== Relationship Traversal\n\nFind how entities connect across memory types:\n\n[source,cypher]\n----\n// Find entities mentioned in messages that triggered successful reasoning\nMATCH (m:Message)-[:MENTIONS]->(e:Entity)\nMATCH (t:ReasoningTrace)-[:INITIATED_BY]->(m)\nWHERE t.success = true\nRETURN e.name, count(*) as mentions\nORDER BY mentions DESC\n----\n\n=== Temporal Queries\n\nTrack how knowledge evolves:\n\n[source,cypher]\n----\n// Find when an entity was first mentioned\nMATCH (m:Message)-[:MENTIONS]->(e:Entity {name: \"OpenAI\"})\nRETURN min(m.created_at) as first_mention\n----\n\n=== Combined Search\n\nNeo4j combines vector similarity, graph traversal, and property filters:\n\n[source,cypher]\n----\n// Semantic search + graph filter + property filter\nCALL db.index.vector.queryNodes('message_embedding', 10, $embedding)\nYIELD node as m, score\nMATCH (m)-[:MENTIONS]->(e:Entity {type: \"PERSON\"})\nWHERE m.created_at > datetime() - duration('P7D')\nRETURN m.content, e.name, score\n----\n\n== Best Practices\n\n=== Use Short-Term for Conversation Context\n\nInclude recent messages in your LLM prompts for continuity:\n\n[source,python]\n----\nrecent = await client.short_term.get_messages(session_id, limit=10)\ncontext = \"\\n\".join([f\"{m.role}: {m.content}\" for m in recent])\n----\n\n=== Use Long-Term for Domain Knowledge\n\nQuery entities when the user asks about specific topics:\n\n[source,python]\n----\nentities = await client.long_term.search_entities(\"machine learning\")\n# Add entity descriptions to prompt context\n----\n\n=== Use Reasoning for Similar Problems\n\nWhen facing a new task, find how similar tasks were solved:\n\n[source,python]\n----\nsimilar = await client.reasoning.search_traces(\"summarize document\")\n# Use successful trace outcomes as examples\n----\n\n=== Connect Across Types\n\nLink reasoning traces to triggering messages for full traceability:\n\n[source,python]\n----\ntrace = await client.reasoning.start_trace(\n    session_id,\n    task=\"Answer user question\",\n    triggered_by_message_id=user_message.id,\n)\n----\n\n== See Also\n\n* xref:how-to/messages.adoc[Store and Search Messages] - Short-term memory operations\n* xref:how-to/entities.adoc[Work with Entities] - Long-term memory operations\n* xref:how-to/reasoning-traces.adoc[Record Reasoning Traces] - Reasoning memory operations\n* xref:reference/api/memory-client.adoc[MemoryClient API] - Full API reference\n* xref:explanation/multi-agent-sharing.adoc[Cross-Agent Memory Sharing] - How multiple agents share one memory graph\n* link:https://github.com/neo4j-labs/agent-memory-tck/blob/main/docs/explanation/memory-model.adoc[Memory model in the TCK spec] - The cross-language spec author's framing\n",
+    "sections": [
+      {
+        "id": "_the_problem_with_stateless_agents",
+        "title": "The Problem with Stateless Agents",
+        "level": 1
+      },
+      {
+        "id": "_a_three_layer_solution",
+        "title": "A Three-Layer Solution",
+        "level": 1
+      },
+      {
+        "id": "_short_term_memory_what_happened",
+        "title": "Short-Term Memory: What Happened",
+        "level": 2
+      },
+      {
+        "id": "_long_term_memory_what_the_agent_knows",
+        "title": "Long-Term Memory: What the Agent Knows",
+        "level": 2
+      },
+      {
+        "id": "_reasoning_memory_how_to_solve_problems",
+        "title": "Reasoning Memory: How to Solve Problems",
+        "level": 2
+      },
+      {
+        "id": "_why_three_layers",
+        "title": "Why Three Layers?",
+        "level": 1
+      },
+      {
+        "id": "_different_lifetimes",
+        "title": "Different Lifetimes",
+        "level": 2
+      },
+      {
+        "id": "_different_access_patterns",
+        "title": "Different Access Patterns",
+        "level": 2
+      },
+      {
+        "id": "_different_schemas",
+        "title": "Different Schemas",
+        "level": 2
+      },
+      {
+        "id": "_how_they_connect",
+        "title": "How They Connect",
+        "level": 1
+      },
+      {
+        "id": "_messages_entities",
+        "title": "Messages \u2192 Entities",
+        "level": 2
+      },
+      {
+        "id": "_traces_messages",
+        "title": "Traces \u2192 Messages",
+        "level": 2
+      },
+      {
+        "id": "_unified_context",
+        "title": "Unified Context",
+        "level": 2
+      },
+      {
+        "id": "_the_graph_advantage",
+        "title": "The Graph Advantage",
+        "level": 1
+      },
+      {
+        "id": "_relationship_traversal",
+        "title": "Relationship Traversal",
+        "level": 2
+      },
+      {
+        "id": "_temporal_queries",
+        "title": "Temporal Queries",
+        "level": 2
+      },
+      {
+        "id": "_combined_search",
+        "title": "Combined Search",
+        "level": 2
+      },
+      {
+        "id": "_best_practices",
+        "title": "Best Practices",
+        "level": 1
+      },
+      {
+        "id": "_use_short_term_for_conversation_context",
+        "title": "Use Short-Term for Conversation Context",
+        "level": 2
+      },
+      {
+        "id": "_use_long_term_for_domain_knowledge",
+        "title": "Use Long-Term for Domain Knowledge",
+        "level": 2
+      },
+      {
+        "id": "_use_reasoning_for_similar_problems",
+        "title": "Use Reasoning for Similar Problems",
+        "level": 2
+      },
+      {
+        "id": "_connect_across_types",
+        "title": "Connect Across Types",
+        "level": 2
+      },
+      {
+        "id": "_see_also",
+        "title": "See Also",
+        "level": 1
+      }
+    ]
+  },
+  "explanation/framework-comparison.adoc": {
+    "source": "= Choosing an Agent Framework Integration\n:page-product: agent-memory\n:page-pagination:\n:description: Compare Neo4j Agent Memory integrations for LangChain, PydanticAI, LlamaIndex, CrewAI, OpenAI Agents SDK, AWS Strands Agents, and Microsoft Agent Framework.\n:keywords: agent, framework, comparison, langchain, pydantic-ai, llamaindex, crewai, openai, strands, aws, microsoft\n\nNeo4j Agent Memory provides integrations for seven popular agent frameworks. This guide helps you choose the right integration for your use case.\n\n== Feature Comparison Matrix\n\n[cols=\"2,1,1,1,1,1,1,1\", options=\"header\"]\n|===\n| Feature | LangChain | PydanticAI | LlamaIndex | CrewAI | OpenAI Agents | Strands | Microsoft \u26a0\ufe0f\n\n| *Memory Class*\n| `Neo4jAgentMemory`\n| `MemoryDependency`\n| `Neo4jLlamaIndexMemory`\n| `Neo4jCrewMemory`\n| `Neo4jOpenAIMemory`\n| `context_graph_tools()`\n| `Neo4jMicrosoftMemory`\n\n| *Retriever Support*\n| \u2705 `Neo4jMemoryRetriever`\n| \u274c\n| \u2705 Native `TextNode`\n| \u274c\n| \u274c\n| \u274c\n| \u274c\n\n| *Built-in Tools*\n| \u274c Custom required\n| \u2705 `create_memory_tools()`\n| \u274c Custom required\n| \u274c Custom required\n| \u2705 `create_memory_tools()`\n| \u2705 `context_graph_tools()`\n| \u2705 `create_memory_tools()`\n\n| *Context Provider*\n| \u274c\n| \u274c\n| \u274c\n| \u274c\n| \u274c\n| \u274c\n| \u2705 `Neo4jContextProvider`\n\n| *GDS Integration*\n| \u274c\n| \u274c\n| \u274c\n| \u274c\n| \u274c\n| \u274c\n| \u2705 PageRank, paths, similarity\n\n| *Trace Recording*\n| \u274c Manual\n| \u2705 `record_agent_trace()`\n| \u274c Manual\n| \u274c Manual\n| \u2705 `record_agent_trace()`\n| \u274c Manual\n| \u2705 `record_agent_trace()`\n\n| *Multi-Agent*\n| \u26a0\ufe0f Limited\n| \u26a0\ufe0f Limited\n| \u26a0\ufe0f Limited\n| \u2705 Native\n| \u26a0\ufe0f Limited\n| \u26a0\ufe0f Limited\n| \u26a0\ufe0f Limited\n\n| *Async Support*\n| \u2705 Via wrapper\n| \u2705 Native\n| \u2705 Via wrapper\n| \u2705 Via wrapper\n| \u2705 Native\n| \u2705 Sync (async internal)\n| \u2705 Native\n\n| *Test Coverage*\n| \u2705 39 tests\n| \u2705 38 tests\n| \u2705 25 tests\n| \u2705 30 tests\n| \u2705 35 tests\n| \u2705 95 tests\n| \u2705 55+ tests\n|===\n\nNOTE: The Microsoft Agent Framework column targets `agent-framework>=1.0.0b260212`. The framework has reached GA \u2014 check the https://github.com/microsoft/agent-framework[official releases] for the latest stable version.\n\n== Quick Decision Guide\n\n=== Use LangChain if:\n\n* You have an existing LangChain application\n* You need retriever integration for RAG pipelines\n* You want the most battle-tested integration\n* You're building chains with conversation memory\n\n[source,python]\n----\nfrom neo4j_agent_memory.integrations.langchain import Neo4jAgentMemory\n\nmemory = Neo4jAgentMemory(memory_client=client, session_id=\"user-123\")\ncontext = memory.load_memory_variables({\"input\": \"query\"})\n----\n\n=== Use PydanticAI if:\n\n* Starting a new project from scratch\n* You want automatic reasoning trace recording\n* You prefer modern dependency injection patterns\n* You need type-safe tool definitions\n\n[source,python]\n----\nfrom neo4j_agent_memory.integrations.pydantic_ai import MemoryDependency, create_memory_tools\n\ndeps = MemoryDependency(memory_client=client, session_id=\"user-123\")\ntools = create_memory_tools(deps)\ncontext = await deps.get_context(\"query\")\n----\n\n=== Use LlamaIndex if:\n\n* Building RAG applications\n* You need `TextNode` compatibility\n* Combining document retrieval with graph knowledge\n* Using LlamaIndex chat engines or agents\n\n[source,python]\n----\nfrom neo4j_agent_memory.integrations.llamaindex import Neo4jLlamaIndexMemory\n\nmemory = Neo4jLlamaIndexMemory(memory_client=client, session_id=\"user-123\")\nnodes = memory.get(input=\"query\")  # Returns TextNode objects\n----\n\n=== Use CrewAI if:\n\n* Building multi-agent systems\n* Need shared memory across agents\n* Want agent-specific context generation\n* Using CrewAI's crew and task abstractions\n\n[source,python]\n----\nfrom neo4j_agent_memory.integrations.crewai import Neo4jCrewMemory\n\nmemory = Neo4jCrewMemory(memory_client=client, crew_id=\"research-crew\")\nmemory.remember(\"Finding from research\", metadata={\"type\": \"fact\"})\nresults = memory.recall(\"previous findings\")\n----\n\n=== Use OpenAI Agents SDK if:\n\n* Using OpenAI's official agent framework\n* You want function calling tools in OpenAI format\n* Prefer OpenAI message format for conversations\n* Building with GPT-4 or GPT-3.5\n\n[source,python]\n----\nfrom neo4j_agent_memory.integrations.openai_agents import Neo4jOpenAIMemory, create_memory_tools\n\nmemory = Neo4jOpenAIMemory(memory_client=client, session_id=\"user-123\")\ntools = create_memory_tools(memory)  # OpenAI function format\nmessages = await memory.get_conversation()  # OpenAI message format\n----\n\n=== Use Strands Agents if:\n\n* Building on AWS with Amazon Bedrock\n* You want pre-built tools for context graph operations\n* You prefer a simple tool-based API without managing memory classes\n* You need Bedrock embedding support out of the box\n\n[source,python]\n----\nfrom strands import Agent\nfrom neo4j_agent_memory.integrations.strands import context_graph_tools\n\ntools = context_graph_tools(\n    neo4j_uri=\"bolt://localhost:7687\",\n    neo4j_password=\"password\",\n    embedding_provider=\"bedrock\",\n)\n\nagent = Agent(\n    model=\"anthropic.claude-sonnet-4-20250514-v1:0\",\n    tools=tools,\n)\n----\n\n=== Use Microsoft Agent Framework if:\n\n* Building with Azure OpenAI or Microsoft's agent platform\n* You want automatic context injection via ContextProvider hooks\n* You need Graph Data Science (GDS) algorithms for recommendations\n* You want auto-invoked tools with no manual dispatch\n\nNOTE: This integration targets Microsoft Agent Framework v1.0.0b260212. The framework has reached GA \u2014 check the https://github.com/microsoft/agent-framework[official releases] for the latest stable version.\n\n[source,python]\n----\nfrom neo4j_agent_memory.integrations.microsoft_agent import (\n    Neo4jMicrosoftMemory,\n    create_memory_tools,\n)\n\nmemory = Neo4jMicrosoftMemory(memory_client=client, session_id=\"user-123\")\ntools = create_memory_tools(memory)\n\n# Framework auto-invokes tools during agent.run()\nagent = chat_client.as_agent(\n    context_providers=[memory.context_provider],\n    tools=tools,\n)\n----\n\n== Memory Types Support\n\nAll integrations support the three-layer memory architecture:\n\n[cols=\"2,1,1,1\", options=\"header\"]\n|===\n| Memory Type | Description | Use Case | All Integrations\n\n| *Short-Term*\n| Conversation history\n| Session context\n| \u2705\n\n| *Long-Term*\n| Entities, preferences, facts\n| Persistent knowledge\n| \u2705\n\n| *Reasoning*\n| Task traces, tool usage\n| Learning from past\n| \u2705\n|===\n\n== Installation\n\nInstall with your preferred framework:\n\n[source,bash]\n----\n# LangChain\npip install neo4j-agent-memory[langchain]\n\n# PydanticAI\npip install neo4j-agent-memory[pydantic-ai]\n\n# LlamaIndex\npip install neo4j-agent-memory[llamaindex]\n\n# CrewAI\npip install neo4j-agent-memory[crewai]\n\n# OpenAI Agents SDK\npip install neo4j-agent-memory[openai-agents]\n\n# Strands Agents (AWS)\npip install neo4j-agent-memory[strands]\n\n# Microsoft Agent Framework (Preview)\npip install neo4j-agent-memory[microsoft-agent]\n\n# All frameworks\npip install neo4j-agent-memory[all]\n----\n\n== Detailed Comparison\n\n=== Context Retrieval\n\nAll integrations provide a way to get combined context for LLM prompts:\n\n[cols=\"1,2\", options=\"header\"]\n|===\n| Framework | Method\n\n| LangChain\n| `memory.load_memory_variables({\"input\": query})`\n\n| PydanticAI\n| `await deps.get_context(query)`\n\n| LlamaIndex\n| `memory.get(input=query)` \u2192 TextNode list\n\n| CrewAI\n| `memory.get_agent_context(agent_role, task)`\n\n| OpenAI Agents\n| `await memory.get_context(query)`\n\n| Strands\n| Via `search_context` tool (auto-called by agent)\n\n| Microsoft\n| `await memory.get_context(query)`\n|===\n\n=== Message Storage\n\n[cols=\"1,2\", options=\"header\"]\n|===\n| Framework | Method\n\n| LangChain\n| `memory.save_context(inputs, outputs)`\n\n| PydanticAI\n| `await deps.save_interaction(user_msg, assistant_msg)`\n\n| LlamaIndex\n| `memory.put(TextNode(text=content))`\n\n| CrewAI\n| `memory.remember(content, metadata)`\n\n| OpenAI Agents\n| `await memory.save_message(role, content)`\n\n| Strands\n| Via `add_memory` tool (auto-called by agent)\n\n| Microsoft\n| `await memory.save_message(role, content)`\n|===\n\n=== Search Operations\n\n[cols=\"1,2\", options=\"header\"]\n|===\n| Framework | Method\n\n| LangChain\n| Via `Neo4jMemoryRetriever.get_relevant_documents()`\n\n| PydanticAI\n| Via memory tools or direct client access\n\n| LlamaIndex\n| `memory.get(input=query)` with semantic search\n\n| CrewAI\n| `memory.recall(query, n=5)`\n\n| OpenAI Agents\n| `await memory.search(query)`\n\n| Strands\n| Via `search_context` and `get_entity_graph` tools\n\n| Microsoft\n| `await memory.search_memory(query)`\n|===\n\n== Performance Considerations\n\n=== Async vs Sync\n\n[cols=\"1,2,2\", options=\"header\"]\n|===\n| Framework | API Style | Notes\n\n| LangChain\n| Sync (async under hood)\n| Uses ThreadPoolExecutor for async bridging\n\n| PydanticAI\n| Async native\n| Best performance for async applications\n\n| LlamaIndex\n| Sync (async under hood)\n| Uses ThreadPoolExecutor for async bridging\n\n| CrewAI\n| Sync (async under hood)\n| Uses ThreadPoolExecutor for async bridging\n\n| OpenAI Agents\n| Async native\n| Best performance for async applications\n\n| Strands\n| Sync (async internal)\n| Tools are sync; async MemoryClient runs in thread pool\n\n| Microsoft\n| Async native\n| ContextProvider hooks and tools are async\n|===\n\n=== Embedding Generation\n\nAll integrations support configurable embedding generation:\n\n* `generate_embedding=True` - Enable for semantic search\n* `generate_embedding=False` - Disable for faster writes\n\n=== Entity Extraction\n\nAll integrations support configurable entity extraction:\n\n* `extract_entities=True` - Extract entities from messages\n* `extract_entities=False` - Disable for faster processing\n\n== Migration Guide\n\n=== From Custom Memory to Neo4j Agent Memory\n\n1. Install the integration for your framework\n2. Replace your memory class with the Neo4j-backed version\n3. Update configuration to point to Neo4j\n4. Migrate existing data if needed\n\n=== Between Frameworks\n\nThe underlying Neo4j data model is the same across all integrations. To switch frameworks:\n\n1. Install the new framework integration\n2. Use the same Neo4j database\n3. Update your code to use the new integration API\n4. Existing data (messages, entities, traces) will be available\n\n== Best Practices\n\n=== Choose Based on Existing Stack\n\nIf you already use a framework, choose that integration:\n\n* LangChain project \u2192 LangChain integration\n* LlamaIndex project \u2192 LlamaIndex integration\n* CrewAI project \u2192 CrewAI integration\n* OpenAI-native \u2192 OpenAI Agents integration\n* AWS/Strands project \u2192 Strands integration\n* Azure/Microsoft project \u2192 Microsoft Agent Framework integration\n\n=== For New Projects\n\nConsider PydanticAI or OpenAI Agents for new projects:\n\n* Modern async-native design\n* Built-in trace recording\n* Type-safe tool creation\n* Better IDE support\n\n=== For RAG Applications\n\nLlamaIndex integration works best with document-based RAG:\n\n* Native TextNode support\n* Combines document and graph retrieval\n* Works with LlamaIndex indices and query engines\n\n=== For AWS Projects\n\nStrands Agents integration is built for the AWS ecosystem:\n\n* Native Amazon Bedrock embedding support\n* Pre-built tools for context graph operations\n* Works with the AWS Strands Agents SDK\n* Combines with HybridMemoryProvider for AgentCore Memory\n\n=== For Multi-Agent Systems\n\nCrewAI integration is designed for multi-agent collaboration:\n\n* Shared memory across agents\n* Agent-specific context generation\n* Cross-task knowledge persistence\n\n== Troubleshooting\n\n=== Import Errors\n\nEach integration requires its framework to be installed:\n\n[source,bash]\n----\n# If you get \"ImportError: No module named 'langchain_core'\"\npip install langchain-core\n\n# If you get \"ImportError: No module named 'llama_index'\"\npip install llama-index-core\n\n# If you get \"ImportError: No module named 'pydantic_ai'\"\npip install pydantic-ai\n\n# If you get \"ImportError: No module named 'crewai'\"\npip install crewai\n\n# If you get \"ImportError: No module named 'openai'\"\npip install openai\n\n# If you get \"ImportError: No module named 'strands'\"\npip install strands-agents\n\n# If you get \"ImportError: No module named 'agent_framework'\"\npip install agent-framework>=1.0.0b260212\n----\n\n=== Async/Sync Issues\n\nIf you encounter event loop issues:\n\n* LangChain, LlamaIndex, CrewAI: Use sync methods directly\n* PydanticAI, OpenAI Agents, Microsoft: Use `asyncio.run()` or async context\n\n=== Empty Results\n\nIf searches return empty:\n\n1. Verify embeddings are generated\n2. Check data exists in Neo4j Browser\n3. Try lowering similarity thresholds\n\n== Summary\n\n| Use Case | Recommended Framework |\n|----------|----------------------|\n| Existing LangChain app | LangChain |\n| New project | PydanticAI or OpenAI Agents |\n| RAG with documents | LlamaIndex |\n| Multi-agent systems | CrewAI |\n| OpenAI function calling | OpenAI Agents |\n| AWS / Bedrock ecosystem | Strands |\n| Azure / Microsoft ecosystem | Microsoft Agent Framework |\n| GDS graph algorithms | Microsoft Agent Framework |\n| Maximum flexibility | Direct MemoryClient |\n",
+    "sections": [
+      {
+        "id": "_feature_comparison_matrix",
+        "title": "Feature Comparison Matrix",
+        "level": 1
+      },
+      {
+        "id": "_quick_decision_guide",
+        "title": "Quick Decision Guide",
+        "level": 1
+      },
+      {
+        "id": "_use_langchain_if",
+        "title": "Use LangChain if:",
+        "level": 2
+      },
+      {
+        "id": "_use_pydanticai_if",
+        "title": "Use PydanticAI if:",
+        "level": 2
+      },
+      {
+        "id": "_use_llamaindex_if",
+        "title": "Use LlamaIndex if:",
+        "level": 2
+      },
+      {
+        "id": "_use_crewai_if",
+        "title": "Use CrewAI if:",
+        "level": 2
+      },
+      {
+        "id": "_use_openai_agents_sdk_if",
+        "title": "Use OpenAI Agents SDK if:",
+        "level": 2
+      },
+      {
+        "id": "_use_strands_agents_if",
+        "title": "Use Strands Agents if:",
+        "level": 2
+      },
+      {
+        "id": "_use_microsoft_agent_framework_if",
+        "title": "Use Microsoft Agent Framework if:",
+        "level": 2
+      },
+      {
+        "id": "_memory_types_support",
+        "title": "Memory Types Support",
+        "level": 1
+      },
+      {
+        "id": "_installation",
+        "title": "Installation",
+        "level": 1
+      },
+      {
+        "id": "_detailed_comparison",
+        "title": "Detailed Comparison",
+        "level": 1
+      },
+      {
+        "id": "_context_retrieval",
+        "title": "Context Retrieval",
+        "level": 2
+      },
+      {
+        "id": "_message_storage",
+        "title": "Message Storage",
+        "level": 2
+      },
+      {
+        "id": "_search_operations",
+        "title": "Search Operations",
+        "level": 2
+      },
+      {
+        "id": "_performance_considerations",
+        "title": "Performance Considerations",
+        "level": 1
+      },
+      {
+        "id": "_async_vs_sync",
+        "title": "Async vs Sync",
+        "level": 2
+      },
+      {
+        "id": "_embedding_generation",
+        "title": "Embedding Generation",
+        "level": 2
+      },
+      {
+        "id": "_entity_extraction",
+        "title": "Entity Extraction",
+        "level": 2
+      },
+      {
+        "id": "_migration_guide",
+        "title": "Migration Guide",
+        "level": 1
+      },
+      {
+        "id": "_from_custom_memory_to_neo4j_agent_memory",
+        "title": "From Custom Memory to Neo4j Agent Memory",
+        "level": 2
+      },
+      {
+        "id": "_between_frameworks",
+        "title": "Between Frameworks",
+        "level": 2
+      },
+      {
+        "id": "_best_practices",
+        "title": "Best Practices",
+        "level": 1
+      },
+      {
+        "id": "_choose_based_on_existing_stack",
+        "title": "Choose Based on Existing Stack",
+        "level": 2
+      },
+      {
+        "id": "_for_new_projects",
+        "title": "For New Projects",
+        "level": 2
+      },
+      {
+        "id": "_for_rag_applications",
+        "title": "For RAG Applications",
+        "level": 2
+      },
+      {
+        "id": "_for_aws_projects",
+        "title": "For AWS Projects",
+        "level": 2
+      },
+      {
+        "id": "_for_multi_agent_systems",
+        "title": "For Multi-Agent Systems",
+        "level": 2
+      },
+      {
+        "id": "_troubleshooting",
+        "title": "Troubleshooting",
+        "level": 1
+      },
+      {
+        "id": "_import_errors",
+        "title": "Import Errors",
+        "level": 2
+      },
+      {
+        "id": "_asyncsync_issues",
+        "title": "Async/Sync Issues",
+        "level": 2
+      },
+      {
+        "id": "_empty_results",
+        "title": "Empty Results",
+        "level": 2
+      },
+      {
+        "id": "_summary",
+        "title": "Summary",
+        "level": 1
+      }
+    ]
+  },
+  "explanation/graph-architecture.adoc": {
+    "source": "= Why Neo4j? Graph-Native Memory Architecture\n:page-product: agent-memory\n:page-pagination:\n:toclevels: 3\n:sectanchors:\n:icons: font\n:source-highlighter: highlight.js\n:page-ad-icon: mortarboard\n:page-ad-title: Context Graphs: Agent Memory with Neo4j\n:page-ad-description: Build an AI agent that records its reasoning into Neo4j and query the trace to understand what it did and why.\n:page-ad-link: https://graphacademy.neo4j.com/courses/genai-context-graphs/?ref=docs-ad-genai-context-graphs\n:page-ad-underline-role: button\n:page-ad-underline: Enroll now\n\nUnderstanding why graph databases are the optimal choice for agent memory systems.\n\n== The Problem with Traditional Storage\n\nMost AI agent memory implementations use one of two approaches:\n\n1. **Vector databases only** - Good for semantic search, but lose relationships\n2. **Relational databases** - Structured storage, but expensive joins for connected queries\n\nNeither approach handles the fundamental nature of memory: **relationships between concepts**.\n\n=== Enterprise Memory Challenges\n\nConsider a financial services agent that needs to answer: \"What transactions has John Smith made with companies where his colleagues also invested?\"\n\n.With a Relational Database\n[source,sql]\n----\nSELECT t.*\nFROM transactions t\nJOIN customers c ON t.customer_id = c.id\nJOIN colleagues col ON c.id = col.customer_id\nJOIN investments inv ON col.colleague_id = inv.investor_id\nJOIN companies comp ON t.merchant_id = comp.id AND inv.company_id = comp.id\nWHERE c.name = 'John Smith';\n----\n\nThis query requires:\n- 5 table joins\n- Complex query planning\n- Performance degrades exponentially with data size\n- Schema changes require query rewrites\n\n.With Neo4j Graph Database\n[source,cypher]\n----\nMATCH (john:Person {name: 'John Smith'})-[:COLLEAGUE_OF]->(colleague)\n      -[:INVESTED_IN]->(company)<-[:TRANSACTION_WITH]-(john)\nRETURN john, company, colleague\n----\n\nThis query:\n- Naturally expresses the relationship pattern\n- Performs in constant time per result\n- Self-documents the business logic\n- Adapts easily to schema evolution\n\n== Graph-Native Advantages\n\n=== 1. Natural Relationship Modeling\n\nMemory is inherently about connections. In an ecommerce retail agent:\n\n[source]\n----\n(Customer)-[:PURCHASED]->(Product)\n(Product)-[:IN_CATEGORY]->(Category)\n(Customer)-[:VIEWED]->(Product)\n(Product)-[:FREQUENTLY_BOUGHT_WITH]->(Product)\n(Customer)-[:HAS_PREFERENCE]->(Brand)\n----\n\nThese relationships are first-class citizens in Neo4j, not afterthoughts requiring join tables.\n\n=== 2. Traversal Performance\n\nGraph databases use index-free adjacency\u2014each node directly references its neighbors. This means:\n\n[cols=\"1,1,1\"]\n|===\n|Query Type |Relational |Graph\n\n|Find direct connections\n|O(log n)\n|O(1)\n\n|2-hop traversal\n|O(n \u00d7 log n)\n|O(k)\n\n|6-hop traversal (e.g., fraud detection)\n|Often infeasible\n|O(k^6)\n|===\n\nWhere `n` is table size and `k` is average connections per node.\n\n.Financial Services Example: Fraud Ring Detection\n[source,cypher]\n----\n// Find accounts connected through suspicious transaction patterns\nMATCH path = (account:Account)-[:TRANSFERRED_TO*2..5]-(other:Account)\nWHERE account.flagged = true\n  AND all(r IN relationships(path) WHERE r.amount > 10000)\nRETURN path\n----\n\nThis multi-hop fraud detection query runs in milliseconds on Neo4j but would be impractical in a relational database.\n\n=== 3. Vector Search Integration\n\nNeo4j combines graph traversal with vector similarity search:\n\n[source,cypher]\n----\n// Find semantically similar products that the customer's network also purchased\nMATCH (customer:Customer {id: $customerId})-[:KNOWS]->(friend)\n      -[:PURCHASED]->(product:Product)\nWITH collect(DISTINCT product) as friendProducts\nCALL db.index.vector.queryNodes('product_embeddings', 10, $queryEmbedding)\nYIELD node as similarProduct, score\nWHERE similarProduct IN friendProducts\nRETURN similarProduct, score\nORDER BY score DESC\n----\n\nThis combines:\n- **Graph traversal**: Customer's social network\n- **Vector search**: Semantic similarity to query\n- **Filtering**: Intersection of both result sets\n\n=== 4. Temporal Queries\n\nMemory systems need to reason about time. Neo4j handles temporal data naturally:\n\n[source,cypher]\n----\n// Find customer behavior patterns before large purchases\nMATCH (customer:Customer)-[v:VIEWED]->(product:Product)\n      -[:IN_CATEGORY]->(cat:Category {name: 'Luxury'})\nWHERE v.timestamp > datetime() - duration('P30D')\nWITH customer, count(v) as viewCount\nMATCH (customer)-[p:PURCHASED]->(item)\nWHERE p.amount > 1000\n  AND p.timestamp > datetime() - duration('P7D')\nRETURN customer, viewCount, sum(p.amount) as totalSpent\n----\n\n=== 5. Schema Flexibility\n\nEnterprise agents often need to handle evolving data models:\n\n.Adding a New Entity Type (No Migration Required)\n[source,cypher]\n----\n// Existing: Customers and Products\n// New requirement: Track loyalty program membership\n\n// Simply create new nodes and relationships\nCREATE (customer)-[:MEMBER_OF {since: date(), tier: 'Gold'}]->(program:LoyaltyProgram {name: 'Rewards+'})\n----\n\nNo schema migrations, no downtime, no breaking existing queries.\n\n== The Three-Layer Memory Architecture\n\nNeo4j enables a unified storage layer for all three memory types:\n\nimage::diagrams/memory-architecture.png[Memory architecture: MemoryClient with three layers backed by Neo4j graph database,width=600,align=left]\n\n=== Why One Database?\n\nUsing separate databases for vectors, entities, and relationships creates:\n\n- **Consistency issues**: Data can become out of sync\n- **Query complexity**: Cross-database joins are expensive\n- **Operational overhead**: Multiple systems to manage\n\nNeo4j provides all capabilities in one system:\n\n[cols=\"2,3\"]\n|===\n|Capability |Neo4j Feature\n\n|Semantic search\n|Vector indexes with HNSW algorithm\n\n|Entity relationships\n|Native graph storage and traversal\n\n|Conversation history\n|Linked list pattern with Message nodes\n\n|Location queries\n|Point type with spatial indexes\n\n|Full-text search\n|Lucene-based full-text indexes\n\n|Graph analytics\n|Built-in algorithms (PageRank, community detection)\n|===\n\n== Enterprise Use Case: Financial Services\n\nConsider a wealth management agent that helps advisors serve clients:\n\n=== Data Model\n\n[source,cypher]\n----\n// Client and account structure\n(Client:Person)-[:HAS_ACCOUNT]->(Account)\n(Account)-[:HOLDS]->(Position)-[:IN]->(Security)\n(Client)-[:ADVISED_BY]->(Advisor:Person)\n\n// Transaction history\n(Account)-[:EXECUTED]->(Transaction)-[:INVOLVED]->(Security)\n(Transaction)-[:ON_DATE]->(Date)\n\n// Relationships and preferences\n(Client)-[:RELATED_TO {type: 'spouse'}]->(Client)\n(Client)-[:HAS_PREFERENCE]->(Preference)\n(Client)-[:MENTIONED_IN]->(Message)-[:IN_SESSION]->(Conversation)\n\n// Compliance and risk\n(Transaction)-[:FLAGGED_BY]->(ComplianceRule)\n(Client)-[:HAS_RISK_PROFILE]->(RiskProfile)\n----\n\n=== Example Queries\n\n.Cross-Account Family View\n[source,cypher]\n----\n// Get complete household financial picture\nMATCH (client:Client {id: $clientId})-[:RELATED_TO*0..2]-(family:Client)\n      -[:HAS_ACCOUNT]->(account)-[:HOLDS]->(position)\nRETURN family.name, account.type, sum(position.value) as totalValue\nORDER BY totalValue DESC\n----\n\n.Preference-Aware Recommendations\n[source,cypher]\n----\n// Find securities matching client preferences mentioned in conversations\nMATCH (client:Client {id: $clientId})-[:HAS_PREFERENCE]->(pref)\nWHERE pref.category = 'investment_style'\nWITH client, collect(pref.value) as preferences\n\nMATCH (security:Security)\nWHERE any(p IN preferences WHERE security.style CONTAINS p)\n  AND NOT exists((client)-[:HAS_ACCOUNT]->()-[:HOLDS]->()-[:IN]->(security))\n\nCALL db.index.vector.queryNodes('security_embeddings', 20, $queryEmbedding)\nYIELD node, score\nWHERE node = security\nRETURN security, score\n----\n\n== Enterprise Use Case: Ecommerce Retail\n\nAn AI shopping assistant needs to understand customer behavior and preferences:\n\n=== Data Model\n\n[source,cypher]\n----\n// Customer journey\n(Customer)-[:VIEWED {timestamp, duration}]->(Product)\n(Customer)-[:ADDED_TO_CART {timestamp}]->(Product)\n(Customer)-[:PURCHASED {timestamp, price}]->(Product)\n(Customer)-[:RETURNED {reason}]->(Product)\n\n// Product catalog\n(Product)-[:IN_CATEGORY]->(Category)-[:CHILD_OF]->(Category)\n(Product)-[:HAS_ATTRIBUTE]->(Attribute)\n(Product)-[:SOLD_BY]->(Seller)\n(Product)-[:FREQUENTLY_BOUGHT_WITH]->(Product)\n\n// Customer knowledge\n(Customer)-[:HAS_PREFERENCE]->(Preference)\n(Customer)-[:MENTIONED_IN]->(Message)\n(Customer)-[:IN_SEGMENT]->(CustomerSegment)\n\n// Inventory and fulfillment\n(Product)-[:AVAILABLE_AT]->(Warehouse)-[:LOCATED_IN]->(Region)\n(Order)-[:SHIPS_TO]->(Address)-[:IN]->(Region)\n----\n\n=== Example Queries\n\n.Personalized Product Discovery\n[source,cypher]\n----\n// Find products based on behavior patterns and stated preferences\nMATCH (customer:Customer {id: $customerId})\n\n// Get viewing patterns\nOPTIONAL MATCH (customer)-[v:VIEWED]->(viewed:Product)\nWHERE v.timestamp > datetime() - duration('P30D')\nWITH customer, collect(viewed) as recentlyViewed\n\n// Get stated preferences from conversations\nOPTIONAL MATCH (customer)-[:HAS_PREFERENCE]->(pref)\nWHERE pref.category IN ['brand', 'style', 'price_range']\nWITH customer, recentlyViewed, collect(pref) as preferences\n\n// Find similar products not yet viewed\nUNWIND recentlyViewed as viewed\nMATCH (viewed)-[:FREQUENTLY_BOUGHT_WITH]->(recommended:Product)\nWHERE NOT recommended IN recentlyViewed\nRETURN DISTINCT recommended, count(*) as relevanceScore\nORDER BY relevanceScore DESC\nLIMIT 10\n----\n\n.Inventory-Aware Recommendations\n[source,cypher]\n----\n// Recommend products available for fast shipping to customer location\nMATCH (customer:Customer {id: $customerId})-[:SHIPS_TO]->(addr:Address)\n      -[:IN]->(region:Region)\nMATCH (product:Product)-[:AVAILABLE_AT]->(warehouse)-[:LOCATED_IN]->(region)\nWHERE product.category = $category\n  AND warehouse.stock > 0\n\n// Boost products matching preferences\nOPTIONAL MATCH (customer)-[:HAS_PREFERENCE]->(pref)\nWHERE product.brand = pref.value OR product.style = pref.value\nWITH product, warehouse, count(pref) as prefMatch\nRETURN product, warehouse.estimated_delivery, prefMatch\nORDER BY prefMatch DESC, warehouse.estimated_delivery ASC\n----\n\n== Performance Characteristics\n\n=== Benchmark: Multi-Hop Queries\n\nTesting traversal of customer networks to find shared purchasing patterns:\n\n[cols=\"1,1,1,1\"]\n|===\n|Hops |Records |PostgreSQL |Neo4j\n\n|2\n|10K\n|45ms\n|2ms\n\n|3\n|100K\n|1.2s\n|8ms\n\n|4\n|1M\n|28s\n|35ms\n\n|5\n|10M\n|Timeout\n|180ms\n|===\n\n=== Memory Footprint\n\nNeo4j's native storage is optimized for graph data:\n\n- **Node**: ~15 bytes base + properties\n- **Relationship**: ~34 bytes base + properties\n- **Vector index**: Configurable dimensions (typically 384-1536 floats)\n\nFor a typical enterprise deployment with:\n- 10M entities\n- 50M relationships\n- 10M message embeddings (384 dimensions)\n\nEstimated storage: ~50GB\n\n== When to Consider Alternatives\n\nWhile Neo4j excels for agent memory, consider alternatives when:\n\n1. **Pure vector search only**: If you only need semantic search without relationships, a dedicated vector database may be simpler\n2. **Simple key-value access**: If memory is just session state, Redis or similar may suffice\n3. **Massive scale analytics**: For petabyte-scale batch analytics, data warehouses may be more appropriate\n\nHowever, most enterprise agent use cases benefit from the combination of graph, vector, and transactional capabilities that Neo4j provides.\n\n== See Also\n\n* xref:explanation/memory-types.adoc[Understanding the Three Memory Types]\n* xref:explanation/poleo-model.adoc[The POLE+O Data Model]\n* xref:reference/configuration.adoc[Configuration Reference]\n* xref:reference/rest-api.adoc[NAMS REST API] - The hosted-service surface both SDKs target\n* xref:how-to/entity-extraction.adoc[Configure Entity Extraction]\n* link:https://github.com/neo4j-labs/agent-memory-tck/blob/main/docs/explanation/architecture.adoc[Architecture in the TCK spec] - The cross-language spec author's framing\n",
+    "sections": [
+      {
+        "id": "_the_problem_with_traditional_storage",
+        "title": "The Problem with Traditional Storage",
+        "level": 1
+      },
+      {
+        "id": "_enterprise_memory_challenges",
+        "title": "Enterprise Memory Challenges",
+        "level": 2
+      },
+      {
+        "id": "_graph_native_advantages",
+        "title": "Graph-Native Advantages",
+        "level": 1
+      },
+      {
+        "id": "_1_natural_relationship_modeling",
+        "title": "1. Natural Relationship Modeling",
+        "level": 2
+      },
+      {
+        "id": "_2_traversal_performance",
+        "title": "2. Traversal Performance",
+        "level": 2
+      },
+      {
+        "id": "_3_vector_search_integration",
+        "title": "3. Vector Search Integration",
+        "level": 2
+      },
+      {
+        "id": "_4_temporal_queries",
+        "title": "4. Temporal Queries",
+        "level": 2
+      },
+      {
+        "id": "_5_schema_flexibility",
+        "title": "5. Schema Flexibility",
+        "level": 2
+      },
+      {
+        "id": "_the_three_layer_memory_architecture",
+        "title": "The Three-Layer Memory Architecture",
+        "level": 1
+      },
+      {
+        "id": "_why_one_database",
+        "title": "Why One Database?",
+        "level": 2
+      },
+      {
+        "id": "_enterprise_use_case_financial_services",
+        "title": "Enterprise Use Case: Financial Services",
+        "level": 1
+      },
+      {
+        "id": "_data_model",
+        "title": "Data Model",
+        "level": 2
+      },
+      {
+        "id": "_example_queries",
+        "title": "Example Queries",
+        "level": 2
+      },
+      {
+        "id": "_enterprise_use_case_ecommerce_retail",
+        "title": "Enterprise Use Case: Ecommerce Retail",
+        "level": 1
+      },
+      {
+        "id": "_data_model_2",
+        "title": "Data Model",
+        "level": 2
+      },
+      {
+        "id": "_example_queries_2",
+        "title": "Example Queries",
+        "level": 2
+      },
+      {
+        "id": "_performance_characteristics",
+        "title": "Performance Characteristics",
+        "level": 1
+      },
+      {
+        "id": "_benchmark_multi_hop_queries",
+        "title": "Benchmark: Multi-Hop Queries",
+        "level": 2
+      },
+      {
+        "id": "_memory_footprint",
+        "title": "Memory Footprint",
+        "level": 2
+      },
+      {
+        "id": "_when_to_consider_alternatives",
+        "title": "When to Consider Alternatives",
+        "level": 1
+      },
+      {
+        "id": "_see_also",
+        "title": "See Also",
+        "level": 1
+      }
+    ]
+  },
+  "explanation/extraction-pipeline.adoc": {
+    "source": "= How Entity Extraction Works\n:page-product: agent-memory\n:page-pagination:\n:toclevels: 2\n\nUnderstanding the multi-stage extraction pipeline, trade-offs between speed and accuracy, and how extractors work together.\n\nNOTE: This page describes the *client-side* extraction pipeline used by the *bolt* backend, which you configure (spaCy / GLiNER / LLM). On *NAMS*, extraction runs server-side and is not client-configurable \u2014 your extraction settings are ignored. See xref:explanation/backends.adoc#capability-matrix[Bolt vs NAMS].\n\n== The Challenge\n\nEntity extraction from natural language is hard. Consider this text:\n\n> \"Marc Andreessen and Ben Horowitz discussed their investment in OpenAI on the a]6z podcast. The San Francisco-based fund focuses on AI companies.\"\n\nHumans easily identify: Marc Andreessen (person), Ben Horowitz (person), OpenAI (organization), a16z (organization), San Francisco (location), AI (technology/concept).\n\nMachines need help.\n\n== Three Extraction Approaches\n\nneo4j-agent-memory supports three fundamentally different extraction approaches, each with trade-offs:\n\nimage::diagrams/extraction-pipeline.png[Multi-stage extraction pipeline: spaCy \u2192 GLiNER2 \u2192 GLiREL \u2192 LLM \u2192 Knowledge Graph,width=540,align=left]\n\n=== spaCy: Statistical NER\n\nspaCy uses pre-trained statistical models to recognize entities.\n\n[cols=\"1,1\"]\n|===\n| Pros | Cons\n\n| Very fast (native code)\n| Fixed entity types (PERSON, ORG, GPE, etc.)\n\n| No external API calls\n| May miss domain-specific entities\n\n| Free to run\n| Lower accuracy on specialized text\n\n| Runs offline\n| No confidence scores\n|===\n\n*Best for*: Fast initial extraction, common entity types, offline use.\n\n=== GLiNER: Zero-Shot NER\n\nGLiNER uses transformer models to extract entities based on type descriptions, not training data.\n\n[cols=\"1,1\"]\n|===\n| Pros | Cons\n\n| Custom entity types via descriptions\n| Slower than spaCy (neural network)\n\n| Good accuracy on diverse text\n| Requires model download (~400MB)\n\n| Confidence scores\n| May hallucinate on ambiguous text\n\n| Works with domain schemas\n| GPU recommended for speed\n|===\n\n*Best for*: Domain-specific extraction, custom types, balancing speed and accuracy.\n\n=== LLM: Context-Aware Extraction\n\nLLM extractors use large language models (GPT-4o, Claude, Llama, Gemini, \u2026) with structured output.\n\n[cols=\"1,1\"]\n|===\n| Pros | Cons\n\n| Best understanding of context\n| Highest latency\n\n| Can handle ambiguous text\n| Most expensive (API costs)\n\n| Explains reasoning\n| Rate limits\n\n| Most flexible\n| May be inconsistent\n|===\n\n*Best for*: High-value extraction, complex text, when accuracy matters most.\n\n[NOTE]\n====\n`LLMEntityExtractor` is provider-pluggable: pass any `LLMProvider` instance (Anthropic, Bedrock, Vertex AI, local Ollama, \u2026) or rely on `MemorySettings.llm` to wire one for you. When the configured provider implements the Silver tier (`StructuredExtractor`), the extractor calls `complete_structured` with a Pydantic schema \u2014 OpenAI strict mode, Anthropic forced tool use, or schema-aligned retry, depending on the provider. See xref:explanation/structured-extraction.adoc[Structured Extraction] for the dispatch rules and xref:how-to/bring-your-own-model.adoc[Bring Your Own Model] for the wiring.\n====\n\n== Multi-Stage Pipelines\n\nThe real power comes from combining extractors in a pipeline:\n\n[source,python]\n----\nfrom neo4j_agent_memory.extraction import ExtractionPipeline, MergeStrategy\n\npipeline = ExtractionPipeline(\n    stages=[\n        SpacyEntityExtractor(),           # Fast first pass\n        GLiNEREntityExtractor.for_schema(\"podcast\"),  # Domain refinement\n    ],\n    merge_strategy=MergeStrategy.CONFIDENCE,\n)\n----\n\n=== Why Pipelines?\n\n1. **Speed vs. Cost**: spaCy catches obvious entities instantly; GLiNER refines with domain knowledge; LLM handles the hard cases.\n\n2. **Redundancy**: Multiple extractors provide confirmation. An entity found by both spaCy and GLiNER is more reliable.\n\n3. **Coverage**: Different extractors have different strengths. spaCy finds common entities; domain schemas find specialized ones.\n\n== Merge Strategies\n\nWhen multiple extractors find entities, how do we combine results?\n\n=== CONFIDENCE (Default)\n\nKeep the entity with the highest confidence score:\n\n[source,python]\n----\n# If spaCy finds \"John\" (no confidence) and GLiNER finds \"John Smith\" (0.95)\n# Result: \"John Smith\" with confidence 0.95\n----\n\n*Best for*: General use, when you trust confidence scores.\n\n=== UNION\n\nKeep all unique entities from all stages:\n\n[source,python]\n----\n# spaCy: [\"John\", \"Acme\"]\n# GLiNER: [\"John Smith\", \"Acme Corp\", \"NYC\"]\n# Result: [\"John\", \"John Smith\", \"Acme\", \"Acme Corp\", \"NYC\"]\n----\n\n*Best for*: Maximum recall, when you'll filter/merge later.\n\n=== INTERSECTION\n\nKeep only entities found by multiple stages:\n\n[source,python]\n----\n# spaCy: [\"John\", \"Acme\"]\n# GLiNER: [\"John Smith\", \"Acme\", \"NYC\"]\n# Result: [\"Acme\"]  # Only \"Acme\" found by both\n----\n\n*Best for*: High precision, when you only want confirmed entities.\n\n=== FIRST\n\nUse first stage's results, fallback to later stages on failure:\n\n[source,python]\n----\n# If spaCy finds entities, use them\n# Otherwise, try GLiNER\n# Otherwise, try LLM\n----\n\n*Best for*: Fast-first extraction with fallback.\n\n=== LAST\n\nLater stages override earlier:\n\n[source,python]\n----\n# GLiNER results override spaCy results\n# LLM results override both\n----\n\n*Best for*: Trust the \"smarter\" extractor.\n\n== Domain Schemas\n\nGLiNER's zero-shot capability becomes powerful with domain schemas - descriptions of entity types for your specific use case.\n\n[source,python]\n----\n# The \"podcast\" schema\n{\n    \"PERSON\": \"A person mentioned or interviewed\",\n    \"COMPANY\": \"A company, startup, or business\",\n    \"PRODUCT\": \"A product, service, or platform\",\n    \"CONCEPT\": \"A concept, methodology, or framework\",\n}\n\n# GLiNER uses these descriptions to guide extraction\nextractor = GLiNEREntityExtractor.for_schema(\"podcast\")\n----\n\n=== Why Descriptions Matter\n\nGLiNER doesn't just match labels - it uses the semantic meaning of descriptions:\n\n* `\"PERSON\"` \u2192 Generic person detection\n* `\"A person mentioned or interviewed\"` \u2192 Focuses on people in interview context, not passing mentions\n\nThis is why domain schemas significantly improve extraction quality.\n\n== Relationship Extraction with GLiREL\n\nBeyond entities, GLiREL extracts relationships:\n\n[source,python]\n----\nfrom neo4j_agent_memory.extraction import GLiNERWithRelationsExtractor\n\nextractor = GLiNERWithRelationsExtractor.for_poleo()\nresult = await extractor.extract(\"Marc works at a16z in San Francisco\")\n\n# Entities: [Marc, a16z, San Francisco]\n# Relations: [Marc -[WORKS_AT]-> a16z, a16z -[LOCATED_IN]-> San Francisco]\n----\n\nRelationship extraction finds typed connections between entities, building richer knowledge graphs.\n\n== Automatic Relationship Storage\n\nWhen adding messages with entity extraction enabled, extracted relationships are automatically stored as `RELATED_TO` relationships in Neo4j:\n\n[source,python]\n----\n# Relationships are stored automatically when adding messages\nawait memory.short_term.add_message(\n    \"session-1\",\n    \"user\",\n    \"Brian Chesky founded Airbnb in San Francisco.\",\n    extract_entities=True,\n    extract_relations=True,  # Default: True\n)\n\n# This creates:\n# - Entity nodes: Brian Chesky (PERSON), Airbnb (ORGANIZATION), San Francisco (LOCATION)\n# - MENTIONS relationships: Message -> Entity\n# - RELATED_TO relationships: (Brian Chesky)-[:RELATED_TO {relation_type: \"FOUNDED\"}]->(Airbnb)\n----\n\nThe relationship storage works for:\n\n* **`add_message()`** - Extract and store from individual messages (default: `extract_relations=True`)\n* **`add_messages_batch()`** - Batch operations (default: `extract_relations=True`, only applies when `extract_entities=True`)\n* **`extract_entities_from_session()`** - Post-hoc extraction from existing messages (default: `extract_relations=True`)\n\n[source,python]\n----\n# Post-hoc extraction with relationship storage\nresult = await memory.short_term.extract_entities_from_session(\n    \"session-1\",\n    extract_relations=True,  # Default: True\n)\nprint(f\"Extracted {result['relations_extracted']} relationships\")\n----\n\n=== Relationship Storage Strategies\n\nRelationships can reference entities in two ways:\n\n1. **Same-message entities**: When both the source and target entity are extracted from the same message, relationships are created using entity IDs (most efficient).\n\n2. **Cross-message entities**: When a relationship references an entity from a previous message, the system looks up entities by name. This enables building a connected knowledge graph across a conversation.\n\n== Performance Considerations\n\n=== Latency\n\nTypical extraction times for a 500-word document:\n\n[cols=\"1,1,1\"]\n|===\n| Extractor | CPU | GPU\n\n| spaCy\n| 10-50ms\n| N/A\n\n| GLiNER\n| 200-500ms\n| 50-100ms\n\n| LLM (GPT-4o-mini)\n| 500-2000ms\n| N/A\n|===\n\n=== Batch Processing\n\nFor many documents, use batch extraction:\n\n[source,python]\n----\nresult = await pipeline.extract_batch(\n    texts,\n    batch_size=32,      # GLiNER batch size\n    max_concurrency=5,  # Parallel extractions\n)\n----\n\nGLiNER specifically benefits from batching on GPU.\n\n=== Streaming for Long Documents\n\nFor very long documents (>100K tokens), use streaming:\n\n[source,python]\n----\nstreamer = StreamingExtractor(\n    extractor,\n    chunk_size=4000,\n    overlap=200,\n)\n\nasync for chunk_result in streamer.extract_streaming(long_document):\n    print(f\"Chunk {chunk_result.chunk.index}: {chunk_result.entity_count} entities\")\n----\n\n== Choosing the Right Approach\n\n[cols=\"1,1,1,1\"]\n|===\n| Scenario | Recommendation | Pipeline | Why\n\n| Fast indexing, common entities\n| spaCy only\n| `[spaCy]`\n| Speed, simplicity\n\n| Domain-specific text\n| GLiNER with schema\n| `[GLiNER]`\n| Custom types, good accuracy\n\n| High-value documents\n| Full pipeline\n| `[spaCy \u2192 GLiNER \u2192 LLM]`\n| Maximum accuracy\n\n| Mixed workload\n| Tiered pipeline\n| `[spaCy + GLiNER]`\n| Balance speed/accuracy\n\n| Relations needed\n| GLiNER + GLiREL\n| `[GLiNERWithRelations]`\n| Entity + relation extraction\n|===\n\n== See Also\n\n* xref:how-to/entity-extraction.adoc[Configure Entity Extraction] - Practical setup\n* xref:reference/extractors.adoc[Extractor Classes Reference] - API details\n* xref:reference/schemas.adoc[Domain Schemas Reference] - Available schemas\n* xref:how-to/batch-processing.adoc[Process Documents in Batch] - Batch and streaming\n",
+    "sections": [
+      {
+        "id": "_the_challenge",
+        "title": "The Challenge",
+        "level": 1
+      },
+      {
+        "id": "_three_extraction_approaches",
+        "title": "Three Extraction Approaches",
+        "level": 1
+      },
+      {
+        "id": "_spacy_statistical_ner",
+        "title": "spaCy: Statistical NER",
+        "level": 2
+      },
+      {
+        "id": "_gliner_zero_shot_ner",
+        "title": "GLiNER: Zero-Shot NER",
+        "level": 2
+      },
+      {
+        "id": "_llm_context_aware_extraction",
+        "title": "LLM: Context-Aware Extraction",
+        "level": 2
+      },
+      {
+        "id": "_multi_stage_pipelines",
+        "title": "Multi-Stage Pipelines",
+        "level": 1
+      },
+      {
+        "id": "_why_pipelines",
+        "title": "Why Pipelines?",
+        "level": 2
+      },
+      {
+        "id": "_merge_strategies",
+        "title": "Merge Strategies",
+        "level": 1
+      },
+      {
+        "id": "_confidence_default",
+        "title": "CONFIDENCE (Default)",
+        "level": 2
+      },
+      {
+        "id": "_union",
+        "title": "UNION",
+        "level": 2
+      },
+      {
+        "id": "_intersection",
+        "title": "INTERSECTION",
+        "level": 2
+      },
+      {
+        "id": "_first",
+        "title": "FIRST",
+        "level": 2
+      },
+      {
+        "id": "_last",
+        "title": "LAST",
+        "level": 2
+      },
+      {
+        "id": "_domain_schemas",
+        "title": "Domain Schemas",
+        "level": 1
+      },
+      {
+        "id": "_why_descriptions_matter",
+        "title": "Why Descriptions Matter",
+        "level": 2
+      },
+      {
+        "id": "_relationship_extraction_with_glirel",
+        "title": "Relationship Extraction with GLiREL",
+        "level": 1
+      },
+      {
+        "id": "_automatic_relationship_storage",
+        "title": "Automatic Relationship Storage",
+        "level": 1
+      },
+      {
+        "id": "_relationship_storage_strategies",
+        "title": "Relationship Storage Strategies",
+        "level": 2
+      },
+      {
+        "id": "_performance_considerations",
+        "title": "Performance Considerations",
+        "level": 1
+      },
+      {
+        "id": "_latency",
+        "title": "Latency",
+        "level": 2
+      },
+      {
+        "id": "_batch_processing",
+        "title": "Batch Processing",
+        "level": 2
+      },
+      {
+        "id": "_streaming_for_long_documents",
+        "title": "Streaming for Long Documents",
+        "level": 2
+      },
+      {
+        "id": "_choosing_the_right_approach",
+        "title": "Choosing the Right Approach",
+        "level": 1
+      },
+      {
+        "id": "_see_also",
+        "title": "See Also",
+        "level": 1
+      }
+    ]
+  },
+  "explanation/structured-extraction.adoc": {
+    "source": "= Structured Extraction\n:page-product: agent-memory\n:page-pagination:\n:toclevels: 3\n:sectanchors:\n:icons: font\n:source-highlighter: highlight.js\n\nWhy the library splits structured extraction into its own Protocol, and how the different paths (OpenAI strict mode, Anthropic forced tool use, schema-aligned retry, Instructor) compare.\n\n[.lead]\nThe Silver TCK tier \u2014 `StructuredExtractor` \u2014 is what makes entity extraction reliable across providers. This page explains why it's a separate Protocol from `LLMProvider`, how each adapter implements it, and when schema-aligned retry kicks in. For task-oriented use, see xref:how-to/bring-your-own-model.adoc[Bring Your Own Model].\n\n== The problem structured extraction solves\n\nThe entity extractor needs the model to produce a JSON object validating against a Pydantic schema. Free-form `complete()` calls produce text \u2014 sometimes valid JSON, often near-misses (markdown fences, trailing commas, a leading \"Sure, here's the JSON:\" prelude, hallucinated fields). The library converts those text completions into validated `LLMExtractionPayload` instances in three layered ways.\n\n== The three paths\n\nEach path delivers the same contract \u2014 `complete_structured(messages, response_model) -> T` \u2014 but with different reliability/quality trade-offs.\n\n[cols=\"3,3,2\",options=\"header\"]\n|===\n| Path                     | Mechanism                                                | When it runs\n| Native strict mode       | OpenAI `response_format={\"type\":\"json_schema\",\"strict\":true}` | OpenAI-via-`OpenAIProvider` (only).\n| Forced tool use          | Anthropic `tool_choice={\"type\":\"tool\",\"name\":...}`        | Anthropic-via-`AnthropicProvider` and Bedrock-via-`BedrockProvider` for Anthropic models.\n| Schema-aligned retry (SAP) | Prompt with schema + tolerant parse + validation feedback retry | Everything else, including LiteLLM and any custom `LLMProvider` that doesn't implement `StructuredExtractor` natively.\n|===\n\nNative paths produce schema-valid output on the first call. SAP retries on validation failure, feeding the error back to the model as a correction prompt \u2014 empirically the second-attempt success rate on capable models is very high.\n\n== Why split `StructuredExtractor` from `LLMProvider`?\n\n[source,python]\n----\n@runtime_checkable\nclass LLMProvider(Protocol):\n    model: str\n    async def complete(self, messages, ...) -> Completion: ...\n\n@runtime_checkable\nclass StructuredExtractor(Protocol):\n    async def complete_structured(\n        self, messages, response_model, ...\n    ) -> T: ...\n----\n\nTwo reasons:\n\n. **Capability tiers should be explicit.** Some adapters can't do native structured output. `InstructorProvider`, conversely, *only* does structured output \u2014 there's no value-add wrapping `instructor.from_provider` to expose a Bronze `complete()`. A two-Protocol split lets each adapter declare exactly what it provides.\n. **The entity extractor picks the best available path.** `LLMEntityExtractor` introspects the provider with `isinstance(provider, StructuredExtractor)` at runtime. If it sees the Silver Protocol, it calls `complete_structured`; otherwise, it falls back to prompt-engineered JSON via `complete` and the same tolerant parser. The split makes the dispatch explicit.\n\n== How `schema_aligned_extract` works\n\nThe function (in `neo4j_agent_memory.llm.structured`) is ~80 lines:\n\n. **Build a system message containing the schema.** The schema is `response_model.model_json_schema()`, dumped as indented JSON, with instructions: \"return JSON only, no prose, no markdown.\"\n. **Call the provider's `complete()`.** Returns a `Completion`.\n. **Tolerant-parse the response.** Strips markdown fences, smart quotes, trailing commas; finds the largest balanced `{...}` block. Truncated JSON (mid-string cutoff) surfaces as `JSONDecodeError` \u2014 the correct outcome, since it must trigger a retry.\n. **Validate against the Pydantic model.** Success returns the validated `T`.\n. **On `ValidationError` or `JSONDecodeError`, retry with feedback.** Append the failed assistant response and a feedback `user` message naming the violated field paths. Example feedback: `\"Your previous response failed schema validation: - entities[0].type: invalid value 'PLACE'. Return a corrected JSON object...\"`\n. **After `max_retries + 1` total attempts, raise `StructuredExtractionError`** carrying every attempt's raw text and the validation errors for diagnosability.\n\nThe validation-error feedback is the secret ingredient. Models respond to \"the field `entities[0].type` is invalid\" much better than \"your response was invalid\" \u2014 empirical observation across thousands of extraction runs.\n\n== Why native paths win when available\n\nOpenAI's strict mode is a hard guarantee: the model is constrained at decoding time to emit only tokens consistent with the schema. There is no retry; the first response is always schema-valid (or the model fails to generate at all). This is structurally stronger than any prompt-based approach.\n\nAnthropic's forced tool use is similar in spirit: the model is required to call a single tool whose `input_schema` is your Pydantic schema. Anthropic's tool-use mode has high schema-conformance rates because the same training data that taught the model to use tools taught it to respect tool input schemas.\n\nLiteLLM normalises away strict mode for most providers \u2014 it routes through `response_format={\"type\": \"json_object\"}` (JSON mode, not schema-strict), which gets you parseable JSON but not necessarily *schema-valid* JSON. That's why the LiteLLM adapter delegates to SAP rather than relying on `response_format`.\n\n== Why we didn't make Instructor the only structured path\n\n`InstructorProvider` exists as an optional adapter for users already invested in the https://python.useinstructor.com/[Instructor library]. We considered making it the *only* `StructuredExtractor` path. Three reasons not to:\n\n. **Instructor adds dependencies.** Users who aren't on Instructor shouldn't have to install it.\n. **Native adapters can do better.** OpenAI strict mode and Anthropic forced tool use exploit provider-specific features that Instructor's universal interface can't access. Native > Instructor on those providers.\n. **SAP works everywhere.** A 80-line retry loop with feedback covers every provider with a `complete()` method. Instructor is one of several ways to achieve the same end; the library exposes it as a peer, not a privileged path.\n\nThe TCK design then becomes: Bronze = `LLMProvider`. Silver = `StructuredExtractor` via any path (native, SAP, or Instructor). Gold = behavioural conformance under the contract harness.\n\n== Using `complete_structured` directly\n\nOutside the entity extractor, you can call `complete_structured` on any provider that implements `StructuredExtractor`:\n\n[source,python]\n----\nfrom pydantic import BaseModel\nfrom neo4j_agent_memory.llm import ChatMessage, from_provider\n\n\nclass Address(BaseModel):\n    street: str\n    city: str\n    postal_code: str\n\n\nprovider = from_provider(\"anthropic/claude-3-5-sonnet-latest\")\naddr = await provider.complete_structured(\n    [ChatMessage(role=\"user\", content=\"Extract: 123 Main St, Springfield IL 62701\")],\n    response_model=Address,\n)\nprint(addr.city)  # Springfield\n----\n\nOr use `schema_aligned_extract` directly against a plain `LLMProvider` that doesn't implement Silver:\n\n[source,python]\n----\nfrom neo4j_agent_memory.llm import schema_aligned_extract\n\naddr = await schema_aligned_extract(\n    provider,\n    messages=[ChatMessage(role=\"user\", content=\"Extract: 123 Main St ...\")],\n    response_model=Address,\n    max_retries=2,\n)\n----\n\n== When SAP retries: a worked example\n\nSuppose the model returns invalid JSON on the first attempt:\n\n[source,text]\n----\nAttempt 1 response:\n  Sure! Here's the address:\n  ```json\n  {\"street\": \"123 Main\", \"city\": \"Springfield\"}\n  ```\n----\n\n. Tolerant parser strips the prose preamble and markdown fence, extracts `{\"street\": \"123 Main\", \"city\": \"Springfield\"}`.\n. Pydantic validation fails: missing required field `postal_code`.\n. SAP appends:\n+\n[source,text]\n----\nAssistant: {\"street\": \"123 Main\", \"city\": \"Springfield\"}\nUser: Your previous response failed schema validation:\n  - postal_code: Field required\n\nReturn a corrected JSON object that validates against the Address schema.\nOutput JSON only \u2014 no prose, no markdown.\n----\n. Attempt 2 returns `{\"street\": \"123 Main\", \"city\": \"Springfield\", \"postal_code\": \"62701\"}`. Validation succeeds.\n\n`max_retries=2` (default) gives three total attempts. The default is conservative \u2014 most calls resolve in one or two.\n\n== When SAP fails\n\nIf all `max_retries + 1` attempts fail, the function raises `StructuredExtractionError` carrying:\n\n* `last_attempts: list[str]` \u2014 raw text of every attempt, in order.\n* `validation_errors: list[ValidationError]` \u2014 Pydantic errors from each failed validation. May be shorter than `last_attempts` if some attempts failed at JSON parsing rather than validation.\n\n[source,python]\n----\ntry:\n    addr = await provider.complete_structured(...)\nexcept StructuredExtractionError as exc:\n    logger.error(\n        \"Extraction failed after %d attempts. Last raw response: %s\",\n        len(exc.last_attempts),\n        exc.last_attempts[-1][:500],\n    )\n----\n\nThe full diagnostic trail makes post-mortem debugging tractable \u2014 you see exactly what the model tried, in what order, and why it failed each time.\n\n== Tuning\n\n* **`max_retries`**: Default 2. Bumping to 3-4 helps marginally for weak models; not worth it for capable ones.\n* **`temperature`**: SAP passes the caller's `temperature` to every retry. Stick to 0.0 for deterministic extraction. Higher temperatures rarely help on structured tasks.\n* **Prompt design**: For complex schemas, embed examples in the system message before SAP gets involved. SAP's retry feedback is good but expensive \u2014 first-attempt success rate dominates total cost.\n\n== Related\n\n* xref:explanation/why-provider-protocol.adoc[Why the Provider Protocol?] \u2014 the bigger-picture design.\n* xref:explanation/extraction-pipeline.adoc[Extraction Pipeline] \u2014 how `LLMEntityExtractor` calls the Silver path.\n* xref:reference/api/llm-provider.adoc[LLM Provider API] \u2014 Protocol signatures.\n* xref:reference/api/adapters.adoc[Adapters] \u2014 per-adapter Silver implementation notes.\n",
+    "sections": [
+      {
+        "id": "_the_problem_structured_extraction_solves",
+        "title": "The problem structured extraction solves",
+        "level": 1
+      },
+      {
+        "id": "_the_three_paths",
+        "title": "The three paths",
+        "level": 1
+      },
+      {
+        "id": "_why_split_structuredextractor_from_llmprovider",
+        "title": "Why split `StructuredExtractor` from `LLMProvider`?",
+        "level": 1
+      },
+      {
+        "id": "_how_schema_aligned_extract_works",
+        "title": "How `schema_aligned_extract` works",
+        "level": 1
+      },
+      {
+        "id": "_why_native_paths_win_when_available",
+        "title": "Why native paths win when available",
+        "level": 1
+      },
+      {
+        "id": "_why_we_didnt_make_instructor_the_only_structured_path",
+        "title": "Why we didn't make Instructor the only structured path",
+        "level": 1
+      },
+      {
+        "id": "_using_complete_structured_directly",
+        "title": "Using `complete_structured` directly",
+        "level": 1
+      },
+      {
+        "id": "_when_sap_retries_a_worked_example",
+        "title": "When SAP retries: a worked example",
+        "level": 1
+      },
+      {
+        "id": "_when_sap_fails",
+        "title": "When SAP fails",
+        "level": 1
+      },
+      {
+        "id": "_tuning",
+        "title": "Tuning",
+        "level": 1
+      },
+      {
+        "id": "_related",
+        "title": "Related",
+        "level": 1
+      }
+    ]
+  },
+  "explanation/skills.adoc": {
+    "source": "= Agent Skills\n:page-product: agent-memory\n:page-pagination:\n:toclevels: 3\n:sectanchors:\n:icons: font\n\n[NOTE]\n====\nicon:flask[] *Preview.* Agent Skills is a NAMS-backend feature in preview. The\nbackend contract (REST endpoints and MCP tools) is stable enough to build\nagainst, but the dashboard experience is still evolving and the surface is not\nyet exposed in the Python or TypeScript SDKs. There is no equivalent on the bolt\nbackend.\n====\n\n[.lead]\nAn *Agent Skill* turns accumulated agent memory into a small, trustworthy,\nreusable procedure another agent can load. Where the three memory layers capture\n_what happened_ in one workspace, a skill is the distilled _how-to_ \u2014 a portable\npackage other agents (or the same agent in a fresh context) can pick up without\nstarting cold.\n\n== The problem skills solve\n\nA NAMS workspace accumulates three kinds of memory: short-term messages,\nlong-term POLE+O entities, and reasoning traces (steps and tool calls). That\nexperience is valuable but *trapped* \u2014 it lives in one workspace's graph, in a\nform no other agent can consume directly. Skill distillation is the transform\nthat lifts a scoped slice of that graph into a portable, spec-compliant Agent\nSkill (a `SKILL.md` package following the link:https://agentskills.io[agentskills.io]\nformat) that any agent can load.\n\n== Create \u2192 review \u2192 use\n\nThe feature is organised around three jobs:\n\nCreate:: Distil a skill from a *scope* \u2014 the whole workspace, a single entity, or\nan ontology class. NAMS snapshots the relevant memory, synthesises a procedure\ngrounded in it, runs quality gates, and packages the result.\nReview:: A human approves or rejects a distilled skill before it is published, so\nthe published library stays healthy. Skills move through a lifecycle:\n`draft \u2192 in_review \u2192 published` (with `rejected` as a terminal state).\nUse:: Download the published `SKILL.md` package (a ZIP), or discover what exists\nover MCP, and load it into an agent.\n\n== Fidelity via provenance\n\nThe defining property of a distilled skill is that *the graph is the authority\nand the LLM is only a writer working from cited sources*. Every claim and every\nprocedure step is `GROUNDED_IN` specific source node ids \u2014 messages, entities, or\nreasoning steps in the workspace. That makes a skill **auditable, not invented**:\nyou can trace any statement back to the memory it came from\n(`explain-provenance`), and a published package ships a `provenance.json`\nmapping. Distillation enforces quality gates on this grounding \u2014 a run whose\ngrounding or coverage is too low is *withheld* (often with a suggestion to split\nit into smaller procedures) rather than published.\n\n== How a skill relates to memory\n\nSkills are a *derived projection* of the existing memory model, not a new memory\nlayer:\n\n[cols=\"1,3\",options=\"header\"]\n|===\n| Concept | Relationship to skills\n\n| Short-term / long-term / reasoning memory\n| The raw material. A skill's claims and steps are grounded in `:Message`,\n`:Entity`, and reasoning (`:AgentStep` / `:ToolCall`) nodes.\n| Reasoning traces\n| The primary source for *procedure* steps \u2014 a recorded tool call becomes a\ntyped script step; a reasoning step becomes a judgement step.\n| Ontology\n| Can be used as a distillation *scope* (`scope_type = ontology_class`), so you\ncan distil \"everything we know about this class of thing\".\n| New graph objects\n| Distillation adds `:Skill` \u2192 `:SkillVersion` \u2192 `:SkillStep` / component nodes\nplus a `:DistillationRun`, co-located with the memory they cite.\n|===\n\n== What ships in a skill package\n\nA downloaded skill bundle contains a `SKILL.md` (YAML frontmatter carrying the\ngrounding score and provenance id), a typed procedure (a step graph, or prose\nfor simpler skills), `provenance.json`, and reference docs (domain model,\nexemplars, procedures). Published versions are **attested** \u2014 signed with a\ndetached JWS you can verify offline against a public JWKS \u2014 so a consumer can\nconfirm a package's integrity before loading it.\n\n== Maturity & limits\n\n* **Distillation** is on by default.\n* **Composition** (extracting a sub-procedure that other skills `CALLS`) is off by\ndefault.\n* **Execution** is *dry-run planning only* and gated off by default \u2014 NAMS will\norder and validate a skill's steps but does not invoke tools. Running the\nprocedure is the loading agent's responsibility.\n* Whole-workspace distils tend to be *withheld* once a workspace holds more than\none distinct procedure \u2014 prefer a narrower scope.\n\nSee xref:reference/skills-api.adoc[Skills API] for the REST + MCP surface and the\nxref:tutorials/skills-quickstart.adoc[Skills Quickstart] for an end-to-end\nwalkthrough.\n\n== See also\n\n* xref:explanation/memory-types.adoc[Memory Types] \u2014 the three layers a skill distils from.\n* xref:explanation/backends.adoc[Bolt vs NAMS] \u2014 skills are NAMS-only.\n* xref:reference/skills-api.adoc[Skills API] \u2014 endpoints, MCP tools, and lifecycle.\n",
+    "sections": [
+      {
+        "id": "_the_problem_skills_solve",
+        "title": "The problem skills solve",
+        "level": 1
+      },
+      {
+        "id": "_create_review_use",
+        "title": "Create \u2192 review \u2192 use",
+        "level": 1
+      },
+      {
+        "id": "_fidelity_via_provenance",
+        "title": "Fidelity via provenance",
+        "level": 1
+      },
+      {
+        "id": "_how_a_skill_relates_to_memory",
+        "title": "How a skill relates to memory",
+        "level": 1
+      },
+      {
+        "id": "_what_ships_in_a_skill_package",
+        "title": "What ships in a skill package",
+        "level": 1
+      },
+      {
+        "id": "_maturity_limits",
+        "title": "Maturity & limits",
+        "level": 1
+      },
+      {
+        "id": "_see_also",
+        "title": "See also",
+        "level": 1
+      }
+    ]
+  }
+}
