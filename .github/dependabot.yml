@@ -108,6 +108,7 @@ updates:
   - package-ecosystem: "uv"
     directories:
       - "/examples/full-stack-chat-agent/backend"
+      - "/examples/support-desk-agent/backend"
       - "/examples/lennys-memory/backend"
       - "/examples/financial-services-advisor/aws-financial-services-advisor/backend"
       - "/examples/financial-services-advisor/google-cloud-financial-advisor/backend"
@@ -170,6 +171,7 @@ updates:
     directories:
       - "/typescript/examples/*"
       - "/examples/full-stack-chat-agent/frontend"
+      - "/examples/support-desk-agent/frontend"
       - "/examples/lennys-memory/frontend"
       - "/examples/microsoft_agent_retail_assistant/frontend"
       - "/examples/financial-services-advisor/aws-financial-services-advisor/frontend"

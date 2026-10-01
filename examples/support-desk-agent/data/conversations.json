@@ -1,0 +1,189 @@
+{
+  "_comment": "Seed conversations for the support-desk agent, loaded by `python -m src.seed` with short_term.add_message() (GLiNER2.5 extraction on, against the active support-desk ontology). Conversation 1 is the transcript of examples/ontology-lifecycle-bolt, string for string. The others overlap on purpose so entity resolution has work to do: Marcus Bell and Elena Fischer return in later conversations (exact merges), 'Priya' and 'Elena' are first-name-only mentions (pending review pairs), 'the Halcyon Chair' is a shorter name for the Halcyon Ergonomic Chair, and TK-2210, TK-2211, TK-2214 and TK-2217 are referenced again from later conversations.",
+  "conversations": [
+    {
+      "session_id": "seed-priya-damaged-lamp",
+      "title": "Priya Raman: cracked Aurora Desk Lamp",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hi, this is Priya Raman. Order SO-4417 arrived yesterday and the Aurora Desk Lamp was cracked."
+        },
+        {
+          "role": "assistant",
+          "content": "Sorry about that, Priya. I've opened ticket TK-2210 for order SO-4417 covering the damaged Aurora Desk Lamp."
+        },
+        {
+          "role": "user",
+          "content": "Can you send a replacement lamp rather than a refund?"
+        },
+        {
+          "role": "assistant",
+          "content": "Done — ticket TK-2210 is now a replacement request for the Aurora Desk Lamp, shipping to the address on order SO-4417."
+        },
+        {
+          "role": "user",
+          "content": "Also, the Northwind Cable Tray from order SO-4390 was the wrong colour. Same ticket or a new one?"
+        },
+        {
+          "role": "assistant",
+          "content": "I've opened ticket TK-2211 for the Northwind Cable Tray on order SO-4390 so the two shipments stay separate."
+        }
+      ]
+    },
+    {
+      "session_id": "seed-marcus-late-chair",
+      "title": "Marcus Bell: Halcyon chair delivery is late",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hello, my name is Marcus Bell. I ordered the Halcyon Ergonomic Chair on order SO-4452 two weeks ago and it still hasn't arrived."
+        },
+        {
+          "role": "assistant",
+          "content": "Thanks for your patience, Marcus Bell. Order SO-4452 is held at the carrier's depot, so I've opened ticket TK-2214 to chase delivery of the Halcyon Ergonomic Chair."
+        },
+        {
+          "role": "user",
+          "content": "Please let me know when it moves. I need the chair before Monday."
+        },
+        {
+          "role": "assistant",
+          "content": "Ticket TK-2214 is marked urgent, and we'll email you the moment order SO-4452 is back in transit."
+        }
+      ]
+    },
+    {
+      "session_id": "seed-elena-monitor-arm-parts",
+      "title": "Elena Fischer: monitor arm missing bolts",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hi, Elena Fischer here. The Lumen Monitor Arm from order SO-4468 came without its mounting bolts."
+        },
+        {
+          "role": "assistant",
+          "content": "Apologies, Elena. I've opened ticket TK-2217 for the missing bolts on the Lumen Monitor Arm from order SO-4468."
+        },
+        {
+          "role": "user",
+          "content": "Will you ship just the bolts, or the whole arm again?"
+        },
+        {
+          "role": "assistant",
+          "content": "Only the missing parts: ticket TK-2217 covers a parts shipment for the Lumen Monitor Arm, so you keep the arm you already have."
+        }
+      ]
+    },
+    {
+      "session_id": "seed-daniel-desk-refund",
+      "title": "Daniel Okafor: standing desk motor failed",
+      "messages": [
+        {
+          "role": "user",
+          "content": "This is Daniel Okafor. The motor in my Breeze Standing Desk stopped working after a week. It was order SO-4471."
+        },
+        {
+          "role": "assistant",
+          "content": "I'm sorry to hear that, Daniel Okafor. I've opened ticket TK-2219 for the faulty motor on the Breeze Standing Desk from order SO-4471."
+        },
+        {
+          "role": "user",
+          "content": "I'd rather have a refund than a repair."
+        },
+        {
+          "role": "assistant",
+          "content": "Understood. Ticket TK-2219 is now a refund request for order SO-4471, and a return label for the Breeze Standing Desk is on its way."
+        }
+      ]
+    },
+    {
+      "session_id": "seed-marcus-chair-arrived",
+      "title": "Marcus Bell: chair arrived, adding to an open order",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Marcus Bell again. The Halcyon Chair from order SO-4452 finally arrived, so you can close ticket TK-2214."
+        },
+        {
+          "role": "assistant",
+          "content": "Great news, Marcus Bell. Ticket TK-2214 is closed now that order SO-4452 has been delivered."
+        },
+        {
+          "role": "user",
+          "content": "While I have you, can I add a Tidewater Desk Organizer to my open order SO-4489?"
+        },
+        {
+          "role": "assistant",
+          "content": "Order SO-4489 hasn't shipped yet, so I've added the Tidewater Desk Organizer to it."
+        }
+      ]
+    },
+    {
+      "session_id": "seed-grace-double-charge",
+      "title": "Grace Liu: charged twice for one lamp",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hi, I'm Grace Liu. I was charged twice for order SO-4503, which was a single Aurora Desk Lamp."
+        },
+        {
+          "role": "assistant",
+          "content": "I can see the duplicate charge on order SO-4503, Grace Liu. I've opened ticket TK-2223 with billing to refund the second payment."
+        },
+        {
+          "role": "user",
+          "content": "How long will the refund take?"
+        },
+        {
+          "role": "assistant",
+          "content": "Billing usually settles tickets like TK-2223 within three business days, and the refund goes back to the card used for order SO-4503."
+        }
+      ]
+    },
+    {
+      "session_id": "seed-priya-replacement-follow-up",
+      "title": "Priya Raman: where is the replacement lamp?",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hello again, Priya Raman here. Ticket TK-2210 said a replacement Aurora Desk Lamp would ship, but order SO-4417 still shows no tracking."
+        },
+        {
+          "role": "assistant",
+          "content": "Thanks for checking in, Priya Raman. The replacement Aurora Desk Lamp for ticket TK-2210 left the warehouse this morning, and tracking for order SO-4417 will update tonight."
+        },
+        {
+          "role": "user",
+          "content": "And what about the Northwind Cable Tray on ticket TK-2211?"
+        },
+        {
+          "role": "assistant",
+          "content": "Ticket TK-2211 is approved: a Northwind Cable Tray in the right colour ships with the same courier as the lamp."
+        }
+      ]
+    },
+    {
+      "session_id": "seed-elena-wobbly-desk",
+      "title": "Elena Fischer: new standing desk wobbles",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Elena Fischer again. The parts sent for ticket TK-2217 fixed my Lumen Monitor Arm, but the Breeze Standing Desk from order SO-4510 wobbles at full height."
+        },
+        {
+          "role": "assistant",
+          "content": "Glad that's sorted, Elena Fischer. I've opened ticket TK-2226 because the Breeze Standing Desk on order SO-4510 wobbles."
+        },
+        {
+          "role": "user",
+          "content": "Is that the same motor problem another customer had?"
+        },
+        {
+          "role": "assistant",
+          "content": "No, ticket TK-2226 is a stability issue with the frame, not the motor fault an earlier batch of the Breeze Standing Desk had."
+        }
+      ]
+    }
+  ]
+}

@@ -56,7 +56,7 @@ Plain `v*` tags do not trigger any publish.
   `tests/**`, `benchmarks/**`, `examples/**`, `docs/**`, `scripts/**`,
   and Python config files. **TypeScript-only PRs do not trigger Python
   CI.** It also owns the `frontend-build` job, which installs, type-checks,
-  lints, tests and builds the five example frontends plus the AWS CDK app. A
+  lints, tests and builds the six example frontends plus the AWS CDK app. A
   `changed-paths` job narrows that matrix with plain `git diff`, so a
   Python-only PR skips it.
 - `.github/workflows/ci-typescript.yml` fires on changes under
@@ -2240,7 +2240,7 @@ no README footer, no index row, or no test module. The shape of the tree:
 | Runtime + tooling | `no_llm/`, `domain-schemas/` |
 | Ontologies on bolt | `ontology-extraction/`, `ontology-lifecycle-bolt/` (bolt twin of `ontology-lifecycle/`) |
 | Framework integrations | `strands-session-manager/`, `strands-memory-store/`, `google_adk_demo/`, `google_cloud_integration/`, `microsoft_agent_retail_assistant/` |
-| Full-stack apps | `full-stack-chat-agent/`, `lennys-memory/`, `financial-services-advisor/` (AWS Strands + Google ADK twins) |
+| Full-stack apps | `full-stack-chat-agent/`, `lennys-memory/`, `financial-services-advisor/` (AWS Strands + Google ADK twins), `support-desk-agent/` (bolt ontology + reasoning memory, PydanticAI) |
 | TypeScript | `typescript/examples/` — ten examples, flagship `nextjs-memory-chat/` |
 
 `hello-memory/` is the only example allowed to use a PEP 723 header; every other

@@ -37,6 +37,7 @@ For examples using the Python `bolt` backend, first follow [the shared Aura setu
 | Give a Strands agent cross-session recall from a graph | [`strands-memory-store/`](#strands-memory-store) |
 | Wire it to Google Cloud (Vertex AI, ADK, MCP) | [`google_cloud_integration/`](#google-cloud-integration) |
 | See a full-stack reference app | [`full-stack-chat-agent/`](#full-stack-chat-agent), [`lennys-memory/`](#lennys-podcast-memory-explorer) |
+| Chat with an agent over an ontology-typed graph, with reasoning memory and a live type rename | [`support-desk-agent/`](#support-desk-agent) |
 | See a multi-agent compliance workflow | [`financial-services-advisor/`](#financial-services-advisor) |
 | Write the memory layer in TypeScript instead | [`../typescript/examples/`](#typescript-examples) |
 
@@ -162,6 +163,10 @@ These four examples cover the v0.2 feature drop. Each is self-contained, runs wi
 ### Full-stack chat agent
 
 [`full-stack-chat-agent/`](full-stack-chat-agent/) — FastAPI + PydanticAI 2.x + Next.js over two Neo4j graphs (memory plus a seeded news graph in Aura); SSE with live tool events, reasoning traces with `:TOUCHED` audit edges, entity extraction switched by `EXTRACTION_MODE`. Bolt only (it uses `client.get_graph()`). Great middle-weight example; the frontend has its own README, lint/typecheck/test scripts and a Node 22 floor.
+
+### Support-desk agent
+
+[`support-desk-agent/`](support-desk-agent/) — the full-stack version of [`ontology-lifecycle-bolt/`](ontology-lifecycle-bolt/): the same support-desk ontology (imported from the Arrows diagram, stored and activated on bolt) and transcript, plus a seed of eight support conversations. A FastAPI + PydanticAI 2.x agent answers over the ontology-typed graph and uses reasoning memory both ways: every turn records a trace (linked to the message that started it, tool calls with `:TOUCHED` audit edges), and the agent recalls similar past traces before acting. The Next.js + Chakra UI v3 frontend has Memory (entities with their ontology labels, review-band pairs to confirm or reject), Graph (NVL), Ontology (revisions, diff, and a one-click `Ticket` → `SupportCase` rename and migration) and Reasoning (trace timeline, similar tasks, tool stats) panels. GLiNER2.5 extraction is keyless; the chat needs `OPENAI_API_KEY` (or another `AGENT_MODEL`).
 
 ### Lenny's Podcast Memory Explorer
 

@@ -612,6 +612,8 @@ jobs:
             dir: examples/full-stack-chat-agent/frontend
           - name: lennys-memory
             dir: examples/lennys-memory/frontend
+          - name: support-desk-agent
+            dir: examples/support-desk-agent/frontend
           - name: aws-financial-services-advisor
             dir: examples/financial-services-advisor/aws-financial-services-advisor/frontend
           - name: google-cloud-financial-advisor

@@ -1,0 +1,39 @@
+{
+  "name": "support-desk-agent-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "type-check": "tsc --noEmit",
+    "typegen": "chakra typegen src/theme/index.ts",
+    "prepare": "chakra typegen src/theme/index.ts"
+  },
+  "dependencies": {
+    "@chakra-ui/react": "^3.37.0",
+    "@emotion/react": "^11.14.0",
+    "@neo4j-nvl/base": "^1.2.1",
+    "@neo4j-nvl/react": "^1.2.1",
+    "next": "^16.3.8",
+    "next-themes": "^0.4.6",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-icons": "^5.7.0",
+    "react-markdown": "^10.1.0"
+  },
+  "devDependencies": {
+    "@chakra-ui/cli": "^3.37.0",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "eslint": "^10.11.0",
+    "eslint-config-next": "^16.3.8",
+    "eslint-plugin-react-hooks": "^7.1.0",
+    "typescript": "^5.9.0"
+  }
+}
