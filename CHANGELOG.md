@@ -104,6 +104,10 @@ name.
   `BoltOntology.migrate` matches and writes labels in the same form; it used
   `sanitize_label`, which re-cased a rename to `SupportCase` into
   `:Supportcase`.
+- **`BoltOntology.diff` reports a validation-mode change.** `mode_change` is
+  `{"from": "permissive", "to": "strict"}` when the two revisions' modes
+  differ, the shape NAMS returns; it was always `None` on bolt, because the
+  mode lives on the version row that `diff_documents()` never sees.
 - **Ontology enforcement on the write paths** — `schema_config.validation_mode`
   (`"permissive"` | `"strict"` | `None` to derive). Relations the ontology
   forbids are dropped in *both* modes, because writing an edge the schema

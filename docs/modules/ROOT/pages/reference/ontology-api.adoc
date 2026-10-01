@@ -57,7 +57,7 @@ TypeScript: `ontology.import({content?, url?, format?})`
 | Python: `ontology.diff(id, from_revision, to_revision)` +
 TypeScript: `ontology.diff(id, fromRevision, toRevision)`
 | Structural diff between two revisions of an ontology (`OntologyDiff`).
-| Same shape, computed locally by `diff_documents()`.
+| Same shape, computed locally by `diff_documents()`. `mode_change` is `{"from": ..., "to": ...}` when the two revisions' validation modes differ, as on NAMS.
 
 | Python: `ontology.migrate(id, from_version_id=, to_version_id=, type_mappings=, dry_run=False)` +
 TypeScript: `ontology.migrate(id, {fromVersionId, toVersionId, typeMappings, dryRun?})`

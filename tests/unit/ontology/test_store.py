@@ -826,6 +826,29 @@ class TestDiff:
         assert diff.to_revision == 2
         assert [et["label"] for et in diff.entity_types["added"]] == ["Company"]
         assert diff.entity_types["removed"] == []
+        # Same validation mode on both revisions: nothing to report.
+        assert diff.mode_change is None
+
+    @pytest.mark.asyncio
+    async def test_a_validation_mode_change_is_reported(self, store, client):
+        """The mode lives on the version row, which diff_documents never sees."""
+        document = make_document(entity_types=[PERSON], relationships=[])
+        client.on_read(
+            queries.GET_ONTOLOGY,
+            [
+                {
+                    "ontology": ontology_node(),
+                    "versions": [
+                        version_node(document, id="v1", revision=1, validation_mode="permissive"),
+                        version_node(document, id="v2", revision=2, validation_mode="strict"),
+                    ],
+                }
+            ],
+        )
+
+        diff = await store.diff("o1", 1, 2)
+
+        assert diff.mode_change == {"from": "permissive", "to": "strict"}
 
     @pytest.mark.asyncio
     async def test_unknown_revision_raises_not_found(self, store, client):

@@ -597,7 +597,8 @@ class BoltOntology:
 
         Returns:
             An :class:`OntologyDiff` with ``from_revision``/``to_revision``
-            filled in.
+            filled in, and ``mode_change`` (``{"from": ..., "to": ...}``, the
+            shape NAMS returns) when the two revisions' validation modes differ.
 
         Raises:
             NotFoundError: The ontology or one of the revisions is unknown, or
@@ -610,6 +611,12 @@ class BoltOntology:
         result = diff_documents(before, after)
         result.from_revision = from_revision
         result.to_revision = to_revision
+        # The validation mode lives on the version row, not the document, so
+        # diff_documents cannot see it.
+        modes = {v.revision: v.validation_mode for v in ontology.versions}
+        old_mode, new_mode = modes.get(from_revision), modes.get(to_revision)
+        if old_mode and new_mode and old_mode != new_mode:
+            result.mode_change = {"from": old_mode, "to": new_mode}
         return result
 
     # -- migration ------------------------------------------------------------
