@@ -408,10 +408,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
-    # Until an alias has been written, the library's resolution blocking query
-    # makes Neo4j warn that the `aliases` property key does not exist, once
-    # per mention. Harmless, and loud on a fresh database.
-    logging.getLogger("neo4j.notifications").setLevel(logging.ERROR)
     try:
         settings = get_settings()
     except ValidationError as exc:

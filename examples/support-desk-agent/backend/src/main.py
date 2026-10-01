@@ -18,11 +18,6 @@ from src.memory import MemoryService, MemoryUnavailableError
 
 logger = logging.getLogger(__name__)
 
-# Until an alias has been written, the library's resolution blocking query
-# makes Neo4j warn that the `aliases` property key does not exist, once per
-# mention. Harmless, and loud on a fresh database.
-logging.getLogger("neo4j.notifications").setLevel(logging.ERROR)
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:

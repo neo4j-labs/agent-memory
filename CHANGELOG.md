@@ -108,6 +108,27 @@ name.
   `BoltOntology.migrate` matches and writes labels in the same form; it used
   `sanitize_label`, which re-cased a rename to `SupportCase` into
   `:Supportcase`.
+- **Extraction drops mentions that only name their own type.** Span
+  extractors type the class noun along with the instances: in "which tickets
+  does Grace have?" GLiNER2.5 returns `tickets` as a Ticket, and no type
+  description talks it out of that. `ExtractionResult.filter_invalid_entities()`
+  now also drops a mention whose whole name, ignoring case, a leading article
+  or possessive ("my ticket") and regular plurals, is its POLE+O type, its
+  subtype, the label the extractor produced it under, or (with the new optional
+  `ontology` argument) the label the ontology declares for its pair — so
+  `support cases` goes too under a `SupportCase` label. Relations to a dropped
+  mention go with it. Message ingestion passes the client's ontology. The check
+  is `extraction.base.is_type_name_mention()`.
+- **No more "does not exist" warnings from the library's own queries.** On a
+  fresh or lightly used database Neo4j logged a `label / relationship type /
+  property key does not exist` warning for correct library queries that
+  reference schema nothing has written yet — `e.aliases` in entity resolution
+  (once per ingested message), `:SchemaMigration`, `HAS_VERSION`. The bolt
+  client's `execute_read` / `execute_write` now ask the server not to report
+  the UNRECOGNIZED notification classification (`report_unrecognized=False`
+  by default); the read-only `client.query.cypher` accessor and
+  `Neo4jClient.session()` keep reporting it, so a typo in Cypher you write
+  still warns.
 - **`BoltOntology.diff` reports a validation-mode change.** `mode_change` is
   `{"from": "permissive", "to": "strict"}` when the two revisions' modes
   differ, the shape NAMS returns; it was always `None` on bolt, because the

@@ -1432,7 +1432,7 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
                 extraction_result = await self._extractor.extract(content)
 
                 # Filter out invalid entities (stopwords, numbers, etc.)
-                extraction_result = extraction_result.filter_invalid_entities()
+                extraction_result = extraction_result.filter_invalid_entities(self._ontology)
 
                 # Enforce the ontology, exactly as the add_message path does.
                 extraction_result = self._apply_ontology(extraction_result)
@@ -1868,7 +1868,7 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         result = await self._extractor.extract(message.content)
 
         # Filter out invalid entities (stopwords, numbers, etc.)
-        result = result.filter_invalid_entities()
+        result = result.filter_invalid_entities(self._ontology)
 
         # Enforce the ontology (drops forbidden relations; in strict mode also
         # entities whose type the ontology does not declare).

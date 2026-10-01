@@ -103,7 +103,7 @@ Fields and defaults:
 | `confidence` | `float` | `1.0` | Confidence score
 |===
 
-`ExtractionResult.entity_count`, `relation_count`, and `preference_count` are properties. `entities_by_type()` groups entities into a dictionary; `get_entities_of_type(type)` returns a list using case-insensitive type matching. `filter_invalid_entities()` returns a new result with invalid names and affected relations removed. `validate_relations(ontology, *, mode="warn")` checks every relation against an ontology's endpoint typing and returns `(result, violations)`; see xref:reference/extractor-relations.adoc[Relation extractors]. There are no `filter_by_type` or `filter_by_confidence` methods.
+`ExtractionResult.entity_count`, `relation_count`, and `preference_count` are properties. `entities_by_type()` groups entities into a dictionary; `get_entities_of_type(type)` returns a list using case-insensitive type matching. `filter_invalid_entities(ontology=None)` returns a new result with invalid names and affected relations removed. Invalid names are stopwords, numbers and punctuation, and mentions that only name their own type, such as "tickets" typed Ticket. Type names are the mention's POLE+O type, subtype and extractor label, plus the label `ontology` declares for its pair. Message ingestion applies it with the client's ontology. `validate_relations(ontology, *, mode="warn")` checks every relation against an ontology's endpoint typing and returns `(result, violations)`; see xref:reference/extractor-relations.adoc[Relation extractors]. There are no `filter_by_type` or `filter_by_confidence` methods.
 
 [source,python]
 ----

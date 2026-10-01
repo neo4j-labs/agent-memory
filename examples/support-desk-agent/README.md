@@ -120,9 +120,8 @@ Activating revision 1 again does not migrate back. The tickets keep `:SupportCas
 
 ## Known limitations
 
-- **Generic words become entities.** GLiNER2.5 extracts the bare word "ticket" or "tickets" in a question such as *"Which tickets does Grace have?"* as a `Ticket`. Sharper type descriptions did not prevent it, so such nodes can appear in the Memory panel next to the real `TK-` tickets.
-- **Warning noise on a fresh database.** The library's resolution query makes Neo4j warn that the `aliases` property does not exist until some entity has one. The backend and the seed silence the `neo4j.notifications` logger.
 - **`AGENT_MODEL=test` sends no message history,** because `TestModel` only calls tools on a turn with no earlier model response.
+- **Re-activating revision 1 does not migrate back** (see above); `make reseed` starts over.
 
 ## Tests
 

@@ -1998,7 +1998,7 @@ agent = ChatAgent(
 
 9. **Entity Type Labels**: Entity `type` and `subtype` are added as PascalCase Neo4j node labels (e.g., `:Entity:Person:Individual`) for efficient querying. The `query_builder.py` module sanitizes types to ensure they are valid Neo4j label identifiers and converts them to PascalCase. Both POLE+O types and custom types become labels. For POLE+O types, subtypes are validated against known subtypes; for custom types, any valid identifier works as a subtype. On bolt a third label comes from the client's ontology: the label it declares for the entity's exact type/subtype pair (`OntologyDocument.node_label`), formatted by `ontology_node_label` (PascalCase that keeps existing capitals), so a custom ontology subtype such as `CUSTOMER` still reaches the graph as `:Customer`.
 
-10. **Entity Stopword Filtering**: Extracted entities are filtered to exclude common stopwords (pronouns like "they", "them", articles, common verbs), purely numeric values, and single-character names. The `ENTITY_STOPWORDS` frozenset in `extraction/base.py` contains ~200 filtered words. Use `is_valid_entity_name()` to check if a name is valid, or `ExtractionResult.filter_invalid_entities()` to filter a result.
+10. **Entity Stopword Filtering**: Extracted entities are filtered to exclude common stopwords (pronouns like "they", "them", articles, common verbs), purely numeric values, and single-character names. The `ENTITY_STOPWORDS` frozenset in `extraction/base.py` contains ~200 filtered words. Use `is_valid_entity_name()` to check if a name is valid, or `ExtractionResult.filter_invalid_entities(ontology=None)` to filter a result. The filter also drops *type-name mentions* (`is_type_name_mention()`): a mention whose whole name, ignoring case, a leading article/possessive and regular plurals, is its own POLE+O type, subtype, extractor label (`attributes["gliner2_label"]`) or ontology label — "tickets" typed Ticket. Ingestion passes the client's ontology.
 
 11. **Geocoding for Locations**: Location entities can have a `location` property containing Neo4j Point coordinates. Use `GeocodingConfig` to configure providers (Nominatim free, Google requires API key). The `geocoder.py` module provides `NominatimGeocoder`, `GoogleGeocoder`, and `CachedGeocoder` classes. A Point index is created on `Entity.location` for efficient spatial queries.
 
@@ -2071,15 +2071,7 @@ agent = ChatAgent(
     image_url = metadata.get("image_url")
     ```
 
-23. **Neo4j Property Key Warnings**: When querying optional properties in Cypher, avoid referencing properties that may not exist in the schema. Use `'property' IN keys(node)` to check existence before accessing:
-
-    ```cypher
-    // Wrong - warns if 'aliases' property doesn't exist on any node
-    WHERE e.name = $name OR $name IN e.aliases
-    
-    // Correct - check property exists first
-    WHERE e.name = $name OR ('aliases' IN keys(e) AND $name IN e.aliases)
-    ```
+23. **Neo4j Property Key Warnings**: Neo4j warns "label / relationship type / property key does not exist" (GQL 01N50/01N52, the UNRECOGNIZED classification) for any *static* reference to a name the database has never stored — including inside a `'aliases' IN keys(e) AND ...` guard and dynamic `e['aliases']` access, which the planner resolves the same way. A guard does not prevent the warning. Instead, `Neo4jClient.execute_read` / `execute_write` open their sessions with the UNRECOGNIZED classification disabled (`report_unrecognized=False`, the default), so library queries stay quiet on a fresh database. The read-only `client.query.cypher` accessor passes `report_unrecognized=True` and `Neo4jClient.session()` applies no filter, so user-written Cypher keeps the hint. Keep the `keys()` guards where they change semantics (absent vs. null), not for the warning.
 
 24. **Graph Visualization with Episode Session IDs**: The `/api/memory/graph` endpoint accepts an `episode_session_ids` parameter (comma-separated) to include full conversations and entities from podcast episodes in addition to the current thread. This is used when tool call results contain references to specific episodes.
 

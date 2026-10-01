@@ -301,6 +301,84 @@ def is_valid_entity_name(name: str) -> bool:
     return True
 
 
+#: Leading words that do not change what a mention names ("my ticket").
+_TYPE_NAME_LEADERS = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "my",
+        "your",
+        "our",
+        "their",
+        "his",
+        "her",
+        "its",
+        "this",
+        "that",
+        "these",
+        "those",
+        "any",
+        "all",
+        "some",
+        "each",
+        "every",
+        "new",
+        "open",
+    }
+)
+
+
+def _type_name_words(label: str) -> str:
+    """``SupportCase`` / ``support_case`` / ``SUPPORT_CASE`` -> ``"support case"``."""
+    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", label.strip()).replace("_", " ")
+    return " ".join(spaced.lower().split())
+
+
+def _plural_forms(words: str) -> set[str]:
+    """The phrase and its regular plurals (``ticket``/``tickets``, ``category``/``categories``)."""
+    forms = {words, f"{words}s", f"{words}es"}
+    if words.endswith("y"):
+        forms.add(f"{words[:-1]}ies")
+    return forms
+
+
+def is_type_name_mention(
+    entity: "ExtractedEntity", ontology: "OntologyDocument | None" = None
+) -> bool:
+    """Whether a mention is only the name of its own type, such as "tickets" typed Ticket.
+
+    Span extractors type the class noun along with the instances: in "which
+    tickets does Grace have?" GLiNER2.5 returns ``tickets`` as a Ticket, and a
+    type description cannot talk it out of that. Such a mention names the type,
+    not an entity, so it is dropped. "TK-2210" and "Acme Company" are kept.
+
+    The type's names are the mention's POLE+O type and subtype, the label the
+    extractor produced it under (``attributes["gliner2_label"]``), and, when an
+    ontology is given, the label it declares for the mention's exact pair. The
+    comparison ignores case, leading articles and possessives ("my ticket"),
+    and regular plurals.
+
+    Args:
+        entity: The extracted mention.
+        ontology: The ontology the mention was extracted against, if any.
+
+    Returns:
+        ``True`` when the mention's whole name is one of its type's names.
+    """
+    words = _type_name_words(entity.name).split()
+    while len(words) > 1 and words[0] in _TYPE_NAME_LEADERS:
+        words = words[1:]
+    name = " ".join(words)
+    if not name:
+        return False
+
+    labels = [entity.type, entity.subtype or "", str(entity.attributes.get("gliner2_label") or "")]
+    if ontology is not None:
+        labels.append(ontology.node_label(entity.type, entity.subtype) or "")
+    return any(name in _plural_forms(_type_name_words(label)) for label in labels if label)
+
+
 class ExtractedEntity(BaseModel):
     """Entity extracted from text.
 
@@ -431,7 +509,9 @@ class ExtractionResult(BaseModel):
         """Get entities of a specific type."""
         return [e for e in self.entities if e.type.upper() == entity_type.upper()]
 
-    def filter_invalid_entities(self) -> "ExtractionResult":
+    def filter_invalid_entities(
+        self, ontology: "OntologyDocument | None" = None
+    ) -> "ExtractionResult":
         """Return a new ExtractionResult with invalid entities filtered out.
 
         Filters entities that are:
@@ -439,14 +519,24 @@ class ExtractionResult(BaseModel):
         - Too short (less than 2 characters)
         - Purely numeric
         - Only punctuation/special characters
+        - Only the name of their own type, such as "tickets" typed Ticket
+          (see :func:`is_type_name_mention`)
 
         Also filters relations that reference removed entities.
+
+        Args:
+            ontology: The ontology the result was extracted against. Its
+                declared labels count as type names too.
 
         Returns:
             New ExtractionResult with only valid entities and relations
         """
         # Filter entities
-        valid_entities = [e for e in self.entities if is_valid_entity_name(e.name)]
+        valid_entities = [
+            e
+            for e in self.entities
+            if is_valid_entity_name(e.name) and not is_type_name_mention(e, ontology)
+        ]
 
         # Get set of valid entity names for relation filtering
         valid_entity_names = {e.normalized_name for e in valid_entities}
