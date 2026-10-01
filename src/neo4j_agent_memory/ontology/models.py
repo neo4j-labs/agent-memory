@@ -261,6 +261,39 @@ class OntologyDocument(_Lenient):
                 return et.label
         return None
 
+    def node_label(self, pole_type: str, subtype: str | None = None) -> str | None:
+        """The declared label a stored entity's node should carry, if any.
+
+        Unlike :meth:`label_for`, there is no fallback: the ontology must
+        declare exactly this ``(pole_type, subtype)`` pair, and a base
+        declaration (``subtype=None``) only matches an entity with no subtype.
+        :meth:`label_for` falls back so that validation accepts a bare
+        ``PERSON`` under an ontology that declares only ``Customer =
+        PERSON:CUSTOMER``; stamping ``:Customer`` on that node would assert a
+        subtype the caller never stated.
+
+        A pair that two labels declare is ambiguous and yields ``None`` too,
+        rather than labelling every such node with whichever came first.
+
+        Args:
+            pole_type: One of the five POLE+O types (any casing).
+            subtype: Optional subtype (any casing).
+
+        Returns:
+            The declared label as written, or ``None``. The write paths turn it
+            into a node label with
+            :func:`~neo4j_agent_memory.graph.query_builder.ontology_node_label`.
+        """
+        wanted_type = pole_type.upper()
+        wanted_subtype = subtype.upper() if subtype else None
+        matches = {
+            et.label
+            for et in self.entity_types
+            if et.pole_type.upper() == wanted_type
+            and (et.subtype.upper() if et.subtype else None) == wanted_subtype
+        }
+        return matches.pop() if len(matches) == 1 else None
+
     def declares(self, pole_type: str, subtype: str | None = None) -> bool:
         """Whether the ontology declares an entity type for this pair.
 

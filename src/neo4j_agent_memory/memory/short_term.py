@@ -17,7 +17,10 @@ from neo4j_agent_memory.core.memory import BaseMemory, MemoryEntry
 from neo4j_agent_memory.core.protocols import ShortTermProtocol
 from neo4j_agent_memory.extraction.base import ExtractedEntity, ExtractionResult
 from neo4j_agent_memory.graph import queries
-from neo4j_agent_memory.graph.query_builder import build_create_entity_query
+from neo4j_agent_memory.graph.query_builder import (
+    build_create_entity_query,
+    build_label_set_clause,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -493,6 +496,15 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         self._validation_mode = validation_mode
         self._resolver = resolver
         self._resolution_config = resolution_config
+
+    def _node_label(self, entity_type: str | None, subtype: str | None) -> str | None:
+        """The ontology label an entity node gets, for an exact declaration only.
+
+        See :meth:`~neo4j_agent_memory.ontology.models.OntologyDocument.node_label`.
+        """
+        if self._ontology is None or not entity_type:
+            return None
+        return self._ontology.node_label(entity_type, subtype)
 
     def _apply_ontology(self, result: ExtractionResult) -> ExtractionResult:
         """Enforce the ontology on a freshly extracted result before storage.
@@ -1007,11 +1019,17 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
                     continue
                 entity_id = rows[0]["id"]
             elif getattr(ref, "type", None):
+                # Same labels as every other entity write: the type label and,
+                # when the ontology declares the bare type, its label.
+                label_clause = build_label_set_clause(
+                    ref.type, None, ontology_label=self._node_label(ref.type, None)
+                )
                 rows = await self._client.execute_write(
-                    """
-                    MERGE (e:Entity {name: $name, type: $type})
+                    f"""
+                    MERGE (e:Entity {{name: $name, type: $type}})
                     ON CREATE SET e.id = coalesce(e.id, $name + ':' + $type),
                                   e.created_at = datetime()
+                    {label_clause}
                     RETURN e.id AS id
                     """,
                     {"name": ref.name, "type": ref.type},
@@ -1754,7 +1772,9 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
 
         entity_id = str(uuid4())
         subtype = getattr(entity, "subtype", None)
-        create_query = build_create_entity_query(entity.type, subtype)
+        create_query = build_create_entity_query(
+            entity.type, subtype, ontology_label=self._node_label(entity.type, subtype)
+        )
         rows = await self._client.execute_write(
             create_query,
             {

@@ -775,7 +775,16 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
             storage_metadata["attributes"] = entity.attributes
 
         # Store entity with dynamic labels for type/subtype
-        create_query = build_create_entity_query(entity.type, entity.subtype, include_aliases=True)
+        create_query = build_create_entity_query(
+            entity.type,
+            entity.subtype,
+            include_aliases=True,
+            ontology_label=(
+                self._ontology.node_label(entity.type, entity.subtype)
+                if self._ontology is not None
+                else None
+            ),
+        )
         results = await self._client.execute_write(
             create_query,
             {

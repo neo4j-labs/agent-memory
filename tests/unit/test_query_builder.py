@@ -6,6 +6,7 @@ from neo4j_agent_memory.graph.query_builder import (
     build_create_entity_query,
     build_label_set_clause,
     is_poleo_type,
+    ontology_node_label,
     sanitize_label,
     to_pascal_case,
     validate_entity_type,
@@ -468,3 +469,37 @@ class TestValidSubtypesConsistency:
         """Test that ORGANIZATION subtypes include expected values."""
         expected = {"COMPANY", "NONPROFIT", "GOVERNMENT", "EDUCATIONAL"}
         assert expected.issubset(VALID_SUBTYPES["ORGANIZATION"])
+
+
+class TestOntologyLabel:
+    """The ontology's declared label is added in PascalCase, keeping its capitals."""
+
+    def test_pascal_case_keeps_existing_capitals(self):
+        assert ontology_node_label("SupportCase") == "SupportCase"
+        assert ontology_node_label("  Ticket ") == "Ticket"
+        # The built-in templates declare GLiNER-style lowercase labels.
+        assert ontology_node_label("company") == "Company"
+        assert ontology_node_label("tv_show") == "TvShow"
+        assert ontology_node_label("financial_metric") == "FinancialMetric"
+
+    def test_what_cannot_be_a_label_is_rejected(self):
+        assert ontology_node_label(None) is None
+        assert ontology_node_label("") is None
+        assert ontology_node_label("Support Case") is None
+        assert ontology_node_label("X`) DETACH DELETE e //") is None
+
+    def test_the_create_query_adds_the_ontology_label(self):
+        query = build_create_entity_query("OBJECT", "TICKET", ontology_label="SupportCase")
+        assert "SET e:Object, e:SupportCase" in query
+        assert "Supportcase" not in query
+
+    def test_a_label_equal_to_an_existing_label_is_not_repeated(self):
+        assert build_label_set_clause("PERSON", None, ontology_label="person") == "SET e:Person"
+        assert (
+            build_label_set_clause("ORGANIZATION", "COMPANY", ontology_label="company")
+            == "SET e:Organization, e:Company"
+        )
+
+    def test_an_invalid_ontology_label_is_skipped(self):
+        clause = build_label_set_clause("OBJECT", "TICKET", ontology_label="Support Case")
+        assert clause == "SET e:Object"

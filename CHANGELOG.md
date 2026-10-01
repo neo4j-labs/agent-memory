@@ -89,6 +89,21 @@ name.
   ids, turned into editable ontologies by `clone()`. Constraints on
   `Ontology.id` / `OntologyVersion.id` and an index on `Ontology.name` are
   created by `graph/schema.py`.
+- **Bolt entity nodes carry their ontology label.** Message ingestion,
+  `LongTermMemory.add_entity` and explicit mentions add the label the client's
+  ontology declares for the entity's exact `(pole_type, subtype)` pair — a
+  `Ticket = OBJECT:TICKET` entity is written as `:Entity:Object:Ticket` — in
+  PascalCase that keeps the label's own capitals (`SupportCase` stays
+  `SupportCase`; the templates' `tv_show` becomes `TvShow`). A base declaration
+  applies only to an entity with no subtype, a pair two labels declare adds
+  nothing, and a label equal to the type or built-in subtype label is not
+  repeated, so the default POLE+O ontology writes exactly the labels it always
+  did. `OntologyDocument.node_label()` is the exact-match lookup;
+  `label_for()` keeps its fallbacks for validation. Explicit mentions with a
+  `type` now also get their type label, like every other entity write.
+  `BoltOntology.migrate` matches and writes labels in the same form; it used
+  `sanitize_label`, which re-cased a rename to `SupportCase` into
+  `:Supportcase`.
 - **Ontology enforcement on the write paths** — `schema_config.validation_mode`
   (`"permissive"` | `"strict"` | `None` to derive). Relations the ontology
   forbids are dropped in *both* modes, because writing an edge the schema

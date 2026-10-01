@@ -48,7 +48,7 @@ from neo4j_agent_memory.core.exceptions import (
     SchemaError,
 )
 from neo4j_agent_memory.graph import queries
-from neo4j_agent_memory.graph.query_builder import sanitize_label
+from neo4j_agent_memory.graph.query_builder import ontology_node_label, validate_subtype
 from neo4j_agent_memory.ontology.builtin import get_template, list_templates
 from neo4j_agent_memory.ontology.convert import (
     from_arrows,
@@ -640,9 +640,11 @@ class BoltOntology:
         POLE+O ``pole_type``. When the target entity type declares no subtype
         the subtype labels the *source* version could have written are removed
         too, so a node does not keep a ``:Individual`` label while reporting
-        ``subtype = null``. Labels are sanitised with
-        :func:`~neo4j_agent_memory.graph.query_builder.sanitize_label`, so they
-        are matched in their PascalCase form.
+        ``subtype = null``. Labels are matched and written in the form
+        :func:`~neo4j_agent_memory.graph.query_builder.ontology_node_label`
+        gives them (``SupportCase`` stays ``SupportCase``, ``tv_show`` becomes
+        ``TvShow``) — the same form the write paths give a node whose type the
+        ontology declares.
 
         The job is persisted as an ``(:OntologyMigration)`` node either way and
         can be read back with :meth:`get_migration`.
@@ -925,8 +927,8 @@ def _plan_mapping(
 ) -> _MappingStep:
     """Resolve one mapping against the two documents, or explain why not."""
     raw_from, raw_to = pair
-    from_label = sanitize_label(raw_from)
-    to_label = sanitize_label(raw_to)
+    from_label = ontology_node_label(raw_from)
+    to_label = ontology_node_label(raw_to)
     if from_label is None or to_label is None:
         raise ValueError(
             f"Type mapping {raw_from!r} -> {raw_to!r} contains a label that is not a "
@@ -962,11 +964,13 @@ def _stale_subtype_labels(source: OntologyDocument, raw_from: str, raw_to: str) 
     ``relabel_entities_query`` sets ``e.subtype = null``, but Cypher cannot
     remove a label without naming it, so a node written as
     ``:Entity:Person:Individual`` would keep ``:Individual`` — still matching
-    every subtype-scoped query — while claiming no subtype. The labels a node
-    under ``raw_from`` can be carrying are exactly the ones the *source*
-    version declares for that entity type's ``pole_type``, so they come from
-    the source document. Removing one a node does not carry is a no-op, so an
-    over-broad set is safe.
+    every subtype-scoped query — while claiming no subtype. Besides
+    ``raw_from`` itself (the declared label, removed separately), a node can
+    carry the built-in POLE+O subtype label the write path adds for a subtype
+    such as ``INDIVIDUAL``; a custom subtype never becomes a label of its own.
+    The candidates are the built-in subtype labels of every subtype the
+    *source* version declares for that entity type's ``pole_type``. Removing
+    one a node does not carry is a no-op, so an over-broad set is safe.
 
     Args:
         source: The ontology version the graph was written against.
@@ -974,7 +978,7 @@ def _stale_subtype_labels(source: OntologyDocument, raw_from: str, raw_to: str) 
         raw_to: The target label (for the error message only).
 
     Returns:
-        Sanitised (PascalCase) subtype labels to remove, sorted.
+        Built-in (PascalCase) subtype labels to remove, sorted.
 
     Raises:
         ValueError: ``raw_from`` is not declared by the source version and
@@ -995,7 +999,7 @@ def _stale_subtype_labels(source: OntologyDocument, raw_from: str, raw_to: str) 
 
     pole_type = source_type.pole_type.upper()
     labels = {
-        sanitize_label(et.subtype)
+        validate_subtype(pole_type, et.subtype)
         for et in source.entity_types
         if et.subtype and et.pole_type.upper() == pole_type
     }

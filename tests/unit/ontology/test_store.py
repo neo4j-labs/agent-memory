@@ -1068,6 +1068,69 @@ class TestMigrate:
         assert "REMOVE e:`Client`\n" in relabel
 
     @pytest.mark.asyncio
+    async def test_labels_are_matched_and_written_verbatim(self, store, client):
+        """The write path labels nodes with the declared label as written.
+
+        ``sanitize_label`` re-cased its input, so a rename to ``SupportCase``
+        wrote ``:Supportcase`` — a label no write path produces and no query
+        for ``:SupportCase`` matches.
+        """
+        old = make_document(
+            name="v1",
+            entity_types=[EntityTypeDef(label="Ticket", pole_type="OBJECT", subtype="TICKET")],
+            relationships=[],
+        )
+        new = make_document(
+            name="v2",
+            entity_types=[EntityTypeDef(label="SupportCase", pole_type="OBJECT", subtype="TICKET")],
+            relationships=[],
+        )
+        arm_migration(client, old=old, new=new)
+        client.on_write("REMOVE e:", [{"migrated": 2}])
+
+        job = await store.migrate(
+            "o1",
+            from_version_id="from-v",
+            to_version_id="to-v",
+            type_mappings=[("Ticket", "SupportCase")],
+        )
+
+        relabel = next(q for q in client.write_queries if "REMOVE e:" in q)
+        assert "MATCH (e:Entity:`Ticket`)" in relabel
+        assert "SET e:`SupportCase`" in relabel
+        assert "Supportcase" not in relabel
+        assert job.processed == 2
+
+    @pytest.mark.asyncio
+    async def test_a_custom_subtype_never_counts_as_a_stale_label(self, store, client):
+        """Only built-in POLE+O subtypes become labels, so only they are stripped."""
+        old = make_document(
+            name="v1",
+            entity_types=[
+                EntityTypeDef(label="Ticket", pole_type="OBJECT", subtype="TICKET"),
+                EntityTypeDef(label="Phone", pole_type="OBJECT", subtype="DEVICE"),
+            ],
+            relationships=[],
+        )
+        new = make_document(
+            name="v2",
+            entity_types=[EntityTypeDef(label="Item", pole_type="OBJECT")],
+            relationships=[],
+        )
+        arm_migration(client, old=old, new=new)
+        client.on_write("REMOVE e:", [{"migrated": 1}])
+
+        await store.migrate(
+            "o1",
+            from_version_id="from-v",
+            to_version_id="to-v",
+            type_mappings=[("Ticket", "Item")],
+        )
+
+        relabel = next(q for q in client.write_queries if "REMOVE e:" in q)
+        assert "REMOVE e:`Ticket`:`Device`\n" in relabel
+
+    @pytest.mark.asyncio
     async def test_the_label_being_added_is_never_removed(self, store, client):
         """``to_label`` can coincide with a source subtype label; keep it."""
         old = make_document(

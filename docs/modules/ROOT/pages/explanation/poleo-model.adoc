@@ -62,7 +62,7 @@ On Bolt, the query builder turns a subtype into a node label only when it is a k
 
 Any other subtype on a POLE+O type is still stored in the entity's `subtype` property, but it adds no label: `ORGANIZATION` with subtype `RESTAURANT` gets `:Entity:Organization`, not `:Entity:Organization:Restaurant`. Custom (non-POLE+O) types accept any valid label identifier as a subtype. An extractor can propose a subtype outside this list; check the table before relying on a subtype label in a query.
 
-The same rule applies to ontology labels, because every ontology entity type maps onto a POLE+O `pole_type`. A `Product` label declared with `pole_type: OBJECT` and `subtype: PRODUCT` is stored as `:Entity:Object:Product`. A `Customer` label declared with `pole_type: PERSON` and `subtype: CUSTOMER` is stored with `subtype: "CUSTOMER"` but labeled only `:Entity:Person`, because `CUSTOMER` is not in the table.
+An ontology adds its own labels on top. Every ontology entity type maps onto a POLE+O `pole_type`, and on Bolt a node also gets the label the client's ontology declares for its exact `pole_type`/`subtype` pair, in PascalCase that keeps the label's own capitals. A `Customer` label declared with `pole_type: PERSON` and `subtype: CUSTOMER` is stored as `:Entity:Person:Customer`, although `CUSTOMER` is not in the table; a `Product` label declared as `OBJECT:PRODUCT` is stored as `:Entity:Object:Product`, its subtype label and ontology label being the same.
 
 [[_neo4j_schema]]
 == Classification in the graph

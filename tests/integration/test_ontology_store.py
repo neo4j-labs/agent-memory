@@ -12,7 +12,9 @@ from uuid import uuid4
 
 import pytest
 
+from neo4j_agent_memory import MemoryClient
 from neo4j_agent_memory.core.exceptions import NotFoundError, NotSupportedError
+from neo4j_agent_memory.extraction.base import ExtractedEntity, ExtractionResult
 from neo4j_agent_memory.ontology.models import (
     DomainInfo,
     EntityTypeDef,
@@ -428,6 +430,93 @@ class TestOntologyMigrate:
             {"id": entity_id},
         )
         return rows[0]
+
+    @pytest.mark.asyncio
+    async def test_labels_the_write_path_adds_survive_a_rename(self, clean_memory_client):
+        """End to end: no hand-written label anywhere.
+
+        The other tests here seed ``:Client`` with Cypher. This one lets the
+        write paths label the nodes from the client's ontology — ``add_entity``
+        and message ingestion — then renames ``Ticket`` to ``SupportCase``.
+        """
+
+        class TicketExtractor:
+            name = "fixed"
+
+            async def extract(self, text: str, **_: object) -> ExtractionResult:
+                start = text.index("TK-2211")
+                return ExtractionResult(
+                    entities=[
+                        ExtractedEntity(
+                            name="TK-2211",
+                            type="OBJECT",
+                            subtype="TICKET",
+                            start_pos=start,
+                            end_pos=start + len("TK-2211"),
+                        )
+                    ],
+                    relations=[],
+                    source_text=text,
+                )
+
+        template = clean_memory_client
+        name = f"migrate-{uuid4().hex[:8]}"
+        ticket = OntologyDocument(
+            domain=DomainInfo(id=name, name=name),
+            entity_types=[EntityTypeDef(label="Ticket", pole_type="OBJECT", subtype="TICKET")],
+        )
+        renamed = OntologyDocument(
+            domain=DomainInfo(id=name, name=name),
+            entity_types=[EntityTypeDef(label="SupportCase", pole_type="OBJECT", subtype="TICKET")],
+        )
+        v1 = await template.ontology.create(name, ticket)
+        v2 = await template.ontology.update(v1.ontology_id, renamed)
+
+        client = MemoryClient(
+            template._settings,
+            embedder=template._embedder,
+            extractor=TicketExtractor(),
+            ontology=ticket,
+        )
+        await client.connect()
+        try:
+            await client.long_term.add_entity(
+                "TK-2210",
+                "OBJECT",
+                subtype="TICKET",
+                deduplicate=False,
+                geocode=False,
+                enrich=False,
+            )
+            await client.short_term.add_message(
+                f"labels-{uuid4().hex[:8]}", "user", "Ticket TK-2211 is still open."
+            )
+
+            label_rows = """
+                MATCH (e:Entity) WHERE e.name IN ['TK-2210', 'TK-2211']
+                RETURN e.name AS name, labels(e) AS labels, e.subtype AS subtype
+                ORDER BY name
+            """
+            before = await client._client.execute_read(label_rows)
+            assert [row["name"] for row in before] == ["TK-2210", "TK-2211"]
+            assert all("Ticket" in row["labels"] for row in before)
+
+            job = await client.ontology.migrate(
+                v1.ontology_id,
+                from_version_id=v1.id,
+                to_version_id=v2.id,
+                type_mappings=[("Ticket", "SupportCase")],
+            )
+            assert (job.status, job.processed) == ("completed", 2)
+
+            after = await client._client.execute_read(label_rows)
+            for row in after:
+                assert "SupportCase" in row["labels"]
+                assert "Ticket" not in row["labels"]
+                assert "Supportcase" not in row["labels"]
+                assert row["subtype"] == "TICKET"
+        finally:
+            await client.close()
 
     @pytest.mark.asyncio
     async def test_dry_run_counts_without_changing_anything(self, clean_memory_client):

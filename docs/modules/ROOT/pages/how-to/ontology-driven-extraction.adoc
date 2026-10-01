@@ -162,21 +162,22 @@ relationship, use `inverse: OTHER_TYPE` and declare the reverse pattern too
 === How labels reach Neo4j
 
 Each entity type carries a POLE+O `pole_type` and an optional `subtype`, and the
-storage layer writes both onto the node as the `type` and `subtype` properties.
-The `pole_type` always becomes a PascalCase label. The `subtype` becomes a label
-only when it is one of the built-in POLE+O subtypes for that type (for `PERSON`:
-`INDIVIDUAL`, `ALIAS`, `PERSONA`, `SUSPECT`, `WITNESS` and `VICTIM`); any other
-subtype stays a property. So `Customer` above lands as:
+storage layer writes both onto the node as the `type` and `subtype` properties
+and as labels: the `pole_type` as its PascalCase label, a built-in POLE+O
+subtype (such as `INDIVIDUAL`) as its label, and the ontology's own label for
+that exact `pole_type`/`subtype` pair. So `Customer` above lands as:
 
 [source,cypher]
 ----
-(:Entity:Person {name: "Dana Whitfield", type: "PERSON", subtype: "CUSTOMER"})
+(:Entity:Person:Customer {name: "Dana Whitfield", type: "PERSON", subtype: "CUSTOMER"})
 ----
 
-Match a custom subtype on the property, for example
-`MATCH (c:Person {subtype: "CUSTOMER"})`. Declare the `subtype` all the same.
-Without it, `Customer` and `Engineer` both map to `(PERSON, None)` and the
-fine-grained distinction survives in the extractor's output but not in the graph.
+The declared label is written in PascalCase that keeps its own capitals:
+`SupportCase` stays `SupportCase`, and a GLiNER-style `tv_show` becomes
+`TvShow`. Declare the `subtype`. Without it, `Customer` and `Engineer` both map
+to `(PERSON, None)`; two labels declaring one pair is ambiguous, so neither
+label is written and the nodes are plain `:Entity:Person`. The fine-grained
+distinction then survives in the extractor's output but not in the graph.
 
 == 2. Validate and compile it
 

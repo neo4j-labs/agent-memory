@@ -724,3 +724,46 @@ class TestOntologyAPIProtocol:
             nams_params = inspect.signature(getattr(NamsOntology, name)).parameters
             assert list(protocol_params) == list(nams_params), name
             assert inspect.iscoroutinefunction(getattr(NamsOntology, name)), name
+
+
+class TestNodeLabel:
+    """``node_label``: the label a stored node gets — exact declarations only."""
+
+    TICKET = EntityTypeDef(label="Ticket", pole_type="OBJECT", subtype="TICKET")
+    CUSTOMER = EntityTypeDef(label="Customer", pole_type="PERSON", subtype="CUSTOMER")
+
+    def test_an_exact_pair_yields_the_declared_label_verbatim(self):
+        doc = _doc([self.TICKET, EntityTypeDef(label="SupportCase", pole_type="EVENT")])
+        assert doc.node_label("OBJECT", "TICKET") == "Ticket"
+        assert doc.node_label("object", "ticket") == "Ticket"
+        assert doc.node_label("EVENT") == "SupportCase"
+
+    def test_a_bare_type_gets_no_subtyped_label(self):
+        """``label_for`` falls back for validation; a node label must not."""
+        doc = _doc([self.CUSTOMER])
+        assert doc.label_for("PERSON") == "Customer"
+        assert doc.node_label("PERSON") is None
+
+    def test_an_undeclared_subtype_gets_no_base_label(self):
+        doc = _doc([PERSON, self.CUSTOMER])
+        assert doc.label_for("PERSON", "CONTRACTOR") == "Person"
+        assert doc.node_label("PERSON", "CONTRACTOR") is None
+        assert doc.node_label("PERSON") == "Person"
+
+    def test_an_ambiguous_pair_yields_no_label(self):
+        doc = _doc(
+            [
+                EntityTypeDef(label="Customer", pole_type="PERSON"),
+                EntityTypeDef(label="Engineer", pole_type="PERSON"),
+            ]
+        )
+        assert doc.node_label("PERSON") is None
+
+    def test_the_default_poleo_labels_match_the_type_labels(self):
+        from neo4j_agent_memory.ontology import POLEO_ONTOLOGY
+
+        assert POLEO_ONTOLOGY.node_label("PERSON") == "Person"
+        assert POLEO_ONTOLOGY.node_label("ORGANIZATION") == "Organization"
+        # Built-in subtypes are not declared by the default ontology; their
+        # labels keep coming from the POLE+O subtype list.
+        assert POLEO_ONTOLOGY.node_label("PERSON", "INDIVIDUAL") is None

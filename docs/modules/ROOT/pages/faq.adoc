@@ -118,7 +118,7 @@ Bolt manages constraints and indexes needed by its configured schema and search 
 [[entity-labels]]
 === How are entities labeled in Neo4j?
 
-On Bolt, managed entities carry `:Entity`, a type property, and supported type/subtype labels such as `:Person` or `:Vehicle`. See xref:explanation/poleo-model.adoc[POLE+O] and xref:reference/schema-objects.adoc[Schema objects] for the distinction between stored labels and conceptual categories.
+On Bolt, managed entities carry `:Entity`, a type property, supported type/subtype labels such as `:Person` or `:Vehicle`, and the label the client's ontology declares for the entity's exact type and subtype, such as `:Customer`. See xref:explanation/poleo-model.adoc[POLE+O] and xref:reference/schema-objects.adoc[Schema objects] for the distinction between stored labels and conceptual categories.
 
 [[query-by-type]]
 === Can I query entities by type directly?

@@ -169,7 +169,7 @@ An extracted label is mapped onto a POLE+O `(type, subtype)` pair. An ontology's
 | `:Entity:Object`, `:Entity:Object:Product`, `:Entity:Object:Vehicle`
 |===
 
-The subtype is stored on the entity's `subtype` property. For a POLE+O type it also becomes a node label only when it is one of the known POLE+O subtypes for that type, so `COMPANY` and `CITY` add a label while `ACTOR` and `INSTITUTION` do not.
+The subtype is stored on the entity's `subtype` property. For a POLE+O type it also becomes a node label only when it is one of the known POLE+O subtypes for that type, so `COMPANY` and `CITY` add a label while `ACTOR` and `INSTITUTION` do not. Separately, on Bolt, the label the client's ontology declares for the entity's exact type/subtype pair is added in PascalCase that keeps its own capitals: with the `scientific` template active, an `institution` entity is written as `:Entity:Organization:Institution`.
 
 For GLiNER2.5, labels that neither the ontology nor the default table declares map to type `OBJECT` with the uppercased label as subtype; they are not automatically stored as a custom top-level entity type. Declare the label in an ontology with an explicit `pole_type` and `subtype`, or pass `label_mapping` to `GLiNER2Extractor` to replace the table. Direct bolt `add_entity` can store validated custom type/subtype labels; this separate path uses the graph query builder to convert labels to UpperCamelCase.
 

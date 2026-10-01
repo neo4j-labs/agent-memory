@@ -73,7 +73,7 @@ TypeScript: `ontology.getMigration(jobId)`
 [#bolt-migrate]
 === `migrate` on Bolt
 
-`migrate` executes one transaction per `(from_label, to_label)` pair, inline. For each pair it removes the `from` label, adds the `to` label, sets `e.subtype` from the target version's entity type, and rewrites `e.type` when the target label maps onto a different `pole_type`. When the target entity type declares no subtype, the subtype labels the source version could have written are removed too. Labels are sanitized to their PascalCase form. `type_mappings` accepts `(from, to)` tuples or `{"from": ..., "to": ...}` dicts.
+`migrate` executes one transaction per `(from_label, to_label)` pair, inline. For each pair it removes the `from` label, adds the `to` label, sets `e.subtype` from the target version's entity type, and rewrites `e.type` when the target label maps onto a different `pole_type`. When the target entity type declares no subtype, the subtype labels the source version could have written are removed too. Labels are matched and written in the form the write paths give them: PascalCase that keeps the label's own capitals (`SupportCase` stays `SupportCase`, `tv_show` becomes `TvShow`). `type_mappings` accepts `(from, to)` tuples or `{"from": ..., "to": ...}` dicts.
 
 `dry_run=True` counts matching nodes (`total`) and mutates nothing (`processed = 0`). A failed step is recorded on the job (`errored`, `error_message`, `status = "failed"`) rather than raised. Either way the job is persisted as an `(:OntologyMigration)` node.
 
