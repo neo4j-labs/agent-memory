@@ -8,7 +8,7 @@ Relationship captions are the typed relation name (``r.type``) for
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -89,7 +89,10 @@ LIMIT $limit
 """
 
 
-def _kind(labels: list[str]) -> str:
+NodeKind = Literal["entity", "message", "conversation"]
+
+
+def _kind(labels: list[str]) -> NodeKind:
     if "Conversation" in labels:
         return "conversation"
     if "Message" in labels:
@@ -117,7 +120,7 @@ def _node(node: dict[str, Any] | None, labels: list[str] | None) -> GraphNode | 
         id=str(node["id"]),
         caption=_caption(node, kind),
         labels=entity_labels(labels) if kind == "entity" else labels,
-        kind=kind,  # type: ignore[arg-type]
+        kind=kind,
         properties=properties if isinstance(properties, dict) else {},
     )
 
@@ -179,7 +182,7 @@ async def thread_graph(
 
 @router.get("/graph/neighbors/{node_id}", response_model=Graph, response_model_by_alias=True)
 async def neighbors(client: MemoryClientDep, node_id: str) -> Graph:
-    """One node and its neighbours via RELATED_TO / SAME_AS / MENTIONS (at most 50)."""
+    """One node and up to 50 neighbours via RELATED_TO, SAME_AS, MENTIONS or HAS_MESSAGE."""
     found = await client.query.cypher(NODE_BY_ID, {"id": node_id})
     if not found:
         raise HTTPException(status_code=404, detail=f"Node {node_id!r} not found")

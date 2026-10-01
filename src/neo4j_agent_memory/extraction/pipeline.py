@@ -402,7 +402,7 @@ def _apply_min_confidence(result: ExtractionResult, min_confidence: float) -> Ex
 class ExtractionPipeline:
     """Multi-stage entity extraction pipeline.
 
-    The pipeline runs multiple extraction stages (spaCy, GLiNER, LLM) and
+    The pipeline runs multiple extraction stages (spaCy, GLiNER2.5, LLM) and
     merges their results according to a configurable strategy. This allows
     combining fast statistical NER with more accurate LLM-based extraction.
 

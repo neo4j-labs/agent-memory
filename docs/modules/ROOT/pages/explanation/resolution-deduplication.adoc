@@ -51,15 +51,41 @@ Exact-name matching detects repeated forms. Fuzzy matching tolerates spelling an
 
 Type-constrained matching reduces some false positives, such as an organization named "Apple" and an object representing the fruit. It does not distinguish two people with the same name or guarantee that a broad `OBJECT` category contains only interchangeable products.
 
-On Bolt, the default `OntologyResolver` (what `resolution.strategy="composite"` builds) composes these signals rather than replacing them, and adds what a graph needs:
-
-* *Blocking in Cypher.* Candidates come from database queries that never cross the POLE+O type, so "Apple" the company is never even compared with "Apple" the product. One exact-key query covers each entity type in a message; the token-prefix and vector-index queries run only when that query found no exact or alias match.
-* *Deterministic evidence first.* An exact normalized match, a declared ontology alias or an acronym expansion settles the score without the weighted blend. A controlled vocabulary beats a similarity computation, and it works with embeddings switched off.
-* *Type-aware normalization.* Organizations lose their legal suffix and people lose titles and generational suffixes before anything is compared.
-* *Rules that refuse to overreach.* A whole-token prefix ("Apple" and "Apple Bank", "Kansas" and "Kansas City") clears the merge line only when independent context corroborates it; otherwise the pair lands in the review band. Name embeddings do not count, because a name and its extension embed alike whether or not they are one entity. Low-entropy names such as "N600" are penalized, because fuzzy similarity is close to meaningless on them.
-* *Ontology-driven configuration.* `EntityTypeDef.aliases` is the gazetteer, and `resolution_threshold` / `review_threshold` set per-type bands.
+On Bolt, the default `OntologyResolver` (what `resolution.strategy="composite"` builds) composes these signals rather than replacing them. It puts the candidate search in Cypher, lets deterministic evidence (an exact normalized match, a declared ontology alias, an acronym expansion) settle the score before any similarity computation, and takes its aliases and per-type bands from the ontology, so a controlled vocabulary works even with embeddings switched off.
 
 The consequence of type-constrained blocking is that a cross-typed duplicate, such as one company extracted once as `ORGANIZATION` and once as `OBJECT`, is never found. Fix the typing, usually with a sharper ontology description, rather than loosening the blocking.
+
+[#resolver-stages]
+=== The resolver's five stages
+
+The stages are separable, and knowing which one a bad decision came from is most of the work of xref:how-to/tune-entity-resolution.adoc[tuning]:
+
+[cols="1,4", options="header"]
+|===
+| Stage | What happens
+
+| 1. Normalize
+| `normalize_name(name, entity_type)` reduces the surface form to a comparison key: NFC, casefolded, punctuation and leading determiners stripped, whitespace collapsed. Organizations lose their legal suffix ("Acme Corp" → `acme`); people lose titles and generational suffixes ("Dr. Ada Lovelace Jr." → `ada lovelace`). It also records the head and tail token, the initials, an acronym flag, and the Shannon entropy of the key. It is deterministic and model-free, so benchmarks compare names exactly the way the resolver does.
+
+| 2. Block
+| Candidates come from Cypher, and blocking never crosses the POLE+O type: "Apple" the company and "Apple" the product embed almost identically. One exact-key query per entity type covers the whole message; the wider buckets (head/tail token prefix, then the entity vector index) are queried only when the exact bucket produced no exact or alias match. An oversized token-prefix bucket (more than 60 rows) carries no signal and is discarded.
+
+| 3. Score
+| Deterministic evidence short-circuits: an exact normalized match scores `1.0`, a declared ontology alias `1.0`, an acronym expansion `0.97` (organizations only, and at least three letters; "IT" is not Isabel Turner). Failing those, the whole-token-prefix rule (<<prefix-rule>>) applies to every type, and otherwise the score is `0.45 × fuzzy + 0.40 × embedding + 0.15 × context`, renormalized over whichever components are available. A low-entropy pair (below 2.5 bits on the lower-entropy side, such as "N600" or "Ada") loses 0.25 unless the prefix rule fired, so the penalty does not depend on which name happens to be the mention. When fuzzy similarity is the only component and one name contains the other as a contiguous run of whole tokens, the score is capped at `review_threshold`: containment is never proof of identity on its own.
+
+| 4. Band
+| At or above `auto_merge_threshold` the mention merges onto the matched entity. At or above `review_threshold` it becomes its own node plus a pending `SAME_AS` edge. Below that it is created normally.
+
+| 5. Cluster
+| A second pass clusters the mentions that matched nothing stored against each other, anchored on the first one seen, without counting their shared context window as corroboration. <<two-passes>> explains why.
+|===
+
+[#prefix-rule]
+=== Why a whole-token prefix needs corroboration
+
+The prefix rule is where most false merges would otherwise come from. A whole-token prefix is not an identity, whatever the type: "Apple" and "Apple Bank" are different companies, "Kansas" and "Kansas City" different places, "Paris" and "Paris Hilton" different people. So the rule scores `0.92` only when independent surrounding context agrees (context similarity 0.60 or above), and `0.88`, inside the review band, otherwise.
+
+Name embeddings do not count as agreement: a name and its extension embed alike whether or not they are one entity (all-MiniLM-L6-v2 scores "Acme Bank" against "Acme Corp" at 0.76, above "Northwind" against "Northwind Logistics" at 0.73). The rule replaces the weighted blend rather than being combined with it, because RapidFuzz rates every whole-token prefix pair at exactly 0.90, the default auto-merge line, which would merge exactly the pairs the rule exists to hold back.
 
 [#resolution-on-ingest]
 == Where resolution happens
@@ -74,9 +100,10 @@ Message ingestion (`short_term.add_message`, `add_messages_batch`, `extract_enti
 
 Resolution is an enhancement, never a gate: if a blocking query fails, the failure is logged and the mentions are stored unresolved.
 
+[#two-passes]
 === Why a message needs two passes
 
-Resolving each mention against stored entities is not enough. A message that mentions "Acme" and "Acme Corp" for the first time has no stored anchor for either, so a single pass would create two nodes and fragment the graph from the first message. The resolver therefore runs a second pass over the still-unmatched mentions, clustering them against each other and anchoring on the first one seen. Two mentions from the same message share one context window, so context does not count as corroboration between them.
+Resolving each mention against stored entities is not enough. A message that mentions "Acme" and "Acme Corp" for the first time has no stored anchor for either, so a single pass would create two nodes and fragment the graph from the first message. The resolver therefore runs a second pass over the still-unmatched mentions, clustering them against each other and anchoring on the first one seen. Two mentions from the same message share one context window, so context does not count as corroboration between them; otherwise "Apple Bank has no relationship with Apple, the phone maker" would corroborate itself into a merge.
 
 === Three bands, not two
 

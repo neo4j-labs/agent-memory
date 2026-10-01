@@ -189,7 +189,7 @@ class LLMConfig(BaseModel):
     """LLM provider configuration for extraction.
 
     This config is optional on `MemorySettings`. Set ``MemorySettings.llm=None``
-    to run without any LLM provider (e.g. spaCy/GLiNER-only extraction in
+    to run without any LLM provider (e.g. spaCy/GLiNER2.5-only extraction in
     air-gapped or no-API-key environments). See the "Running without an LLM"
     how-to and ``examples/no_llm/`` for a worked example.
     """
@@ -314,7 +314,9 @@ class ExtractionConfig(BaseModel):
 
     # Pipeline settings (when extractor_type=PIPELINE)
     enable_spacy: bool = Field(default=True, description="Enable spaCy in extraction pipeline")
-    enable_gliner: bool = Field(default=True, description="Enable GLiNER in extraction pipeline")
+    enable_gliner: bool = Field(
+        default=True, description="Enable GLiNER2.5 in the extraction pipeline"
+    )
     enable_llm_fallback: bool = Field(
         default=True, description="Enable LLM as fallback in pipeline"
     )
@@ -332,7 +334,7 @@ class ExtractionConfig(BaseModel):
         default=0.85, ge=0.0, le=1.0, description="Default confidence score for spaCy extractions"
     )
 
-    # GLiNER settings. "gliner" means GLiNER2.5 (the ``gliner2`` package and
+    # GLiNER2.5 settings. "gliner" means GLiNER2.5 (the ``gliner2`` package and
     # the ``fastino/gliner2.5-*`` checkpoints); the field names are unchanged
     # so existing configuration and NAM_EXTRACTION__* env vars keep working.
     # The default mirrors ``extraction.gliner2_extractor.DEFAULT_GLINER2_5_MODEL``,
@@ -343,7 +345,7 @@ class ExtractionConfig(BaseModel):
         description="GLiNER2.5 checkpoint (small/base/multi -v1)",
     )
     gliner_threshold: float = Field(
-        default=0.5, ge=0.0, le=1.0, description="GLiNER entity confidence threshold"
+        default=0.5, ge=0.0, le=1.0, description="GLiNER2.5 entity confidence threshold"
     )
     gliner_relation_threshold: float | None = Field(
         default=None,
@@ -354,10 +356,12 @@ class ExtractionConfig(BaseModel):
             "ontology's per-relation thresholds selected"
         ),
     )
-    gliner_device: str = Field(default="cpu", description="Device for GLiNER model (cpu/cuda/mps)")
+    gliner_device: str = Field(
+        default="cpu", description="Device for the GLiNER2.5 model (cpu/cuda/mps)"
+    )
     gliner_schema: str | None = Field(
         default=None,
-        description="Domain schema for GLiNER extraction (poleo, podcast, news, scientific, business, entertainment, medical, legal)",
+        description="Domain schema for GLiNER2.5 extraction (poleo, podcast, news, scientific, business, entertainment, medical, legal)",
     )
     gliner_max_words: int = Field(
         default=384,

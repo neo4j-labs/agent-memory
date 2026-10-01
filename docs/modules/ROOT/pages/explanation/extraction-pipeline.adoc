@@ -81,6 +81,30 @@ Two GLiNER2.5 outcomes can look like "nothing to find" when they are not:
 * `feasible=False` means the decoder could not satisfy the ontology's hard constraints (`unique_source`, `unique_target`, `acyclic`) and returned an empty assignment. The extractor raises a `RuntimeWarning`. Relax those constraints or lower the thresholds instead of concluding that the text was empty.
 * Long input loses relations without a warning. Relation recall drops sharply past roughly 400 words, so the extractor windows any input longer than `max_words` (default 384; `gliner_max_words` in `ExtractionConfig`). A relation whose endpoints fall in different windows cannot be decoded, and a windowed extraction never reports `feasible=False`.
 
+[#gliner25-compared]
+=== Compared with the GLiNER v1 stack
+
+GLiNER2.5 is an architecture change, not an accuracy jump. Measured on the POLE+O gold set in `benchmarks/data/` with `benchmarks/compare_extractors.py` (CPU):
+
+[cols="2,1,1,1", options="header"]
+|===
+| Checkpoint | Entity F1 | Relation F1 (lenient / strict) | Throughput
+
+| `fastino/gliner2.5-base-v1`
+| 0.80
+| 0.37 / 0.27
+| ~1.6 docs/s
+
+| `fastino/gliner2.5-small-v1`
+| 0.75
+| _not measured_
+| faster
+|===
+
+Both runs reported zero endpoint-type violations, which is the joint decoder's constraint at work. The other gains are structural. One model replaces two, so there is no separate relation model to install, version or keep in memory. The model trains on sequences up to 4,096 words and decodes spans of any length instead of a fixed span-width grid, although relation recall still degrades past roughly 400 words, which is why the extractor windows its input. Entity descriptions are read as annotation guidelines (see <<_domain_schemas>>).
+
+What did not change: entity F1 is roughly level with the v1 stack, and end-to-end zero-shot relation extraction is weak for every model in this class. Treat relation F1 as a floor to improve with per-relation thresholds.
+
 [[_automatic_relationship_storage]]
 == From extraction to stored relationships
 

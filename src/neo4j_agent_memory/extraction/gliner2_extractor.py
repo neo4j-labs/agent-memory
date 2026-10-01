@@ -17,11 +17,11 @@ The ontology is the input that matters. Pass an
     extractor = GLiNER2Extractor.for_schema("podcast")
     result = await extractor.extract("Brian Chesky founded Airbnb.")
 
-Two failure modes are quiet enough to be worth naming. Relation recall
+Two behaviours are quiet enough to be worth naming. Relation recall
 collapses past roughly 400 words, so input longer than ``max_words`` is
-windowed through ``extract_long``; and ``feasible=False`` means the
-decoder could not satisfy the ontology's hard constraints, which is *not*
-the same as "no facts in this text" — both raise a :class:`RuntimeWarning`.
+windowed through ``extract_long`` (silently). And ``feasible=False`` means
+the decoder could not satisfy the ontology's hard constraints, which is *not*
+the same as "no facts in this text"; that one raises a :class:`RuntimeWarning`.
 The infeasibility warning only covers the single-pass path: gliner2's
 ``extract_long`` merges its chunk results into a fresh ``JointResult``
 and does not carry any chunk's ``feasible`` flag through, so a windowed

@@ -30,6 +30,7 @@ and default to the throwaway container ``make neo4j-start`` launches.
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 import warnings
 from pathlib import Path
@@ -55,7 +56,8 @@ from _env import (  # type: ignore[import-not-found]  # ty: ignore[unused-ignore
 )
 
 ONTOLOGY_PATH = Path(__file__).with_name("ontology.yaml")
-LOCAL_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+#: Any sentence-transformers model id; examples/.env.example sets the default.
+LOCAL_EMBEDDING_MODEL = os.getenv("LOCAL_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 
 INTAKE, FOLLOWUP = "ontology-demo-intake", "ontology-demo-followup"
 

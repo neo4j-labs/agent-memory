@@ -39,78 +39,14 @@ python -m pip install 'neo4j-agent-memory[openai,fuzzy]==0.7.0'
 
 == How it works
 
-`OntologyResolver` runs five separable stages. Knowing which stage a bad
-decision came from is most of the work of tuning:
-
-[cols="1,4", options="header"]
-|===
-| Stage | What happens
-
-| 1. Normalize
-| `normalize_name(name, entity_type)` reduces the surface form to a comparison
-  key: NFC, casefolded, punctuation and leading determiners stripped,
-  whitespace collapsed. Organizations lose their legal suffix ("Acme Corp" →
-  `acme`); people lose titles and generational suffixes ("Dr. Ada Lovelace Jr."
-  → `ada lovelace`). It also records the head and tail token, the initials, an
-  acronym flag, and the Shannon entropy of the key. Deterministic and
-  model-free, so benchmarks compare names exactly the way the resolver does.
-
-| 2. Block
-| Candidates come from Cypher, and blocking never crosses the POLE+O type:
-  "Apple" the company and "Apple" the product embed almost identically. One
-  exact-key query per entity type covers the whole message; the wider buckets
-  (head/tail token prefix, then the entity vector index) are queried only when
-  the exact bucket produced no exact or alias match. An oversized token-prefix
-  bucket (more than 60 rows) carries no signal and is discarded.
-
-| 3. Score
-| Deterministic evidence short-circuits: an exact normalized match scores
-  `1.0`, a declared ontology alias `1.0`, an acronym expansion `0.97`
-  (organizations only, and at least three letters; "IT" is not Isabel
-  Turner). Failing those, the whole-token-prefix rule (below) applies to every
-  type, and otherwise the score is
-  `0.45 × fuzzy + 0.40 × embedding + 0.15 × context`, renormalized over
-  whichever components are actually available. A low-entropy pair (below
-  2.5 bits on the lower-entropy side, such as "N600" or "Ada") loses 0.25
-  unless the prefix rule fired, so the penalty does not depend on which name
-  happens to be the mention. When fuzzy similarity is the only component and
-  one name contains the other as a contiguous run of whole tokens, the score is
-  capped at
-  `review_threshold`: containment is never proof of identity on its own.
-
-| 4. Band
-| At or above `auto_merge_threshold` the mention merges onto the matched entity.
-  At or above `review_threshold` it becomes its own node plus a pending
-  `SAME_AS` edge. Below that it is created normally.
-
-| 5. Cluster
-| A second pass clusters the mentions that matched nothing stored against each
-  other, anchored on the first one seen. Without it, a message that mentions
-  "Acme" and "Acme Corp" for the first time creates two nodes, because neither
-  had a stored entity to anchor to. Two mentions of the same message share one
-  context window, so the context component is dropped for that comparison;
-  otherwise "Apple Bank has no relationship with Apple, the phone maker" would
-  corroborate itself into a merge.
-|===
-
-The prefix rule is worth spelling out, because it is where most false merges
-would otherwise come from. A whole-token prefix is not an identity, whatever the
-type: "Apple" and "Apple Bank" are different companies, "Kansas" and "Kansas
-City" different places, "Paris" and "Paris Hilton" different people. So the rule
-scores `0.92` only when independent surrounding context agrees (context
-similarity 0.60 or above), and `0.88`, inside the review band, otherwise. Name
-embeddings do not count as agreement: a name and its extension embed alike
-whether or not they are one entity (all-MiniLM-L6-v2 scores "Acme Bank" against
-"Acme Corp" at 0.76, above "Northwind" against "Northwind Logistics" at 0.73).
-The rule replaces the weighted blend rather than being combined with it, because
-RapidFuzz rates every whole-token prefix pair at exactly 0.90, the default
-auto-merge line, which would merge exactly the pairs the rule exists to hold
-back.
-
-The alias gazetteer is keyed per canonical name, not per surface form. If two
-canonicals declare the same short form (`{"Apple Inc": ["Apple"],
-"Apple Records": ["Apple"]}`), then "Apple" identifies neither of them, and the
-pair falls through to the blend instead of scoring `1.0`.
+`OntologyResolver` normalizes each mention, fetches candidates of the same type
+in Cypher, scores them, sorts the best score into a band, and finally clusters
+the mentions that matched nothing stored. Knowing which stage a bad decision
+came from is most of the work of tuning;
+xref:explanation/resolution-deduplication.adoc#resolver-stages[The resolver's five stages]
+explains each one and the scoring rules, including why a whole-token prefix
+such as "Acme" and "Acme Bank" lands in the review band (`0.88`) unless the
+surrounding context corroborates it.
 
 What lands in the graph per band:
 
@@ -259,6 +195,11 @@ entity_types:
 This is the fix for anything the scorer cannot be expected to infer: internal
 project code names, ticker symbols, product SKUs, or an acronym whose expansion
 never co-occurs with it in your text.
+
+The gazetteer is keyed per canonical name, not per surface form. If two
+canonicals declare the same short form (`{"Apple Inc": ["Apple"],
+"Apple Records": ["Apple"]}`), then "Apple" identifies neither of them, and the
+pair falls through to the blend instead of scoring `1.0`.
 
 == Review the middle band
 

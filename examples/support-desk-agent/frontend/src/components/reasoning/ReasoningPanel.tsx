@@ -126,12 +126,14 @@ function SimilarTasks({
   excludeId: string;
   onSelect: (id: string) => void;
 }) {
+  // The server leaves the selected trace out, so it does not come back as its
+  // own best match and the list still holds five others.
   const load = useCallback(
-    (signal: AbortSignal) => api.traces.similar(task, 5, { signal }),
-    [task],
+    (signal: AbortSignal) => api.traces.similar(task, 5, { signal }, excludeId),
+    [task, excludeId],
   );
   const { data, error, loading } = useApi(load);
-  const similar = (data ?? []).filter((trace) => trace.id !== excludeId);
+  const similar = data ?? [];
 
   return (
     <Box

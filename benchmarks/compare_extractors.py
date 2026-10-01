@@ -372,6 +372,9 @@ class LegacyGLiNERAdapter:
             ImportError: If the ``gliner`` package is not installed.
         """
         try:
+            # gliner v1 is no longer a dependency (removed in 0.7), so it is
+            # usually absent and has no stubs; this optional comparison
+            # imports it only when the caller installed it by hand.
             import gliner  # type: ignore[import-not-found]
         except ImportError as exc:
             raise ImportError(

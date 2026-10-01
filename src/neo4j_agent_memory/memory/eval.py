@@ -34,8 +34,9 @@ of raising.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
 
@@ -50,8 +51,22 @@ from neo4j_agent_memory.core.metrics import (
 
 if TYPE_CHECKING:
     from neo4j_agent_memory import MemoryClient
-    from neo4j_agent_memory.extraction.base import EntityExtractor
+    from neo4j_agent_memory.extraction.base import EntityExtractor, ExtractedEntity
     from neo4j_agent_memory.resolution.base import EntityResolver
+
+
+@runtime_checkable
+class _EpisodeResolver(Protocol):
+    """A resolver that resolves one episode's mentions together.
+
+    :class:`~neo4j_agent_memory.resolution.ontology.OntologyResolver` is one;
+    any resolver exposing the method qualifies. The decisions are read with
+    ``getattr``, so their type is left open.
+    """
+
+    async def resolve_episode(self, entities: Sequence[ExtractedEntity], /) -> Sequence[object]:
+        """Resolve every mention of one episode."""
+        ...
 
 
 # -----------------------------------------------------------------------------
@@ -403,9 +418,9 @@ class EvalMemory:
         """Score entity resolution with B-cubed F1 against gold clusters."""
         details: list[dict[str, Any]] = []
         scores: list[float] = []
-        episode_capable = callable(getattr(resolver, "resolve_episode", None))
+        episode_capable = isinstance(resolver, _EpisodeResolver)
         for case in cases:
-            if episode_capable:
+            if isinstance(resolver, _EpisodeResolver):
                 predicted = await self._episode_clusters(case, resolver)
             else:
                 resolved = await resolver.resolve_batch(case.mentions)
@@ -435,7 +450,7 @@ class EvalMemory:
     @staticmethod
     async def _episode_clusters(
         case: ResolutionCase,
-        resolver: Any,
+        resolver: _EpisodeResolver,
     ) -> dict[str, str]:
         """Predicted clusters from one ``resolve_episode`` call.
 

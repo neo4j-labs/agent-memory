@@ -53,7 +53,6 @@ def create_app() -> FastAPI:
         app.include_router(router.router, prefix="/api")
 
     @app.get("/api/health", response_model=Health)
-    @app.get("/health", response_model=Health, include_in_schema=False)
     async def health(request: Request) -> Health:
         """Neo4j reachability, the agent model, and the ontology the app's client uses."""
         service: MemoryService = request.app.state.memory

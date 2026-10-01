@@ -2,7 +2,7 @@
 
 The ontology document is the one schema shape the runtime consumes. Every
 other schema the library accepts — the legacy
-:class:`~neo4j_agent_memory.schema.models.EntitySchemaConfig`, the GLiNER
+:class:`~neo4j_agent_memory.schema.models.EntitySchemaConfig`, the GLiNER2.5
 domain catalog, an arrows.app export, a JSON/YAML file on disk — enters
 through here.
 """
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
 
 class _DomainSchemaLike(Protocol):
-    """The GLiNER domain-catalog shape, duck-typed to avoid the import."""
+    """The GLiNER2.5 domain-catalog shape, duck-typed to avoid the import."""
 
     name: str
     entity_types: dict[str, str]
@@ -273,7 +273,7 @@ def from_domain_schema(
     *,
     relationships: list[RelationshipDef] | None = None,
 ) -> OntologyDocument:
-    """Convert a GLiNER domain-catalog schema into an ontology document.
+    """Convert a GLiNER2.5 domain-catalog schema into an ontology document.
 
     The catalog carries labels with descriptions but no endpoint typing, so
     relationships are supplied by the caller. Any ``relationships`` entry

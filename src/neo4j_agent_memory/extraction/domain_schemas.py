@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 class DomainSchema(BaseModel):
     """Schema defining entity types for a specific domain.
 
-    Entity type descriptions help GLiNER2 understand what to extract.
+    Entity type descriptions help GLiNER2.5 understand what to extract.
     Using descriptions improves extraction accuracy significantly.
     """
 
@@ -192,7 +192,7 @@ def list_schemas() -> list[str]:
     return list(DOMAIN_SCHEMAS.keys())
 
 
-# Default POLE+O labels for GLiNER (lowercase as GLiNER prefers)
+# Default POLE+O labels for GLiNER2.5 (lowercase, as GLiNER2.5 prefers)
 # These are simple labels without descriptions (legacy support)
 DEFAULT_POLEO_LABELS = [
     "person",
@@ -200,7 +200,7 @@ DEFAULT_POLEO_LABELS = [
     "location",
     "event",
     "object",
-    # Common subtypes that GLiNER can recognize
+    # Common subtypes that GLiNER2.5 can recognize
     "vehicle",
     "phone number",
     "email address",

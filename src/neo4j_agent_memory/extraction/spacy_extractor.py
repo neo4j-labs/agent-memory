@@ -47,7 +47,7 @@ class SpacyEntityExtractor:
     Location, Event, Organization).
 
     Note: spaCy does not extract relations or preferences - use in combination
-    with other extractors (GLiNER, LLM) for full extraction.
+    with other extractors (GLiNER2.5, LLM) for full extraction.
     """
 
     # Mapping from spaCy labels to POLE+O types
@@ -196,7 +196,7 @@ class SpacyEntityExtractor:
         Extract entities from text using spaCy NER.
 
         Note: spaCy NER does not extract relations or preferences.
-        For full extraction, combine with GLiNER or LLM extractors.
+        For full extraction, combine with GLiNER2.5 or LLM extractors.
 
         Args:
             text: The text to extract from

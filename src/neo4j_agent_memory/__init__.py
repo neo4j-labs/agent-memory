@@ -471,7 +471,7 @@ class MemoryClient(Generic[_ST, _LT, _RT]):
         # Ontology accessor — an ``OntologyAPI`` implementation on either
         # backend: ``NamsOntology`` on NAMS, ``BoltOntology`` on bolt.
         # Wired in connect().
-        self._ontology: Any = None
+        self._ontology: OntologyAPI | None = None
 
         # API-key management accessor. Real (``NamsAuth``) on NAMS; a
         # ``_NamsUnsupported`` sentinel on bolt. Wired in connect().
@@ -782,8 +782,10 @@ class MemoryClient(Generic[_ST, _LT, _RT]):
         mode: Literal["permissive", "strict"]
         if schema_config.validation_mode is not None:
             mode = schema_config.validation_mode
-        elif stored_mode in ("permissive", "strict"):
-            mode = cast('Literal["permissive", "strict"]', stored_mode)
+        elif stored_mode == "permissive":
+            mode = "permissive"
+        elif stored_mode == "strict":
+            mode = "strict"
         else:
             mode = "strict" if schema_config.strict_types else "permissive"
 
@@ -1147,7 +1149,7 @@ class MemoryClient(Generic[_ST, _LT, _RT]):
         """
         if self._ontology is None:
             raise NotConnectedError("Client not connected. Use 'async with' or call connect().")
-        return cast("OntologyAPI", self._ontology)
+        return self._ontology
 
     @property
     def ontology_document(self) -> OntologyDocument | None:
@@ -1792,7 +1794,7 @@ class MemoryClient(Generic[_ST, _LT, _RT]):
         - NONE: No extraction
         - LLM: LLM-based extraction (OpenAI)
         - SPACY: spaCy NER extraction (local)
-        - GLINER: GLiNER zero-shot NER (local)
+        - GLINER: GLiNER2.5 zero-shot entity and relation extraction (local)
         - PIPELINE: Multi-stage pipeline combining multiple extractors
 
         ``self._settings.llm`` may be an :class:`LLMConfig` (legacy) or

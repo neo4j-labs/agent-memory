@@ -125,7 +125,7 @@ def resolve_ontology(
         try:
             return get_template(extraction_config.gliner_schema)
         except ValueError as e:
-            logger.warning(f"Invalid GLiNER schema: {e}. Using the default ontology.")
+            logger.warning(f"Invalid GLiNER2.5 schema: {e}. Using the default ontology.")
 
     if ontology is not None:
         return ontology
@@ -297,7 +297,7 @@ def create_extraction_pipeline(
 ) -> ExtractionPipeline:
     """Create a multi-stage extraction pipeline based on configuration.
 
-    The pipeline combines multiple extractors (spaCy, GLiNER, LLM) according
+    The pipeline combines multiple extractors (spaCy, GLiNER2.5, LLM) according
     to the configuration settings. Stages are run in order and results are
     merged according to the specified strategy.
 
@@ -408,7 +408,7 @@ def create_extractor(
         config = ExtractionConfig(extractor_type=ExtractorType.SPACY)
         extractor = create_extractor(config)
 
-        # Create GLiNER extractor
+        # Create the GLiNER2.5 extractor
         config = ExtractionConfig(extractor_type=ExtractorType.GLINER)
         extractor = create_extractor(config)
 
@@ -601,7 +601,7 @@ class ExtractorBuilder:
     def with_entity_types(self, types: list[str]) -> ExtractorBuilder:
         """Set entity types to extract."""
         self._entity_types = types
-        # GLiNER labels mirror the configured entity types when no domain
+        # GLiNER2.5 labels mirror the configured entity types when no domain
         # schema is provided.
         self._gliner_entity_labels = [t.lower() for t in types]
         return self

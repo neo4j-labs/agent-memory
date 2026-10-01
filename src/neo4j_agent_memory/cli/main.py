@@ -158,7 +158,7 @@ def cli() -> None:
     """Neo4j Agent Memory - Entity Extraction CLI.
 
     Extract entities, relations, and preferences from text using
-    GLiNER and LLM-based extractors.
+    GLiNER2.5 and LLM-based extractors.
     """
     pass
 

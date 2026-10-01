@@ -177,6 +177,24 @@ name.
   whole path: author an ontology, `create`/`activate` it, ingest messages with
   alias variation across two sessions, read the typed edges back with their
   `support` counts, inspect the review band, then `update` and `diff`.
+- **`examples/ontology-lifecycle-bolt/`** — the keyless bolt twin of
+  `examples/ontology-lifecycle/` (NAMS), on the same Arrows diagram and
+  transcript: import the diagram locally, repair the POLE+O types the
+  conversion guesses, activate revision 1 (and see that a connected client keeps
+  its old ontology until it reconnects), ingest with GLiNER2.5 so tickets land as
+  `:Entity:Event:Ticket`, rename `Ticket` -> `SupportCase` in a strict revision
+  2, diff, and migrate the extracted entities inline. It keeps everything it
+  writes and leaves revision 2 active, so it runs only through
+  `make example-ontology-lifecycle-bolt`, never `make examples`.
+- **`examples/support-desk-agent/`** — a full-stack app (FastAPI + PydanticAI
+  2.x, Next.js 16 + Chakra UI v3) on the same support-desk ontology with eight
+  seeded conversations. The agent uses reasoning memory both ways: every turn is
+  a trace linked to its message, with `TOUCHED` edges per tool call, and it
+  recalls similar past traces before acting. Memory, Graph, Ontology (revisions,
+  diff, a one-click rename + migration) and Reasoning panels.
+- **How-to "Rename an ontology type and migrate a Bolt graph"**
+  (`how-to/migrate-a-bolt-ontology.adoc`), which runs the
+  `ontology-lifecycle-bolt` program.
 
 ### Changed
 
@@ -1525,6 +1543,7 @@ The v0.2 feature drop. Headline feature is **adopting an existing Neo4j graph** 
 - **CLI Tool**: Command-line interface for entity extraction and schema management
 - **Schema Persistence**: Store and version custom entity schemas in Neo4j
 
+[0.7.0]: https://github.com/neo4j-labs/agent-memory/releases/tag/python-v0.7.0
 [0.6.0]: https://github.com/neo4j-labs/agent-memory/releases/tag/python-v0.6.0
 [0.5.0]: https://github.com/neo4j-labs/agent-memory/releases/tag/python-v0.5.0
 [0.4.0]: https://github.com/neo4j-labs/agent-memory/releases/tag/v0.4.0

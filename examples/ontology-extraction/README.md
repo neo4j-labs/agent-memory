@@ -1,4 +1,4 @@
-# Ontology-Driven Extraction Example
+# Ontology-driven extraction example
 
 ![Neo4j Labs](https://img.shields.io/badge/Neo4j-Labs-6366F1?logo=neo4j)
 ![Status: Beta](https://img.shields.io/badge/Status-Beta-6366F1)
@@ -33,7 +33,7 @@ This example is the v0.7 ontology surface end to end. `ontology.yaml` is an `Ont
 
 ## Prerequisites
 
-- Neo4j 5.26 LTS or 2025.x+ at `bolt://localhost:7687` (or set `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`). From the repo root, `make neo4j-start` launches one with password `test-password` — the defaults point at it.
+- Neo4j 5.26 LTS or 2025.x+. Follow [the shared Aura setup](../AURA_SETUP.md) and export `NEO4J_URI`, `NEO4J_USERNAME` and `NEO4J_PASSWORD` for a dedicated AuraDB instance. For a local run instead, `make example-ontology-extraction` from the repository root starts the throwaway Docker Neo4j (`make neo4j-start`, password `test-password`) when `NEO4J_URI` is unset.
 - The extraction and local-embedding extras:
 
   ```bash
@@ -142,4 +142,4 @@ Work in `ontology.yaml`; nothing in `main.py` knows the domain.
 
 ---
 
-_Verified against `neo4j-agent-memory` v0.7.0 with gliner2 2.0.0 (`fastino/gliner2.5-base-v1`), sentence-transformers 5.7.0, and Neo4j 5.26 (Docker) on 2026-09-17._
+_Verified against `neo4j-agent-memory` 0.7.0 (in-tree) with `gliner2` 2.0.0 (`fastino/gliner2.5-base-v1`), sentence-transformers 5.7.0 and Neo4j 5.26 Community on 2026-10-01. Live, with no mocks: `make example-ontology-extraction` against the Docker Neo4j (real GLiNER2.5 and MiniLM inference), and the `requires_neo4j` end-to-end test in `tests/examples/test_ontology_extraction_example.py` against a testcontainers Neo4j. The test module's other cases run offline: they load and validate `ontology.yaml` and compile it against a fake JointIE schema recorder instead of `gliner2`._

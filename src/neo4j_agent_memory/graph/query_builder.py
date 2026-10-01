@@ -138,7 +138,7 @@ def ontology_node_label(label: str | None) -> str | None:
     underscores and each part's first letter is upper-cased, the rest left as
     written. A user-authored ``SupportCase`` stays ``SupportCase`` (where
     :func:`sanitize_label` would re-case it to ``Supportcase``), and the
-    built-in templates' GLiNER-style ``company`` / ``tv_show`` become
+    built-in templates' GLiNER2.5-style ``company`` / ``tv_show`` become
     ``Company`` / ``TvShow``, matching the type and subtype labels beside them.
     The input must be a valid label identifier, which keeps the value safe to
     interpolate into Cypher.
@@ -310,6 +310,29 @@ def build_add_ontology_label_query(
     if declared in existing:
         return None
     return f"MATCH (e:Entity {{id: $id}})\nSET e:{declared}\nRETURN e.id AS id"
+
+
+def build_merge_entity_reference_query(entity_type: str, ontology_label: str | None) -> str:
+    """Query that resolves or creates a typed explicit entity reference.
+
+    Used by ``add_message(extraction_mode="explicit")`` for an ``EntityRef``
+    with a ``type`` and no ``id``: MERGE on ``(name, type)`` and give the node
+    the same labels as every other entity write — the type label and, when the
+    ontology declares the bare type, its label.
+
+    Args:
+        entity_type: The reference's entity type.
+        ontology_label: The ontology's declared label for ``(entity_type, None)``.
+
+    Returns:
+        A query taking ``$name`` and ``$type`` and returning ``id``.
+    """
+    label_clause = build_label_set_clause(entity_type, None, ontology_label=ontology_label)
+    return f"""MERGE (e:Entity {{name: $name, type: $type}})
+ON CREATE SET e.id = coalesce(e.id, $name + ':' + $type),
+              e.created_at = datetime()
+{label_clause}
+RETURN e.id AS id"""
 
 
 def build_create_entity_query(

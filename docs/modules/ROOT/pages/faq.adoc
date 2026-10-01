@@ -77,7 +77,7 @@ anchor:_troubleshooting[]
 [[gliner-not-installed]]
 === ImportError: GLiNER2.5 not installed
 
-GLiNER2.5 is optional. Install the `gliner2` extra, `pip install "neo4j-agent-memory[gliner2]"`, in the environment running the program; the `extraction` and `full` extras include it too, and `gliner` remains a deprecated alias until 0.8. `GLiNER2Extractor` loads the `gliner2` package on its first extraction, so the `ImportError` appears there rather than when the extractor is constructed. A broad extra does not necessarily include local models, and installing a Python package does not download every model. See xref:how-to/entity-extraction.adoc[Configure extraction].
+GLiNER2.5 is optional. Install the `gliner2` extra, `pip install "neo4j-agent-memory[gliner2]==0.7.0"`, in the environment running the program; the `extraction` and `full` extras include it too, and `gliner` remains a deprecated alias until 0.8. `GLiNER2Extractor` loads the `gliner2` package on its first extraction, so the `ImportError` appears there rather than when the extractor is constructed. A broad extra does not necessarily include local models, and installing a Python package does not download every model. See xref:how-to/entity-extraction.adoc[Configure extraction].
 
 Importing a name that 0.7.0 removed, such as `GLiNEREntityExtractor`, `GLiRELExtractor`, `GLiNERWithRelationsExtractor` or `is_gliner_available`, raises an `ImportError` that names its replacement. See xref:how-to/migrate-to-gliner2.adoc[Migrate to GLiNER2.5].
 

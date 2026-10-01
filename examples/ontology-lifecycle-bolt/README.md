@@ -1,4 +1,4 @@
-# Ontology Lifecycle (Bolt)
+# Ontology lifecycle (Bolt)
 
 ![Neo4j Labs](https://img.shields.io/badge/Neo4j-Labs-6366F1?logo=neo4j)
 ![Status: Beta](https://img.shields.io/badge/Status-Beta-6366F1)
@@ -64,7 +64,7 @@ as `:Ontology` / `:OntologyVersion` nodes and drives local GLiNER2.5 extraction.
 ## Prerequisites
 
 - Python 3.10+
-- Neo4j 5.26 LTS or 2025.x+, ideally a dedicated database (see the warning above). From the repository root, `make neo4j-start` launches a throwaway one with password `test-password`.
+- Neo4j 5.26 LTS or 2025.x+ in a dedicated database (see the warning above). Follow [the shared Aura setup](../AURA_SETUP.md) and export `NEO4J_URI`, `NEO4J_USERNAME` and `NEO4J_PASSWORD` for a dedicated AuraDB instance. For a local run instead, `make example-ontology-lifecycle-bolt` from the repository root starts the throwaway Docker Neo4j (`make neo4j-start`, password `test-password`) when `NEO4J_URI` is unset.
 - The extras: `pip install -r examples/ontology-lifecycle-bolt/requirements.txt`. Model weights (GLiNER2.5 ~407 MB, MiniLM ~90 MB) download once on the first run and are cached.
 - **No API key.** The client runs with `llm=None` and a local embedder.
 

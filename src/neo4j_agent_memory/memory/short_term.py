@@ -20,7 +20,7 @@ from neo4j_agent_memory.graph import queries
 from neo4j_agent_memory.graph.query_builder import (
     build_add_ontology_label_query,
     build_create_entity_query,
-    build_label_set_clause,
+    build_merge_entity_reference_query,
 )
 
 logger = logging.getLogger(__name__)
@@ -370,7 +370,7 @@ if TYPE_CHECKING:
     from neo4j_agent_memory.llm.protocol import LLMProvider
     from neo4j_agent_memory.ontology.models import OntologyDocument
     from neo4j_agent_memory.resolution.base import EntityResolver
-    from neo4j_agent_memory.resolution.ontology import EntityResolution
+    from neo4j_agent_memory.resolution.ontology import EntityResolution, OntologyResolver
 
 
 class MessageRole(str, Enum):
@@ -1012,39 +1012,19 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
             # Resolve to or create the target entity. Identity precedence:
             # id > name+type > name.
             if getattr(ref, "id", None):
-                rows = await self._client.execute_read(
-                    "MATCH (e:Entity {id: $id}) RETURN e.id AS id LIMIT 1",
-                    {"id": ref.id},
-                )
+                rows = await self._client.execute_read(queries.GET_ENTITY_ID, {"id": ref.id})
                 if not rows:
                     continue
                 entity_id = rows[0]["id"]
             elif getattr(ref, "type", None):
-                # Same labels as every other entity write: the type label and,
-                # when the ontology declares the bare type, its label.
-                label_clause = build_label_set_clause(
-                    ref.type, None, ontology_label=self._node_label(ref.type, None)
-                )
                 rows = await self._client.execute_write(
-                    f"""
-                    MERGE (e:Entity {{name: $name, type: $type}})
-                    ON CREATE SET e.id = coalesce(e.id, $name + ':' + $type),
-                                  e.created_at = datetime()
-                    {label_clause}
-                    RETURN e.id AS id
-                    """,
+                    build_merge_entity_reference_query(ref.type, self._node_label(ref.type, None)),
                     {"name": ref.name, "type": ref.type},
                 )
                 entity_id = rows[0]["id"]
             else:
                 rows = await self._client.execute_write(
-                    """
-                    MERGE (e:Entity {name: $name})
-                    ON CREATE SET e.id = coalesce(e.id, $name),
-                                  e.created_at = datetime()
-                    RETURN e.id AS id
-                    """,
-                    {"name": ref.name},
+                    queries.MERGE_ENTITY_REFERENCE_BY_NAME, {"name": ref.name}
                 )
                 entity_id = rows[0]["id"]
 
@@ -1553,7 +1533,7 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         embeddings = await self._embedder.embed_batch(names)
         return list(embeddings)
 
-    def _ingest_resolver(self) -> Any | None:
+    def _ingest_resolver(self) -> OntologyResolver | None:
         """The resolver to use on the ingestion path, or ``None``.
 
         Ingest-time resolution needs the episode-level, type-constrained

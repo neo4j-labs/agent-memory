@@ -371,54 +371,23 @@ Because the merge key changed, one pair of entities can now carry several
 differently-typed edges where before a second type would overwrite the first.
 Expect the edge count to grow on re-ingestion.
 
-== 7. What to expect from the new model
+== 7. Adjust for the new model's behavior
 
-GLiNER2.5 is an architecture change, not an accuracy jump. Measured on the
-POLE+O gold set in `benchmarks/data/` with `benchmarks/compare_extractors.py`
-(CPU):
+Expect entity quality roughly level with the v1 stack, and relation quality
+that needs per-relation thresholds;
+xref:explanation/extraction-pipeline.adoc#gliner25-compared[Compared with the GLiNER v1 stack]
+has the measurements and what changed. Then check for the two outcomes that
+look like an empty extraction when they are not:
 
-[cols="2,1,1,1", options="header"]
-|===
-| Checkpoint | Entity F1 | Relation F1 (lenient / strict) | Throughput
-
-| `fastino/gliner2.5-base-v1`
-| 0.80
-| 0.37 / 0.27
-| ~1.6 docs/s
-
-| `fastino/gliner2.5-small-v1`
-| 0.75
-| _not measured_
-| faster
-|===
-
-Both runs reported zero endpoint-type violations. What you gain:
-
-* **Typed joint decoding.** Endpoint types are enforced during beam search, not
-  filtered afterwards, so a relation whose endpoints the ontology forbids is
-  never produced.
-* **Long context.** The model trains on sequences up to 4,096 words and decodes
-  spans of any length, instead of a fixed span-width grid.
-* **Descriptions as guidelines.** Entity descriptions are read as annotation
-  guidelines, so a described label extracts noticeably better than a bare one.
-* **One model instead of two.** No separate relation model to install, version
-  or keep in memory.
-
-What you do not gain: entity F1 is roughly flat against the previous stack.
-End-to-end zero-shot relation extraction is weak for every model in this class;
-treat relation F1 as a floor to improve with per-relation thresholds.
-
-=== Two quiet failure modes
-
-* **Relation recall past ~400 words.** It degrades sharply and can reach zero
-  while entity recall stays fine, with no error raised. Input longer than
-  `max_words` is windowed through `extract_long`, and relations whose endpoints
-  land in different windows are lost. Extract per message or per section rather
-  than per long concatenation.
-* **`feasible=False`.** The decoder could not satisfy the ontology's hard
-  constraints (uniqueness, acyclicity) and fell back to an empty assignment.
-  This is *not* "no facts in this text". The extractor raises a
-  `RuntimeWarning` saying so; relax the constraints or lower the thresholds.
+* *Long input loses relations without a warning.* Relation recall degrades
+  sharply past roughly 400 words while entity recall stays fine. Input longer
+  than `max_words` is windowed through `extract_long`, and a relation whose
+  endpoints land in different windows is lost. Extract per message or per
+  section rather than per long concatenation.
+* *A `RuntimeWarning` about `feasible=False`.* The decoder could not satisfy
+  the ontology's hard constraints (uniqueness, acyclicity) and fell back to an
+  empty assignment. This is not "no facts in this text": relax the constraints
+  or lower the thresholds.
 
 == 8. Verify
 

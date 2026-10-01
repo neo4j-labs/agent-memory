@@ -1533,6 +1533,20 @@ ORDER BY score DESC
 # ``LongTermMemory._add_alias_to_entity`` and the short-term ingestion path,
 # which appends the merged-away surface form when a mention resolves onto an
 # existing node.
+# Explicit mentions (``add_message(extraction_mode="explicit")``): resolve an
+# EntityRef by id, or create it by name. A typed ref uses
+# query_builder.build_merge_entity_reference_query, which adds labels.
+GET_ENTITY_ID = """
+MATCH (e:Entity {id: $id}) RETURN e.id AS id LIMIT 1
+"""
+
+MERGE_ENTITY_REFERENCE_BY_NAME = """
+MERGE (e:Entity {name: $name})
+ON CREATE SET e.id = coalesce(e.id, $name),
+              e.created_at = datetime()
+RETURN e.id AS id
+"""
+
 ADD_ENTITY_ALIAS = """
 MATCH (e:Entity {id: $id})
 SET e.aliases = CASE

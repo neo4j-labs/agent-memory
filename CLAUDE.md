@@ -353,8 +353,9 @@ server-side) and both are wired in `_connect_bolt`.
   level, reused by `core/metrics.py`) → type-constrained blocking in Cypher
   (`FIND_ENTITIES_BY_NORMALIZED_KEYS`, `FIND_ENTITIES_BY_TOKEN_PREFIX`,
   `FIND_SIMILAR_ENTITIES_BY_EMBEDDING`, each with a `_FOR_USER` variant) → score
-  (exact 1.0, alias 1.0, acronym 0.97, org whole-token-prefix 0.92 corroborated /
-  0.88 bare, else `0.45·fuzzy + 0.40·embed + 0.15·context` renormalized, −0.25
+  (exact 1.0, alias 1.0, acronym 0.97 (organizations only), whole-token prefix for
+  every type 0.92 when independent context corroborates it / 0.88 otherwise — name
+  embeddings never corroborate a prefix — else `0.45·fuzzy + 0.40·embed + 0.15·context` renormalized, −0.25
   below 2.5 bits of entropy) → bands (`merged` / `review` / `created`) →
   two-pass episode (`resolve_episode`, pass 2 clusters the unmatched among
   themselves, anchored on first-seen). `resolve_one()` is the single-name entry.
@@ -370,8 +371,9 @@ server-side) and both are wired in `_connect_bolt`.
   `OntologyResolver.resolve_one` when that is the configured resolver (mapping
   the decision back onto `DeduplicationResult`), so `add_entity` and ingestion
   band identically. `DeduplicationConfig.from_resolution_config()` projects
-  `ResolutionConfig` onto the old dataclass for direct `LongTermMemory`
-  construction — `MemoryClient` does not pass it, it relies on the delegation.
+  `ResolutionConfig` onto the old dataclass; `MemoryClient` passes
+  `DeduplicationConfig.from_resolution_config(settings.resolution)` to
+  `LongTermMemory`, so the non-delegated path bands the same way too.
 - **`_persist_entity` adopts the id the database returns** after the entity
   `MERGE` (which keys on `(name, type)`). Before v0.7 a freshly generated uuid
   was used even when `ON MATCH` kept the pre-existing id, so `MENTIONS` links and
@@ -385,6 +387,7 @@ server-side) and both are wired in `_connect_bolt`.
     validation_mode, document, schema_hash, is_active, created_at, message})
 (:OntologyMigration {id, ontology_id, status, total, processed, errored,
     spec, error_message, created_at})                    # bolt migrate() record
+(:SchemaMigration {name, completed_at})                  # one-time backfill marker
 (Entity)-[:RELATED_TO {type, relation_type, confidence, support, derived,
     extractor, source_message_ids, evidence,
     created_at, updated_at}]->(Entity)                   # typed + provenance
@@ -395,7 +398,9 @@ server-side) and both are wired in `_connect_bolt`.
 Constraints on `Ontology.id` and `OntologyVersion.id`, plus an index on
 `Ontology.name`, are created by `graph/schema.py` (`setup_constraints` /
 `setup_indexes`, and dropped by `drop_all`). `setup_all()` also runs the
-idempotent `queries.BACKFILL_RELATION_TYPE`.
+`queries.BACKFILL_RELATION_TYPE` backfill once per database: success is recorded
+on a `(:SchemaMigration {name: "relation_type_backfill"})` marker that later
+connects check first, and `schema_config.backfill_relation_types=False` skips it.
 
 **Configuration (v0.7):**
 
@@ -444,6 +449,7 @@ The package creates these node types:
 - `ReasoningTrace`, `ReasoningStep`, `ToolCall`, `Tool` (reasoning)
 - `Ontology`, `OntologyVersion`, `OntologyMigration` (v0.7, bolt ontology store)
 - `Schema` (stored `EntitySchemaConfig` documents, `SchemaManager`), `Extractor` (provenance)
+- `SchemaMigration` (markers for one-time data migrations, e.g. the `relation_type_backfill`)
 
 #### Short-Term Memory Relationships
 
@@ -477,9 +483,11 @@ Entities can be linked to each other via extracted relationships:
 - `r.source_message_ids` is capped at 25 entries, `r.evidence` at 3.
 - Writes prefer `ExtractedRelation.source_id`/`target_id` (mention ids from the
   same extraction call) over a name lookup.
-- `graph/schema.py setup_all()` runs an idempotent `BACKFILL_RELATION_TYPE`
-  query copying `relation_type` into `type` on connect. It matches nothing once
-  migrated; on very large graphs run the equivalent in batches manually.
+- `graph/schema.py setup_all()` runs the `BACKFILL_RELATION_TYPE` query, copying
+  `relation_type` into `type`, once per database: completion is recorded on a
+  `(:SchemaMigration {name: "relation_type_backfill"})` marker, and a failed run
+  retries on the next connect. On very large graphs set
+  `schema_config.backfill_relation_types=False` and run the equivalent in batches.
 
 #### Cross-Memory Relationships
 
@@ -2002,9 +2010,9 @@ agent = ChatAgent(
 
 11. **Geocoding for Locations**: Location entities can have a `location` property containing Neo4j Point coordinates. Use `GeocodingConfig` to configure providers (Nominatim free, Google requires API key). The `geocoder.py` module provides `NominatimGeocoder`, `GoogleGeocoder`, and `CachedGeocoder` classes. A Point index is created on `Entity.location` for efficient spatial queries.
 
-12. **GLiNER2.5 Availability Check**: GLiNER2.5 is an optional dependency. Use `is_gliner2_available()` from `neo4j_agent_memory.extraction` to check before creating an extractor. The checkpoint is lazy-loaded on first use, so the `ImportError` (naming `pip install "neo4j-agent-memory[gliner2]"`) surfaces during extraction, not at construction. A GLiNER v1 model id raises `ValueError` from the constructor, before any download. `feasible=False` on a decode and input longer than `gliner_max_words` both raise a `RuntimeWarning` — neither means "no facts in this text".
+12. **GLiNER2.5 Availability Check**: GLiNER2.5 is an optional dependency. Use `is_gliner2_available()` from `neo4j_agent_memory.extraction` to check before creating an extractor. The checkpoint is lazy-loaded on first use, so the `ImportError` (naming `pip install "neo4j-agent-memory[gliner2]"`) surfaces during extraction, not at construction. A GLiNER v1 model id raises `ValueError` from the constructor, before any download. `feasible=False` on a decode raises a `RuntimeWarning` (only on the single-pass path) and does not mean "no facts in this text"; input longer than `gliner_max_words` is windowed through `extract_long` silently.
 
-13. **Entity Deduplication**: `add_entity()` returns a tuple `(Entity, DeduplicationResult)` instead of just `Entity`; `deduplicate=False` skips the check for one entity. As of v0.7 the bands come from `ResolutionConfig` (`auto_merge_threshold=0.90`, `review_threshold=0.85`) whenever the configured resolver is an `OntologyResolver`, because `_check_for_duplicates` delegates to `resolve_one()`; the `DeduplicationConfig` defaults (0.95 / 0.85) apply only on the non-delegated path. Above the merge line the entity is merged and the new name kept as an alias; between the two lines a pending `SAME_AS` edge is written for human review (`find_potential_duplicates` / `review_duplicate`). **Message ingestion writes into the same review queue as of v0.7** — it resolves by default.
+13. **Entity Deduplication**: `add_entity()` returns a tuple `(Entity, DeduplicationResult)` instead of just `Entity`; `deduplicate=False` skips the check for one entity. As of v0.7 the bands come from `ResolutionConfig` (`auto_merge_threshold=0.90`, `review_threshold=0.85`) whenever the configured resolver is an `OntologyResolver`, because `_check_for_duplicates` delegates to `resolve_one()`; on the non-delegated path `MemoryClient` passes `DeduplicationConfig.from_resolution_config(settings.resolution)`, and the dataclass's own defaults match it (0.90 / 0.85, fuzzy 0.85, 12 candidates). Above the merge line the entity is merged and the new name kept as an alias; between the two lines a pending `SAME_AS` edge is written for human review (`find_potential_duplicates` / `review_duplicate`). **Message ingestion writes into the same review queue as of v0.7** — it resolves by default.
 
 14. **Schema Persistence**: Custom schemas can be stored in Neo4j using `SchemaManager`. Schemas are stored as `(:Schema)` nodes with JSON-serialized config. Multiple versions of the same schema can exist, with one marked as active. Use `save_schema()` to store, `load_schema()` to retrieve by name, and `load_schema_version()` for specific versions. Indexes are created on `Schema.name` and `Schema.id` for efficient lookups.
 
@@ -2236,8 +2244,11 @@ no README footer, no index row, or no test module. The shape of the tree:
 | TypeScript | `typescript/examples/` — ten examples, flagship `nextjs-memory-chat/` |
 
 `hello-memory/` is the only example allowed to use a PEP 723 header; every other
-one pins `neo4j-agent-memory[...]>=0.5.0,<0.7` in a `requirements.txt` or
-`pyproject.toml` so the pin is reviewable.
+one pins `neo4j-agent-memory[...]>=0.7.0,<0.8` in a `requirements.txt` or
+`pyproject.toml` so the pin is reviewable. The exception is the Google Cloud
+financial advisor backend, which pins the latest *published* release because CI
+exports its Docker requirements from PyPI (raise it after each release:
+`CONTRIBUTING.md`, Publishing step 6).
 
 The example READMEs point readers at a dedicated AuraDB instance
 (`examples/AURA_SETUP.md`); the Docker Neo4j from `docker-compose.test.yml` is

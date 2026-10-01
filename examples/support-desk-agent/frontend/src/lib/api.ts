@@ -161,8 +161,12 @@ export const api = {
       request<TraceSummary[]>(`/traces${query({ thread_id: threadId })}`, opts),
     get: (id: string, opts?: Opts) =>
       request<TraceDetail>(`/traces/${encodeURIComponent(id)}`, opts),
-    similar: (task: string, limit = 5, opts?: Opts) =>
-      request<SimilarTrace[]>(`/traces/similar${query({ task, limit })}`, opts),
+    /** Traces similar to `task`; `excludeId` leaves the trace it came from out. */
+    similar: (task: string, limit = 5, opts?: Opts, excludeId?: string) =>
+      request<SimilarTrace[]>(
+        `/traces/similar${query({ task, limit, exclude_id: excludeId })}`,
+        opts,
+      ),
   },
 
   toolStats: (opts?: Opts) => request<ToolStat[]>("/tool-stats", opts),

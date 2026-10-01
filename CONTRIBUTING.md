@@ -315,6 +315,13 @@ tag prefix and publish workflow.
    then builds and publishes to PyPI and creates a GitHub Release. The `pypi`
    environment has no approval gate, so the push publishes — and a version
    number, once claimed on PyPI, cannot be reused.
+6. Once the release is on PyPI, move the Google Cloud financial advisor
+   backend onto it: raise the `neo4j-agent-memory` pin in
+   `examples/financial-services-advisor/google-cloud-financial-advisor/backend/pyproject.toml`,
+   then run `cd backend && uv lock` and `make docker-requirements` there. CI
+   regenerates `requirements-docker.txt` from PyPI (`--no-sources`), so this
+   one pin can only name a published version; every other example pins the
+   release being prepared.
 
 ### TypeScript (@neo4j-labs/agent-memory → npm)
 

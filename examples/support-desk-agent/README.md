@@ -36,9 +36,9 @@ The agent also *reads* its reasoning memory. Before a non-trivial request it cal
 | Threads sidebar | The eight seeded conversations, marked as seeded, and your chats | `GET/POST /api/threads`, `GET /api/threads/{id}` |
 | Chat | Streams the answer; tool calls appear as cards with arguments, result and the entities they touched; each turn links to its trace | `POST /api/chat` (SSE) |
 | Memory | Entities this conversation mentions, grouped by ontology label; pending review pairs with Confirm / Reject | `GET /api/memory/context`, `POST /api/memory/duplicates/review` |
-| Graph | NVL view of the conversation, its messages, entities and typed `RELATED_TO` edges, or of all seeded data; double-click to expand | `GET /api/graph`, `GET /api/graph/neighbors/{id}` |
+| Graph | NVL view of the conversation, its messages (`HAS_MESSAGE`, `MENTIONS`), entities, typed `RELATED_TO` edges and pending `SAME_AS` review pairs, or of all seeded data; double-click to expand | `GET /api/graph`, `GET /api/graph/neighbors/{id}` |
 | Ontology | Active revision and mode, the revision the app's client resolved, revision history, diff, label counts, rename and migrate, activate an older revision | `GET /api/ontology`, `GET /api/ontology/diff`, `POST /api/ontology/rename`, `POST /api/ontology/activate` |
-| Reasoning | The conversation's traces as a timeline; a trace's steps, tool calls and touched entities; similar past tasks; tool statistics | `GET /api/traces`, `GET /api/traces/{id}`, `GET /api/traces/similar`, `GET /api/tool-stats` |
+| Reasoning | The conversation's traces as a timeline; a trace's steps, tool calls and touched entities; similar past tasks (`exclude_id` leaves the selected trace out); tool statistics | `GET /api/traces`, `GET /api/traces/{id}`, `GET /api/traces/similar`, `GET /api/tool-stats` |
 
 ### The agent's tools
 
@@ -84,6 +84,8 @@ make install                              # uv sync + npm ci
 make neo4j                                # Neo4j on 7474 / 7687, password test-password
 make seed                                 # ontology revision 1 + the eight conversations
 ```
+
+`make seed` refuses to run when the database already holds the `support-desk` ontology or any `seed-*` conversation, including a half-finished earlier seed, so it never seeds twice. `make reseed` removes both and seeds again.
 
 Then, in two terminals:
 
