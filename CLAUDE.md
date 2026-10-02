@@ -2245,10 +2245,11 @@ no README footer, no index row, or no test module. The shape of the tree:
 
 `hello-memory/` is the only example allowed to use a PEP 723 header; every other
 one pins `neo4j-agent-memory[...]>=0.7.0,<0.8` in a `requirements.txt` or
-`pyproject.toml` so the pin is reviewable. The exception is the Google Cloud
-financial advisor backend, which pins the latest *published* release because CI
-exports its Docker requirements from PyPI (raise it after each release:
-`CONTRIBUTING.md`, Publishing step 6).
+`pyproject.toml` so the pin is reviewable. The exceptions are the two financial
+advisor backends, which pin the latest *published* release because CI installs
+them from PyPI: the Google Cloud one exports its Docker requirements with
+`--no-sources`, and the AWS one is bundled by `cdk synth` with `pip install .`
+(raise both after each release: `CONTRIBUTING.md`, Publishing step 6).
 
 The example READMEs point readers at a dedicated AuraDB instance
 (`examples/AURA_SETUP.md`); the Docker Neo4j from `docker-compose.test.yml` is
