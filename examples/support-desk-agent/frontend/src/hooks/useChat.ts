@@ -9,6 +9,7 @@ import type {
   StoredEntity,
   ThreadMessage,
   TouchedRef,
+  TraceToolCall,
 } from "@/lib/types";
 
 export interface ToolCallState {
@@ -55,15 +56,46 @@ interface ThreadMessages {
   messages: ChatMessage[];
 }
 
+const FAILED_STATUSES = new Set(["error", "failure", "failed", "timeout"]);
+
+/** A recorded tool call, shaped like the ones a live turn streams. */
+function fromRecorded(call: TraceToolCall): ToolCallState {
+  const args = call.arguments;
+  return {
+    id: call.id,
+    name: call.tool_name,
+    args:
+      typeof args === "object" && args !== null && !Array.isArray(args)
+        ? (args as Record<string, unknown>)
+        : {},
+    status: FAILED_STATUSES.has(call.status.toLowerCase()) ? "error" : "success",
+    result: call.result,
+    durationMs: call.duration_ms ?? undefined,
+    touched: call.touched.map((entity) => ({
+      id: entity.id,
+      name: entity.name,
+      type: "",
+      labels: entity.labels,
+    })),
+  };
+}
+
 function fromHistory(messages: ThreadMessage[]): ChatMessage[] {
+  // The trace (and its tool calls) belongs to the user message that started
+  // it; the UI shows both on the assistant reply that follows.
   let pendingTrace: string | null = null;
+  let pendingCalls: ToolCallState[] = [];
   return messages.map((message) => {
     let traceId = message.trace_id;
+    let toolCalls: ToolCallState[] = [];
     if (message.role === "user") {
       pendingTrace = message.trace_id;
+      pendingCalls = (message.tool_calls ?? []).map(fromRecorded);
     } else if (message.role === "assistant") {
       traceId = traceId ?? pendingTrace;
+      toolCalls = pendingCalls;
       pendingTrace = null;
+      pendingCalls = [];
     }
     return {
       key: message.id,
@@ -72,7 +104,7 @@ function fromHistory(messages: ThreadMessage[]): ChatMessage[] {
       content: message.content,
       createdAt: message.created_at,
       traceId,
-      toolCalls: [],
+      toolCalls,
       entities: null,
       streaming: false,
     };

@@ -14,7 +14,7 @@ import { EntityBadge } from "@/components/ui/EntityBadge";
 import { JsonBlock } from "@/components/ui/JsonBlock";
 import type { ToolCallState } from "@/hooks/useChat";
 import { formatDuration, preview } from "@/lib/format";
-import { pascalCase } from "@/lib/labels";
+import { primaryLabel } from "@/lib/labels";
 
 const STATUS_PALETTE: Record<ToolCallState["status"], string> = {
   pending: "yellow",
@@ -87,14 +87,17 @@ export function ToolCallCard({ call }: { call: ToolCallState }) {
             <Text fontSize="xs" color="fg.muted" mr="1">
               Touched
             </Text>
-            {call.touched.map((ref) => (
-              <EntityBadge
-                key={`${ref.type}:${ref.name}`}
-                name={ref.name}
-                label={pascalCase(ref.type)}
-                title={`${ref.name} (${ref.type}) — recorded as a TOUCHED edge`}
-              />
-            ))}
+            {call.touched.map((ref) => {
+              const label = primaryLabel(ref.labels, ref.type);
+              return (
+                <EntityBadge
+                  key={ref.id || `${ref.type}:${ref.name}`}
+                  name={ref.name}
+                  label={label}
+                  title={`${ref.name} (${label}) — recorded as a TOUCHED edge`}
+                />
+              );
+            })}
           </Flex>
         ) : null}
 

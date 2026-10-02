@@ -3,14 +3,16 @@
 Run from ``backend/``::
 
     uv run python -m src.seed           # refuses when support-desk already exists
-    uv run python -m src.seed --reset   # removes what a previous seed wrote, then seeds
+    uv run python -m src.seed --reset   # removes the seed and every chat, then seeds
 
 What it does:
 
-1. ``--reset`` removes the ``support-desk`` ontology (every revision and
-   migration record), every conversation whose session id starts with
-   ``seed-`` together with the entities its messages mention, and every
-   reasoning trace whose metadata says ``seeded``.
+1. ``--reset`` starts the demo over. It removes the ``support-desk`` ontology
+   (every revision and migration record), every conversation whose session id
+   starts with ``seed-`` or ``chat-`` together with the entities its messages
+   mention, every reasoning trace whose metadata says ``seeded``, and the
+   traces of those chats. Chats are built on the seeded entities, and their
+   traces would keep turning up in ``recall_similar_tasks`` after a reset.
 2. Imports ``data/support-desk.arrows.json``, repairs the draft, creates
    revision 1 (permissive) and activates it. Then it reconnects: a client
    resolves its ontology when it connects.
@@ -51,8 +53,12 @@ from src.ontology import DOMAIN_ID, DOMAIN_NAME, entity_labels, import_support_d
 
 CONVERSATIONS_FILE = DATA_DIR / "conversations.json"
 
-#: Session ids the seed owns. ``--reset`` deletes exactly these.
+#: Session ids the seed owns.
 SEED_PREFIX = "seed-"
+
+#: Session ids of chats started in the app (``api/routes/threads.py``).
+#: ``--reset`` deletes these too.
+CHAT_PREFIX = "chat-"
 
 SET_CONVERSATION_TITLE = """
 MATCH (c:Conversation {session_id: $session_id})
@@ -85,6 +91,11 @@ RETURN count(c) AS deleted
 TRACE_METADATA = """
 MATCH (rt:ReasoningTrace)
 RETURN rt.id AS id, properties(rt).metadata AS metadata
+"""
+
+SESSION_TRACE_IDS = """
+MATCH (rt:ReasoningTrace) WHERE rt.session_id STARTS WITH $prefix
+RETURN rt.id AS id
 """
 
 DELETE_TRACES = """
@@ -190,13 +201,16 @@ async def seeded_trace_ids(client: BoltMemoryClient) -> list[str]:
 
 
 async def reset_seed(client: BoltMemoryClient) -> dict[str, int]:
-    """Remove what a previous seed wrote. Chat threads (``chat-*``) are kept."""
-    trace_ids = await seeded_trace_ids(client)
+    """Remove what a previous seed wrote, and every chat (``chat-*``) built on it."""
+    chat_traces = await client.query.cypher(SESSION_TRACE_IDS, {"prefix": CHAT_PREFIX})
+    trace_ids = await seeded_trace_ids(client) + [row["id"] for row in chat_traces]
     traces = await client.graph.execute_write(DELETE_TRACES, {"ids": trace_ids})
-    entities = await client.graph.execute_write(DELETE_SEED_ENTITIES, {"prefix": SEED_PREFIX})
-    conversations = await client.graph.execute_write(
-        DELETE_SEED_CONVERSATIONS, {"prefix": SEED_PREFIX}
-    )
+    entities = conversations = 0
+    for prefix in (SEED_PREFIX, CHAT_PREFIX):
+        rows = await client.graph.execute_write(DELETE_SEED_ENTITIES, {"prefix": prefix})
+        entities += int(rows[0]["deleted"]) if rows else 0
+        rows = await client.graph.execute_write(DELETE_SEED_CONVERSATIONS, {"prefix": prefix})
+        conversations += int(rows[0]["deleted"]) if rows else 0
     ontologies = await _stored_support_desk(client)
     for ontology_id in ontologies:
         await client.ontology.delete(ontology_id)
@@ -204,8 +218,8 @@ async def reset_seed(client: BoltMemoryClient) -> dict[str, int]:
     await client.reasoning.migrate_tool_stats()
     return {
         "traces": int(traces[0]["deleted"]) if traces else 0,
-        "entities": int(entities[0]["deleted"]) if entities else 0,
-        "conversations": int(conversations[0]["deleted"]) if conversations else 0,
+        "entities": entities,
+        "conversations": conversations,
         "ontologies": len(ontologies),
     }
 
@@ -328,7 +342,7 @@ async def seed(settings: Settings, *, reset: bool = False) -> dict[str, Any]:
             print(
                 f"Reset: removed {removed['ontologies']} ontology, "
                 f"{removed['conversations']} conversation(s), {removed['entities']} "
-                f"entities and {removed['traces']} seeded trace(s)"
+                f"entities and {removed['traces']} trace(s)"
             )
 
         previous_version_id = await _active_version_id(client)
@@ -404,7 +418,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--reset",
         action="store_true",
-        help="remove the support-desk ontology, the seed-* conversations and seeded traces first",
+        help=(
+            "start over: remove the support-desk ontology, the seed-* and chat-* "
+            "conversations and their traces first"
+        ),
     )
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")

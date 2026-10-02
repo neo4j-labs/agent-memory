@@ -29,15 +29,38 @@ export function nodeColor(node: GraphNode): string {
   return labelColor(nodeLegendLabel(node));
 }
 
+/**
+ * Node diameters. NVL sizes a caption to its node's on-screen radius and drops
+ * it when the node renders too small, so entities are large enough to stay
+ * labelled once a conversation's graph is fitted to the panel.
+ */
 export function nodeSize(node: GraphNode): number {
   switch (node.kind) {
     case "conversation":
-      return 30;
+      return 56;
     case "message":
-      return 16;
+      return 26;
     default:
-      return 24;
+      return 48;
   }
+}
+
+const CONVERSATION_CAPTION = 22;
+
+/**
+ * What the canvas writes on a node. NVL hides a caption that does not fit,
+ * so a message shows its role (`user`, `assistant`) and a conversation a
+ * shortened title; the property panel keeps the full text.
+ */
+export function nodeCaption(node: GraphNode): string {
+  if (node.kind === "message") {
+    const role = node.caption.split(":", 1)[0].trim();
+    return role === "user" || role === "assistant" ? role : "message";
+  }
+  if (node.kind === "conversation" && node.caption.length > CONVERSATION_CAPTION) {
+    return `${node.caption.slice(0, CONVERSATION_CAPTION - 1).trimEnd()}…`;
+  }
+  return node.caption;
 }
 
 export type EdgeKind = "mentions" | "same_as" | "structure" | "related";

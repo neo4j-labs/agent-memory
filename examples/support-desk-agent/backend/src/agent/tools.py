@@ -43,6 +43,11 @@ RECALL_THRESHOLD = 0.6
 #: name still clears it; a one-letter query does not).
 CUSTOMER_SEARCH_THRESHOLD = 0.75
 
+#: Messages ``search_support_history`` returns, and how many extra it fetches
+#: so that leaving the current conversation out still leaves that many.
+MESSAGE_HITS = 8
+MESSAGE_HITS_SLACK = 6
+
 Scope = Literal["message", "conversation"]
 
 ENTITY_FIELDS = """
@@ -149,6 +154,22 @@ WHERE m.id IN $ids
 RETURN m.id AS id, c.session_id AS session_id, c.title AS title
 """
 
+#: The tickets and orders each conversation mentions anywhere. A search hit is
+#: one message, and the ticket is usually named in a different one (the reply).
+CONVERSATION_RECORDS = """
+MATCH (c:Conversation)-[:HAS_MESSAGE]->(:Message)-[:MENTIONS]->(e:Entity)
+WHERE c.session_id IN $sessions AND NOT 'merged_into' IN keys(e)
+  AND any(label IN labels(e) WHERE label IN $labels)
+RETURN c.session_id AS session_id, e.id AS id, e.name AS name, e.type AS type,
+       labels(e) AS labels
+ORDER BY e.name
+"""
+
+ENTITY_LABELS = """
+MATCH (e:Entity) WHERE e.id IN $ids
+RETURN e.id AS id, labels(e) AS labels
+"""
+
 TRACE_METADATA = """
 MATCH (rt:ReasoningTrace) WHERE rt.id IN $ids
 RETURN rt.id AS id, properties(rt).metadata AS metadata
@@ -245,6 +266,25 @@ async def _conversations(client: BoltMemoryClient, entity_id: str) -> list[dict[
         }
         for row in rows
     ]
+
+
+async def _conversation_records(
+    client: BoltMemoryClient, session_ids: set[str]
+) -> dict[str, dict[str, list[dict[str, Any]]]]:
+    """``{session_id: {"tickets": [...], "orders": [...]}}`` under the active labels."""
+    if not session_ids:
+        return {}
+    document = _document(client)
+    ticket, order = role_label(document, TICKET), role_label(document, ORDER)
+    rows = await client.query.cypher(
+        CONVERSATION_RECORDS, {"sessions": sorted(session_ids), "labels": [ticket, order]}
+    )
+    records: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    for row in rows:
+        kind = "tickets" if ticket in row["labels"] else "orders"
+        bucket = records.setdefault(row["session_id"], {"tickets": [], "orders": []})[kind]
+        bucket.append(_ref(row))
+    return records
 
 
 async def _trace_metadata(client: BoltMemoryClient, ids: list[str]) -> dict[str, dict[str, Any]]:
@@ -456,15 +496,37 @@ async def get_order(client: BoltMemoryClient, order_number: str) -> dict[str, An
     }
 
 
-async def search_support_history(client: BoltMemoryClient, query: str) -> dict[str, Any]:
-    """Semantic search over every session's messages, plus matching entities."""
-    messages = await client.short_term.search_messages(query, limit=8, threshold=0.5)
+async def search_support_history(
+    client: BoltMemoryClient, query: str, *, exclude_session_id: str | None = None
+) -> dict[str, Any]:
+    """Semantic search over earlier sessions' messages, plus matching entities.
+
+    ``exclude_session_id`` leaves the conversation the agent is answering in
+    out: its messages, including the question just asked, are already in the
+    model's context. Each hit lists the tickets and orders its conversation
+    mentions, because the ticket for a complaint is usually opened in the
+    reply rather than in the message that matched.
+    """
+    found = await client.short_term.search_messages(
+        query, limit=MESSAGE_HITS + MESSAGE_HITS_SLACK, threshold=0.5
+    )
     sessions = {
         row["id"]: row
-        for row in await client.query.cypher(
-            MESSAGE_SESSIONS, {"ids": [str(m.id) for m in messages]}
-        )
+        for row in await client.query.cypher(MESSAGE_SESSIONS, {"ids": [str(m.id) for m in found]})
     }
+
+    def session_of(message_id: object) -> str | None:
+        session_id = sessions.get(str(message_id), {}).get("session_id")
+        return str(session_id) if session_id else None
+
+    messages = [
+        message
+        for message in found
+        if exclude_session_id is None or session_of(message.id) != exclude_session_id
+    ][:MESSAGE_HITS]
+    records = await _conversation_records(
+        client, {s for s in (session_of(m.id) for m in messages) if s}
+    )
     entities = await client.long_term.search_entities(query, limit=8, threshold=0.5)
     stored = {
         row["id"]: row
@@ -489,11 +551,19 @@ async def search_support_history(client: BoltMemoryClient, query: str) -> dict[s
         "messages": [
             {
                 "message_id": str(message.id),
-                "session_id": sessions.get(str(message.id), {}).get("session_id"),
+                "session_id": session_of(message.id),
                 "title": sessions.get(str(message.id), {}).get("title"),
                 "role": message.role.value,
                 "snippet": _snippet(message.content),
                 "similarity": round(float(message.metadata.get("similarity", 0.0)), 3),
+                # What the rest of that conversation names: check these with
+                # get_ticket / get_order before saying a record does not exist.
+                "conversation_tickets": records.get(session_of(message.id) or "", {}).get(
+                    "tickets", []
+                ),
+                "conversation_orders": records.get(session_of(message.id) or "", {}).get(
+                    "orders", []
+                ),
             }
             for message in messages
         ],
@@ -526,12 +596,29 @@ async def get_ontology(client: BoltMemoryClient) -> dict[str, Any]:
     }
 
 
-def entity_refs(touched: list[dict[str, Any]]) -> list[dict[str, str]]:
-    """Project tool ``touched`` entries onto the SSE shape ``{"name", "type"}``."""
+async def entity_refs(
+    client: BoltMemoryClient, touched: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Project tool ``touched`` entries onto the SSE shape ``{"id", "name", "type", "labels"}``.
+
+    ``labels`` are the node's labels, ontology label first, so the chat shows
+    the same ``Customer`` / ``Order`` the Memory and Reasoning panels show,
+    not the POLE+O ``type``.
+    """
+    refs = [item for item in touched if isinstance(item, dict) and item.get("name")]
+    ids = [str(item["id"]) for item in refs if item.get("id")]
+    labels: dict[str, list[str]] = {}
+    if ids:
+        rows = await client.query.cypher(ENTITY_LABELS, {"ids": ids})
+        labels = {row["id"]: entity_labels(row["labels"]) for row in rows}
     return [
-        {"name": str(item.get("name") or ""), "type": str(item.get("type") or "")}
-        for item in touched
-        if isinstance(item, dict) and item.get("name")
+        {
+            "id": str(item.get("id") or ""),
+            "name": str(item["name"]),
+            "type": str(item.get("type") or ""),
+            "labels": labels.get(str(item.get("id")), []),
+        }
+        for item in refs
     ]
 
 

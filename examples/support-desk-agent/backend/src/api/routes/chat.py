@@ -50,7 +50,7 @@ from src.agent.agent import get_agent
 from src.agent.deps import SupportDeskDeps
 from src.agent.tools import entity_refs
 from src.api import memory_service
-from src.api.routes.threads import set_title
+from src.api.routes.threads import DEFAULT_TITLE, set_title, title_from
 from src.api.schemas import ChatRequest
 from src.config import get_settings
 from src.memory import jsonable
@@ -114,6 +114,25 @@ def _touched(result: Any) -> list[dict[str, Any]]:
     return [item for item in touched if isinstance(item, dict)] if isinstance(touched, list) else []
 
 
+async def _touched_refs(client: BoltMemoryClient, result: Any) -> list[dict[str, Any]]:
+    """The entities a tool result named, with their labels. Never raises."""
+    touched = _touched(result)
+    try:
+        return await entity_refs(client, touched)
+    except Exception:
+        logger.warning("Could not look up the labels of touched entities", exc_info=True)
+        return [
+            {
+                "id": str(t.get("id") or ""),
+                "name": str(t["name"]),
+                "type": str(t.get("type") or ""),
+                "labels": [],
+            }
+            for t in touched
+            if t.get("name")
+        ]
+
+
 async def _history(client: BoltMemoryClient, session_id: str) -> list[ModelMessage]:
     """The thread's earlier messages as PydanticAI message history."""
     conversation = await client.short_term.get_conversation(session_id)
@@ -140,11 +159,10 @@ async def _message_entities(client: BoltMemoryClient, message_id: str) -> list[d
 
 
 async def _ensure_title(client: BoltMemoryClient, session_id: str, message: str) -> None:
-    """Give a thread that was never created through ``POST /threads`` a title."""
+    """Title an untitled thread after its first message, so the sidebar can tell chats apart."""
     rows = await client.query.cypher(CONVERSATION_TITLE, {"session_id": session_id})
-    if rows and not rows[0].get("title"):
-        title = message.strip().splitlines()[0][:60] if message.strip() else "New chat"
-        await set_title(client, session_id, title)
+    if rows and rows[0].get("title") in (None, "", DEFAULT_TITLE):
+        await set_title(client, session_id, title_from(message))
 
 
 async def _record_step(
@@ -277,7 +295,7 @@ async def stream_turn(request: ChatRequest, http_request: Request) -> AsyncItera
                             "name": tool_name,
                             "result": result,
                             "duration_ms": duration_ms,
-                            "touched": entity_refs(_touched(result)),
+                            "touched": await _touched_refs(client, result),
                         }
                     )
                     if trace_id is not None:

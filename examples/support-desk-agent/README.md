@@ -13,7 +13,7 @@ The full-stack version of [`ontology-lifecycle-bolt/`](../ontology-lifecycle-bol
 > This example is part of [`neo4j-agent-memory`](https://github.com/neo4j-labs/agent-memory), a Neo4j Labs project. It is actively maintained but not officially supported. APIs may change. Community support is available via the [Neo4j Community Forum](https://community.neo4j.com).
 
 > [!WARNING]
-> **Use a database dedicated to this demo.** The seed activates the `support-desk` ontology, and activation is per database: every client that connects to it with `schema_config.use_active_ontology=True` (the default) extracts against `support-desk`. The Ontology panel's rename switches the database to a strict revision. `make reseed` removes everything the seed created.
+> **Use a database dedicated to this demo.** The seed activates the `support-desk` ontology, and activation is per database: every client that connects to it with `schema_config.use_active_ontology=True` (the default) extracts against `support-desk`. The Ontology panel's rename switches the database to a strict revision. `make reseed` removes everything the seed created and every chat started in the app.
 
 ## What it shows
 
@@ -33,10 +33,10 @@ The agent also *reads* its reasoning memory. Before a non-trivial request it cal
 
 | Area | What it does | API |
 |---|---|---|
-| Threads sidebar | The eight seeded conversations, marked as seeded, and your chats | `GET/POST /api/threads`, `GET /api/threads/{id}` |
-| Chat | Streams the answer; tool calls appear as cards with arguments, result and the entities they touched; each turn links to its trace | `POST /api/chat` (SSE) |
+| Threads sidebar | The eight seeded conversations, marked as seeded, and your chats, each titled after its first message | `GET/POST /api/threads`, `GET /api/threads/{id}` |
+| Chat | Streams the answer; tool calls appear as cards with arguments, result and the entities they touched, labelled by the ontology; each turn links to its trace. Reopening a chat shows the same cards, rebuilt from the recorded trace | `POST /api/chat` (SSE) |
 | Memory | Entities this conversation mentions, grouped by ontology label; pending review pairs with Confirm / Reject | `GET /api/memory/context`, `POST /api/memory/duplicates/review` |
-| Graph | NVL view of the conversation, its messages (`HAS_MESSAGE`, `MENTIONS`), entities, typed `RELATED_TO` edges and pending `SAME_AS` review pairs, or of all seeded data; double-click to expand | `GET /api/graph`, `GET /api/graph/neighbors/{id}` |
+| Graph | NVL view of the conversation, its messages (`HAS_MESSAGE`, `MENTIONS`), entities, typed `RELATED_TO` edges and pending `SAME_AS` review pairs, or of all seeded data, fitted to the panel once laid out (**Fit to view** re-fits after you expand); double-click to expand | `GET /api/graph`, `GET /api/graph/neighbors/{id}` |
 | Ontology | Active revision and mode, the revision the app's client resolved, revision history, diff, label counts, rename and migrate, activate an older revision | `GET /api/ontology`, `GET /api/ontology/diff`, `POST /api/ontology/rename`, `POST /api/ontology/activate` |
 | Reasoning | The conversation's traces as a timeline; a trace's steps, tool calls and touched entities; similar past tasks (`exclude_id` leaves the selected trace out); tool statistics | `GET /api/traces`, `GET /api/traces/{id}`, `GET /api/traces/similar`, `GET /api/tool-stats` |
 
@@ -49,7 +49,7 @@ The agent also *reads* its reasoning memory. Before a non-trivial request it cal
 | `get_ticket` | A ticket under the active ticket label, with its order, product, customer and the messages that mention it |
 | `list_tickets` | Tickets, optionally for one customer |
 | `get_order` | An order with its products and tickets |
-| `search_support_history` | Messages across every conversation, and matching entities |
+| `search_support_history` | Messages from other conversations, each with the tickets and orders its conversation names, and matching entities |
 | `get_ontology` | The active revision, its mode, labels and relationships |
 
 ## Data
@@ -85,7 +85,7 @@ make neo4j                                # Neo4j on 7474 / 7687, password test-
 make seed                                 # ontology revision 1 + the eight conversations
 ```
 
-`make seed` refuses to run when the database already holds the `support-desk` ontology or any `seed-*` conversation, including a half-finished earlier seed, so it never seeds twice. `make reseed` removes both and seeds again.
+`make seed` refuses to run when the database already holds the `support-desk` ontology or any `seed-*` conversation, including a half-finished earlier seed, so it never seeds twice. `make reseed` removes both, and every chat started in the app, then seeds again.
 
 Then, in two terminals:
 
@@ -145,4 +145,4 @@ RUN_INTEGRATION_TESTS=1 uv run pytest tests/examples/test_support_desk_agent_exa
 
 ---
 
-> _Verified against `neo4j-agent-memory` 0.7.0 (in-tree, branch `gliner-2.5`), PydanticAI 2.31, FastAPI, Next.js 16, Chakra UI v3, `gliner2` 2.0.0 with `fastino/gliner2.5-base-v1`, MiniLM and Neo4j 5.26 Community (Docker) on 2026-10-01: `make seed` on an empty database, chat turns through the running backend and frontend with `AGENT_MODEL=test` (message stored with typed entities, trace with seven tool calls and `TOUCHED` edges, recall of the seeded traces), the rename and migration of seven tickets, and the example's test module against a testcontainers Neo4j. The frontend type-checks, lints and builds; its panels were also checked in headless Chrome against a contract mock. A real-model chat with `OPENAI_API_KEY` was not run._
+> _Verified against `neo4j-agent-memory` 0.7.0 (in-tree, branch `gliner-2.5`), PydanticAI 2.31, FastAPI, Next.js 16, Chakra UI v3, `gliner2` 2.0.0 with `fastino/gliner2.5-base-v1`, MiniLM and Neo4j 5.26 Community (Docker) on 2026-10-01: `make seed` on an empty database, chat turns through the running backend and frontend with `AGENT_MODEL=test` (message stored with typed entities, trace with seven tool calls and `TOUCHED` edges, recall of the seeded traces), the rename and migration of seven tickets, and the example's test module against a testcontainers Neo4j. The frontend type-checks, lints and builds. On 2026-10-02 the running app was also driven in headless Chrome with `AGENT_MODEL=openai:gpt-5-mini`: real-model chat turns (tool cards with ontology labels, thread titles, recall), a reopened chat's tool cards, every panel, the graph fitted to the panel, dark mode and a 390 px phone layout, with no console errors._

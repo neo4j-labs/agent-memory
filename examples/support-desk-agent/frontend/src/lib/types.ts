@@ -13,10 +13,16 @@
 /** A POLE+O type in upper case, e.g. `PERSON`, `EVENT`, `OBJECT`. */
 export type PoleType = string;
 
-/** `{name, type}` reference to an entity a tool read (a TOUCHED audit edge). */
+/**
+ * An entity a tool read (a TOUCHED audit edge). `labels` are the node's labels
+ * without `Entity`, ontology label first; `type` is the POLE+O type, a fallback
+ * when the labels could not be looked up.
+ */
 export interface TouchedRef {
+  id: string;
   name: string;
   type: PoleType;
+  labels: string[];
 }
 
 /** A resolved touched entity on a recorded tool call. */
@@ -66,6 +72,8 @@ export interface ThreadMessage {
   created_at: string | null;
   /** Set on user messages that initiated a reasoning trace. */
   trace_id: string | null;
+  /** User messages: the tool calls of the trace they initiated. */
+  tool_calls: TraceToolCall[];
 }
 
 /** `GET /threads/{id}`. */

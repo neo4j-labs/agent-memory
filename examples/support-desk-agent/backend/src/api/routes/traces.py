@@ -14,6 +14,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Query
 
 from neo4j_agent_memory import BoltMemoryClient
+from neo4j_agent_memory.memory.reasoning import ReasoningTrace, ToolCall
 from src.api import MemoryClientDep
 from src.api.schemas import (
     SimilarTrace,
@@ -60,6 +61,61 @@ async def _facts(client: BoltMemoryClient, ids: list[str]) -> dict[str, dict[str
 
 def _seeded(facts: dict[str, Any] | None) -> bool:
     return bool(parse_json_map((facts or {}).get("metadata")).get("seeded"))
+
+
+async def _step_touched(
+    client: BoltMemoryClient, step_ids: list[str]
+) -> dict[str, list[TouchedEntity]]:
+    """The entities each step touched (``(:ReasoningStep)-[:TOUCHED]->(:Entity)``)."""
+    touched: dict[str, list[TouchedEntity]] = {}
+    if not step_ids:
+        return touched
+    for row in await client.query.cypher(STEP_TOUCHED, {"ids": step_ids}):
+        touched.setdefault(row["step_id"], []).append(
+            TouchedEntity(id=row["id"], name=row.get("name"), labels=entity_labels(row["labels"]))
+        )
+    return touched
+
+
+def _tool_call_view(call: ToolCall, touched: list[TouchedEntity]) -> ToolCallView:
+    return ToolCallView(
+        id=str(call.id),
+        tool_name=call.tool_name,
+        arguments=jsonable(call.arguments) or {},
+        result=jsonable(call.result),
+        status=str(getattr(call.status, "value", call.status)),
+        duration_ms=call.duration_ms,
+        # TOUCHED edges hang off the step; each step records one call.
+        touched=touched,
+    )
+
+
+async def tool_calls_by_trace(
+    client: BoltMemoryClient, trace_ids: list[str]
+) -> dict[str, list[ToolCallView]]:
+    """Each trace's tool calls in step order, with the entities they touched.
+
+    ``GET /threads/{id}`` uses it to show a past turn's tool cards.
+    """
+    traces: dict[str, ReasoningTrace] = {}
+    for trace_id in trace_ids:
+        try:
+            trace = await client.reasoning.get_trace_with_steps(UUID(trace_id))
+        except ValueError:
+            continue
+        if trace is not None:
+            traces[trace_id] = trace
+    touched = await _step_touched(
+        client, [str(step.id) for trace in traces.values() for step in trace.steps]
+    )
+    return {
+        trace_id: [
+            _tool_call_view(call, touched.get(str(step.id), []))
+            for step in trace.steps
+            for call in step.tool_calls
+        ]
+        for trace_id, trace in traces.items()
+    }
 
 
 @router.get("/traces", response_model=list[TraceSummary])
@@ -129,12 +185,7 @@ async def get_trace(client: MemoryClientDep, trace_id: str) -> TraceDetail:
     if trace is None:
         raise HTTPException(status_code=404, detail=f"Trace {trace_id!r} not found")
     facts = (await _facts(client, [trace_id])).get(trace_id, {})
-    step_ids = [str(step.id) for step in trace.steps]
-    touched: dict[str, list[TouchedEntity]] = {}
-    for row in await client.query.cypher(STEP_TOUCHED, {"ids": step_ids}):
-        touched.setdefault(row["step_id"], []).append(
-            TouchedEntity(id=row["id"], name=row.get("name"), labels=entity_labels(row["labels"]))
-        )
+    touched = await _step_touched(client, [str(step.id) for step in trace.steps])
     return TraceDetail(
         id=trace_id,
         task=trace.task,
@@ -149,17 +200,7 @@ async def get_trace(client: MemoryClientDep, trace_id: str) -> TraceDetail:
                 action=step.action,
                 observation=step.observation,
                 tool_calls=[
-                    ToolCallView(
-                        id=str(call.id),
-                        tool_name=call.tool_name,
-                        arguments=jsonable(call.arguments) or {},
-                        result=jsonable(call.result),
-                        status=str(getattr(call.status, "value", call.status)),
-                        duration_ms=call.duration_ms,
-                        # TOUCHED edges hang off the step; each step records one call.
-                        touched=touched.get(str(step.id), []),
-                    )
-                    for call in step.tool_calls
+                    _tool_call_view(call, touched.get(str(step.id), [])) for call in step.tool_calls
                 ],
             )
             for step in trace.steps

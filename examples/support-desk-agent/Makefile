@@ -7,7 +7,7 @@ help:
 	@echo "  make install         Install backend (uv) and frontend (npm) dependencies"
 	@echo "  make neo4j           Start Neo4j 5.26 in Docker (ports 7474 / 7687)"
 	@echo "  make seed            Import the ontology, activate revision 1, load the seed conversations"
-	@echo "  make reseed          Remove the seeded data and the support-desk ontology, then seed again"
+	@echo "  make reseed          Start over: remove the seed, every chat and the ontology, then seed"
 	@echo ""
 	@echo "Run (two terminals):"
 	@echo "  make run-backend     FastAPI on http://localhost:8000"

@@ -363,6 +363,22 @@ class TestOfflineBackend:
         assert backend.ontology.ticket_label(revised) == "SupportCase"
         assert backend.ontology.entity_labels(["Entity", "Event", "Ticket"]) == ["Ticket", "Event"]
 
+    @pytest.mark.imports
+    def test_untitled_threads_are_titled_after_their_first_message(self, backend):
+        pytest.importorskip("fastapi")
+        threads = importlib.import_module("src.api.routes.threads")
+        assert threads.title_from("  Where is order SO-4471?\nThanks ") == (
+            "Where is order SO-4471? Thanks"
+        )
+        question = (
+            "Which open tickets does Grace Liu have, and is the duplicate charge "
+            "on SO-4503 refunded yet?"
+        )
+        title = threads.title_from(question)
+        assert len(title) <= threads.TITLE_LENGTH and title.endswith("…")
+        assert question.startswith(title[:-1])
+        assert threads.title_from("   ") == threads.DEFAULT_TITLE
+
 
 # ---------------------------------------------------------------------------
 # End to end
@@ -478,8 +494,9 @@ def test_backend_runs_end_to_end(neo4j_env, monkeypatch):
                     transcript = next(t for t in threads if t["id"] == "seed-priya-damaged-lamp")
                     assert transcript["seeded"] is True and transcript["message_count"] == 6
 
-                    created = await http.post("/api/threads", json={"title": "E2E"})
+                    created = await http.post("/api/threads", json={})
                     assert created.status_code == 200, created.text
+                    assert created.json()["title"] == "New chat"
                     thread_id = created.json()["id"]
                     chat_sessions.append(thread_id)
                     assert thread_id.startswith("chat-")
@@ -505,6 +522,9 @@ def test_backend_runs_end_to_end(neo4j_env, monkeypatch):
                     assert {e["name"] for e in calls} == TOOL_NAMES
                     assert len(results) == len(calls)
                     assert any(e["touched"] for e in results), "list_tickets names tickets"
+                    # The chat labels touched entities like the panels do.
+                    streamed = [t for e in results for t in e["touched"]]
+                    assert all(t["labels"] for t in streamed), streamed
                     done = events[-1]
                     assert done["trace_id"] == events[1]["trace_id"]
 
@@ -526,6 +546,27 @@ def test_backend_runs_end_to_end(neo4j_env, monkeypatch):
                     thread = (await http.get(f"/api/threads/{thread_id}")).json()
                     assert [m["role"] for m in thread["messages"]] == ["user", "assistant"]
                     assert thread["messages"][0]["trace_id"] == trace["id"]
+                    # Untitled at creation, titled after the first message.
+                    assert thread["title"] == "Which tickets does Priya Raman have?"
+                    # A reopened chat rebuilds its tool cards from the trace.
+                    recorded = thread["messages"][0]["tool_calls"]
+                    assert {c["tool_name"] for c in recorded} == TOOL_NAMES
+                    assert all(t["labels"] for c in recorded for t in c["touched"])
+
+                    # search_support_history leaves the current conversation
+                    # out (the question itself would be its best hit), and each
+                    # hit names the tickets its conversation mentions.
+                    tools = importlib.import_module("src.agent.tools")
+                    client = await app.state.memory.get_client()
+                    question = "Which tickets does Priya Raman have?"
+                    everywhere = await tools.search_support_history(client, question)
+                    assert any(m["session_id"] == thread_id for m in everywhere["messages"])
+                    elsewhere = await tools.search_support_history(
+                        client, question, exclude_session_id=thread_id
+                    )
+                    assert elsewhere["messages"], elsewhere
+                    assert all(m["session_id"] != thread_id for m in elsewhere["messages"])
+                    assert any(m["conversation_tickets"] for m in elsewhere["messages"]), elsewhere
 
                     similar = (
                         await http.get(

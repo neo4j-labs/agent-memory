@@ -51,10 +51,17 @@ How to work:
 3. Related items come from typed relationships when extraction found them, and
    from being mentioned together otherwise; each item says which (`via`).
    Treat "same conversation" links as likely, not certain.
-4. A customer may appear twice, once by first name only, with a pending review
+4. A search hit is a lead, not the whole record. Before you say that an order
+   or a customer has no ticket, check with `get_order` or `find_customer`; the
+   ticket is often named in a different message of the same conversation
+   (`conversation_tickets` on each search hit).
+5. A customer may appear twice, once by first name only, with a pending review
    pair (`possible_duplicates`). Say so instead of silently merging them.
-5. Cite ticket and order ids (TK-…, SO-…) in your answer, keep it short, and
+6. Cite ticket and order ids (TK-…, SO-…) in your answer, keep it short, and
    say plainly when the graph has nothing on a question.
+7. Write for a support colleague, in plain language. Say how things relate
+   ("TK-2223 is about order SO-4503"), never how the graph stores it: no
+   relationship types (OPENED, ABOUT), `via` values, labels or "same message".
 """
 
 
@@ -140,12 +147,17 @@ def build_agent(model: str | Model) -> Agent[SupportDeskDeps, str]:
     async def search_support_history(
         ctx: RunContext[SupportDeskDeps], query: str
     ) -> dict[str, Any]:
-        """Search every past support conversation by meaning, plus matching entities.
+        """Search earlier support conversations by meaning, plus matching entities.
+
+        Leaves out this conversation, which you already have. Each hit lists
+        the tickets and orders its conversation mentions.
 
         Args:
             query: What to look for, in plain words.
         """
-        return await tools.search_support_history(ctx.deps.client, query)
+        return await tools.search_support_history(
+            ctx.deps.client, query, exclude_session_id=ctx.deps.session_id
+        )
 
     @agent.tool
     async def get_ontology(ctx: RunContext[SupportDeskDeps]) -> dict[str, Any]:

@@ -13,7 +13,7 @@ import {
   Text,
 } from "@chakra-ui/react";
 import { useCallback, useMemo, useState } from "react";
-import { LuExpand, LuRefreshCw } from "react-icons/lu";
+import { LuExpand, LuFocus, LuRefreshCw } from "react-icons/lu";
 import { StatusAlert } from "@/components/ui/StatusAlert";
 import { useApi } from "@/hooks/useApi";
 import { api, errorMessage } from "@/lib/api";
@@ -200,6 +200,7 @@ export function GraphPanel({ threadId, refreshKey }: GraphPanelProps) {
   const [expandingNodeId, setExpandingNodeId] = useState<string | null>(null);
   const [expandError, setExpandError] = useState<string | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [fitRequest, setFitRequest] = useState(0);
 
   // An expansion belongs to the fetch it was built on; a refetch resets it.
   const current = expansion.base === data && data !== null;
@@ -262,6 +263,16 @@ export function GraphPanel({ threadId, refreshKey }: GraphPanelProps) {
             </Text>
           ) : null}
           <IconButton
+            aria-label="Fit graph to view"
+            title="Fit to view"
+            size="xs"
+            variant="ghost"
+            onClick={() => setFitRequest((n) => n + 1)}
+            disabled={!graph || graph.nodes.length === 0}
+          >
+            <LuFocus />
+          </IconButton>
+          <IconButton
             aria-label="Refresh graph"
             size="xs"
             variant="ghost"
@@ -305,6 +316,8 @@ export function GraphPanel({ threadId, refreshKey }: GraphPanelProps) {
             expandingNodeId={expandingNodeId}
             onNodeSelect={setSelectedNodeId}
             onNodeExpand={expand}
+            fitKey={data}
+            fitRequest={fitRequest}
           />
         ) : (
           <Flex h="full" alignItems="center" justifyContent="center" p="6">

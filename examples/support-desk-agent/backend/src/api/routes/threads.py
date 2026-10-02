@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 
 from neo4j_agent_memory import BoltMemoryClient
 from src.api import MemoryClientDep
+from src.api.routes.traces import tool_calls_by_trace
 from src.api.schemas import CreateThreadRequest, Thread, ThreadMessage, ThreadSummary
 from src.memory import iso
 
@@ -38,8 +39,25 @@ ORDER BY rt.started_at
 """
 
 
+#: Longest title derived from a first message.
+TITLE_LENGTH = 60
+
+
 def is_seeded(session_id: str) -> bool:
     return session_id.startswith(SEED_PREFIX)
+
+
+def title_from(message: str) -> str:
+    """A thread title from its first message: one line, cut at a word boundary."""
+    text = " ".join(message.split())
+    if not text:
+        return DEFAULT_TITLE
+    if len(text) <= TITLE_LENGTH:
+        return text
+    cut = text[: TITLE_LENGTH - 1]
+    if " " in cut:
+        cut = cut.rsplit(" ", 1)[0]
+    return cut.rstrip(" ,.;:-") + "…"
 
 
 async def set_title(client: BoltMemoryClient, session_id: str, title: str) -> None:
@@ -68,14 +86,19 @@ async def list_threads(client: MemoryClientDep) -> list[ThreadSummary]:
 
 @router.post("/threads", response_model=ThreadSummary)
 async def create_thread(client: MemoryClientDep, request: CreateThreadRequest) -> ThreadSummary:
-    """Create an empty chat thread (``chat-<8 hex>``)."""
+    """Create an empty chat thread (``chat-<8 hex>``).
+
+    Without a ``title`` the thread stays untitled, and the first chat turn
+    titles it after the message (``chat._ensure_title``).
+    """
     session_id = f"{CHAT_PREFIX}{uuid.uuid4().hex[:8]}"
-    title = (request.title or "").strip() or DEFAULT_TITLE
+    title = (request.title or "").strip()
     conversation = await client.short_term.create_conversation(session_id)
-    await set_title(client, session_id, title)
+    if title:
+        await set_title(client, session_id, title)
     return ThreadSummary(
         id=session_id,
-        title=title,
+        title=title or DEFAULT_TITLE,
         message_count=0,
         updated_at=iso(conversation.updated_at or conversation.created_at),
         seeded=False,
@@ -94,6 +117,7 @@ async def get_thread(client: MemoryClientDep, thread_id: str) -> Thread:
         row["message_id"]: row["trace_id"]
         for row in await client.query.cypher(INITIATED_TRACES, {"ids": ids})
     }
+    tool_calls = await tool_calls_by_trace(client, sorted(set(traces.values())))
     return Thread(
         id=thread_id,
         title=rows[0].get("title") or DEFAULT_TITLE,
@@ -105,6 +129,7 @@ async def get_thread(client: MemoryClientDep, thread_id: str) -> Thread:
                 content=message.content,
                 created_at=iso(message.created_at),
                 trace_id=traces.get(str(message.id)),
+                tool_calls=tool_calls.get(traces.get(str(message.id), ""), []),
             )
             for message in conversation.messages
             if message.role.value != "system"

@@ -23,7 +23,8 @@ const NON_DOMAIN_LABELS = new Set(["Entity", ...POLE_LABELS]);
 /** Canvas colours (the Neo4j Bloom / NVL palette). */
 const LABEL_COLORS: Record<string, string> = {
   Conversation: "#4C8EDA",
-  Message: "#57C7E3",
+  // Neutral, so message structure does not compete with the blue Product.
+  Message: "#B4BAC4",
   Customer: "#C990C0",
   Order: "#FFC454",
   Product: "#68BDF6",
@@ -61,7 +62,7 @@ const LABEL_PALETTES: Record<string, string> = {
   Event: "orange",
   Object: "gray",
   Conversation: "blue",
-  Message: "cyan",
+  Message: "gray",
 };
 
 function hash(text: string): number {

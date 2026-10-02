@@ -106,7 +106,10 @@ function StepView({ step, index }: { step: TraceStep; index: number }) {
             <b>Thought:</b> {step.thought}
           </Text>
         ) : null}
-        {step.observation ? (
+        {/* The chat route records observations from the tool result
+            (auto_observation), so a step with a tool call would show the same
+            JSON twice. The result below is the observation. */}
+        {step.observation && step.tool_calls.length === 0 ? (
           <Text fontSize="xs" color="fg.muted">
             <b>Observation:</b> {preview(step.observation, 240)}
           </Text>

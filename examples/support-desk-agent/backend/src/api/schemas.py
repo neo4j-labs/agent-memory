@@ -50,6 +50,9 @@ class ThreadMessage(BaseModel):
     content: str
     created_at: str | None = None
     trace_id: str | None = None
+    #: User messages: the tool calls of the trace they initiated, so a past
+    #: turn shows the same tool cards it showed while streaming.
+    tool_calls: list[ToolCallView] = Field(default_factory=list)
 
 
 class Thread(BaseModel):
