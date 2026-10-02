@@ -30,18 +30,18 @@ export function nodeColor(node: GraphNode): string {
 }
 
 /**
- * Node diameters. NVL sizes a caption to its node's on-screen radius and drops
- * it when the node renders too small, so entities are large enough to stay
- * labelled once a conversation's graph is fitted to the panel.
+ * Node diameters. NVL sizes a node's caption from its radius, so the text
+ * size comes from `nodeCaptionSize` rather than from big nodes; messages stay
+ * small because they are structure, not facts.
  */
 export function nodeSize(node: GraphNode): number {
   switch (node.kind) {
     case "conversation":
-      return 56;
+      return 42;
     case "message":
-      return 26;
+      return 20;
     default:
-      return 48;
+      return 36;
   }
 }
 
@@ -71,6 +71,18 @@ export function edgeKind(rel: GraphRelationship): EdgeKind {
   if (STRUCTURAL_TYPES.has(rel.type)) return "structure";
   return "related";
 }
+
+/**
+ * NVL's node caption size. Only 1, 2 or 3 are valid: the font is the node's
+ * radius divided by 3.5, 2.75 or 2, and any other value renders no caption.
+ * 2 keeps ids such as `TK-2210` on one line; 3 breaks them across two.
+ */
+export function nodeCaptionSize(node: GraphNode): 1 | 2 | 3 {
+  return node.kind === "message" ? 1 : 2;
+}
+
+/** NVL's relationship caption multiplier (the font is 6 px times this). */
+export const RELATIONSHIP_CAPTION_SIZE = 1.8;
 
 export const EDGE_STYLE: Record<
   EdgeKind,

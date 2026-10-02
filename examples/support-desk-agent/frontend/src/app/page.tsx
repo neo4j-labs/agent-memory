@@ -12,11 +12,17 @@ import { useCallback, useState } from "react";
 import { LabsFooter } from "@/components/branding/LabsFooter";
 import { ChatPanel } from "@/components/chat/ChatPanel";
 import { AppHeader } from "@/components/layout/AppHeader";
+import { ResizeHandle } from "@/components/layout/ResizeHandle";
 import { ThreadSidebar } from "@/components/layout/ThreadSidebar";
 import { SidePanel, type PanelTab } from "@/components/panels/SidePanel";
 import { useApi } from "@/hooks/useApi";
 import { useChat } from "@/hooks/useChat";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
+import {
+  clamp,
+  useResizableWidth,
+  useViewportWidth,
+} from "@/hooks/useResizableWidth";
 import { useThreads } from "@/hooks/useThreads";
 import { API_ORIGIN, api } from "@/lib/api";
 import type { MessageStoredEvent } from "@/lib/types";
@@ -24,6 +30,17 @@ import type { MessageStoredEvent } from "@/lib/types";
 /** Widths at which the side columns stop being drawers. */
 const SIDEBAR_INLINE = "(min-width: 768px)";
 const PANEL_INLINE = "(min-width: 1280px)";
+
+/** Column widths (px). Dragged widths are remembered per browser. */
+const SIDEBAR_WIDTH = {
+  key: "support-desk:sidebar-width",
+  initial: 270,
+  min: 200,
+  max: 440,
+};
+const PANEL_WIDTH = { key: "support-desk:panel-width", min: 360, max: 1100 };
+/** The chat column never gets narrower than this while a column is dragged. */
+const CHAT_MIN_WIDTH = 420;
 
 const bump = (n: number) => n + 1;
 
@@ -36,6 +53,43 @@ export default function Home() {
   const [panelShown, setPanelShown] = useState(true);
   const [sidebarDrawer, setSidebarDrawer] = useState(false);
   const [panelDrawer, setPanelDrawer] = useState(false);
+
+  const viewport = useViewportWidth();
+  const sidebarWidth = useResizableWidth(
+    SIDEBAR_WIDTH.key,
+    SIDEBAR_WIDTH.initial,
+  );
+  const panelWidth = useResizableWidth(
+    PANEL_WIDTH.key,
+    viewport >= 1536 ? 520 : 440,
+  );
+  const sidebarOpen = sidebarInline && sidebarShown;
+  const panelOpen = panelInline && panelShown;
+  // Each column may grow until the chat would fall below CHAT_MIN_WIDTH; a
+  // remembered width that no longer fits the window is clamped, not lost.
+  const sidebarPx = clamp(
+    sidebarWidth.width,
+    SIDEBAR_WIDTH.min,
+    Math.min(
+      SIDEBAR_WIDTH.max,
+      viewport - CHAT_MIN_WIDTH - (panelOpen ? PANEL_WIDTH.min : 0),
+    ),
+  );
+  const panelMax = Math.max(
+    PANEL_WIDTH.min,
+    Math.min(
+      PANEL_WIDTH.max,
+      viewport - CHAT_MIN_WIDTH - (sidebarOpen ? sidebarPx : 0),
+    ),
+  );
+  const panelPx = clamp(panelWidth.width, PANEL_WIDTH.min, panelMax);
+  const sidebarMax = Math.max(
+    SIDEBAR_WIDTH.min,
+    Math.min(
+      SIDEBAR_WIDTH.max,
+      viewport - CHAT_MIN_WIDTH - (panelOpen ? panelPx : 0),
+    ),
+  );
 
   const [tab, setTab] = useState<PanelTab>("memory");
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
@@ -193,16 +247,29 @@ export default function Home() {
       />
 
       <Flex flex="1" minH="0" overflow="hidden">
-        {sidebarInline && sidebarShown ? (
+        {sidebarOpen ? (
           <Box
             as="aside"
-            w="270px"
+            aria-label="Conversations"
+            position="relative"
             flexShrink={0}
             borderRightWidth="1px"
             borderColor="border.subtle"
             bg="bg.panel"
+            style={{ width: sidebarPx }}
           >
             {sidebar}
+            <ResizeHandle
+              edge="end"
+              label="Resize the conversations sidebar"
+              width={sidebarPx}
+              min={SIDEBAR_WIDTH.min}
+              max={sidebarMax}
+              dragging={sidebarWidth.dragging}
+              onPreview={sidebarWidth.preview}
+              onCommit={sidebarWidth.commit}
+              onReset={sidebarWidth.reset}
+            />
           </Box>
         ) : null}
 
@@ -223,17 +290,29 @@ export default function Home() {
           />
         </Flex>
 
-        {panelInline && panelShown ? (
+        {panelOpen ? (
           <Box
             as="aside"
             aria-label="Memory panels"
-            w={{ base: "440px", "2xl": "520px" }}
+            position="relative"
             flexShrink={0}
             borderLeftWidth="1px"
             borderColor="border.subtle"
             bg="bg.panel"
             minH="0"
+            style={{ width: panelPx }}
           >
+            <ResizeHandle
+              edge="start"
+              label="Resize the memory panels"
+              width={panelPx}
+              min={PANEL_WIDTH.min}
+              max={panelMax}
+              dragging={panelWidth.dragging}
+              onPreview={panelWidth.preview}
+              onCommit={panelWidth.commit}
+              onReset={panelWidth.reset}
+            />
             {sidePanel}
           </Box>
         ) : null}

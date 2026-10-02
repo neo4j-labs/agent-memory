@@ -64,10 +64,26 @@ export function SidePanel({
       flex="1"
       h="full"
       minH="0"
+      // The panel's width is user-resizable, so its contents respond to the
+      // panel (a size container), not to the window.
+      css={{ containerType: "inline-size", containerName: "side-panel" }}
     >
       {/* The brand palette is scoped to the tab strip so it does not cascade
           into every neutral badge inside the panels. */}
-      <Tabs.List px="2" flexShrink={0} bg="bg.panel" colorPalette="brand">
+      <Tabs.List
+        px="2"
+        flexShrink={0}
+        bg="bg.panel"
+        colorPalette="brand"
+        css={{
+          // A narrow panel drops the tab icons rather than squeezing them.
+          "@container side-panel (max-width: 430px)": {
+            paddingInline: "0",
+            "& [role=tab]": { paddingInline: "0.5rem" },
+            "& [role=tab] svg": { display: "none" },
+          },
+        }}
+      >
         <Tabs.Trigger value="memory">
           <LuBrain />
           Memory

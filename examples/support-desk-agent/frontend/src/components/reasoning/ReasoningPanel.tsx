@@ -211,7 +211,8 @@ function ToolStatsTable({ refreshKey }: { refreshKey: number }) {
   const rows = [...data].sort((a, b) => b.calls - a.calls);
   return (
     <Table.ScrollArea borderWidth="1px" borderRadius="md">
-      <Table.Root size="sm">
+      {/* Tight cells, so the four columns fit a panel dragged to its minimum. */}
+      <Table.Root size="sm" css={{ "& th, & td": { paddingInline: "0.5rem" } }}>
         <Table.Header>
           <Table.Row>
             <Table.ColumnHeader>Tool</Table.ColumnHeader>
@@ -223,7 +224,12 @@ function ToolStatsTable({ refreshKey }: { refreshKey: number }) {
         <Table.Body>
           {rows.map((row) => (
             <Table.Row key={row.name}>
-              <Table.Cell fontFamily="mono" fontSize="xs">
+              <Table.Cell
+                fontFamily="mono"
+                fontSize="xs"
+                whiteSpace="normal"
+                overflowWrap="anywhere"
+              >
                 {row.name}
               </Table.Cell>
               <Table.Cell textAlign="end">{row.calls}</Table.Cell>

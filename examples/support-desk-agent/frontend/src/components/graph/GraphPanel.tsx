@@ -307,7 +307,7 @@ export function GraphPanel({ threadId, refreshKey }: GraphPanelProps) {
         bg="bg.subtle"
         style={{ touchAction: "none" }}
       >
-        {graph && graph.nodes.length > 0 ? (
+        {data && graph && graph.nodes.length > 0 ? (
           <GraphCanvas
             nodes={graph.nodes}
             relationships={graph.relationships}
@@ -316,7 +316,7 @@ export function GraphPanel({ threadId, refreshKey }: GraphPanelProps) {
             expandingNodeId={expandingNodeId}
             onNodeSelect={setSelectedNodeId}
             onNodeExpand={expand}
-            fitKey={data}
+            base={data}
             fitRequest={fitRequest}
           />
         ) : (

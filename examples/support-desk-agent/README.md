@@ -36,9 +36,11 @@ The agent also *reads* its reasoning memory. Before a non-trivial request it cal
 | Threads sidebar | The eight seeded conversations, marked as seeded, and your chats, each titled after its first message | `GET/POST /api/threads`, `GET /api/threads/{id}` |
 | Chat | Streams the answer; tool calls appear as cards with arguments, result and the entities they touched, labelled by the ontology; each turn links to its trace. Reopening a chat shows the same cards, rebuilt from the recorded trace | `POST /api/chat` (SSE) |
 | Memory | Entities this conversation mentions, grouped by ontology label; pending review pairs with Confirm / Reject | `GET /api/memory/context`, `POST /api/memory/duplicates/review` |
-| Graph | NVL view of the conversation, its messages (`HAS_MESSAGE`, `MENTIONS`), entities, typed `RELATED_TO` edges and pending `SAME_AS` review pairs, or of all seeded data, fitted to the panel once laid out (**Fit to view** re-fits after you expand); double-click to expand | `GET /api/graph`, `GET /api/graph/neighbors/{id}` |
+| Graph | NVL view of the conversation, its messages (`HAS_MESSAGE`, `MENTIONS`), entities, typed `RELATED_TO` edges and pending `SAME_AS` review pairs, or of all seeded data. A d3-force layout tuned per edge kind keeps facts together and lets busy messages fan out; only typed and `SAME_AS` edges are labelled until you select a node. Fitted to the panel (**Fit to view** re-fits); double-click to expand | `GET /api/graph`, `GET /api/graph/neighbors/{id}` |
 | Ontology | Active revision and mode, the revision the app's client resolved, revision history, diff, label counts, rename and migrate, activate an older revision | `GET /api/ontology`, `GET /api/ontology/diff`, `POST /api/ontology/rename`, `POST /api/ontology/activate` |
 | Reasoning | The conversation's traces as a timeline; a trace's steps, tool calls and touched entities; similar past tasks (`exclude_id` leaves the selected trace out); tool statistics | `GET /api/traces`, `GET /api/traces/{id}`, `GET /api/traces/similar`, `GET /api/tool-stats` |
+
+Both side columns are resizable: drag the edge between a column and the chat, or focus that edge and use the arrow keys (Shift for bigger steps, Home and End for the limits); double-click to reset. The chat never gets narrower than 420 px, each width is remembered in your browser, and the graph re-fits itself to the new size.
 
 ### The agent's tools
 
