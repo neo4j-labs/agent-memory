@@ -20,10 +20,10 @@ include::partial$python-tutorial-setup.adoc[]
 
 [source,bash]
 ----
-python -m pip install 'neo4j-agent-memory[gliner]==0.6.0'
+python -m pip install 'neo4j-agent-memory[gliner2]==0.7.0'
 ----
 
-The maintained program `extraction_recipes.py` supplies its own imports, source texts, and event-loop entry point. It downloads the GLiNER model on first inference; allow disk space and network access for the download. These commands do not connect to a database or require an LLM API key.
+The maintained program `extraction_recipes.py` supplies its own imports, source texts, and event-loop entry point. It downloads the GLiNER2.5 checkpoint `fastino/gliner2.5-base-v1` (about 407 MB) on first inference; allow disk space and network access for the download. These commands do not connect to a database or require an LLM API key.
 
 include::partial$python-extraction-recipe-file.adoc[]
 
@@ -31,7 +31,7 @@ include::partial$python-extraction-recipe-file.adoc[]
 
 anchor:_batch_extraction[]anchor:_high_volume_ecommerce_speed_priority[]anchor:_financial_compliance_accuracy_priority[]
 
-The runner selects the `business` GLiNER schema. `ExtractionPipeline(..., fallback_on_error=False)` propagates an extractor error to the batch wrapper; `fail_fast=False` then collects the item error instead of abandoning the remaining inputs. The example starts with one worker and a batch size of two; tune after measuring your workload.
+The runner selects the `business` template with `GLiNER2Extractor.for_schema("business")`. `ExtractionPipeline(..., fallback_on_error=False)` propagates an extractor error to the batch wrapper; `fail_fast=False` then collects the item error instead of abandoning the remaining inputs. The example starts with one worker and a batch size of two; tune after measuring your workload.
 
 The following function is included from the complete program. Run the maintained file with the command below it.
 
@@ -71,13 +71,15 @@ python extraction_recipes.py streaming
 
 `chunk_size=400` and `overlap=40` in this example are *characters*. The default is 4,000 characters with 200 overlap. With `chunk_by_tokens=True`, this implementation uses approximate whitespace token counts, not the exact tokenizer of every model. Choose a size based on the selected model's accepted input, boundary behavior, memory use, latency, and a representative corpus; there is no universal 2,000/10,000/100,000-token cutoff.
 
+GLiNER2.5 also windows any single text longer than its `max_words` limit (default 384 words, counted as the model splits them, with each punctuation mark a word of its own) into windows of that size that overlap by `chunk_overlap` words (default 64). A relation whose endpoints fall in different windows is lost without a warning. When you need relations, keep each chunk below `max_words` and split on paragraph or turn boundaries so both endpoints stay in one chunk.
+
 The API accepts the complete input string and computes its chunks. It is not a file-streaming reader that avoids loading the document text into memory. `extract_streaming` yields `StreamingChunkResult` objects with `.result.entities`; `extract` returns `StreamingExtractionResult`, and `to_extraction_result` converts it to the common result model. Calling extraction twice repeats model work.
 
 == Preserve source indexes and measure quality
 
 anchor:_track_extraction_quality[]
 
-The batch API shown here belongs to `ExtractionPipeline`. `GLiNEREntityExtractor.extract_batch` has a different signature and returns a list of `ExtractionResult`, not the aggregate wrapper. Keep the two APIs distinct.
+The batch API shown here belongs to `ExtractionPipeline`. `GLiNER2Extractor.extract_batch` has a different signature: it takes `batch_size` and `on_progress` but no `max_concurrency` or `fail_fast`, decodes each slice of texts in one forward pass, and returns a list of `ExtractionResult` in input order, not the aggregate wrapper. An error in any slice propagates out of the call. Keep the two APIs distinct.
 
 Before persistence, associate each successful `BatchItemResult.index` with its source document; log errors against that same input identifier. The xref:tutorials/knowledge-graph.adoc[document program] demonstrates message provenance and safe relationship endpoint matching. Measure precision/recall on reviewed samples and inspect chunk boundaries; a 100% completed-item rate is not a claim of extraction accuracy.
 

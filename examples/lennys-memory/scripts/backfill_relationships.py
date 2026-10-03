@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """Backfill RELATED_TO relationships for existing entities in the database.
 
-Runs GLiREL relationship extraction (no LLM) over messages that already have
-extracted entities and writes ``RELATED_TO`` edges between Entity nodes.
+Runs GLiNER2.5 joint entity+relation extraction (no LLM) over messages that
+already have extracted entities and writes ``RELATED_TO`` edges between the
+Entity nodes whose names the decoded relations name.
 
 Useful for databases populated before relationship extraction existed, or when
 ``--no-relations`` was used during the initial load.
 
 Features:
 - Durable progress: every visited message is stamped with
-  ``relations_extracted_at``, so a message GLiREL finds no relations in is still
+  ``relations_extracted_at``, so a message with no decoded relations is still
   "done" and the loop cannot re-process the same batch forever.
 - Resumable (``--status`` shows what is left), ``--dry-run`` previews.
 - Writes through ``long_term.add_relationship()`` -- the public writer.
@@ -52,9 +53,9 @@ from _common import (  # noqa: E402
 
 from neo4j_agent_memory import MemoryClient  # noqa: E402
 from neo4j_agent_memory.extraction.base import ExtractedEntity  # noqa: E402
-from neo4j_agent_memory.extraction.gliner_extractor import (  # noqa: E402
-    GLiRELExtractor,
-    is_glirel_available,
+from neo4j_agent_memory.extraction.gliner2_extractor import (  # noqa: E402
+    GLiNER2Extractor,
+    is_gliner2_available,
 )
 
 load_backend_env()
@@ -87,7 +88,7 @@ LIMIT $limit
 """
 
 # "Pending" is a durable fact on the node, not something inferred from whether
-# relationships happen to exist. A message GLiREL finds nothing in still gets
+# relationships happen to exist. A message with no decoded relations still gets
 # stamped, so it leaves this result set and the next page is genuinely new.
 GET_MESSAGES_PENDING = """
 MATCH (m:Message)-[:MENTIONS]->(e:Entity)
@@ -218,7 +219,7 @@ async def store_relations(
             except Exception as e:
                 logger.debug(f"Failed to create relation by ID: {e}")
         else:
-            # Names that GLiREL returned but that are not in this message's
+            # Names the decoder returned but that are not in this message's
             # entity list (e.g. an alias) -- match by name instead.
             try:
                 await memory.graph.execute_write(
@@ -239,14 +240,14 @@ async def store_relations(
 
 async def process_message(
     memory: MemoryClient,
-    extractor: GLiRELExtractor,
+    extractor: GLiNER2Extractor,
     message: dict,
 ) -> dict:
     """Process a single message to extract and store relationships.
 
     Args:
         memory: MemoryClient instance
-        extractor: GLiREL extractor
+        extractor: GLiNER2.5 extractor
         message: Message dict with content and entities
 
     Returns:
@@ -255,7 +256,8 @@ async def process_message(
     content = message["content"]
     entities_data = message["entities"]
 
-    # Convert to ExtractedEntity objects for GLiREL
+    # The decoder finds its own mentions; the stored entities only supply the
+    # name -> id mapping the writer needs.
     entities = []
     entity_id_map = {}
 
@@ -273,9 +275,9 @@ async def process_message(
     if len(entities) < 2:
         return {"relations_extracted": 0, "relations_stored": 0}
 
-    # Extract relations using GLiREL
+    # GLiNER2.5 decodes entities and relations in one pass.
     try:
-        relations = await extractor.extract_relations(content, entities)
+        relations = (await extractor.extract(content)).relations
     except Exception as e:
         logger.warning(f"Failed to extract relations: {e}")
         return {"relations_extracted": 0, "relations_stored": 0, "error": str(e)}
@@ -305,7 +307,7 @@ async def process_message(
 
 async def backfill_relationships(
     memory: MemoryClient,
-    extractor: GLiRELExtractor,
+    extractor: GLiNER2Extractor,
     batch_size: int = 50,
     skip_processed: bool = True,
     dry_run: bool = False,
@@ -315,7 +317,7 @@ async def backfill_relationships(
 
     Args:
         memory: MemoryClient instance
-        extractor: GLiREL extractor
+        extractor: GLiNER2.5 extractor
         batch_size: Number of messages to process per batch
         skip_processed: Skip messages that already have relationships
         dry_run: If True, only show what would be done
@@ -422,7 +424,7 @@ async def backfill_relationships(
             if limit and processed >= limit:
                 break
 
-        # Stamp the whole batch as visited -- including messages GLiREL found no
+        # Stamp the whole batch as visited -- including messages with no decoded
         # relations in, which is what makes the next page genuinely new.
         if skip_processed:
             await mark_processed(memory, batch_ids)
@@ -559,17 +561,17 @@ Examples:
         "--device",
         default="cpu",
         choices=["cpu", "cuda", "mps"],
-        help="Device to run GLiREL on (default: cpu)",
+        help="Device to run GLiNER2.5 on (default: cpu)",
     )
 
     add_neo4j_args(parser)
     add_model_args(parser)
     args = parser.parse_args()
 
-    # Check GLiREL availability
-    if not args.status and not is_glirel_available():
-        print(color("Error: GLiREL is not installed.", Colors.RED))
-        print("Install it with: pip install glirel")
+    # Check GLiNER2.5 availability
+    if not args.status and not is_gliner2_available():
+        print(color("Error: GLiNER2.5 is not installed.", Colors.RED))
+        print('Install it with: pip install "neo4j-agent-memory[gliner2]"')
         sys.exit(1)
 
     # One settings builder for the whole pipeline (same embedding space).
@@ -587,9 +589,9 @@ Examples:
                 await show_status(memory)
                 return
 
-            # Initialize GLiREL extractor
-            print(color("Loading GLiREL model...", Colors.DIM), end=" ", flush=True)
-            extractor = GLiRELExtractor.for_poleo(
+            # Initialize the GLiNER2.5 extractor
+            print(color("Loading GLiNER2.5 model...", Colors.DIM), end=" ", flush=True)
+            extractor = GLiNER2Extractor.for_poleo(
                 threshold=args.threshold,
                 device=args.device,
             )

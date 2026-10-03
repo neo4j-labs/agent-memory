@@ -7,7 +7,7 @@
 
 We will store a message in AuraDB through the Bolt backend, request entity extraction using an Anthropic adapter, and retrieve context using locally computed sentence-transformer embeddings. We will inspect the actual provider classes and vector dimensions. This exercise builds a memory pipeline; a conversational agent loop is a separate lesson.
 
-This lesson uses `neo4j-agent-memory` 0.6.0 from PyPI and the complete programs on this page in a POSIX shell. Create the local files shown below; the checks below verify the results in your environment.
+This lesson uses `neo4j-agent-memory` 0.7.0 from PyPI and the complete programs on this page in a POSIX shell. Create the local files shown below; the checks below verify the results in your environment.
 
 [[_what_youll_learn]]
 == Before you begin
@@ -28,14 +28,14 @@ include::partial$python-tutorial-setup.adoc[]
 
 [source,bash]
 ----
-python -m pip install 'neo4j-agent-memory[anthropic,sentence-transformers]==0.6.0'
+python -m pip install 'neo4j-agent-memory[anthropic,sentence-transformers]==0.7.0'
 python -c "from importlib.metadata import version; \
 import neo4j_agent_memory; \
-assert version('neo4j-agent-memory') == '0.6.0'; \
-print('SDK 0.6.0 import verified')"
+assert version('neo4j-agent-memory') == '0.7.0'; \
+print('SDK 0.7.0 import verified')"
 ----
 
-Expected: `SDK 0.6.0 import verified`. Keep `agent-memory-tutorials` as your working directory for every command below.
+Expected: `SDK 0.7.0 import verified`. Keep `agent-memory-tutorials` as your working directory for every command below.
 
 === Create and check the local files
 
@@ -124,11 +124,11 @@ Expected milestones:
 . `LLM adapter: AnthropicProvider`.
 . `Embedding adapter: SentenceTransformersProvider; dimensions=384`.
 . `Verified message readback; session=...` with the created session identifier.
-. One or more `Entity candidate:` lines, one for each entity that extraction created or updated during this run, then `Verified: context assembly returned text`.
+. One or more `Entity candidate:` lines, one for each entity this message mentions, then `Verified: context assembly returned text`.
 
 Read the candidate names and context; model output is variable. A schema-valid response can still misidentify the source. Empty results stop the exercise rather than being presented as verified extraction.
 
-The program reads the entities back with an exact graph query rather than `search_entities()`. In 0.6.0, entities created by automatic extraction are stored without an embedding, so a semantic entity search does not return them. Messages are embedded, which the next step checks.
+The program reads the entities back by following the message's `MENTIONS` edges rather than with `search_entities()`. In 0.7.0, entities created by automatic extraction are embedded with the same local model, so a semantic entity search can return them. It can also return similar entities from earlier runs, and ingest-time resolution can link a mention to an entity an earlier run stored, so the edges from this message are the exact record of this run. Messages are embedded too, which the next step checks.
 
 [[_step_6_inspect_the_graph]]
 == 6. Inspect the stored vectors

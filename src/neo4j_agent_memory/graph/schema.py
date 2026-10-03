@@ -27,6 +27,10 @@ logger = logging.getLogger(__name__)
 # Default vector dimensions
 DEFAULT_VECTOR_DIMENSIONS = 1536
 
+#: ``(:SchemaMigration {name})`` marker for the legacy ``RELATED_TO.type``
+#: backfill. Present => the scan has already run against this database.
+RELATION_TYPE_BACKFILL = "relation_type_backfill"
+
 
 def _extract_vector_dimensions(options: object) -> int | None:
     """Pull ``vector.dimensions`` from a ``SHOW VECTOR INDEXES`` options map.
@@ -65,6 +69,7 @@ class SchemaManager:
         client: Neo4jClient,
         *,
         vector_dimensions: int = DEFAULT_VECTOR_DIMENSIONS,
+        backfill_relation_types: bool = True,
     ):
         """
         Initialize schema manager.
@@ -72,14 +77,21 @@ class SchemaManager:
         Args:
             client: Neo4j client
             vector_dimensions: Dimensions for vector indexes
+            backfill_relation_types: Whether :meth:`setup_all` may run the
+                one-shot legacy ``RELATED_TO.relation_type`` -> ``r.type``
+                backfill. Mirrors
+                ``schema_config.backfill_relation_types``; set ``False`` to
+                run the equivalent query yourself in batches.
         """
         self._client = client
         self._vector_dimensions = vector_dimensions
+        self._backfill_relation_types = backfill_relation_types
 
     async def setup_all(self) -> None:
         """Set up all indexes and constraints."""
         await self.setup_constraints()
         await self.setup_indexes()
+        await self._backfill_relation_type()
         await self.setup_vector_indexes()
         await self.setup_point_indexes()
 
@@ -103,6 +115,12 @@ class SchemaManager:
             # Hygiene + privacy (v0.5)
             ("consolidation_run_id", "ConsolidationRun", "id"),
             ("memory_read_audit_id", "MemoryReadAudit", "id"),
+            # Ontology store (v0.7)
+            ("ontology_id", "Ontology", "id"),
+            ("ontology_version_id", "OntologyVersion", "id"),
+            # Backs the MERGE that serialises concurrent
+            # ``ACTIVATE_ONTOLOGY_VERSION`` writers on one node.
+            ("ontology_lock_id", "OntologyLock", "id"),
         ]
 
         for constraint_name, label, property_name in constraints:
@@ -129,6 +147,8 @@ class SchemaManager:
             ("conversation_archived_idx", "Conversation", "archived"),
             ("consolidation_run_kind_idx", "ConsolidationRun", "kind"),
             ("memory_read_audit_kind_idx", "MemoryReadAudit", "kind"),
+            # Ontology store (v0.7) — lookup by name for clone/collision checks
+            ("ontology_name_idx", "Ontology", "name"),
         ]
 
         for index_name, label, property_name in indexes:
@@ -229,6 +249,52 @@ class SchemaManager:
             actual_dimensions=mismatches[0][2],
             index_name=mismatches[0][0],
         )
+
+    async def _backfill_relation_type(self, *, force: bool = False) -> None:
+        """Backfill the canonical ``r.type`` property on legacy RELATED_TO edges.
+
+        Relationships written before the v0.7 provenance rework only carried
+        ``r.relation_type``; every reader (``MERGE_ENTITIES``, entity-graph
+        traversal, graph export) now keys off ``r.type``. The underlying
+        query only matches edges where ``r.type`` is still unset, so it is
+        idempotent — but it is still a write transaction that scans every
+        ``RELATED_TO`` edge, which is not something to pay for on every
+        :meth:`setup_all` (i.e. every ``connect()``).
+
+        So it runs **once per database**: completion is recorded on a
+        ``(:SchemaMigration {name: "relation_type_backfill"})`` marker, and a
+        run that finds the marker already there returns immediately. Set
+        ``schema_config.backfill_relation_types=False`` to skip it entirely
+        and run the equivalent query yourself in batches (e.g. via
+        ``apoc.periodic.iterate``).
+
+        Failures here are logged, not raised — this is a best-effort hygiene
+        step, not a prerequisite for the library to function. The marker is
+        only written once the scan has actually succeeded, so a failed run
+        is retried on the next connection.
+
+        Args:
+            force: Run even when the marker is present. For tests and for
+                re-running the backfill after loading legacy data.
+        """
+        if not self._backfill_relation_types and not force:
+            return
+        try:
+            if not force:
+                done = await self._client.execute_read(
+                    queries.GET_SCHEMA_MIGRATION, {"name": RELATION_TYPE_BACKFILL}
+                )
+                if done:
+                    return
+            rows = await self._client.execute_write(queries.BACKFILL_RELATION_TYPE)
+            updated = rows[0].get("updated") if rows else None
+            if updated:
+                logger.debug("Backfilled r.type on %s legacy RELATED_TO edges.", updated)
+            await self._client.execute_write(
+                queries.RECORD_SCHEMA_MIGRATION, {"name": RELATION_TYPE_BACKFILL}
+            )
+        except Exception:
+            logger.warning("Failed to backfill RELATED_TO.type from relation_type.", exc_info=True)
 
     async def setup_point_indexes(self) -> None:
         """Create point indexes for geospatial queries."""
@@ -345,6 +411,7 @@ class SchemaManager:
             "user_",
             "consolidation_",
             "memory_read_",
+            "ontology_",
         ]
         return any(name.startswith(prefix) for prefix in memory_prefixes)
 

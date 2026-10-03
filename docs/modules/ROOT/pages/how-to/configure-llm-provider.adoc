@@ -17,7 +17,7 @@ CAUTION: Setting only `MemorySettings.llm` does not configure embeddings. `Memor
 
 == Prerequisites
 
-* Install the extras for each selected provider and configure its credentials. Quote package extras in shell commands, for example `pip install 'neo4j-agent-memory[openai]==0.6.0' 'httpx>=0.27'`. Keep `httpx` in the command: release 0.6.0 imports it when connecting over Bolt but declares it only in the `nams` extra.
+* Install the extras for each selected provider and configure its credentials. Quote package extras in shell commands, for example `pip install 'neo4j-agent-memory[openai]==0.7.0'`.
 * Use a dedicated AuraDB instance and export `NEO4J_URI`, `NEO4J_USERNAME`, and `NEO4J_PASSWORD` as shown in xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the Aura connection setup]. These examples use the `bolt` backend; `NEO4J_DATABASE` defaults to `neo4j` when omitted.
 * Model identifiers below illustrate adapter routing. Confirm the chosen model is available to your account before making a live request; successful provider construction does not verify model access.
 * Run snippets containing `await` in an async function. The `provider`, `messages`, and connected `client` in later fragments come from your application's setup.
@@ -56,7 +56,7 @@ settings = MemorySettings(
     },
     llm=None,
     extraction=ExtractionConfig(
-        extractor_type=ExtractorType.GLINER,  # or SPACY / PIPELINE
+        extractor_type=ExtractorType.GLINER,  # GLiNER2.5; or SPACY / PIPELINE
         enable_llm_fallback=False,
     ),
 )
@@ -118,7 +118,7 @@ The `neo4j-agent-memory` command needs the `cli` extra, and `mcp serve` also nee
 
 [source,bash]
 ----
-pip install 'neo4j-agent-memory[cli,mcp,anthropic,openai]==0.6.0' 'httpx>=0.27'
+pip install 'neo4j-agent-memory[cli,mcp,anthropic,openai]==0.7.0'
 ----
 
 [source,bash]

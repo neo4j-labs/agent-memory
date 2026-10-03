@@ -4,9 +4,9 @@
 ![Status: Beta](https://img.shields.io/badge/Status-Beta-6366F1)
 ![Community Supported](https://img.shields.io/badge/Support-Community-6B7280)
 
-> Domain-tuned entity extraction with GLiNER — eight ready-made schemas from POLE+O investigations to medical records, plus a recipe for your own.
+> Domain-tuned entity extraction with GLiNER2.5 — eight ready-made schemas from POLE+O investigations to medical records, plus a recipe for your own.
 
-GLiNER supports **domain schemas**: named sets of entity types, each with a natural-language description the model reads when deciding whether a span matches. Describing `drug` and `symptom` gives the model far more context than a generic `OBJECT` label on the same clinical note, with the same weights — which is typically where the precision gain on domain-specific spans comes from.
+GLiNER2.5 supports **domain schemas**: named sets of entity types, each with a natural-language description the model reads when deciding whether a span matches. Describing `drug` and `symptom` gives the model far more context than a generic `OBJECT` label on the same clinical note, with the same weights — which is typically where the precision gain on domain-specific spans comes from.
 
 > ⚠️ **Neo4j Labs Project**
 >
@@ -37,9 +37,9 @@ domain-schemas/
 
 | Schema | Corpus | Demos it showcases by default |
 |---|---|---|
-| `poleo` | Fraud investigation reports (POLE+O model) | GLiREL relations |
+| `poleo` | Fraud investigation reports (POLE+O model) | Typed relations |
 | `podcast` | Tech podcast transcript excerpts | Native batch inference |
-| `news` | News articles (regulation, climate, disaster) | GLiREL relations |
+| `news` | News articles (regulation, climate, disaster) | Typed relations |
 | `scientific` | ML paper abstracts | Streaming extraction |
 | `business` | Earnings call, market analysis, M&A announcement | — |
 | `entertainment` | Film review, TV preview, awards coverage | — |
@@ -55,19 +55,11 @@ Every demo is a flag, so any schema can exercise any of them: `--relations`, `--
 uv sync --all-extras
 
 # Or with pip
-pip install "neo4j-agent-memory[gliner,sentence-transformers]==0.6.0"
+pip install "neo4j-agent-memory[gliner2,sentence-transformers]==0.7.0"
 ```
 
-- GLiNER downloads its model (~500 MB) on first use; later runs read the cache.
-- **GLiREL is opt-in** and is not in any extra (last released 2025-04). Without it `--relations` prints a skip notice instead of running. GLiREL also needs spaCy's `en_core_web_sm` model for tokenization, `loguru` (imported but not declared), `protobuf`, and `huggingface-hub` below 1.0 (GLiREL 1.2.1 cannot load its model with 1.x):
-
-  ```bash
-  pip install "neo4j-agent-memory[gliner,spacy,sentence-transformers]==0.6.0" \
-    glirel "loguru>=0.7,<1" "huggingface-hub<1" protobuf
-  python -m spacy download en_core_web_sm
-  ```
-
-  With `neo4j-agent-memory` 0.6.0 the GLiREL stage runs but reports `No relationships extracted`: that release passes character offsets where GLiREL expects token positions. For relations on 0.6.0, use the LLM extractor stage instead: `ExtractionConfig(extractor_type=ExtractorType.PIPELINE, enable_llm_fallback=True)`, which needs an OpenAI key.
+- GLiNER2.5 downloads its model (~407 MB for `base`, ~296 MB for `small`) on first use; later runs read the cache.
+- **Relations need no extra model**: they come out of the same pass, for the three templates that declare relationships (`poleo`, `podcast`, `news`). `--relations` on a label-only template says so instead of running.
 - Neo4j is **optional** — extraction runs with no database. Storage needs one (see below) and uses a local sentence-transformers embedder, so no API key is involved either way.
 
 For the optional storage step, follow [Aura setup and cleanup](../AURA_SETUP.md) and export the connection variables. The extraction-only commands below explicitly use `--no-store` so exported credentials do not turn them into writes.
@@ -114,7 +106,7 @@ All sample documents are synthetic: quotes, figures and events are invented
 for demonstration. Nothing here is attributable to a real person or company.
 
   Schema:       medical (3 documents)
-  Model:        gliner-community/gliner_medium-v2.5
+  Model:        fastino/gliner2.5-base-v1
   Threshold:    0.4
   Device:       cpu
   Entity types: ['disease', 'drug', 'symptom', 'procedure', 'body_part', 'gene', 'organism']
@@ -158,10 +150,10 @@ STORING IN NEO4J
 
   backend: bolt (neo4j+s://<instance-id>.databases.neo4j.io)
   Stored 7 entity nodes from 8 extracted mentions (dedup actions: {'none': 7, 'merged': 1})
-  Linked all of them to the :Extractor node 'GLiNEREntityExtractor'
+  Linked all of them to the :Extractor node 'GLiNER2Extractor'
 
   Read-back:
-    entities tagged with GLiNEREntityExtractor: 5 (first 5)
+    entities tagged with GLiNER2Extractor: 5 (first 5)
       - Case No. 3:23-cv-01234-ABC (EVENT:CASE)
       - MEGACORP TECHNOLOGIES, INC. (ORGANIZATION)
     search_entities("licensing breach arbitration"): 3 hits
@@ -186,10 +178,14 @@ extractor = create_gliner_extractor(config)
 The terse alternative, when you do not already have a config object:
 
 ```python
-from neo4j_agent_memory.extraction import GLiNEREntityExtractor
+from neo4j_agent_memory.extraction import GLiNER2Extractor
 
-extractor = GLiNEREntityExtractor.for_schema("podcast", threshold=0.45)
+extractor = GLiNER2Extractor.for_schema("podcast", threshold=0.45)
 ```
+
+Both paths compile the schema into a GLiNER2.5 `JointSchema`: the labels with
+their descriptions as annotation guidelines, plus whatever typed relationships
+the ontology declares.
 
 ### Letting the library do all of it
 
@@ -210,23 +206,28 @@ async with MemoryClient(settings) as client:
     )
 ```
 
-### GLiREL relation extraction (no LLM)
+### Typed relation extraction (no LLM)
+
+Entities and relations come out of the same pass, and the endpoint types the
+ontology declares are enforced during decoding — so a `WORKS_AT` edge can only
+run from a `person` to a `company` if that is what the ontology says:
 
 ```python
-from neo4j_agent_memory.extraction import GLiNERWithRelationsExtractor, is_glirel_available
+from neo4j_agent_memory.extraction import GLiNER2Extractor
 
-if is_glirel_available():
-    extractor = GLiNERWithRelationsExtractor.for_schema("news", entity_threshold=0.4)
-    result = await extractor.extract(text)
-    for rel in result.relations:
-        print(f"{rel.source} -[{rel.relation_type}]-> {rel.target}")
+extractor = GLiNER2Extractor.for_schema("news", threshold=0.4)
+result = await extractor.extract(text)
+for rel in result.relations:
+    # source_id/target_id name the exact mentions, not just the names.
+    print(f"{rel.source} -[{rel.relation_type}]-> {rel.target}")
 ```
 
-With `--store`, the relations found this way are persisted as `(:Entity)-[:RELATED_TO {relation_type}]->(:Entity)` via `long_term.add_relationship`.
+Only the templates that declare relationships (`poleo`, `podcast`, `news`)
+produce edges; the rest are label-only catalogs. With `--store`, the relations
+found this way are persisted as `(:Entity)-[:RELATED_TO {type}]->(:Entity)`
+via `long_term.add_relationship`.
 
-On `neo4j-agent-memory` 0.6.0 this stage finds no relations (see [Prerequisites](#prerequisites)), so `--relations --store` adds no `RELATED_TO` edges. Use the LLM extractor stage for relations on that release.
-
-### Batch extraction (native GLiNER inference)
+### Batch extraction (native GLiNER2.5 inference)
 
 ```python
 results = await extractor.extract_batch(
@@ -235,7 +236,7 @@ results = await extractor.extract_batch(
 print(f"Total entities: {sum(r.entity_count for r in results)}")
 ```
 
-`GLiNEREntityExtractor.extract_batch` returns a plain `list[ExtractionResult]`, one per input — the GPU-efficient path. The multi-stage `ExtractionPipeline.extract_batch` returns a `BatchExtractionResult` with success/failure bookkeeping instead; they are not interchangeable.
+`GLiNER2Extractor.extract_batch` returns a plain `list[ExtractionResult]`, one per input — the GPU-efficient path. The multi-stage `ExtractionPipeline.extract_batch` returns a `BatchExtractionResult` with success/failure bookkeeping instead; they are not interchangeable.
 
 ### Streaming extraction (long documents)
 
@@ -263,7 +264,7 @@ settings = MemorySettings(
 )
 ```
 
-Then, per run: `register_extractor` once, `add_entity` per entity, `link_entity_to_extractor` for provenance, `add_relationship` for the relations GLiREL found, and a read-back through `get_entities_by_extractor` / `search_entities` / `get_related_entities`.
+Then, per run: `register_extractor` once, `add_entity` per entity, `link_entity_to_extractor` for provenance, `add_relationship` for the decoded relations, and a read-back through `get_entities_by_extractor` / `search_entities` / `get_related_entities`.
 
 For OpenAI embeddings instead, set `embedding="openai/text-embedding-3-small"` and export `OPENAI_API_KEY`. To run with no LLM anywhere in the stack, see [`examples/no_llm/`](../no_llm/).
 
@@ -287,7 +288,7 @@ For OpenAI embeddings instead, set `embedding="openai/text-embedding-3-small"` a
 ## Creating custom schemas
 
 ```python
-from neo4j_agent_memory.extraction import DomainSchema, GLiNEREntityExtractor
+from neo4j_agent_memory.extraction import DomainSchema, GLiNER2Extractor
 
 real_estate_schema = DomainSchema(
     name="real_estate",
@@ -302,7 +303,7 @@ real_estate_schema = DomainSchema(
     },
 )
 
-extractor = GLiNEREntityExtractor(schema=real_estate_schema, threshold=0.5)
+extractor = GLiNER2Extractor(ontology=real_estate_schema, threshold=0.5)
 result = await extractor.extract(property_listing_text)
 ```
 
@@ -330,27 +331,29 @@ The schema name must be one of `list_schemas()`, or a custom `DomainSchema` regi
 
 1. **Adjust the threshold.** Lower (0.3–0.4) extracts more spans with more noise; higher (0.6–0.7) is more precise and misses more. Each corpus ships a tuned default; override with `--threshold`.
 2. **Use a GPU.** `--device cuda` or `--device mps`.
-3. **Batch.** `--batch` uses GLiNER's native batch inference, which matters most on GPU.
+3. **Batch.** `--batch` uses GLiNER2.5's native batch inference, which matters most on GPU.
 4. **Stream long documents.** `--streaming` chunks the input; use it past ~100K tokens.
 5. **Filter.** The runner always calls `result.filter_invalid_entities()` to drop stopwords, bare numbers and single characters.
 
 ## Troubleshooting
 
-### GLiNER not installed
+### GLiNER2.5 not installed
 
 ```
-  ERROR: GLiNER is not installed.
+  ERROR: GLiNER2.5 is not installed.
 
-  To run this example, install GLiNER:
+  To run this example, install it:
     uv sync --all-extras
-    # or: pip install "neo4j-agent-memory[gliner]"
+    # or: pip install "neo4j-agent-memory[gliner2]"
+
+  The GLiNER2.5 model (~407 MB) downloads on first use.
 ```
 
-Install it and re-run. The first run downloads the model (~500 MB).
+Install it and re-run. The first run downloads the model (~407 MB).
 
-### GLiREL skipped
+### No relations printed
 
-`--relations` prints `GLiREL is not installed, so this demo is skipped.` — install GLiREL and its undeclared dependencies with the command under [Prerequisites](#prerequisites). It is not part of `--all-extras`, and `pip install glirel` alone is not enough: without `loguru` the package fails to import and the demo is skipped.
+`--relations` prints `declares no relationships` for the five label-only templates — only `poleo`, `podcast` and `news` declare typed relationships. When a template does declare them and nothing comes back, lower `--threshold`: relation scores sit well below entity scores.
 
 ### Neo4j authentication fails
 
@@ -375,6 +378,4 @@ Verify the generated Aura URI, username and password from [the shared setup](../
 
 ---
 
-**Historical verification report — 2026-09-10.** The following records a prior checkout/test report. Its development-version labels, passing counts, and release-availability statements are historical, not evidence of current package compatibility.
-
-> _Verified against `neo4j-agent-memory` v0.5.0 with gliner 0.2.x on 2026-09-10: all eight schemas run end to end on CPU, and `--store` was exercised against Neo4j 5.26 (GLiREL is not installed in the repo environment, so `--relations` was verified through its skip path and with a stubbed extractor in `tests/examples/test_domain_schemas.py`)._
+_Verified against `neo4j-agent-memory` v0.7.0 with gliner2 2.0.0 on 2026-09-17: the eight schemas run end to end on CPU, `--relations` was exercised against `fastino/gliner2.5-small-v1` (typed edges on `podcast`, the no-relationships notice on the label-only templates), and `--store` was exercised against Neo4j 5.26._

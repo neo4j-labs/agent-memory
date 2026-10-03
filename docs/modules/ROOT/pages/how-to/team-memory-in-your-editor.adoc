@@ -25,7 +25,7 @@ also contains an extended editor-restart walkthrough. This page displays all fil
 
 == Prerequisites
 
-* Python 3.10+ and a POSIX shell; the setup below installs the published Python 0.6.0 package.
+* Python 3.10+ and a POSIX shell; the setup below installs the published Python 0.7.0 package.
 * An intended shared workspace, a workspace administrator for key creation, and a separate data-plane key for each editor that uses key authentication.
 * An installed MCP host. Its configuration and OAuth support must be checked against the installed version.
 * Agreement about what the team will share; user metadata and session naming do not enforce all memory search boundaries.
@@ -36,7 +36,7 @@ include::partial$python-tutorial-setup.adoc[]
 
 [source,bash]
 ----
-python -m pip install 'neo4j-agent-memory[nams,mcp]==0.6.0'
+python -m pip install 'neo4j-agent-memory[nams,mcp]==0.7.0'
 ----
 
 Keep `agent-memory-tutorials/` as the working directory. Create a subdirectory
@@ -191,8 +191,7 @@ This is the project-scoped file that teams commit, so it holds variable referenc
     "team-memory-self-hosted": {
       "type": "stdio",
       "command": "uvx",
-      "args": ["--from", "neo4j-agent-memory[mcp,openai]==0.6.0", "--with", "httpx>=0.27",
-               "neo4j-agent-memory",
+      "args": ["--from", "neo4j-agent-memory[mcp,openai]==0.7.0", "neo4j-agent-memory",
                "mcp", "serve", "--backend", "bolt", "--transport", "stdio",
                "--profile", "core", "--session-strategy", "per_day"],
       "env": {
@@ -210,8 +209,6 @@ This is the project-scoped file that teams commit, so it holds variable referenc
 
 The hosted entry carries no credential: the host runs the OAuth ceremony,
 including a workspace-selector step.
-In the self-hosted entry, `--with httpx>=0.27` adds `httpx`, which release
-0.6.0 imports when connecting over Bolt but declares only in the `nams` extra.
 
 === Claude Desktop — `claude_desktop_config.json`
 

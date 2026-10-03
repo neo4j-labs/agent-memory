@@ -11,7 +11,7 @@ Neo4j Agent Memory can store memory through a Python client connected directly t
 
 anchor:_when_to_choose_which[]anchor:_choose_bolt_when[]anchor:_choose_nams_when[]
 
-Choose *Bolt* when you operate Neo4j, need custom write Cypher, want to configure local extraction/embedding providers, or use preferences, facts, graph adoption, geospatial queries, buffering, or consolidation. Database access, backups, indexes and upgrades remain your responsibility. An air-gapped deployment also needs locally available models and dependencies; selecting Bolt alone does not disable outbound provider requests.
+Choose *Bolt* when you operate Neo4j, need custom write Cypher, want to configure local extraction/embedding providers and drive them from your own ontology, or use preferences, facts, graph adoption, geospatial queries, buffering, or consolidation. Database access, backups, indexes and upgrades remain your responsibility. An air-gapped deployment also needs locally available models and dependencies; selecting Bolt alone does not disable outbound provider requests.
 
 Choose *NAMS* when a managed workspace and REST API suit the application. The service manages the storage and extraction pipeline. Applications use supported conversation, entity, graph, reasoning and ontology operations; they do not gain every Bolt method by changing the connection settings. The TypeScript SDK's normal transport is NAMS REST.
 
@@ -24,6 +24,8 @@ One client has one backend. An application can create separate clients for separ
 The canonical xref:reference/backend-capabilities.adoc[backend capabilities reference] lists language, operation, return-shape and scope differences. A method can satisfy a Python protocol or appear in a TypeScript compatibility interface while raising `NotSupportedError` on the selected backend. A Bolt-only Python method can also be absent from the NAMS store, so calling it raises `AttributeError`, and some Bolt options are silently dropped. Interface similarity is useful for adapters; it is not proof of behavioral portability.
 
 Preferences, facts, client-created relationships and extraction-pipeline configuration are Bolt capabilities. Hosted applications can retrieve information from messages and extracted entities instead, but should not describe that as an equivalent preference/fact API. The hosted Cypher endpoint is read-only.
+
+Ontology management is the exception that runs on both. Since 0.7.0, `client.ontology` on Bolt stores versioned ontologies as `:Ontology` / `:OntologyVersion` nodes in your database, and the document the client resolves at connect time drives local extraction, relation validation and entity resolution; `client.ontology_document` and `client.validation_mode` report it. On NAMS the same methods manage the workspace's ontology, which governs server-side extraction. The mechanics differ: a Bolt client converts imports locally, runs `migrate` synchronously, and picks up a newly activated version at its next connection. See xref:explanation/ontologies.adoc#bolt-vs-nams[Bolt and NAMS mechanics].
 
 [#tenancy]
 == Sharing and isolation
@@ -40,7 +42,7 @@ anchor:_operational_model[]
 image::diagrams/bolt-vs-nams-data-flow.svg["Two stacked panels. Bolt: your application drives client-side embedding and entity-extraction providers and writes through the Bolt driver straight to a Neo4j instance you operate. NAMS: your application calls the hosted workspace over HTTPS; the workspace triggers background, server-side extraction that reaches a not-yet-ready state until the readiness API reports it complete",width=100%,link=self]
 
 [#_bolt_you_own_the_database]
-The Bolt client opens a driver connection pool and issues Cypher. Client-side providers can generate embeddings and extracted entities, while Neo4j stores memory and indexes. The chosen provider determines whether model processing is local or remote.
+The Bolt client opens a driver connection pool and issues Cypher. Client-side providers can generate embeddings and extracted entities, while Neo4j stores memory and indexes. The chosen provider determines whether model processing is local or remote. Extraction and, since 0.7.0, resolution of the extracted mentions against stored entities run in the client within the `add_message` call, so there is no separate extraction-readiness state to wait for.
 
 [#_nams_hosted_rest_api]
 A NAMS client calls the service over HTTPS. Writes and background extraction have different completion points: a stored message can be readable before its extracted graph is ready. A workflow that needs extracted entities must use the supported readiness/status APIs with bounded waiting.

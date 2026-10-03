@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "neo4j-agent-memory",
   "display_name": "Neo4j Agent Memory",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Persistent graph memory for Claude with three memory types (short-term, long-term, reasoning), POLE+O entity extraction, and knowledge graph backed by Neo4j.",
   "author": {
     "name": "Neo4j Labs",
@@ -28,7 +28,7 @@
     "mcp_config": {
       "command": "uvx",
       "args": [
-        "neo4j-agent-memory[mcp,openai]==0.6.0",
+        "neo4j-agent-memory[mcp,openai]==0.7.0",
         "mcp",
         "serve",
         "--backend",

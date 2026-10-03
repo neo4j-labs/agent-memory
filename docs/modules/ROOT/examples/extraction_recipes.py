@@ -3,9 +3,11 @@
 import argparse
 import asyncio
 
-from neo4j_agent_memory.extraction.gliner_extractor import DomainSchema, GLiNEREntityExtractor
+from neo4j_agent_memory.extraction.domain_schemas import DomainSchema, get_schema
+from neo4j_agent_memory.extraction.gliner2_extractor import GLiNER2Extractor
 from neo4j_agent_memory.extraction.pipeline import ExtractionPipeline, MergeStrategy
 from neo4j_agent_memory.extraction.streaming import StreamingExtractor
+from neo4j_agent_memory.ontology import RelationshipDef
 
 TEXTS = [
     "Maya Chen works at Northstar Robotics in Denver.",
@@ -19,8 +21,8 @@ def custom_extractor():
         name="support_catalog",
         entity_types={"customer": "A named customer", "product": "A named purchased item"},
     )
-    return GLiNEREntityExtractor(
-        schema=schema,
+    return GLiNER2Extractor(
+        ontology=schema,
         label_mapping={"customer": ("PERSON", None), "product": ("OBJECT", "PRODUCT")},
         threshold=0.5,
     )
@@ -41,6 +43,41 @@ async def extract(selected, text):
 
 
 # end::extract[]
+
+
+# tag::relations[]
+def relation_extractor():
+    # The business catalog declares labels only; attach typed relationships.
+    ontology = get_schema("business").to_ontology(
+        relationships=[
+            RelationshipDef(
+                type="EMPLOYED_BY",
+                source="person",
+                target="company",
+                description="The person works for or has joined this company",
+            ),
+            RelationshipDef(
+                type="LOCATED_IN",
+                source="company",
+                target="location",
+                description="The company is based or operates in this place",
+            ),
+        ]
+    )
+    return GLiNER2Extractor.for_ontology(ontology, threshold=0.5)
+
+
+async def relations(selected, text):
+    result = await selected.extract(text, extract_preferences=False)
+    if not result.relations:
+        raise RuntimeError("No relations; check the declared relationships and thresholds")
+    for relation in result.relations:
+        print(relation.source, relation.relation_type, relation.target, relation.confidence)
+    print(f"Verified: {len(result.relations)} candidate relations returned; inspect them")
+    return result
+
+
+# end::relations[]
 
 
 # tag::batch[]
@@ -97,12 +134,14 @@ async def streaming(selected, text):
 
 async def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["extract", "schema", "batch", "streaming"])
+    parser.add_argument("command", choices=["extract", "schema", "relations", "batch", "streaming"])
     args = parser.parse_args()
     if args.command == "schema":
         await extract(custom_extractor(), "Maya Chen bought a Trail Starter shoe.")
+    elif args.command == "relations":
+        await relations(relation_extractor(), TEXTS[0])
     else:
-        selected = GLiNEREntityExtractor.for_schema("business")
+        selected = GLiNER2Extractor.for_schema("business")
         if args.command == "extract":
             await extract(selected, TEXTS[0])
         elif args.command == "batch":

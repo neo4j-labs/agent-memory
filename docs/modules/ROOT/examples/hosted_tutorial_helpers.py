@@ -64,9 +64,11 @@ def ontology_binding(active):
 async def read_active_binding(http):
     """Read a restorable binding directly from the public REST response.
 
-    SDK 0.6.0 get_active() infers version metadata from the latest revision.
-    This tutorial reader uses the actual binding returned by /ontologies/active
-    and the released public document model; it never substitutes a list lookup.
+    SDK 0.7.0 get_active() reports the bound version but returns None metadata
+    when a response has no version record (releases before 0.7.0 inferred it
+    from the latest revision). This reader requires the actual binding returned
+    by /ontologies/active, validated against the released public document
+    model, and fails closed rather than substituting a list lookup.
     """
     from neo4j_agent_memory.nams import OntologyDocument
 

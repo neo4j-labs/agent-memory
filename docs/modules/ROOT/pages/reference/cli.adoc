@@ -11,7 +11,7 @@ Install the `cli` extra and PyYAML. The `cli` extra does not include PyYAML, but
 
 [source,bash]
 ----
-pip install 'neo4j-agent-memory[cli]==0.6.0' pyyaml
+pip install 'neo4j-agent-memory[cli]==0.7.0' pyyaml
 ----
 
 Add the extras for the commands you run:
@@ -19,25 +19,26 @@ Add the extras for the commands you run:
 [cols="2,3",options="header"]
 |===
 | Command | Extras to add
-| `extract` (default `--extractor gliner`) | `gliner`. The GLiNER model downloads on first use.
+| `extract` (default `--extractor gliner`) | `gliner2`. The GLiNER2.5 checkpoint downloads on first use.
 | `extract --extractor llm` | `openai`, with `OPENAI_API_KEY` set.
-| `extract --extractor hybrid` | `gliner` and `openai`.
-| `mcp serve` | `mcp`. On bolt, also add the provider extras your `--llm` and `--embedding` strings need; without those flags the server uses the default OpenAI embedder, so add `openai` and set `OPENAI_API_KEY`. Release 0.6.0 also imports `httpx` when connecting over Bolt but declares it only in the `nams` extra, so install `httpx>=0.27` alongside. On NAMS, add the `nams` extra instead; no provider extras are needed.
-| `schemas`, `stats` | None.
+| `extract --extractor hybrid` | `gliner2` and `openai`.
+| `mcp serve` | `mcp`. On bolt, also add the provider extras your `--llm` and `--embedding` strings need; without those flags the server uses the default OpenAI embedder, so add `openai` and set `OPENAI_API_KEY`. On NAMS, add the `nams` extra instead; no provider extras are needed.
+| `ontology compile` | `gliner2`.
+| `schemas`, `stats`, `ontology validate` | None.
 |===
 
 For example, to run every `extract` example on this page:
 
 [source,bash]
 ----
-pip install 'neo4j-agent-memory[cli,gliner,openai]==0.6.0' pyyaml
+pip install 'neo4j-agent-memory[cli,gliner2,openai]==0.7.0' pyyaml
 ----
 
 To run the MCP server against NAMS:
 
 [source,bash]
 ----
-pip install 'neo4j-agent-memory[cli,mcp,nams]==0.6.0' pyyaml
+pip install 'neo4j-agent-memory[cli,mcp,nams]==0.7.0' pyyaml
 ----
 
 == Commands
@@ -69,15 +70,19 @@ neo4j-agent-memory extract [OPTIONS] [TEXT]
 | Option | Default | Description
 | `-f`, `--file` | `unset` | Read text from a file instead of argument.
 | `--format`, `-o` | `table` | Output format (default: table). Choices: `table`, `json`, `jsonl`.
-| `--schema` | `unset` | Path to a schema YAML file.
+| `--schema` | `unset` | Path to an EntitySchemaConfig YAML file.
+| `--ontology` | `unset` | Path to an ontology document (JSON or YAML) to extract against.
+| `--gliner-schema` | `unset` | Built-in domain schema for the GLiNER2.5 extractor. Choices: `poleo`, `podcast`, `news`, `scientific`, `business`, `entertainment`, `medical`, `legal`.
 | `--entity-types`, `-e` | `unset` | Entity types to extract (can be specified multiple times).
-| `--extractor` | `gliner` | Extractor to use (default: gliner). Choices: `gliner`, `llm`, `hybrid`.
-| `--model` | `unset` | Model name for GLiNER or LLM extractor.
+| `--extractor` | `gliner` | Extractor to use (default: gliner, i.e. GLiNER2.5). Choices: `gliner`, `llm`, `hybrid`.
+| `--model` | `unset` | Model name for the GLiNER2.5 or LLM extractor (GLiNER2.5 default: `fastino/gliner2.5-base-v1`). With `hybrid`, it sets the LLM model.
 | `--relations`, `--no-relations` | `true` | Extract relations between entities.
-| `--preferences`, `--no-preferences` | `false` | Extract preferences/sentiments.
-| `--confidence-threshold` | `0.5` | Minimum confidence threshold (default: 0.5). Valid range: 0–1. Applied to GLiNER; not a general post-filter for every extractor.
+| `--preferences`, `--no-preferences` | `false` | Extract preferences/sentiments (LLM extractor only).
+| `--confidence-threshold` | `0.5` | Minimum confidence threshold (default: 0.5). Valid range: 0–1. Sets the GLiNER2.5 entity threshold; with `hybrid` it also filters the merged result. Not applied to `--extractor llm` output.
 | `--quiet`, `-q` | `false` | Suppress progress output.
 |===
+
+`--ontology`, `--schema`, and `--entity-types` are alternatives for the same slot and are consulted in that order. `--gliner-schema` applies only with `--extractor gliner`, where it replaces any of the three.
 
 ==== Examples
 
@@ -103,11 +108,20 @@ neo4j-agent-memory extract --format json "..."
 
 # Use a YAML schema file (see the schema example below)
 neo4j-agent-memory extract --schema custom_schema.yaml "..."
+
+# Use a built-in domain schema
+neo4j-agent-memory extract --gliner-schema podcast "..."
+
+# Use your own ontology (entity labels and typed relationships)
+neo4j-agent-memory extract --ontology my-ontology.yaml "..."
+
+# Entities only, on the small checkpoint
+neo4j-agent-memory extract --model fastino/gliner2.5-small-v1 --no-relations "..."
 ----
 
 ==== Schema input and extractor capabilities
 
-`--schema` requires an existing EntitySchemaConfig YAML file, not a built-in GLiNER schema name. For example, save this as `custom_schema.yaml` and run `schemas validate custom_schema.yaml` before extraction:
+`--schema` requires an existing EntitySchemaConfig YAML file, not a built-in schema name; pass a built-in name with `--gliner-schema` and an OntologyDocument with `--ontology`. For example, save this as `custom_schema.yaml` and run `schemas validate custom_schema.yaml` before extraction:
 
 [source,yaml]
 ----
@@ -120,11 +134,11 @@ entity_types:
     description: A company or organization
 ----
 
-The CLI passes the schema's entity type names to ExtractorBuilder. This does not apply the full schema's relationship/property validation. `--relations` and `--preferences` are extraction requests: GLiNER alone does not produce either; select an LLM/hybrid pipeline for those outputs. `--confidence-threshold` configures the builder's GLiNER threshold and does not post-filter all LLM results.
+The CLI converts the schema to an ontology for ExtractorBuilder: its entity types and subtypes become GLiNER2.5 labels, its relation types between declared entity types become typed relationships, and the type names become the LLM extractor's type list. `--entity-types` builds an EntitySchemaConfig from bare names the same way. An EntitySchemaConfig that omits `relation_types` carries the POLE+O relation types by default; set `relation_types: []` for entities only. GLiNER2.5 decodes relations in the same pass as entities, but only for relationship types the ontology declares. Of the built-in templates, `poleo`, `podcast`, and `news` declare relationships; the others are entity-only. `--preferences` needs `--extractor llm` or `hybrid`. `--confidence-threshold` sets the GLiNER2.5 entity threshold and, for `hybrid`, filters the merged result; it does not post-filter `--extractor llm` output.
 
 ==== Output formats
 
-The table renders entity columns Type, Name, Confidence, and Attributes, plus relation/preference tables when present. Exact model results and confidence scores vary.
+The table renders entity columns Type, Name, Confidence, and Attributes, plus relation/preference tables when present. Exact model results and confidence scores vary; GLiNER2.5 entities carry the decoded label in `attributes` (for example `{"gliner2_label": "person"}`).
 
 The JSON serializer returns entities, relations, preferences, and source_text. Example shape:
 
@@ -151,7 +165,7 @@ Relation/preference lines use `type: "relation"` / `type: "preference"` with the
 
 === schemas
 
-Manage EntitySchemaConfig documents stored in Neo4j (bolt only). These commands do not list the built-in local GLiNER schemas or hosted ontologies. Configure the Aura environment variables in <<_environment_variables,Environment variables>> before running the connection examples.
+Manage EntitySchemaConfig documents stored in Neo4j (bolt only). These commands do not list the built-in domain schemas or stored ontologies; manage ontologies with `client.ontology` and check ontology files with <<_ontology,ontology>>. Configure the Aura environment variables in <<_environment_variables,Environment variables>> before running the connection examples.
 
 ==== schemas list
 
@@ -213,6 +227,51 @@ neo4j-agent-memory schemas show medical --format yaml
 
 # Validate schema file
 neo4j-agent-memory schemas validate custom_schema.yaml
+----
+
+[#_ontology]
+=== ontology
+
+Validate and compile ontology documents locally; neither command connects to Neo4j. Ontology management (create, update, activate, diff) is on the Python API through `client.ontology`; see xref:reference/ontology-api.adoc[Ontology API].
+
+[#_ontology_validate]
+==== ontology validate
+
+[source,bash]
+----
+neo4j-agent-memory ontology validate FILE
+----
+
+Loads `FILE` (`.json`/`.yaml`) through `load_ontology`, so an EntitySchemaConfig file is accepted and converted, then reports every problem `OntologyDocument.validate_structure()` finds, such as duplicate labels, relationship endpoints that name no declared label, bad inverse pairs, and `pole_type` values outside POLE+O. Exits `1` on any problem. Output for a valid document, here the built-in POLE+O ontology:
+
+[source]
+----
+✓ Ontology 'poleo' is valid.
+  Entity types: Person, Organization, Location, Event, Object
+  Relationship types: KNOWS, ALIAS_OF, MEMBER_OF, EMPLOYED_BY, ...
+  Relationship patterns: 69
+----
+
+[#_ontology_compile]
+==== ontology compile
+
+[source,bash]
+----
+neo4j-agent-memory ontology compile FILE
+----
+
+Compiles the ontology into the GLiNER2.5 JointIE schema and prints it as JSON, showing the entity labels and typed relationships the model will decode against. Requires the `gliner2` extra; without it the command exits `1` with an install hint.
+
+[#_ontology_examples]
+==== Examples
+
+[source,bash]
+----
+# Check an ontology before loading it
+neo4j-agent-memory ontology validate ontology.yaml
+
+# See what the model will decode
+neo4j-agent-memory ontology compile ontology.yaml
 ----
 
 === stats
@@ -357,4 +416,5 @@ export NAM_EMBEDDING=BAAI/bge-small-en-v1.5
 
 * xref:how-to/entity-extraction.adoc[Extract and inspect entity candidates] — Pipeline configuration.
 * xref:reference/schemas.adoc[Domain schemas reference] — Available schemas.
+* xref:reference/ontology-api.adoc[Ontology API reference] — Ontology lifecycle on `client.ontology`.
 * xref:reference/extractors.adoc[Extractor classes reference] — Python API.

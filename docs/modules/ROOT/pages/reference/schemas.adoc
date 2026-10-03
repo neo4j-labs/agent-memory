@@ -7,16 +7,19 @@ Reference for built-in domain schemas and custom schema creation. This page is a
 
 == Overview
 
-Domain schemas define entity types with descriptions that improve GLiNER zero-shot extraction accuracy. Each schema supplies domain-specific labels and descriptions; assess extraction quality on your own sample data.
+Domain schemas define entity types with descriptions that improve GLiNER2.5 zero-shot extraction accuracy: the model reads each description as an annotation guideline. Each schema supplies domain-specific labels and descriptions; assess extraction quality on your own sample data.
+
+A `DomainSchema` is a catalog: labels with descriptions and no endpoint typing. `DomainSchema.to_ontology()` converts one into an `OntologyDocument`, which is what the extractor compiles. Each built-in catalog has a matching ontology template of the same name (`neo4j_agent_memory.ontology.get_template`), and `GLiNER2Extractor.for_schema` and `ExtractorBuilder.with_gliner_schema` resolve names through it, so the `poleo`, `podcast` and `news` templates bring typed relationships as well as labels.
 
 == On this subsystem
 
-* anchor:_available_schemas[]anchor:_poleo[]anchor:_podcast[]anchor:_news[]anchor:_scientific[]anchor:_business[]anchor:_entertainment[]anchor:_medical[]anchor:_legal[]anchor:_using_schemas[]anchor:_with_glinerentityextractor[]anchor:_with_extractorbuilder[]anchor:_listing_available_schemas[]xref:reference/schemas-domains.adoc[Built-in domain schemas] — the eight registered GLiNER schemas (`poleo`, `podcast`, `news`, `scientific`, `business`, `entertainment`, `medical`, `legal`) and how to select one with `GLiNEREntityExtractor.for_schema`, `ExtractorBuilder.with_gliner_schema`, or `list_schemas`/`get_schema`.
-* anchor:_creating_custom_schemas[]anchor:_domainschema_class[]anchor:_schema_persistence[]anchor:_entity_type_mapping[]anchor:_schema_models[]anchor:_domainschema[]anchor:_entitytypeconfig[]anchor:_relationtypeconfig[]anchor:_entityschemaconfig[]anchor:_schema_description_guidance[]anchor:_schema_best_practices[]xref:reference/schemas-custom.adoc[Custom schemas and persistence] — `DomainSchema`, the Bolt-only `SchemaManager` overview, the GLiNER-to-POLE+O entity type mapping, and the `DomainSchema`/`EntityTypeConfig`/`RelationTypeConfig`/`EntitySchemaConfig` models.
+* anchor:_available_schemas[]anchor:_poleo[]anchor:_podcast[]anchor:_news[]anchor:_scientific[]anchor:_business[]anchor:_entertainment[]anchor:_medical[]anchor:_legal[]anchor:_using_schemas[]anchor:_with_glinerentityextractor[]anchor:_with_extractorbuilder[]anchor:_listing_available_schemas[]xref:reference/schemas-domains.adoc[Built-in domain schemas] — the eight built-in catalogs (`poleo`, `podcast`, `news`, `scientific`, `business`, `entertainment`, `medical`, `legal`), the relationships their ontology templates declare, and how to select one with `GLiNER2Extractor.for_schema`, `ExtractorBuilder.with_gliner_schema`, or `list_schemas`/`get_schema`.
+* anchor:_creating_custom_schemas[]anchor:_domainschema_class[]anchor:_schema_persistence[]anchor:_entity_type_mapping[]anchor:_schema_models[]anchor:_domainschema[]anchor:_entitytypeconfig[]anchor:_relationtypeconfig[]anchor:_entityschemaconfig[]anchor:_schema_description_guidance[]anchor:_schema_best_practices[]xref:reference/schemas-custom.adoc[Custom schemas and persistence] — custom `DomainSchema` and `OntologyDocument` examples, the Bolt-only `SchemaManager` overview, the label-to-POLE+O entity type mapping, and the `DomainSchema`/`EntityTypeConfig`/`RelationTypeConfig`/`EntitySchemaConfig` models.
 * anchor:_schemamanager_persistence_api_bolt[]anchor:_save_schema[]anchor:_load_schema[]anchor:_load_schema_version[]anchor:_get_stored_schema[]anchor:_get_stored_schema_by_id[]anchor:_list_schemas[]anchor:_list_schema_versions[]anchor:_set_active_version[]anchor:_schema_exists[]anchor:_delete_schema[]anchor:_delete_all_versions[]anchor:_ensure_schema_index[]anchor:_storedschema[]anchor:_schemalistitem[]xref:reference/schemas-api.adoc[SchemaManager persistence API] — `save_schema`, `load_schema`, `list_schemas`, `set_active_version`, `delete_schema`, and the rest of the `neo4j_agent_memory.schema.SchemaManager` CRUD surface.
 
 == See also
 
 * xref:reference/extractors.adoc[Extractor classes reference]
+* xref:reference/ontology-api.adoc[Ontology API reference]
 * xref:how-to/entity-extraction.adoc[Configure entity extraction]
 * xref:explanation/poleo-model.adoc[POLE+O model]

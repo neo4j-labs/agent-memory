@@ -1,7 +1,7 @@
 """Smoke tests for the ontology-lifecycle example.
 
-The ontology surface (``import_`` / ``diff`` / ``migrate`` / ``get_migration``)
-is hosted-only and — before this example — was exercised by nothing outside
+The NAMS ontology surface (``import_`` / ``diff`` / ``migrate`` /
+``get_migration``) was, before this example, exercised by nothing outside
 ``tests/unit/nams``. So the whole script body runs here against a ``respx``-mocked
 NAMS: no API key, no network, no Neo4j.
 
@@ -408,7 +408,7 @@ class TestOntologyLifecycleStructure:
 
     def test_requirements_pin_the_library_with_the_nams_extra(self):
         pin = assert_library_pin(EXAMPLE_DIR / "requirements.txt")
-        assert "nams" in pin.extras, "the ontology surface is hosted-only"
+        assert "nams" in pin.extras, "this example runs on NAMS"
 
     def test_arrows_document_is_valid_json_with_the_four_domain_labels(self):
         document = json.loads(ARROWS_FILE.read_text(encoding="utf-8"))

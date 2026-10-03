@@ -61,6 +61,11 @@ def test_bolt_initializes_without_importing_nams_or_httpx(tmp_path):
             async def close(self):
                 self.is_connected = False
 
+            async def execute_read(self, query, parameters=None):
+                # connect() looks up the activated ontology; an empty database
+                # has none, so resolution falls back to the built-in POLE+O.
+                return []
+
         # Minimal EmbeddingProvider, so the test needs no provider extra: the
         # unit-test CI job installs the dev group only, where a provider string
         # like "openai/text-embedding-3-small" has no adapter to resolve to. An
@@ -77,7 +82,7 @@ def test_bolt_initializes_without_importing_nams_or_httpx(tmp_path):
                 return [0.0] * self.dimensions
 
         class SchemaManager:
-            def __init__(self, client, vector_dimensions):
+            def __init__(self, client, vector_dimensions, backfill_relation_types=True):
                 self.client = client
                 self.vector_dimensions = vector_dimensions
                 self.setup_completed = False
@@ -118,7 +123,10 @@ def test_bolt_initializes_without_importing_nams_or_httpx(tmp_path):
                     assert client.consolidation is not None
                     assert client.schema.setup_completed
                     assert client.schema.dimensions_checked
-                    for name, method in [("ontology", "list"), ("auth", "list_keys")]:
+                    # 0.7 serves client.ontology on bolt from the database
+                    # (BoltOntology); it must still not pull in the NAMS package.
+                    assert type(client.ontology).__name__ == "BoltOntology"
+                    for name, method in [("auth", "list_keys")]:
                         sentinel = getattr(client, name)
                         assert bool(sentinel)
                         try:

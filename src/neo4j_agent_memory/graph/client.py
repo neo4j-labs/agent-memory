@@ -5,6 +5,7 @@ from __future__ import annotations
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
+import neo4j
 from neo4j import (
     AsyncDriver,
     AsyncGraphDatabase,
@@ -16,6 +17,26 @@ from neo4j.exceptions import AuthError, ServiceUnavailable
 
 from neo4j_agent_memory.config.settings import Neo4jConfig
 from neo4j_agent_memory.core.exceptions import ConnectionError
+
+#: Session configuration that stops the server reporting the UNRECOGNIZED
+#: notification classification: "label / relationship type / property key does
+#: not exist". The library's own queries legitimately reference schema that a
+#: fresh or lightly used database has not created yet — ``e.aliases`` before any
+#: entity has an alias, ``:SchemaMigration`` before the first migration — and
+#: Neo4j logged one warning per such query, burying real output. Queries a user
+#: writes keep these hints: the read-only query accessor passes
+#: ``report_unrecognized=True``, and :meth:`Neo4jClient.session` applies no
+#: filter. ``NotificationDisabledClassification`` arrived in driver 5.22; older
+#: drivers spell the same filter as a category.
+_UNRECOGNIZED_FILTER: dict[str, Any] = (
+    {
+        "notifications_disabled_classifications": [
+            neo4j.NotificationDisabledClassification.UNRECOGNIZED
+        ]
+    }
+    if hasattr(neo4j, "NotificationDisabledClassification")
+    else {"notifications_disabled_categories": ["UNRECOGNIZED"]}
+)
 
 
 class Neo4jClient:
@@ -96,10 +117,18 @@ class Neo4jClient:
             raise ConnectionError("Not connected to Neo4j. Call connect() first.")
         return self._driver
 
-    def _get_session(self) -> AsyncSession:
-        """Get a new session."""
+    def _get_session(self, *, report_unrecognized: bool = True) -> AsyncSession:
+        """Get a new session.
+
+        Args:
+            report_unrecognized: Whether the server reports unknown labels,
+                relationship types and property keys (see
+                :data:`_UNRECOGNIZED_FILTER`).
+        """
         driver = self._ensure_connected()
-        return driver.session(database=self._config.database)
+        if report_unrecognized:
+            return driver.session(database=self._config.database)
+        return driver.session(database=self._config.database, **_UNRECOGNIZED_FILTER)
 
     def session(self) -> AsyncSession:
         """Return a new driver session for raw Cypher access.
@@ -115,6 +144,8 @@ class Neo4jClient:
         self,
         query: str,
         parameters: dict[str, Any] | None = None,
+        *,
+        report_unrecognized: bool = False,
     ) -> list[dict[str, Any]]:
         """
         Execute a read query.
@@ -122,11 +153,15 @@ class Neo4jClient:
         Args:
             query: Cypher query string
             parameters: Query parameters
+            report_unrecognized: Report unknown labels, relationship types and
+                property keys. Off for the library's own queries, which
+                reference schema a fresh database has not created yet; the
+                query accessor turns it on for user-written Cypher.
 
         Returns:
             List of result records as dictionaries
         """
-        async with self._get_session() as session:
+        async with self._get_session(report_unrecognized=report_unrecognized) as session:
 
             @unit_of_work(metadata={"app": f"neo4j-agent-memory_v{self._package_version}"})
             async def execute_read_tx(tx: AsyncManagedTransaction) -> list[dict[str, Any]]:
@@ -141,6 +176,8 @@ class Neo4jClient:
         self,
         query: str,
         parameters: dict[str, Any] | None = None,
+        *,
+        report_unrecognized: bool = False,
     ) -> list[dict[str, Any]]:
         """
         Execute a write query.
@@ -148,11 +185,13 @@ class Neo4jClient:
         Args:
             query: Cypher query string
             parameters: Query parameters
+            report_unrecognized: Report unknown labels, relationship types and
+                property keys (see :meth:`execute_read`).
 
         Returns:
             List of result records as dictionaries
         """
-        async with self._get_session() as session:
+        async with self._get_session(report_unrecognized=report_unrecognized) as session:
 
             @unit_of_work(metadata={"app": f"neo4j-agent-memory_v{self._package_version}"})
             async def execute_write_tx(tx: AsyncManagedTransaction) -> list[dict[str, Any]]:

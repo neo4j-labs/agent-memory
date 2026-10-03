@@ -15,7 +15,7 @@ anchor:_python_and_bolt[]
 
 anchor:_building_real_applications[]
 
-These lessons install `neo4j-agent-memory` 0.6.0 from PyPI and show every local file on the page. All require Python 3.10 or newer, a POSIX shell and capacity for a dedicated Aura instance. Complete cleanup before starting the next lesson with a new empty instance; reuse the local environment and unchanged helpers. Resuming an unfinished lesson uses its *original* instance and saved IDs.
+These lessons install `neo4j-agent-memory` 0.7.0 from PyPI and show every local file on the page. All require Python 3.10 or newer, a POSIX shell and capacity for a dedicated Aura instance. Complete cleanup before starting the next lesson with a new empty instance; reuse the local environment and unchanged helpers. Resuming an unfinished lesson uses its *original* instance and saved IDs.
 
 [cols="2,1,3",options="header"]
 |===
@@ -31,7 +31,7 @@ These lessons install `neo4j-agent-memory` 0.6.0 from PyPI and show every local 
 
 |xref:tutorials/knowledge-graph.adoc[Build a knowledge graph from documents]: inspect extraction and source provenance
 |Optional extraction branch
-|OpenAI embeddings/chat; local GLiNER model download
+|OpenAI embeddings/chat; local GLiNER2.5 model download
 
 |xref:tutorials/anthropic-and-local-embeddings.adoc[Extract memory with Anthropic and local embeddings]
 |Optional provider branch
@@ -54,7 +54,7 @@ These lessons install `neo4j-agent-memory` 0.6.0 from PyPI and show every local 
 
 anchor:_what_youll_learn[]
 
-These lessons also install `neo4j-agent-memory` 0.6.0 and include every local file. They need a NAMS workspace data key; no separate model-provider key is required. Service-managed extraction and distillation can still consume workspace resources. Check the selected workspace's usage limits with its owner before starting.
+These lessons also install `neo4j-agent-memory` 0.7.0 and include every local file. They need a NAMS workspace data key; no separate model-provider key is required. Service-managed extraction and distillation can still consume workspace resources. Check the selected workspace's usage limits with its owner before starting.
 
 [cols="2,1,3",options="header"]
 |===

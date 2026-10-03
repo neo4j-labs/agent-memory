@@ -11,13 +11,13 @@ Use `HybridMemoryProvider` to route message, entity and preference retrieval wit
 anchor:_overview[]
 anchor:_installation[]
 
-Use Python 3.10+ and a POSIX shell. The recipe uses xref:reference/configuration.adoc[`BoltSettings`] to select Neo4j explicitly and disables entity extraction so that message persistence can be checked independently. Use a dedicated AuraDB instance with vector-index support and no incompatible existing vectors. Follow xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the Aura connection setup] and copy its connection values into the exports below. These recipes use the published Python 0.6.0 package; provider access and database execution must be verified in your environment. The install command adds `httpx`, which release 0.6.0 imports when connecting over Bolt but declares only in the `nams` extra.
+Use Python 3.10+ and a POSIX shell. The recipe uses xref:reference/configuration.adoc[`BoltSettings`] to select Neo4j explicitly and disables entity extraction so that message persistence can be checked independently. Use a dedicated AuraDB instance with vector-index support and no incompatible existing vectors. Follow xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the Aura connection setup] and copy its connection values into the exports below. These recipes use the published Python 0.7.0 package; provider access and database execution must be verified in your environment.
 
 include::partial$python-tutorial-setup.adoc[]
 
 [source,bash]
 ----
-python -m pip install 'neo4j-agent-memory[openai]==0.6.0' 'httpx>=0.27'
+python -m pip install 'neo4j-agent-memory[openai]==0.7.0'
 export NEO4J_URI='neo4j+s://<instance-id>.databases.neo4j.io'
 export NEO4J_USERNAME='neo4j'
 export NEO4J_PASSWORD='replace-with-your-Aura-password'
@@ -91,7 +91,7 @@ On Bolt, `search_memory(session_id=...)` does not scope message search to that s
 
 anchor:_clear_session[]
 
-`get_session_memories(session_id)` returns a session's stored messages and `get_entity_relationships(entity_name)` returns the Bolt relationships around one entity; the recipe uses only the first. On Bolt in 0.6.0, the provider's `clear_session(session_id)` matches a `sessionId` message property that Bolt messages do not carry, so it returns `0` and deletes nothing. `client.short_term.clear_session(session_id)` removes the session's conversation and messages. Reasoning traces, steps and tool calls remain; see xref:reference/api/short-term-sessions.adoc#_clear_session[`clear_session`] for the query that deletes them by `session_id`.
+`get_session_memories(session_id)` returns a session's stored messages and `get_entity_relationships(entity_name)` returns the Bolt relationships around one entity; the recipe uses only the first. On Bolt in 0.7.0, the provider's `clear_session(session_id)` matches a `sessionId` message property that Bolt messages do not carry, so it returns `0` and deletes nothing. `client.short_term.clear_session(session_id)` removes the session's conversation and messages. Reasoning traces, steps and tool calls remain; see xref:reference/api/short-term-sessions.adoc#_clear_session[`clear_session`] for the query that deletes them by `session_id`.
 
 == Troubleshooting and cleanup
 

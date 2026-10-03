@@ -1,0 +1,39 @@
+/*
+ * Only the few rules Chakra cannot express as style props live here.
+ * Everything colour-related uses Chakra's generated semantic-token CSS
+ * variables, which are redefined under `.dark` by the colour-mode provider —
+ * so these rules follow the colour mode without a hand-written selector.
+ * (The previous version scoped its dark rules to `[data-theme="dark"]`,
+ * an attribute next-themes never sets when `attribute="class"` is used.)
+ */
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--chakra-colors-border-emphasized);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--chakra-colors-fg-subtle);
+}

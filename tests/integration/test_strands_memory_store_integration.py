@@ -187,21 +187,22 @@ def test_an_owned_client_survives_the_loop_change_strands_forces(neo4j_connectio
 async def test_entity_graph_reports_what_the_bolt_stack_can_actually_report(
     clean_memory_client,
 ) -> None:
-    """Pins the edge payload against a real Neo4j — and a library defect under it.
+    """Pins the edge payload against a real Neo4j -- including a remaining defect.
 
-    ``Neo4jClient.execute_read`` returns ``result.data()``, which renders a
-    relationship as ``(start_props, type, end_props)`` and drops its
-    properties entirely. ``LongTermMemory.get_related_entities`` therefore
-    falls through to ``type="RELATED_TO"`` for every hit even though
-    ``CREATE_ENTITY_RELATIONSHIP`` stored ``r.type = "WORKS_AT"``, and it
-    hardcodes ``source_id`` to the centre because
-    ``GET_ENTITY_RELATIONSHIPS`` matches undirected.
+    ``GET_ENTITY_RELATIONSHIPS`` now projects ``r.type`` as an explicit
+    scalar column (rather than a bare ``r``, which ``Result.data()`` would
+    flatten to a ``(start_props, type, end_props)`` tuple and strip of its
+    properties), so ``LongTermMemory.get_related_entities`` correctly reports
+    ``type="WORKS_AT"`` -- the value ``CREATE_ENTITY_RELATIONSHIP`` actually
+    stored -- instead of always falling through to ``"RELATED_TO"``.
 
-    That defect is the library's, not the store's, and is deliberately left
-    for a separate change; this test pins today's behaviour so a fix shows
-    up here (and in ``strands_fakes.FakeLongTerm.get_related_entities``,
-    which mirrors it) rather than silently changing what the tool tells the
-    model.
+    ``source_id`` is still hardcoded to the centre, because
+    ``GET_ENTITY_RELATIONSHIPS`` matches undirected and the direction a hit
+    came from is not part of ``get_related_entities``'s documented return
+    shape. That part of the shape is unchanged and deliberately left for a
+    separate change; this test pins today's behaviour so a fix shows up here
+    (and in ``strands_fakes.FakeLongTerm.get_related_entities``, which
+    mirrors it) rather than silently changing what the tool tells the model.
     """
     from neo4j_agent_memory.integrations.strands._store_tools import _entity_graph
 
@@ -214,5 +215,5 @@ async def test_entity_graph_reports_what_the_bolt_stack_can_actually_report(
 
     assert result["center"] == "Acme Corp"
     assert result["edges"] == [
-        {"from": "Acme Corp", "relationship": "RELATED_TO", "to": "Ada Lovelace"}
+        {"from": "Acme Corp", "relationship": "WORKS_AT", "to": "Ada Lovelace"}
     ]

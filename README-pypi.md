@@ -25,7 +25,7 @@ A graph-native memory system for AI agents. Store conversations, build knowledge
 | Per-session history | Knowledge graph ([POLE+O model](https://neo4j.com/labs/agent-memory/explanation/poleo-model)) | Retrieve recorded decisions |
 | Vector + text search | Entity resolution & dedup | Similar task retrieval |
 
-**Plus:** multi-stage entity extraction (spaCy / GLiNER / LLM), relationship extraction (GLiREL), background enrichment (Wikipedia / Diffbot), geospatial queries, an MCP server with 16 extended-profile tools on Bolt (20 registered on NAMS; backend limitations apply), and integrations with LangChain, Pydantic AI, Google ADK, Strands, CrewAI, and more.
+**Plus:** multi-stage entity extraction (spaCy / GLiNER2.5 / LLM) with typed relations decoded in the same pass, background enrichment (Wikipedia / Diffbot), geospatial queries, an MCP server with 16 extended-profile tools on Bolt (20 registered on NAMS; backend limitations apply), and integrations with LangChain, Pydantic AI, Google ADK, Strands, CrewAI, and more.
 
 ## Backend capabilities
 
@@ -34,7 +34,7 @@ Select the backend at configuration time, then use its supported operations. Pre
 - **Hosted (NAMS)** — a managed REST service. Just an API key; embedding, extraction, and dedup run server-side. Use workspace authentication for the tenancy boundary; conversation user metadata is distinct.
 - **Direct Neo4j (bolt)** — connect to your AuraDB instance with client-side providers. Unlocks write-Cypher, geospatial queries, `adopt_existing_graph`, and deployments with locally configured providers.
 
-> **Python release:** These Python instructions use the published `neo4j-agent-memory==0.6.0` package. The [Python tutorials](https://neo4j.com/labs/agent-memory/sdks/python) show the complete example programs and helpers to copy into local files, so running them does not require a repository clone or code download. TypeScript tutorials retain their [documented source setup](https://neo4j.com/labs/agent-memory/sdks/typescript); Python and npm release versions are independent.
+> **Python release:** These Python instructions use the published `neo4j-agent-memory==0.7.0` package. The [Python tutorials](https://neo4j.com/labs/agent-memory/sdks/python) show the complete example programs and helpers to copy into local files, so running them does not require a repository clone or code download. TypeScript tutorials retain their [documented source setup](https://neo4j.com/labs/agent-memory/sdks/typescript); Python and npm release versions are independent.
 
 ## Quick start — Hosted (NAMS)
 
@@ -44,7 +44,7 @@ The fastest path: no database to run.
 2. Install and export the key:
 
 ```bash
-pip install 'neo4j-agent-memory[nams]==0.6.0'
+pip install 'neo4j-agent-memory[nams]==0.7.0'
 export MEMORY_API_KEY=nams_...
 ```
 
@@ -77,7 +77,7 @@ asyncio.run(main())
 
 ## Quick start — Neo4j Aura (bolt)
 
-Use a dedicated [AuraDB instance](https://neo4j.com/labs/agent-memory/tutorials/first-agent-memory.html#_step_2_set_up_neo4j) and copy its connection values. Aura uses the `bolt` backend. Install the selected adapters with `pip install 'neo4j-agent-memory[anthropic,openai]==0.6.0' 'httpx>=0.27'` (release 0.6.0 imports `httpx` over Bolt but declares it only in the `nams` extra) and set their keys:
+Use a dedicated [AuraDB instance](https://neo4j.com/labs/agent-memory/tutorials/first-agent-memory.html#_step_2_set_up_neo4j) and copy its connection values. Aura uses the `bolt` backend. Install the selected adapters with `pip install 'neo4j-agent-memory[anthropic,openai]==0.7.0'` and set their keys:
 
 ```bash
 export NEO4J_URI="neo4j+s://<instance-id>.databases.neo4j.io"
@@ -122,26 +122,27 @@ asyncio.run(main())
 ## Installation
 
 ```bash
-pip install 'neo4j-agent-memory==0.6.0'                                 # Core
-pip install 'neo4j-agent-memory[nams]==0.6.0'                           # + hosted NAMS backend
-pip install 'neo4j-agent-memory[openai]==0.6.0'                         # + OpenAI native adapter
-pip install 'neo4j-agent-memory[anthropic]==0.6.0'                      # + Anthropic native adapter
-pip install 'neo4j-agent-memory[bedrock]==0.6.0'                        # + AWS Bedrock native adapter
-pip install 'neo4j-agent-memory[sentence-transformers]==0.6.0'          # + local HF embeddings
-pip install 'neo4j-agent-memory[litellm]==0.6.0'                        # + LiteLLM universal fallback (100+ providers)
-pip install 'neo4j-agent-memory[mcp,openai]==0.6.0' 'httpx>=0.27'       # + MCP server
-pip install 'neo4j-agent-memory[all]==0.6.0'                            # Everything except heavy local ML
-pip install 'neo4j-agent-memory[full]==0.6.0'                           # Everything including spaCy, GLiNER, sentence-transformers
+pip install 'neo4j-agent-memory==0.7.0'                                 # Core
+pip install 'neo4j-agent-memory[nams]==0.7.0'                           # + hosted NAMS backend
+pip install 'neo4j-agent-memory[openai]==0.7.0'                         # + OpenAI native adapter
+pip install 'neo4j-agent-memory[anthropic]==0.7.0'                      # + Anthropic native adapter
+pip install 'neo4j-agent-memory[bedrock]==0.7.0'                        # + AWS Bedrock native adapter
+pip install 'neo4j-agent-memory[sentence-transformers]==0.7.0'          # + local HF embeddings
+pip install 'neo4j-agent-memory[litellm]==0.7.0'                        # + LiteLLM universal fallback (100+ providers)
+pip install 'neo4j-agent-memory[mcp,openai]==0.7.0'                     # + MCP server
+pip install 'neo4j-agent-memory[all]==0.7.0'                            # Everything except heavy local ML
+pip install 'neo4j-agent-memory[gliner2]==0.7.0'                        # + GLiNER2.5 local entity + relation extraction
+pip install 'neo4j-agent-memory[full]==0.7.0'                           # Everything including spaCy, GLiNER2.5, sentence-transformers
 ```
 
-Release 0.6.0 imports `httpx` when connecting to Neo4j over Bolt but declares it only in the `[nams]` extra, so add `'httpx>=0.27'` to any Bolt install whose extras do not include `nams`.
+Release 0.7.0 connects over Bolt without `httpx`; only the `[nams]` extra installs it, for the hosted backend.
 
 ## MCP Server
 
 Give any MCP-compatible assistant (Claude Desktop, Claude Code, Cursor) persistent graph-backed memory. Use the Aura and OpenAI environment variables from the quickstart above; the explicit `--user` maps the exported Aura username to the CLI option:
 
 ```bash
-uvx --from 'neo4j-agent-memory[mcp,openai]==0.6.0' --with 'httpx>=0.27' neo4j-agent-memory mcp serve --backend bolt --user "$NEO4J_USERNAME"
+uvx --from 'neo4j-agent-memory[mcp,openai]==0.7.0' neo4j-agent-memory mcp serve --backend bolt --user "$NEO4J_USERNAME"
 ```
 
 See the [MCP tools reference](https://neo4j.com/labs/agent-memory/reference/mcp-tools).

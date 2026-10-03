@@ -19,7 +19,7 @@ import pytest
 
 from neo4j_agent_memory.extraction import ExtractionPipeline
 from neo4j_agent_memory.extraction.base import ExtractedEntity, ExtractedRelation, ExtractionResult
-from neo4j_agent_memory.extraction.gliner_extractor import GLiNEREntityExtractor
+from neo4j_agent_memory.extraction.gliner2_extractor import GLiNER2Extractor
 from neo4j_agent_memory.graph.client import Neo4jClient
 from neo4j_agent_memory.memory.buffered import BufferedWriter
 from neo4j_agent_memory.memory.long_term import Entity, LongTermMemory
@@ -84,6 +84,11 @@ def test_operational_python_blocks_compile(name):
 
 
 class FixtureExtractor:
+    # The identity GLiNER2Extractor exposes for provenance registration.
+    name = "gliner2"
+    version = "fixture"
+    model_id = "fastino/gliner2.5-base-v1"
+
     async def extract(self, text, **kwargs):
         if "Jane" in text:
             raise RuntimeError("fixture extraction failure")
@@ -125,7 +130,7 @@ async def run_block(text, scope):
 
 @pytest.mark.asyncio
 async def test_batch_program_and_provenance_use_real_pipeline_results(monkeypatch):
-    monkeypatch.setattr(GLiNEREntityExtractor, "for_schema", lambda *_args: FixtureExtractor())
+    monkeypatch.setattr(GLiNER2Extractor, "for_schema", lambda *_args: FixtureExtractor())
     scope = {}
     await run_block(program("batch-processing", "# List of documents"), scope)
     result = scope["result"]
@@ -154,7 +159,7 @@ async def test_batch_program_and_provenance_use_real_pipeline_results(monkeypatc
 
 @pytest.mark.asyncio
 async def test_financial_program_uses_stored_ids_for_relationships(monkeypatch):
-    monkeypatch.setattr(GLiNEREntityExtractor, "for_schema", lambda *_args: FixtureExtractor())
+    monkeypatch.setattr(GLiNER2Extractor, "for_schema", lambda *_args: FixtureExtractor())
     client = storage()
     scope = {"client": client}
     await run_block(program("batch-processing", "async def store_entity"), scope)

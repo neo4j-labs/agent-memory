@@ -21,7 +21,7 @@ and is idempotent.
 == Prerequisites
 
 * A running Neo4j 5.x with your existing domain graph already loaded.
-* The Python SDK plus the extra for your configured embedding provider, for example `pip install 'neo4j-agent-memory[openai]==0.6.0' 'httpx>=0.27'`, which provides `client.schema.adopt_existing_graph`. Keep `httpx` in the command: release 0.6.0 imports it when connecting over Bolt but declares it only in the `nams` extra.
+* The Python SDK plus the extra for your configured embedding provider, for example `pip install 'neo4j-agent-memory[openai]==0.7.0'`, which provides `client.schema.adopt_existing_graph`.
 * A `MemorySettings` configured for the database (see xref:reference/configuration.adoc[Configuration reference]), and an already-open `async with MemoryClient(settings) as client:` block — every snippet below shares that one connected `client`.
 
 If your domain types differ from the POLE+O default ontology, also configure `SchemaModel.CUSTOM`:
@@ -50,16 +50,19 @@ Inspect the intended label/type mapping, preview changes without writes, then ad
 
 Limitations of the Bolt implementation:
 
-* **Automatic extraction does not link to adopted nodes.** The NER
+* **Automatic extraction does not link to adopted nodes by default.** The
 extractors map their labels through POLE+O, so a `MOVIE` mention arrives
-typed `OBJECT` and MERGEs a second `:Entity:Object` node; give the
-extractor a `label_mapping` that preserves `MOVIE` and the MERGE finds the
-adopted node but no `MENTIONS` edge is written, because the link step looks
-the entity up by the id it generated rather than the id the MERGE returned.
-Use `extraction_mode="explicit"` with `EntityRef` instead.
-* **`SchemaConfig.strict_types` is not forwarded.** `MemoryClient` does not
-pass `schema_config` to `LongTermMemory`, so out-of-schema types are not
-rejected today.
+typed `OBJECT` (subtype `MOVIE`) and MERGEs a second `:Entity:Object` node.
+Ingest-time resolution only compares entities of the same `type`, so it does not merge that
+node into the adopted one. A GLiNER2.5 `label_mapping` that preserves `MOVIE`
+makes the MERGE find the adopted node, and the ingestion path links the
+`MENTIONS` edge to the id the MERGE returns. For a deterministic link, use
+`extraction_mode="explicit"` with `EntityRef`.
+* **`SchemaConfig.strict_types=True` selects strict validation.** When
+`validation_mode` is unset, it derives `validation_mode="strict"`:
+`add_entity` raises `ValidationError` for an entity type that `entity_types`
+does not declare, and message ingestion drops extracted entities of such types.
+Declare every adopted type in `entity_types`.
 * **Adopted ids must be UUID-shaped for the read helpers.** Nodes adopted
 without a pre-existing `id` get a deterministic `<label_lc>:<name>` id;
 helpers that hydrate `Entity.id` as a `UUID` (such as `search_entities()`)

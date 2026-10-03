@@ -22,7 +22,7 @@ include::partial$python-tutorial-setup.adoc[]
 
 [source,bash]
 ----
-python -m pip install 'neo4j-agent-memory[strands,bedrock]==0.6.0'
+python -m pip install 'neo4j-agent-memory[strands,bedrock]==0.7.0'
 export AWS_REGION='us-east-1'
 export AWS_DEFAULT_REGION="$AWS_REGION"
 export BEDROCK_MODEL_ID='replace-with-an-authorized-model-or-inference-profile-id'

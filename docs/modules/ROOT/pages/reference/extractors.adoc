@@ -9,17 +9,22 @@ Signatures below show types, keyword-only arguments (`*`), and defaults. They ar
 
 See xref:reference/backend-capabilities.adoc[Backend capabilities] for availability and data scope. This page is a short overview and index; each subsystem has its own page.
 
+[NOTE]
+====
+GLiNER v1 and GLiREL were removed in 0.7. `GLiNEREntityExtractor`, `GLiNERConfig`, `GLiNERWithRelationsExtractor`, `GLiRELExtractor`, `GLiRELConfig`, `DEFAULT_RELATION_TYPES`, `is_gliner_available` and `is_glirel_available` now raise `ImportError` (`RemovedExtractorError`) with a migration hint, and `ExtractorBuilder.with_gliner_relations()` no longer exists. `GLiNER2Extractor` replaces them: it decodes entities and relations in one GLiNER2.5 pass. See xref:how-to/migrate-to-gliner2.adoc[Migrate to GLiNER2.5].
+====
+
 == On this subsystem
 
-* anchor:_constructor[]anchor:_parameters[]anchor:_default_type_mapping[]anchor:_example[]anchor:_spacyentityextractor[]anchor:_constructor_2[]anchor:_parameters_2[]anchor:_factory_methods[]anchor:_example_2[]anchor:_glinerentityextractor[]anchor:_extract[]anchor:_extract_batch[]anchor:_for_schema[]anchor:_for_poleo[]anchor:_from_config[]anchor:_update_labels[]anchor:_add_label_mapping[]anchor:_constructor_3[]anchor:_parameters_3[]anchor:_example_3[]anchor:_llmentityextractor[]anchor:_for_custom_types[]xref:reference/extractor-classes.adoc[Built-in extractor classes] — `SpacyEntityExtractor`, `GLiNEREntityExtractor`, and `LLMEntityExtractor`.
-* anchor:_glirelextractor[]anchor:_constructor_5[]anchor:_example_5[]anchor:_extract_relations[]anchor:_glinerwithrelationsextractor[]xref:reference/extractor-relations.adoc[Relation extractors] — `GLiRELExtractor` and `GLiNERWithRelationsExtractor`.
-* anchor:_merge_strategies[]anchor:_constructor_4[]anchor:_example_4[]anchor:_extractionpipeline[]anchor:_extract_with_details[]anchor:_add_stage[]anchor:_remove_stage[]anchor:_merge_by_confidence[]anchor:_merge_by_union[]anchor:_merge_by_intersection[]anchor:_merge_by_cascade[]anchor:_pipelineresult[]anchor:_stageresult[]anchor:_batchextractionresult[]anchor:_batchitemresult[]xref:reference/extractor-pipeline.adoc[Extraction pipeline] — `ExtractionPipeline`, merge strategies, and the pipeline/batch result models.
-* anchor:_builder_methods[]anchor:_extractorbuilder[]anchor:_with_spacy[]anchor:_with_gliner[]anchor:_with_gliner_schema[]anchor:_with_llm[]anchor:_with_llm_fallback[]anchor:_with_schema[]anchor:_with_entity_types[]anchor:_with_confidence_threshold[]anchor:_build[]anchor:_extract_preferences[]xref:reference/extractor-builder.adoc[Extractor builder] — `ExtractorBuilder` fluent construction.
-* anchor:_streamingextractor[]anchor:_extract_streaming[]anchor:_chunk_document[]anchor:_extract_to_result[]xref:reference/extractor-streaming.adoc[Streaming extraction] — `StreamingExtractor` for chunked long-document extraction.
+* anchor:_constructor[]anchor:_parameters[]anchor:_default_type_mapping[]anchor:_example[]anchor:_spacyentityextractor[]anchor:_constructor_2[]anchor:_parameters_2[]anchor:_factory_methods[]anchor:_example_2[]anchor:_glinerentityextractor[]anchor:gliner2extractor[]anchor:_extract[]anchor:_extract_batch[]anchor:_for_schema[]anchor:_for_poleo[]anchor:_from_config[]anchor:_update_labels[]anchor:_add_label_mapping[]anchor:_constructor_3[]anchor:_parameters_3[]anchor:_example_3[]anchor:_llmentityextractor[]anchor:_for_custom_types[]xref:reference/extractor-classes.adoc[Built-in extractor classes] — `SpacyEntityExtractor`, `GLiNER2Extractor` (GLiNER2.5 joint entity and relation extraction), and `LLMEntityExtractor`.
+* anchor:_glirelextractor[]anchor:_constructor_5[]anchor:_example_5[]anchor:_extract_relations[]anchor:_glinerwithrelationsextractor[]xref:reference/extractor-relations.adoc[Relation extractors] — typed relations from the GLiNER2.5 joint pass and the LLM extractor, the ontology constraints that shape them, and `ExtractionResult.validate_relations`.
+* anchor:_merge_strategies[]anchor:_constructor_4[]anchor:_example_4[]anchor:_extractionpipeline[]anchor:_extract_with_details[]anchor:_add_stage[]anchor:_remove_stage[]anchor:_merge_by_confidence[]anchor:_merge_by_union[]anchor:_merge_by_intersection[]anchor:_merge_by_cascade[]anchor:_pipelineresult[]anchor:_stageresult[]anchor:_batchextractionresult[]anchor:_batchitemresult[]xref:reference/extractor-pipeline.adoc[Extraction pipeline] — `ExtractionPipeline`, merge strategies, the confidence floor and ontology relation validation, and the pipeline/batch result models.
+* anchor:_builder_methods[]anchor:_extractorbuilder[]anchor:_with_spacy[]anchor:_with_gliner[]anchor:_with_gliner_schema[]anchor:_with_llm[]anchor:_with_llm_fallback[]anchor:_with_schema[]anchor:_with_entity_types[]anchor:_with_confidence_threshold[]anchor:_build[]anchor:_extract_preferences[]xref:reference/extractor-builder.adoc[Extractor builder] — `ExtractorBuilder` fluent construction, including `with_ontology`.
+* anchor:_streamingextractor[]anchor:streamingextractor[]anchor:_extract_streaming[]anchor:_chunk_document[]anchor:_extract_to_result[]xref:reference/extractor-streaming.adoc[Streaming extraction] — `StreamingExtractor` for chunked long-document extraction.
 
 == EntityExtractor protocol
 
-The protocol requires `extract`, not `extract_batch`. Batch methods are concrete capabilities with different signatures on GLiNER and ExtractionPipeline; check the selected class.
+The protocol requires `extract`, not `extract_batch`. Batch methods are concrete capabilities with different signatures on `GLiNER2Extractor` and `ExtractionPipeline`; check the selected class.
 
 // contract: extraction/base.py:EntityExtractor.extract
 [source,python]
@@ -66,6 +71,7 @@ Fields and defaults:
 | `context` | `str \| None` | `None` | Surrounding context
 | `attributes` | `dict[str, Any]` | `{}` | Additional attributes extracted for this entity
 | `extractor` | `str \| None` | `None` | Name of the extractor that produced this entity
+| `id` | `str \| None` | `None` | Mention id assigned by the extractor, scoped to one extraction call. GLiNER2.5 sets it so relations can name the exact mention when one name occurs twice in a text.
 |===
 
 === ExtractedRelation
@@ -79,6 +85,9 @@ Fields and defaults:
 | `target` | `str` | `required` | Target entity name
 | `relation_type` | `str` | `required` | Type of relationship
 | `confidence` | `float` | `1.0` | Confidence score
+| `source_id` | `str \| None` | `None` | `ExtractedEntity.id` of the source mention from the same extraction call. Storage prefers it over a name lookup.
+| `target_id` | `str \| None` | `None` | `ExtractedEntity.id` of the target mention from the same extraction call.
+| `derived` | `bool` | `False` | `True` when the relation was inferred (for example an inverse mirror) rather than observed. Storage folds it with `AND` across observations, so one asserted sighting clears it.
 |===
 
 === ExtractedPreference
@@ -94,7 +103,7 @@ Fields and defaults:
 | `confidence` | `float` | `1.0` | Confidence score
 |===
 
-`ExtractionResult.entity_count`, `relation_count`, and `preference_count` are properties. `entities_by_type()` groups entities into a dictionary; `get_entities_of_type(type)` returns a list using case-insensitive type matching. `filter_invalid_entities()` returns a new result with invalid names and affected relations removed. There are no `filter_by_type` or `filter_by_confidence` methods.
+`ExtractionResult.entity_count`, `relation_count`, and `preference_count` are properties. `entities_by_type()` groups entities into a dictionary; `get_entities_of_type(type)` returns a list using case-insensitive type matching. `filter_invalid_entities(ontology=None)` returns a new result with invalid names and affected relations removed. Invalid names are stopwords, numbers and punctuation, and mentions that only name their own type, such as "tickets" typed Ticket. Type names are the mention's POLE+O type, subtype and extractor label, plus the label `ontology` declares for its pair. Message ingestion applies it with the client's ontology. `validate_relations(ontology, *, mode="warn")` checks every relation against an ontology's endpoint typing and returns `(result, violations)`; see xref:reference/extractor-relations.adoc[Relation extractors]. There are no `filter_by_type` or `filter_by_confidence` methods.
 
 [source,python]
 ----
@@ -109,5 +118,7 @@ print(result.entities_by_type())
 
 * xref:reference/schemas.adoc[Domain schemas]
 * xref:how-to/entity-extraction.adoc[Configure entity extraction]
+* xref:how-to/ontology-driven-extraction.adoc[Drive extraction from an ontology]
+* xref:how-to/migrate-to-gliner2.adoc[Migrate to GLiNER2.5]
 * xref:how-to/batch-processing.adoc[Batch processing]
 * xref:how-to/entity-extraction-batch.adoc[Batch & Streaming] — handling `BatchExtractionResult` and `StreamingChunkResult` errors

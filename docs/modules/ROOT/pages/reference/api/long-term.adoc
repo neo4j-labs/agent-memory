@@ -36,6 +36,55 @@ Search methods return models, not `(model, score)` tuples. Bolt semantic-search 
 * anchor:_deduplication_operations[]anchor:_provenance_operations[]anchor:_deduplication_bolt_only[]anchor:_find_potential_duplicates[]anchor:_merge_duplicate_entities[]anchor:_review_duplicate[]anchor:_get_same_as_cluster[]anchor:_get_deduplication_stats[]anchor:_deduplicationconfig[]anchor:_deduplicationresult[]anchor:_duplicatecandidate[]anchor:_deduplicationstats[]anchor:_provenance_and_extraction_records_bolt[]anchor:_register_extractor[]anchor:_link_entity_to_message[]anchor:_link_entity_to_extractor[]anchor:_get_entity_provenance[]anchor:_get_entities_from_message[]anchor:_get_entities_by_extractor[]anchor:_list_extractors[]anchor:_get_extraction_stats[]anchor:_get_extractor_stats[]anchor:_delete_entity_provenance[]xref:reference/api/long-term-deduplication.adoc[Deduplication and provenance] — ingest-time duplicate detection (`find_potential_duplicates`, `merge_duplicate_entities`, `review_duplicate`) and extraction provenance (`register_extractor`, `link_entity_to_message`, `get_entity_provenance`).
 * anchor:_geospatial_operations[]anchor:_graph_operations_nams[]anchor:_geospatial_operations_bolt_only[]anchor:_search_locations_near[]anchor:_search_locations_in_bounding_box[]anchor:_get_location_coordinates[]anchor:_geocode_locations[]anchor:_context_bolt[]anchor:_get_context[]anchor:_nams_behavior[]anchor:_wait_for_extraction[]anchor:_expand_graph[]anchor:_get_entity_provenance_nams[]anchor:_set_entity_feedback[]anchor:_get_entity_history[]xref:reference/api/long-term-geospatial.adoc[Geospatial operations and NAMS behavior] — location search/geocoding, `get_context`, and the NAMS wrapper differences table.
 
+== Constructor
+
+Bolt only. `MemoryClient` builds this store for you; it passes its resolver, its resolved ontology and validation mode, and a `DeduplicationConfig` derived from `settings.resolution`. The signature matters when you construct the store directly.
+
+// contract: memory/long_term.py:LongTermMemory.__init__
+[source,python]
+----
+def LongTermMemory(
+    client: Neo4jClient,
+    embedder: Embedder | None=None,
+    extractor: EntityExtractor | None=None,
+    resolver: EntityResolver | None=None,
+    geocoder: Geocoder | None=None,
+    enrichment_service: BackgroundEnrichmentService | None=None,
+    entity_types: list[str] | None=None,
+    strict_types: bool=False,
+    deduplication: DeduplicationConfig | None=None,
+    *,
+    multi_tenant: bool=False,
+    ontology: OntologyDocument | None=None,
+    validation_mode: Literal['permissive', 'strict']='permissive',
+): ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `resolver` | Resolver used by `add_entity`. When it is an `OntologyResolver`, the bolt default, the duplicate check delegates to it, so `add_entity` and message ingestion share one normalization, one blocking strategy, and one set of thresholds. Any other resolver keeps the embedding-similarity check.
+| `deduplication` | Bands for the embedding-similarity check. Derive it with `DeduplicationConfig.from_resolution_config(settings.resolution)` so the two paths cannot drift; see xref:reference/api/long-term-deduplication.adoc#_deduplicationconfig[DeduplicationConfig].
+| `entity_types`, `strict_types` | Legacy type check: with `strict_types=True`, `add_entity` raises `ValueError` for a base type outside `entity_types`. Independent of the ontology's validation mode.
+| `ontology` | The effective ontology, used for strict-mode validation and for mapping type and subtype pairs onto declared labels.
+| `validation_mode` | `strict` makes `add_entity` and `add_relationship` raise `ValidationError`; `permissive` writes anyway. Ignored when `ontology` is `None`.
+|===
+
+=== Strict-mode validation
+
+With `validation_mode="strict"` and an ontology configured, these writes raise `neo4j_agent_memory.core.exceptions.ValidationError`, whose `details` carries the offending type, labels, and ontology name:
+
+[cols="3,1",options="header"]
+|===
+| Rejected | Raised by
+| An entity whose type and subtype the ontology declares no label for. A declared base type still validates when only the subtype is unknown. | `add_entity`
+| A relationship type the ontology does not declare | `add_relationship`
+| An endpoint whose stored type maps onto no declared label | `add_relationship`
+| An endpoint pair the ontology does not permit for that relationship type (`OntologyDocument.permits`) | `add_relationship`
+|===
+
+An ontology that declares no relationships, such as the ad-hoc document built from `schema_config.entity_types`, places no constraint on `add_relationship`.
+
 anchor:_example[]
 
 == See also

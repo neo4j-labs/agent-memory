@@ -10,6 +10,8 @@ Schema creation is performed by `neo4j_agent_memory.graph.schema.SchemaManager.s
 runs as part of `MemoryClient.connect()`. Existing constraints/indexes
 with the same name are skipped; the operation is idempotent.
 
+`setup_all()` also runs a one-time data backfill that copies the legacy `relation_type` property of `RELATED_TO` relationships into `type`, the canonical relationship-name property since 0.7. It runs once per database: completion is recorded on a `(:SchemaMigration {name: "relation_type_backfill"})` node, and later connects skip it. A failure is logged rather than raised, and the backfill is retried on the next connect. Set `schema_config.backfill_relation_types=False` to skip it and run the equivalent query yourself in batches on a very large graph.
+
 The authoritative source is
 `src/neo4j_agent_memory/graph/schema.py`. This page is a human-readable
 reference to the schema objects the library creates, but consult that
@@ -33,6 +35,9 @@ file for the complete current inventory used in deployments.
 | `user_identifier`       | `User`               | `identifier` | Unique user identifier (multi-tenancy).
 | `consolidation_run_id`  | `ConsolidationRun`   | `id`         | Unique consolidation-job run identifier.
 | `memory_read_audit_id`  | `MemoryReadAudit`    | `id`         | Unique memory-read audit event identifier.
+| `ontology_id`           | `Ontology`           | `id`         | Unique stored-ontology identifier (bolt `client.ontology`).
+| `ontology_version_id`   | `OntologyVersion`    | `id`         | Unique ontology-version identifier.
+| `ontology_lock_id`      | `OntologyLock`       | `id`         | Backs the single lock node that serializes concurrent ontology activations.
 |===
 
 == Regular indexes
@@ -57,6 +62,7 @@ Lookup indexes for common filter / equality queries.
 | `consolidation_run_kind_idx` | `ConsolidationRun`  | `kind`           | Filter consolidation runs by kind.
 | `memory_read_audit_kind_idx` | `MemoryReadAudit`   | `kind`           | Filter memory-read audit events by kind.
 | `tool_call_status_idx`       | `ToolCall`          | `status`         | Filter tool calls by status.
+| `ontology_name_idx`          | `Ontology`          | `name`           | Look up stored ontologies by name.
 |===
 
 == Vector indexes
@@ -96,7 +102,7 @@ Created for geospatial queries on Location entities.
 `SchemaManager.drop_all()` removes every constraint and index whose name
 starts with one of `conversation_`, `message_`, `entity_`,
 `preference_`, `fact_`, `reasoning_`, `trace_`, `tool_`, `task_`,
-`step_`, `user_`, `consolidation_`, or `memory_read_`. It does not delete data, but its prefix matching can also remove application-owned schema objects using those prefixes. Inspect the current inventory before deliberately calling it.
+`step_`, `user_`, `consolidation_`, `memory_read_`, or `ontology_`. It does not delete data, but its prefix matching can also remove application-owned schema objects using those prefixes. Inspect the current inventory before deliberately calling it.
 
 [source,python]
 ----

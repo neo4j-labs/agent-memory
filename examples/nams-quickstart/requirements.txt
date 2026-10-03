@@ -1,5 +1,5 @@
 # The [nams] extra pulls the hosted-backend HTTP transport (httpx).
-neo4j-agent-memory[nams]>=0.6.0,<0.7
+neo4j-agent-memory[nams]>=0.7.0,<0.8
 # Optional: loads this directory's .env (the script falls back to a tiny
 # built-in parser when python-dotenv is absent).
 python-dotenv>=1.2.3,<2

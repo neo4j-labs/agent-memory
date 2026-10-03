@@ -18,13 +18,13 @@ Upgrading from the framework's `1.0.0b260212` public preview? The GA line rename
 anchor:_overview[]
 anchor:_installation[]
 
-Use Python 3.10+ and a POSIX shell. The recipe uses xref:reference/configuration.adoc[`BoltSettings`] to select Neo4j explicitly and disables entity extraction so that message persistence can be checked independently. Use a dedicated AuraDB instance with vector-index support and no incompatible existing vectors. Follow xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the Aura connection setup] and copy its connection values into the exports below. These recipes use the published Python 0.6.0 package; provider access and database execution must be verified in your environment. The install command adds `httpx`, which release 0.6.0 imports when connecting over Bolt but declares only in the `nams` extra.
+Use Python 3.10+ and a POSIX shell. The recipe uses xref:reference/configuration.adoc[`BoltSettings`] to select Neo4j explicitly and disables entity extraction so that message persistence can be checked independently. Use a dedicated AuraDB instance with vector-index support and no incompatible existing vectors. Follow xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the Aura connection setup] and copy its connection values into the exports below. These recipes use the published Python 0.7.0 package; provider access and database execution must be verified in your environment.
 
 include::partial$python-tutorial-setup.adoc[]
 
 [source,bash]
 ----
-python -m pip install 'neo4j-agent-memory[microsoft-agent,openai]==0.6.0' "agent-framework-openai>=1.13,<2" 'httpx>=0.27'
+python -m pip install 'neo4j-agent-memory[microsoft-agent,openai]==0.7.0' "agent-framework-openai>=1.13,<2"
 export NEO4J_URI='neo4j+s://<instance-id>.databases.neo4j.io'
 export NEO4J_USERNAME='neo4j'
 export NEO4J_PASSWORD='replace-with-your-Aura-password'
@@ -110,7 +110,7 @@ anchor:_using_neo4jmicrosoftmemory_unified_interface[]
 anchor:_using_neo4jcontextprovider[]
 anchor:_functions[]
 
-This section lists the adapter surface of the published 0.6.0 package. Import every name below from `neo4j_agent_memory.integrations.microsoft_agent`.
+This section lists the adapter surface of the published 0.7.0 package. Import every name below from `neo4j_agent_memory.integrations.microsoft_agent`.
 
 === Constructor options
 
@@ -120,7 +120,7 @@ This section lists the adapter surface of the published 0.6.0 package. Import ev
 |===
 |Option |Default |Effect
 
-|`user_id` |`None` |Optional user identifier stored on the provider, exposed as `user_id` and kept by `serialize()`. The 0.6.0 adapter does not apply it to reads or writes, so it neither groups records nor acts as an access boundary.
+|`user_id` |`None` |Optional user identifier stored on the provider, exposed as `user_id` and kept by `serialize()`. The 0.7.0 adapter does not apply it to reads or writes, so it neither groups records nor acts as an access boundary.
 |`include_short_term` |`True` |Add recent and similar conversation messages to the context.
 |`include_long_term` |`True` |Add matching preferences and entities.
 |`include_reasoning` |`True` |Add similar past task traces.
@@ -186,10 +186,10 @@ anchor:_gds_integration[]
 
 |`enabled` |`False` |Create the `memory.gds` helper and allow the GDS tools.
 |`expose_as_tools` |`[]` |`GDSAlgorithm` members to offer as tools; see the rules above.
-|`fallback_to_basic` |`True` |Use the Cypher fallbacks below when the GDS library is not installed. When `False`, the helpers return neutral results instead (equal scores, one community, no similar entities). In 0.6.0 community detection returns one community with either setting, because its Cypher fallback fails.
+|`fallback_to_basic` |`True` |Use the Cypher fallbacks below when the GDS library is not installed. When `False`, the helpers return neutral results instead (equal scores, one community, no similar entities). In 0.7.0 community detection returns one community with either setting, because its Cypher fallback fails.
 |`warn_on_fallback` |`True` |Log one warning when GDS is not available.
 |`pagerank_damping_factor` |`0.85` |Damping factor for GDS PageRank.
-|`use_pagerank_for_ranking`, `pagerank_weight`, `use_community_grouping` |`True`, `0.3`, `False` |Accepted but not applied by the 0.6.0 context provider; context retrieval does not rerank by PageRank or community.
+|`use_pagerank_for_ranking`, `pagerank_weight`, `use_community_grouping` |`True`, `0.3`, `False` |Accepted but not applied by the 0.7.0 context provider; context retrieval does not rerank by PageRank or community.
 |===
 
 `GDSAlgorithm` has the members `PAGERANK`, `COMMUNITY_DETECTION`, `SHORTEST_PATH`, `NODE_SIMILARITY`, `BETWEENNESS` and `CLOSENESS`. Only the first four are wired to helpers or tools.
@@ -202,8 +202,8 @@ anchor:_gds_fallback_behavior[]
 |Algorithm |What runs without the GDS library
 
 |PageRank |Degree centrality, normalized to the highest-degree entity.
-|Community detection |In 0.6.0 the Cypher fallback query fails with an implicit-grouping error. The helper catches the error and puts every entity in community `0`, the same result as `fallback_to_basic=False`.
-|Node similarity |Overlap of shared relationships. In 0.6.0 this Cypher method is used even when GDS is installed.
+|Community detection |In 0.7.0 the Cypher fallback query fails with an implicit-grouping error. The helper catches the error and puts every entity in community `0`, the same result as `fallback_to_basic=False`.
+|Node similarity |Overlap of shared relationships. In 0.7.0 this Cypher method is used even when GDS is installed.
 |Shortest path |Cypher `shortestPath()`. It never needs GDS.
 |===
 

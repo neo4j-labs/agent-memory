@@ -129,10 +129,15 @@ async def extract_to_result(
 | `on_progress` | Optional progress callback
 |===
 
+With `deduplicate=True`, entities are merged across chunks by normalized name and type, and relations by source name, relation type and target name, keeping the highest-confidence copy of each.
+
+Each chunk is a separate extraction call, so relations whose endpoints fall in different chunks are not found, and mention ids (`ExtractedEntity.id`, `ExtractedRelation.source_id` and `target_id`) are scoped to the chunk that produced them. `GLiNER2Extractor` windows any input longer than its `max_words` (384 words by default) itself, so a chunk longer than that is split again inside the extractor. Use `StreamingExtractor` when you want chunk-level results, progress reporting or control over the boundaries.
+
 [source,python]
 ----
-from neo4j_agent_memory.extraction import StreamingExtractor
+from neo4j_agent_memory.extraction import GLiNER2Extractor, StreamingExtractor
 
+extractor = GLiNER2Extractor.for_schema("podcast")
 streamer = StreamingExtractor(extractor, chunk_size=4000, overlap=200)
 async for chunk_result in streamer.extract_streaming(long_document):
     print(chunk_result.chunk.index, chunk_result.entity_count)

@@ -19,7 +19,7 @@ anchor:_core_concepts[]anchor:_technical_deep_dives[]anchor:_key_design_decision
 * xref:explanation/graph-architecture.adoc[Why Neo4j? Graph memory architecture] -- Why a graph, rather than a vector store or relational database, backs agent memory here.
 * xref:explanation/poleo-model.adoc[The POLE+O data model] -- The Person/Object/Location/Event/Organization classification long-term memory uses for entities.
 * xref:explanation/backends.adoc[Bolt and NAMS backends] -- How the self-hosted Bolt backend and the hosted NAMS backend compare and where they diverge.
-* xref:explanation/extraction-pipeline.adoc[How entity extraction works] -- How the spaCy, GLiNER, and LLM extraction stages combine into one pipeline.
+* xref:explanation/extraction-pipeline.adoc[How entity extraction works] -- How the spaCy, GLiNER2.5, and LLM extraction stages combine into one pipeline.
 * xref:explanation/resolution-deduplication.adoc[Entity resolution and deduplication] -- How entity resolution decides two mentions are the same entity, and when it flags instead of merges.
 * xref:explanation/structured-extraction.adoc[Structured extraction] -- How structured output from an LLM is validated and turned into entities and relationships.
 * xref:explanation/why-provider-protocol.adoc[Why the provider protocol?] -- Why LLM and embedding providers are a swappable protocol rather than hard-coded integrations.

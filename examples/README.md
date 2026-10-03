@@ -28,6 +28,8 @@ For examples using the Python `bolt` backend, first follow [the shared Aura setu
 | Gate CI on memory quality like any other regression metric | [`eval-harness/`](#eval-harness) |
 | Run local models without an LLM API (Aura requires network access) | [`no_llm/`](#run-without-an-llm) |
 | Tune entity extraction for a specific domain | [`domain-schemas/`](#domain-schemas) |
+| Type your own domain, get typed relations and merged aliases out of extraction | [`ontology-extraction/`](#ontology-driven-extraction) |
+| Rename a type in your own Neo4j graph and migrate the entities already extracted | [`ontology-lifecycle-bolt/`](#ontology-driven-extraction) |
 | Resolve duplicate entities | [`entity_resolution.py`](#entity-resolution) |
 | Enrich entities with Wikipedia/Diffbot data | [`enrichment_example.py`](#enrichment) |
 | Use it from a framework | [`langchain_agent.py`](#langchain), [`pydantic_ai_agent.py`](#pydantic-ai), [`google_adk_demo/`](#google-adk-demo), [`microsoft_agent_retail_assistant/`](#microsoft-agent-retail-assistant) |
@@ -35,6 +37,7 @@ For examples using the Python `bolt` backend, first follow [the shared Aura setu
 | Give a Strands agent cross-session recall from a graph | [`strands-memory-store/`](#strands-memory-store) |
 | Wire it to Google Cloud (Vertex AI, ADK, MCP) | [`google_cloud_integration/`](#google-cloud-integration) |
 | See a full-stack reference app | [`full-stack-chat-agent/`](#full-stack-chat-agent), [`lennys-memory/`](#lennys-podcast-memory-explorer) |
+| Chat with an agent over an ontology-typed graph, with reasoning memory and a live type rename | [`support-desk-agent/`](#support-desk-agent) |
 | See a multi-agent compliance workflow | [`financial-services-advisor/`](#financial-services-advisor) |
 | Write the memory layer in TypeScript instead | [`../typescript/examples/`](#typescript-examples) |
 
@@ -49,7 +52,7 @@ Run against the hosted [NAMS](https://memory.neo4jlabs.com) service — no Neo4j
 | [`nams-quickstart/`](nams-quickstart/) | Minimal end-to-end flow over the unified `MemoryClient` — a conversation, messages, an entity, a reasoning trace, `wait_for_extraction()`, and a read-only `client.query.cypher` round-trip. The same script body runs on bolt by flipping `backend`, so it doubles as the bolt-vs-NAMS diff. |
 | [`nams-fastapi/`](nams-fastapi/) | NAMS-backed memory inside a FastAPI service: one lifespan-managed client, per-user scoping from the authenticated request, the library's error taxonomy mapped onto HTTP status codes, a `/chat` route that reads assembled context before answering, and a `/search` route. |
 | [`nams-langchain/`](nams-langchain/) | The same `create_agent` + middleware agent as [`langchain_agent.py`](#langchain), against hosted NAMS — server-side extraction and embeddings, no Neo4j to run. |
-| [`ontology-lifecycle/`](ontology-lifecycle/) | The full NAMS ontology lifecycle: import an Arrows diagram into a typed schema, activate it, ingest under it, then rename a type and migrate the already-extracted entities — `import_`, `diff`, `migrate` + `get_migration` polling, with a `query.cypher` read-back. Hosted-only; the bolt twin is [`existing-graph/`](#existing-graph). |
+| [`ontology-lifecycle/`](ontology-lifecycle/) | The full NAMS ontology lifecycle: import an Arrows diagram into a typed schema, activate it, ingest under it, then rename a type and migrate the already-extracted entities — `import_`, `diff`, `migrate` + `get_migration` polling, with a `query.cypher` read-back. Runs on NAMS; the bolt twin is [`ontology-lifecycle-bolt/`](#ontology-driven-extraction). |
 | [`claude-code-team-memory/`](claude-code-team-memory/) | Shared memory for Claude Code, Claude Desktop and Cursor with **no agent code** — ready-to-copy `.mcp.json` / `claude_desktop_config.json` / `.cursor/mcp.json` files wiring the hosted NAMS MCP server (scope-dependent tools, OAuth) and the self-hosted `mcp serve` (6 or 16 tools) side by side, plus `provision_keys.py` (one rotatable `client.auth` key per developer), `seed_workspace.py` (`bulk_add_messages` → await extraction → read back) and `doctor.py` (key, config validity, tool surface, reachability, extraction status). |
 
 ```bash
@@ -117,11 +120,17 @@ These four examples cover the v0.2 feature drop. Each is self-contained, runs wi
 
 ### Run without an LLM
 
-[`no_llm/`](no_llm/) — `llm=None`, `backend="bolt"`, sentence-transformers embedder, spaCy + GLiNER extractor with the LLM fallback disabled. Exercises all three memory layers locally, runs a consolidation dry run, and fails fast at construction time when a local model is missing, so you never get a surprise API call.
+[`no_llm/`](no_llm/) — `llm=None`, `backend="bolt"`, sentence-transformers embedder, spaCy + GLiNER2.5 extractor with the LLM fallback disabled. Exercises all three memory layers locally, runs a consolidation dry run, and fails fast at construction time when a local model is missing, so you never get a surprise API call.
 
 ### Domain schemas
 
-[`domain-schemas/`](domain-schemas/) — eight ready-made GLiNER2 schemas (POLE+O, podcast, news, scientific, business, entertainment, medical, legal), a recipe for your own, and shared sample documents under `samples/`. One runner: `uv run python examples/domain-schemas/run.py --schema <name>` (the eight per-domain scripts remain as thin deprecated wrappers).
+[`domain-schemas/`](domain-schemas/) — eight ready-made GLiNER2.5 schemas (POLE+O, podcast, news, scientific, business, entertainment, medical, legal), a recipe for your own, and shared sample documents under `samples/`. One runner: `uv run python examples/domain-schemas/run.py --schema <name>` (the eight per-domain scripts remain as thin deprecated wrappers).
+
+### Ontology-driven extraction
+
+[`ontology-extraction/`](ontology-extraction/) — the v0.7 ontology surface end to end, from one `ontology.yaml`. Six support-desk labels mapped onto POLE+O with descriptions written as annotation guidelines, five relationship types with explicit source/target plus `unique_source` / `acyclic` / per-relation `threshold` constraints, and an alias gazetteer. Ingesting six messages shows GLiNER2.5 (JointIE) decoding entities and typed relations in one pass, three surface forms of one organization collapsing onto a single node (with the near-miss "Acme Bank" parked in the review band instead), `r.type` / `r.support` provenance on the edges, and `client.ontology` create → activate → update → diff on bolt. Keyless.
+
+[`ontology-lifecycle-bolt/`](ontology-lifecycle-bolt/) — the bolt twin of [`ontology-lifecycle/`](ontology-lifecycle/): the same Arrows diagram and support transcript, against your own Neo4j. `import_` converts the diagram locally (the script repairs the POLE+O types the conversion guesses), the client picks the activated revision up at its next connect, GLiNER2.5 writes the extracted tickets as `:Entity:Event:Ticket`, and an inline `migrate` relabels them `:SupportCase` after the rename. Keyless, but it leaves `support-desk` (strict) active in the database, so it runs only through `make example-ontology-lifecycle-bolt`, not `make examples`.
 
 ---
 
@@ -155,6 +164,10 @@ These four examples cover the v0.2 feature drop. Each is self-contained, runs wi
 
 [`full-stack-chat-agent/`](full-stack-chat-agent/) — FastAPI + PydanticAI 2.x + Next.js over two Neo4j graphs (memory plus a seeded news graph in Aura); SSE with live tool events, reasoning traces with `:TOUCHED` audit edges, entity extraction switched by `EXTRACTION_MODE`. Bolt only (it uses `client.get_graph()`). Great middle-weight example; the frontend has its own README, lint/typecheck/test scripts and a Node 22 floor.
 
+### Support-desk agent
+
+[`support-desk-agent/`](support-desk-agent/) — the full-stack version of [`ontology-lifecycle-bolt/`](ontology-lifecycle-bolt/): the same support-desk ontology (imported from the Arrows diagram, stored and activated on bolt) and transcript, plus a seed of eight support conversations. A FastAPI + PydanticAI 2.x agent answers over the ontology-typed graph and uses reasoning memory both ways: every turn records a trace (linked to the message that started it, tool calls with `:TOUCHED` audit edges), and the agent recalls similar past traces before acting. The Next.js + Chakra UI v3 frontend has Memory (entities with their ontology labels, review-band pairs to confirm or reject), Graph (NVL), Ontology (revisions, diff, and a one-click `Ticket` → `SupportCase` rename and migration) and Reasoning (trace timeline, similar tasks, tool stats) panels. GLiNER2.5 extraction is keyless; the chat needs `OPENAI_API_KEY` (or another `AGENT_MODEL`).
+
 ### Lenny's Podcast Memory Explorer
 
 [`lennys-memory/`](lennys-memory/) — the flagship Python demo. A podcast knowledge graph with a 28-tool PydanticAI agent, Wikipedia-enriched entity cards, geospatial map view, NVL graph view and automatic preference learning. The real transcript corpus is not shipped — `make load-sample` runs against the synthetic fixtures in `data/samples/`. **[Live demo →](https://lennys-memory.vercel.app)**
@@ -186,7 +199,7 @@ The TypeScript SDK [`@neo4j-labs/agent-memory`](https://www.npmjs.com/package/@n
 - **Google ADK.** Memory is a `Runner`-level service — `Runner(memory_service=...)` plus the `load_memory` tool. `LlmAgent` has no `memory=` field. `Runner.run_async()` returns an `AsyncGenerator`, so iterate it with `async for event in runner.run_async(...)`; don't `await` it. `search_memory()` returns a `SearchMemoryResponse` — iterate `response.memories`.
 - **Multi-file example directories.** A directory example whose scripts import each other adds its own directory to `sys.path` at the top of each entrypoint (`sys.path.insert(0, str(Path(__file__).parent))`), which is why `examples/**/*.py` carries an `E402` ruff exemption.
 - **PEP 723 is allowed in `hello-memory/` only.** Every other example declares its dependencies in a `requirements.txt` or `pyproject.toml` so the pin is reviewable and Dependabot can see it.
-- **Local development uv source.** Backend `pyproject.toml` files pin `neo4j-agent-memory[...]>=0.5.0,<0.7` and add a `[tool.uv.sources]` entry pointing at the repo root, relative to the backend directory (`{ path = "../../..", editable = true }` — one more `..` for a backend nested two levels down). The git URL line is commented out and used for production.
+- **Local development uv source.** Backend `pyproject.toml` files pin `neo4j-agent-memory[...]>=0.7.0,<0.8` (the two financial advisor backends pin the latest published release) and add a `[tool.uv.sources]` entry pointing at the repo root, relative to the backend directory (`{ path = "../../..", editable = true }` — one more `..` for a backend nested two levels down). The git URL line is commented out and used for production.
 
 ## Running the test suite for examples
 
@@ -205,7 +218,7 @@ Equivalent `make` targets: `make test-examples-quick` and `make test-examples`. 
 ## Contributing a new example
 
 1. Add a directory under `examples/` (or a single `.py` for a script).
-2. Pin the library as `neo4j-agent-memory[...]>=0.5.0,<0.7` in `requirements.txt` or `pyproject.toml`, and read every model id from an environment variable with a current default.
+2. Pin the library as `neo4j-agent-memory[...]>=0.7.0,<0.8` in `requirements.txt` or `pyproject.toml`, and read every model id from an environment variable with a current default. The two financial advisor backends are the exception: CI installs them from PyPI (the Google Cloud one exports its Docker requirements, the AWS one is bundled by `cdk synth` with `pip install .`), so they pin the latest published release (see `CONTRIBUTING.md`, Publishing).
 3. Include a README following the [Neo4j Labs guidelines](https://github.com/neo4j-labs) — Labs badge, status badge, community support badge, disclaimer, prerequisites, run steps, expected output, support section, and a "Verified against …" footer naming the library version, the framework versions you tested, the checks you ran, and the date. Say which checks used mocks and which ran against a live service.
 4. Add a smoke test under `tests/examples/`. Mirror an existing one such as [`tests/examples/test_buffered_writes_example.py`](../tests/examples/test_buffered_writes_example.py) for the structure, and mark the classes that need a database with `@pytest.mark.requires_neo4j`.
 5. Register the test in `.github/workflows/ci-python.yml` under `example-tests-quick` if it needs no Neo4j (`example-tests` picks up the whole directory automatically).

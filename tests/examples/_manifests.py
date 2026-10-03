@@ -22,7 +22,7 @@ requirement for the library by name, and checks:
 * the requirement exists at all (not a bare name, not a floating VCS ref);
 * its lower bound is at least :data:`MIN_EXAMPLE_PIN`;
 * for Python manifests, an upper bound exists — the repo convention is
-  ``neo4j-agent-memory[...]>=0.5.0,<0.7`` so an example cannot silently be
+  ``neo4j-agent-memory[...]>=0.7.0,<0.8`` so an example cannot silently be
   resolved against a future breaking release.
 
 Usage
@@ -63,7 +63,7 @@ EXAMPLES_DIR = REPO_ROOT / "examples"
 MIN_EXAMPLE_PIN = "0.5.0"
 
 #: Upper bound the repo convention uses. Only its presence is asserted.
-EXPECTED_CAP_HINT = "<0.7"
+EXPECTED_CAP_HINT = "<0.8"
 
 PYTHON_PACKAGE = "neo4j-agent-memory"
 NPM_PACKAGE = "@neo4j-labs/agent-memory"

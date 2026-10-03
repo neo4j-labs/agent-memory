@@ -1,0 +1,200 @@
+{
+  "name": "poleo_gold",
+  "description": "Synthetic POLE+O gold set: 10 short documents with gold entities and gold triples, written with deliberate alias variation, one planted negation, and cross-sentence relations.",
+  "config": {
+    "name": "poleo_gold",
+    "warmup_runs": 0,
+    "num_runs": 1,
+    "timeout_seconds": 60.0,
+    "extract_relations": true,
+    "entity_types": null,
+    "match_policy": {
+      "normalize_names": true,
+      "use_aliases": true,
+      "fuzzy_threshold": null,
+      "directed": true
+    }
+  },
+  "test_cases": [
+    {
+      "id": "poleo-01",
+      "text": "Priya Raghavan joined Acme Corp as a staff engineer in March. Acme had been looking for a compiler specialist for two years. ACME Corporation issued her an Ascent 9 laptop on her first day, and the firm keeps its head office in Lisbon.",
+      "expected_entities": [
+        {"name": "Priya Raghavan", "type": "PERSON", "aliases": []},
+        {"name": "Acme Corp", "type": "ORGANIZATION", "aliases": ["Acme", "ACME Corporation"]},
+        {"name": "Ascent 9", "type": "OBJECT", "aliases": ["Ascent 9 laptop"]},
+        {"name": "Lisbon", "type": "LOCATION", "aliases": []}
+      ],
+      "expected_relations": [
+        {"source": "Priya Raghavan", "relation_type": "EMPLOYED_BY", "target": "Acme Corp", "source_aliases": [], "target_aliases": ["Acme", "ACME Corporation"]},
+        {"source": "Priya Raghavan", "relation_type": "USES", "target": "Ascent 9", "source_aliases": [], "target_aliases": ["Ascent 9 laptop"]},
+        {"source": "Acme Corp", "relation_type": "HEADQUARTERS_AT", "target": "Lisbon", "source_aliases": ["Acme", "ACME Corporation"], "target_aliases": []}
+      ],
+      "metadata": {
+        "notes": "Three surface forms for one organization. HEADQUARTERS_AT is stated as 'the firm keeps its head office in Lisbon'."
+      }
+    },
+    {
+      "id": "poleo-02",
+      "text": "Marcus Bell interviewed at Northwind Logistics twice last spring. Marcus did not join Northwind; he signed with Harbour Freight Union instead. He has worked out of their Rotterdam office ever since.",
+      "expected_entities": [
+        {"name": "Marcus Bell", "type": "PERSON", "aliases": ["Marcus"]},
+        {"name": "Northwind Logistics", "type": "ORGANIZATION", "aliases": ["Northwind"]},
+        {"name": "Harbour Freight Union", "type": "ORGANIZATION", "aliases": ["Harbour Freight"]},
+        {"name": "Rotterdam", "type": "LOCATION", "aliases": []}
+      ],
+      "expected_relations": [
+        {"source": "Marcus Bell", "relation_type": "EMPLOYED_BY", "target": "Harbour Freight Union", "source_aliases": ["Marcus"], "target_aliases": ["Harbour Freight"]},
+        {"source": "Marcus Bell", "relation_type": "LOCATED_AT", "target": "Rotterdam", "source_aliases": ["Marcus"], "target_aliases": []}
+      ],
+      "metadata": {
+        "notes": "Planted negation: an extractor that ignores 'did not join' will emit a false EMPLOYED_BY edge.",
+        "negative_relations": [["Marcus Bell", "EMPLOYED_BY", "Northwind Logistics"]]
+      }
+    },
+    {
+      "id": "poleo-03",
+      "text": "Vesper Analytics is a subsidiary of Acme Corp. Vesper runs a joint warehouse pilot with Kestrel Robotics. Both teams work out of the same Dublin building.",
+      "expected_entities": [
+        {"name": "Vesper Analytics", "type": "ORGANIZATION", "aliases": ["Vesper"]},
+        {"name": "Acme Corp", "type": "ORGANIZATION", "aliases": ["Acme", "ACME Corporation"]},
+        {"name": "Kestrel Robotics", "type": "ORGANIZATION", "aliases": ["Kestrel"]},
+        {"name": "Dublin", "type": "LOCATION", "aliases": []}
+      ],
+      "expected_relations": [
+        {"source": "Vesper Analytics", "relation_type": "SUBSIDIARY_OF", "target": "Acme Corp", "source_aliases": ["Vesper"], "target_aliases": ["Acme", "ACME Corporation"]},
+        {"source": "Vesper Analytics", "relation_type": "PARTNER_WITH", "target": "Kestrel Robotics", "source_aliases": ["Vesper"], "target_aliases": ["Kestrel"]},
+        {"source": "Vesper Analytics", "relation_type": "LOCATED_AT", "target": "Dublin", "source_aliases": ["Vesper"], "target_aliases": []},
+        {"source": "Kestrel Robotics", "relation_type": "LOCATED_AT", "target": "Dublin", "source_aliases": ["Kestrel"], "target_aliases": []}
+      ],
+      "metadata": {
+        "notes": "Both LOCATED_AT edges are cross-sentence and resolve through 'Both teams'."
+      }
+    },
+    {
+      "id": "poleo-04",
+      "text": "The Lisbon Rail Summit opened on 4 March at the Alcantara conference hall. Priya Raghavan spoke on the second morning. Kestrel Robotics sent a delegation and demonstrated an inspection drone on stage.",
+      "expected_entities": [
+        {"name": "Lisbon Rail Summit", "type": "EVENT", "aliases": ["Rail Summit"]},
+        {"name": "Alcantara conference hall", "type": "LOCATION", "aliases": ["Alcantara"]},
+        {"name": "Priya Raghavan", "type": "PERSON", "aliases": []},
+        {"name": "Kestrel Robotics", "type": "ORGANIZATION", "aliases": ["Kestrel"]},
+        {"name": "inspection drone", "type": "OBJECT", "aliases": []}
+      ],
+      "expected_relations": [
+        {"source": "Lisbon Rail Summit", "relation_type": "OCCURRED_AT", "target": "Alcantara conference hall", "source_aliases": ["Rail Summit"], "target_aliases": ["Alcantara"]},
+        {"source": "Priya Raghavan", "relation_type": "PARTICIPATED_IN", "target": "Lisbon Rail Summit", "source_aliases": [], "target_aliases": ["Rail Summit"]},
+        {"source": "Kestrel Robotics", "relation_type": "PARTICIPATED_IN", "target": "Lisbon Rail Summit", "source_aliases": ["Kestrel"], "target_aliases": ["Rail Summit"]},
+        {"source": "Lisbon Rail Summit", "relation_type": "INVOLVED", "target": "inspection drone", "source_aliases": ["Rail Summit"], "target_aliases": []}
+      ],
+      "metadata": {
+        "notes": "'Lisbon Rail Summit' is an EVENT, not the LOCATION 'Lisbon' of poleo-01: a type trap for resolution."
+      }
+    },
+    {
+      "id": "poleo-05",
+      "text": "Nadia Osei has lived at 42 Rua do Sol since she moved south. Her neighbour Tomas Leal works two streets away. The two met at a cycling club three years ago and still ride together.",
+      "expected_entities": [
+        {"name": "Nadia Osei", "type": "PERSON", "aliases": []},
+        {"name": "42 Rua do Sol", "type": "LOCATION", "aliases": ["Rua do Sol 42"]},
+        {"name": "Tomas Leal", "type": "PERSON", "aliases": []}
+      ],
+      "expected_relations": [
+        {"source": "Nadia Osei", "relation_type": "RESIDES_AT", "target": "42 Rua do Sol", "source_aliases": [], "target_aliases": ["Rua do Sol 42"]},
+        {"source": "Nadia Osei", "relation_type": "KNOWS", "target": "Tomas Leal", "source_aliases": [], "target_aliases": []}
+      ],
+      "metadata": {
+        "notes": "KNOWS is cross-sentence and symmetric in the world but directed in the gold set; score it with MatchPolicy(directed=False) to accept either order."
+      }
+    },
+    {
+      "id": "poleo-06",
+      "text": "Dr. Amara Chen sits on the board of the Riverside Housing Trust. Colleagues still write A.C. in the meeting notes. The trust owns four minibuses that shuttle residents to the clinic.",
+      "expected_entities": [
+        {"name": "Amara Chen", "type": "PERSON", "aliases": ["Dr. Amara Chen", "A.C."]},
+        {"name": "Riverside Housing Trust", "type": "ORGANIZATION", "aliases": ["Riverside Trust"]},
+        {"name": "four minibuses", "type": "OBJECT", "aliases": ["minibuses"]}
+      ],
+      "expected_relations": [
+        {"source": "Amara Chen", "relation_type": "MEMBER_OF", "target": "Riverside Housing Trust", "source_aliases": ["Dr. Amara Chen", "A.C."], "target_aliases": ["Riverside Trust"]},
+        {"source": "Riverside Housing Trust", "relation_type": "OWNS", "target": "four minibuses", "source_aliases": ["Riverside Trust"], "target_aliases": ["minibuses"]}
+      ],
+      "metadata": {
+        "notes": "'A.C.' is an initialism for a person; 'The trust' is a nominal reference to the organization."
+      }
+    },
+    {
+      "id": "poleo-07",
+      "text": "The columnist who signs as J. Marchetti is Giulia Marchetti of the Veneto Review. She has written the Tuesday finance column for six years. Readers rarely notice that the two names belong to one person.",
+      "expected_entities": [
+        {"name": "J. Marchetti", "type": "PERSON", "aliases": []},
+        {"name": "Giulia Marchetti", "type": "PERSON", "aliases": []},
+        {"name": "Veneto Review", "type": "ORGANIZATION", "aliases": []}
+      ],
+      "expected_relations": [
+        {"source": "J. Marchetti", "relation_type": "ALIAS_OF", "target": "Giulia Marchetti", "source_aliases": [], "target_aliases": []},
+        {"source": "Giulia Marchetti", "relation_type": "EMPLOYED_BY", "target": "Veneto Review", "source_aliases": [], "target_aliases": []}
+      ],
+      "metadata": {
+        "notes": "Extraction keeps the two surface forms apart (that is what ALIAS_OF records); resolution puts them in one cluster. The disagreement is deliberate."
+      }
+    },
+    {
+      "id": "poleo-08",
+      "text": "Kestrel Robotics owns three Halcyon 200 arms and leases a fourth. Sofia Brandao, the lead technician at the Porto workshop, uses the arms for weld testing. Kestrel bought the first unit second-hand.",
+      "expected_entities": [
+        {"name": "Kestrel Robotics", "type": "ORGANIZATION", "aliases": ["Kestrel"]},
+        {"name": "Halcyon 200", "type": "OBJECT", "aliases": ["Halcyon 200 arms"]},
+        {"name": "Sofia Brandao", "type": "PERSON", "aliases": []},
+        {"name": "Porto workshop", "type": "LOCATION", "aliases": ["Porto"]}
+      ],
+      "expected_relations": [
+        {"source": "Kestrel Robotics", "relation_type": "OWNS", "target": "Halcyon 200", "source_aliases": ["Kestrel"], "target_aliases": ["Halcyon 200 arms"]},
+        {"source": "Sofia Brandao", "relation_type": "USES", "target": "Halcyon 200", "source_aliases": [], "target_aliases": ["Halcyon 200 arms"]},
+        {"source": "Sofia Brandao", "relation_type": "LOCATED_AT", "target": "Porto workshop", "source_aliases": [], "target_aliases": ["Porto"]}
+      ],
+      "metadata": {
+        "notes": "'leases a fourth' is deliberately not an OWNS edge; 'the arms' in sentence two is a cross-sentence reference."
+      }
+    },
+    {
+      "id": "poleo-09",
+      "text": "Harbour Freight Union held its annual safety review in Antwerp on 12 October. Marcus Bell chaired the session. The union keeps its head office in Rotterdam, a short train ride away.",
+      "expected_entities": [
+        {"name": "Harbour Freight Union", "type": "ORGANIZATION", "aliases": ["Harbour Freight"]},
+        {"name": "annual safety review", "type": "EVENT", "aliases": ["safety review"]},
+        {"name": "Antwerp", "type": "LOCATION", "aliases": []},
+        {"name": "Marcus Bell", "type": "PERSON", "aliases": ["Marcus"]},
+        {"name": "Rotterdam", "type": "LOCATION", "aliases": []}
+      ],
+      "expected_relations": [
+        {"source": "annual safety review", "relation_type": "OCCURRED_AT", "target": "Antwerp", "source_aliases": ["safety review"], "target_aliases": []},
+        {"source": "Harbour Freight Union", "relation_type": "PARTICIPATED_IN", "target": "annual safety review", "source_aliases": ["Harbour Freight"], "target_aliases": ["safety review"]},
+        {"source": "Marcus Bell", "relation_type": "PARTICIPATED_IN", "target": "annual safety review", "source_aliases": ["Marcus"], "target_aliases": ["safety review"]},
+        {"source": "Harbour Freight Union", "relation_type": "HEADQUARTERS_AT", "target": "Rotterdam", "source_aliases": ["Harbour Freight"], "target_aliases": []}
+      ],
+      "metadata": {
+        "notes": "Two locations in one document: the event location (Antwerp) and the head office (Rotterdam)."
+      }
+    },
+    {
+      "id": "poleo-10",
+      "text": "Northwind Logistics, or Northwind to its customers, runs a depot outside Malaga. Its parent company, Acme Corporation, approved the site last year. Elena Duarte manages the depot and reports to Lisbon every Friday.",
+      "expected_entities": [
+        {"name": "Northwind Logistics", "type": "ORGANIZATION", "aliases": ["Northwind"]},
+        {"name": "Malaga", "type": "LOCATION", "aliases": []},
+        {"name": "Acme Corporation", "type": "ORGANIZATION", "aliases": ["Acme", "Acme Corp"]},
+        {"name": "Elena Duarte", "type": "PERSON", "aliases": []},
+        {"name": "Lisbon", "type": "LOCATION", "aliases": []}
+      ],
+      "expected_relations": [
+        {"source": "Northwind Logistics", "relation_type": "SUBSIDIARY_OF", "target": "Acme Corporation", "source_aliases": ["Northwind"], "target_aliases": ["Acme", "Acme Corp"]},
+        {"source": "Northwind Logistics", "relation_type": "LOCATED_AT", "target": "Malaga", "source_aliases": ["Northwind"], "target_aliases": []},
+        {"source": "Elena Duarte", "relation_type": "EMPLOYED_BY", "target": "Northwind Logistics", "source_aliases": [], "target_aliases": ["Northwind"]}
+      ],
+      "metadata": {
+        "notes": "'Its parent company' carries SUBSIDIARY_OF across a sentence boundary; 'reports to Lisbon' is a metonym, not a RESIDES_AT."
+      }
+    }
+  ]
+}

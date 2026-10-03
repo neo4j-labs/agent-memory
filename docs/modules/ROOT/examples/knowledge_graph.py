@@ -11,7 +11,7 @@ from neo4j_agent_memory import MemoryClient
 from neo4j_agent_memory.extraction import (
     DomainSchema,
     ExtractionResult,
-    GLiNEREntityExtractor,
+    GLiNER2Extractor,
     LLMEntityExtractor,
 )
 
@@ -56,7 +56,7 @@ EDGES_QUERY = (
 
 
 class DocumentExtractor:
-    """Take mentions from GLiNER and schema relations from the chat model."""
+    """Take mentions from GLiNER2.5 and schema relations from the chat model."""
 
     def __init__(self, entity_extractor, relation_extractor):
         self.entity_extractor = entity_extractor
@@ -76,7 +76,11 @@ class DocumentExtractor:
 
 def extractor(model):
     return DocumentExtractor(
-        GLiNEREntityExtractor(schema=SCHEMA, label_mapping=LABELS, threshold=0.5),
+        # A DomainSchema gives its relations no endpoint types, so GLiNER2.5
+        # decodes only entities here; the chat model proposes the relations.
+        GLiNER2Extractor(
+            ontology=SCHEMA, label_mapping=LABELS, threshold=0.5, extract_relations=False
+        ),
         LLMEntityExtractor(
             model=f"openai/{model}",
             entity_types=["PERSON", "ORGANIZATION", "LOCATION"],
@@ -106,7 +110,7 @@ async def store_document(client, filename, text, result):
             resolve=False,
             deduplicate=False,
         )
-        # SDK 0.6.0 returns the canonical stored ID after a name/type MERGE.
+        # SDK 0.7.0 returns the canonical stored ID after a name/type MERGE.
         # Verify that the exact match is unambiguous before attaching links.
         persisted = await client.query.cypher(
             "MATCH (e:Entity {name: $name, type: $type}) RETURN e.id AS id",

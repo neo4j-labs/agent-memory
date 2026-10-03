@@ -1,4 +1,0 @@
-[IMPORTANT]
-====
-icon:cloud[] *Available on NAMS: Yes — NAMS only.* This feature requires the hosted NAMS backend; on Bolt its accessor's methods raise `NotSupportedError` (define a custom schema with `SchemaModel.CUSTOM` instead). See the xref:reference/backend-capabilities.adoc[backend capabilities reference].
-====

@@ -147,7 +147,7 @@ def test_every_settings_group_is_documented():
 
 
 def test_domain_schema_labels_and_descriptions_match_registry():
-    tree = ast.parse((SOURCE / "extraction/gliner_extractor.py").read_text())
+    tree = ast.parse((SOURCE / "extraction/domain_schemas.py").read_text())
     registry = next(
         n for n in tree.body if isinstance(n, ast.AnnAssign) and n.target.id == "DOMAIN_SCHEMAS"
     )

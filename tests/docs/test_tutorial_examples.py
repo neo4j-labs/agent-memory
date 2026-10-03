@@ -61,7 +61,7 @@ async def test_conversation_memory_phases(live_programs, capsys):
 async def test_knowledge_graph_phases(live_programs, capsys):
     lesson = live_programs.load("knowledge_graph")
     if "GLiNER" in inspect.getsource(lesson.extractor):
-        pytest.importorskip("gliner", reason="the lesson's extractor needs the gliner extra")
+        pytest.importorskip("gliner2", reason="the lesson's extractor needs the gliner2 extra")
     live_programs.wipe()
 
     await live_programs.run(lesson, "ingest")

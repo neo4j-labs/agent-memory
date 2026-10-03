@@ -52,14 +52,14 @@ include::partial$python-tutorial-setup.adoc[]
 
 [source,bash]
 ----
-python -m pip install 'neo4j-agent-memory[nams]==0.6.0'
+python -m pip install 'neo4j-agent-memory[nams]==0.7.0'
 python -c "from importlib.metadata import version; \
 import neo4j_agent_memory; \
-assert version('neo4j-agent-memory') == '0.6.0'; \
-print('SDK 0.6.0 import verified')"
+assert version('neo4j-agent-memory') == '0.7.0'; \
+print('SDK 0.7.0 import verified')"
 ----
 
-Expected: `SDK 0.6.0 import verified`. Keep `agent-memory-tutorials` as your
+Expected: `SDK 0.7.0 import verified`. Keep `agent-memory-tutorials` as your
 working directory. Do not reuse a nonempty workspace
 merely because it was used for the preceding lesson.
 

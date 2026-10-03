@@ -1,9 +1,15 @@
 """Base extraction classes and protocols."""
 
+import logging
 import re
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    from neo4j_agent_memory.ontology.models import OntologyDocument
+
+logger = logging.getLogger(__name__)
 
 # Stopwords and invalid entity patterns to filter out during extraction
 # These are common words that should never be extracted as named entities
@@ -223,6 +229,37 @@ ENTITY_STOPWORDS: frozenset[str] = frozenset(
 # Minimum length for entity names (single characters and very short strings are usually noise)
 MIN_ENTITY_LENGTH = 2
 
+# Separators an author may use inside a relationship type name.
+_RELATION_SEPARATORS = re.compile(r"[\s\-]+")
+
+
+def normalize_relation_type(name: str) -> str:
+    """Normalise a relationship type name to UPPER_SNAKE.
+
+    Relationship types are written by hand in ontology documents (``WORKS_AT``,
+    ``works at``, ``works-at``) and decoded by the model in whatever casing the
+    schema used. Both ends of every comparison — and the ``relation_type``
+    stored on an :class:`ExtractedRelation` — go through this one function so a
+    tolerantly-spelled declaration still matches what was extracted.
+
+    Args:
+        name: A relationship type name in any casing or separator style.
+
+    Returns:
+        The name upper-cased with runs of whitespace and hyphens collapsed to a
+        single underscore, and repeated underscores collapsed.
+
+    Example:
+        ```python
+        normalize_relation_type("works at")  # "WORKS_AT"
+        normalize_relation_type("Works-At")  # "WORKS_AT"
+        ```
+    """
+    collapsed = _RELATION_SEPARATORS.sub("_", name.strip())
+    collapsed = re.sub(r"_+", "_", collapsed)
+    return collapsed.strip("_").upper()
+
+
 # Pattern for purely numeric entities (these are usually not named entities)
 NUMERIC_PATTERN = re.compile(r"^[\d\s.,%-]+$")
 
@@ -264,6 +301,84 @@ def is_valid_entity_name(name: str) -> bool:
     return True
 
 
+#: Leading words that do not change what a mention names ("my ticket").
+_TYPE_NAME_LEADERS = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "my",
+        "your",
+        "our",
+        "their",
+        "his",
+        "her",
+        "its",
+        "this",
+        "that",
+        "these",
+        "those",
+        "any",
+        "all",
+        "some",
+        "each",
+        "every",
+        "new",
+        "open",
+    }
+)
+
+
+def _type_name_words(label: str) -> str:
+    """``SupportCase`` / ``support_case`` / ``SUPPORT_CASE`` -> ``"support case"``."""
+    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", label.strip()).replace("_", " ")
+    return " ".join(spaced.lower().split())
+
+
+def _plural_forms(words: str) -> set[str]:
+    """The phrase and its regular plurals (``ticket``/``tickets``, ``category``/``categories``)."""
+    forms = {words, f"{words}s", f"{words}es"}
+    if words.endswith("y"):
+        forms.add(f"{words[:-1]}ies")
+    return forms
+
+
+def is_type_name_mention(
+    entity: "ExtractedEntity", ontology: "OntologyDocument | None" = None
+) -> bool:
+    """Whether a mention is only the name of its own type, such as "tickets" typed Ticket.
+
+    Span extractors type the class noun along with the instances: in "which
+    tickets does Grace have?" GLiNER2.5 returns ``tickets`` as a Ticket, and a
+    type description cannot talk it out of that. Such a mention names the type,
+    not an entity, so it is dropped. "TK-2210" and "Acme Company" are kept.
+
+    The type's names are the mention's POLE+O type and subtype, the label the
+    extractor produced it under (``attributes["gliner2_label"]``), and, when an
+    ontology is given, the label it declares for the mention's exact pair. The
+    comparison ignores case, leading articles and possessives ("my ticket"),
+    and regular plurals.
+
+    Args:
+        entity: The extracted mention.
+        ontology: The ontology the mention was extracted against, if any.
+
+    Returns:
+        ``True`` when the mention's whole name is one of its type's names.
+    """
+    words = _type_name_words(entity.name).split()
+    while len(words) > 1 and words[0] in _TYPE_NAME_LEADERS:
+        words = words[1:]
+    name = " ".join(words)
+    if not name:
+        return False
+
+    labels = [entity.type, entity.subtype or "", str(entity.attributes.get("gliner2_label") or "")]
+    if ontology is not None:
+        labels.append(ontology.node_label(entity.type, entity.subtype) or "")
+    return any(name in _plural_forms(_type_name_words(label)) for label in labels if label)
+
+
 class ExtractedEntity(BaseModel):
     """Entity extracted from text.
 
@@ -286,6 +401,16 @@ class ExtractedEntity(BaseModel):
     extractor: str | None = Field(
         default=None, description="Name of the extractor that produced this entity"
     )
+    id: str | None = Field(
+        default=None,
+        description=(
+            "Per-result mention id assigned by the extractor (e.g. the entity id "
+            "produced by a joint entity+relation model such as JointIE), scoped to a "
+            "single extraction call. Lets ExtractedRelation.source_id/target_id "
+            "reference the exact mention rather than a name, which matters when the "
+            "same name is mentioned more than once in one text."
+        ),
+    )
 
     @property
     def normalized_name(self) -> str:
@@ -307,6 +432,31 @@ class ExtractedRelation(BaseModel):
     target: str = Field(description="Target entity name")
     relation_type: str = Field(description="Type of relationship")
     confidence: float = Field(default=1.0, ge=0.0, le=1.0, description="Confidence score")
+    source_id: str | None = Field(
+        default=None,
+        description=(
+            "Mention id of the source entity, matching ExtractedEntity.id for an "
+            "entity produced in the same extraction call. When both source_id and "
+            "target_id resolve to known mentions, storage prefers them over a "
+            "name-based lookup."
+        ),
+    )
+    target_id: str | None = Field(
+        default=None,
+        description=(
+            "Mention id of the target entity, matching ExtractedEntity.id for an "
+            "entity produced in the same extraction call."
+        ),
+    )
+    derived: bool = Field(
+        default=False,
+        description=(
+            "True when this relation was derived (e.g. an inverse mirror of an "
+            "asserted relation) rather than directly observed by the extractor. "
+            "Storage folds this with AND across repeated observations, so once a "
+            "relation is asserted (derived=False) at least once it stays False."
+        ),
+    )
 
     @property
     def as_triple(self) -> tuple[str, str, str]:
@@ -359,7 +509,9 @@ class ExtractionResult(BaseModel):
         """Get entities of a specific type."""
         return [e for e in self.entities if e.type.upper() == entity_type.upper()]
 
-    def filter_invalid_entities(self) -> "ExtractionResult":
+    def filter_invalid_entities(
+        self, ontology: "OntologyDocument | None" = None
+    ) -> "ExtractionResult":
         """Return a new ExtractionResult with invalid entities filtered out.
 
         Filters entities that are:
@@ -367,14 +519,24 @@ class ExtractionResult(BaseModel):
         - Too short (less than 2 characters)
         - Purely numeric
         - Only punctuation/special characters
+        - Only the name of their own type, such as "tickets" typed Ticket
+          (see :func:`is_type_name_mention`)
 
         Also filters relations that reference removed entities.
+
+        Args:
+            ontology: The ontology the result was extracted against. Its
+                declared labels count as type names too.
 
         Returns:
             New ExtractionResult with only valid entities and relations
         """
         # Filter entities
-        valid_entities = [e for e in self.entities if is_valid_entity_name(e.name)]
+        valid_entities = [
+            e
+            for e in self.entities
+            if is_valid_entity_name(e.name) and not is_type_name_mention(e, ontology)
+        ]
 
         # Get set of valid entity names for relation filtering
         valid_entity_names = {e.normalized_name for e in valid_entities}
@@ -393,6 +555,117 @@ class ExtractionResult(BaseModel):
             preferences=self.preferences,  # Preferences don't need filtering
             source_text=self.source_text,
         )
+
+    def validate_relations(
+        self,
+        ontology: "OntologyDocument",
+        *,
+        mode: Literal["warn", "drop", "raise"] = "warn",
+    ) -> "tuple[ExtractionResult, list[ExtractedRelation]]":
+        """Check every relation against the ontology's endpoint typing.
+
+        A relation violates the ontology when any of the following holds:
+
+        * its ``relation_type`` is not a declared relationship type,
+        * either endpoint cannot be resolved to an entity in this result,
+        * the resolved endpoints' labels are not a declared
+          ``(source, type, target)`` pattern
+          (:meth:`OntologyDocument.permits`).
+
+        Endpoints resolve by ``source_id``/``target_id`` first (the precise
+        path for a joint entity+relation extractor, where one name may be
+        mentioned twice), then by normalised name.
+
+        Relationship type names are compared through
+        :func:`normalize_relation_type` on *both* sides, so an ontology that
+        declares ``"works at"`` still matches an extracted ``WORKS_AT``.
+
+        An ontology that declares no relationships cannot express a violation,
+        so the result passes through untouched.
+
+        Args:
+            ontology: The ontology to validate against.
+            mode: ``"warn"`` logs the violations and keeps them, ``"drop"``
+                returns a copy without them, ``"raise"`` raises.
+
+        Returns:
+            ``(result, violations)`` — the result to use (``self`` unless
+            ``mode="drop"`` removed something) and the violating relations.
+
+        Raises:
+            ValueError: If ``mode="raise"`` and at least one relation violates
+                the ontology.
+        """
+        if not ontology.relationships or not self.relations:
+            return self, []
+
+        by_id = {e.id: e for e in self.entities if e.id is not None}
+        by_name: dict[str, ExtractedEntity] = {}
+        for entity in self.entities:
+            by_name.setdefault(entity.normalized_name, entity)
+
+        declared_types = {
+            normalize_relation_type(rel_type) for rel_type in ontology.relationship_types()
+        }
+        # Normalised copy of ontology.permits(): the declared patterns carry the
+        # author's spelling of the type name, the extracted relations carry the
+        # model's, and only the normalised forms are comparable.
+        permitted = {
+            (source.lower(), normalize_relation_type(rel_type), target.lower())
+            for source, rel_type, target in ontology.patterns()
+        }
+
+        def endpoint_label(mention_id: str | None, name: str) -> str | None:
+            entity = by_id.get(mention_id) if mention_id is not None else None
+            if entity is None:
+                entity = by_name.get(name.lower().strip())
+            if entity is None:
+                return None
+            return ontology.label_for(entity.type, entity.subtype)
+
+        violations: list[ExtractedRelation] = []
+        kept: list[ExtractedRelation] = []
+        for relation in self.relations:
+            source_label = endpoint_label(relation.source_id, relation.source)
+            target_label = endpoint_label(relation.target_id, relation.target)
+            rel_type = normalize_relation_type(relation.relation_type)
+            is_permitted = (
+                rel_type in declared_types
+                and source_label is not None
+                and target_label is not None
+                and (source_label.lower(), rel_type, target_label.lower()) in permitted
+            )
+            if is_permitted:
+                kept.append(relation)
+            else:
+                violations.append(relation)
+
+        if not violations:
+            return self, []
+
+        summary = ", ".join(
+            f"{r.source} -[{r.relation_type}]-> {r.target}" for r in violations[:10]
+        )
+        message = (
+            f"{len(violations)} relation(s) are not permitted by ontology "
+            f"{ontology.domain.name!r}: {summary}"
+        )
+
+        if mode == "raise":
+            raise ValueError(message)
+        if mode == "drop":
+            logger.debug("Dropping %s", message)
+            return (
+                ExtractionResult(
+                    entities=self.entities,
+                    relations=kept,
+                    preferences=self.preferences,
+                    source_text=self.source_text,
+                ),
+                violations,
+            )
+        logger.warning(message)
+        return self, violations
 
 
 @runtime_checkable
