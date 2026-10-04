@@ -571,3 +571,18 @@ class MemoryIntegration:
         except Exception as e:
             logger.error(f"Error adding fact: {e}")
             return {"error": str(e)}
+
+    async def delete_fact(self, fact_id: str) -> dict[str, Any]:
+        """Delete a fact by ID."""
+        deleted = await self._client.long_term.delete_fact(fact_id)
+        return {"deleted": deleted, "id": fact_id}
+
+    async def delete_preference(self, preference_id: str) -> dict[str, Any]:
+        """Delete a preference by ID."""
+        deleted = await self._client.long_term.delete_preference(preference_id)
+        return {"deleted": deleted, "id": preference_id}
+
+    async def delete_entity(self, entity_id: str) -> dict[str, Any]:
+        """Delete an entity and its relationships by ID."""
+        deleted = await self._client.long_term.delete_entity(entity_id)
+        return {"deleted": deleted, "id": entity_id}
