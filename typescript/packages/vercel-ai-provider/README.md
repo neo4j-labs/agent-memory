@@ -155,6 +155,10 @@ There are four ways to integrate NAMS depending on how much control you want:
 | **Tools** | Expose memory as explicit AI SDK tools (optionally merged with tools from an MCP server) | When you want the model to decide when to remember |
 | **Hooks** | The runtime reads/writes the session transcript around every generation via AI SDK hooks — nothing memory-related is shown to the LLM | Applications that explicitly coordinate transcript writes |
 
+Building on [eve](https://eve.dev)? Use the [eve memory provider](#eve-memory-provider)
+instead: eve owns the conversation history, so it takes a memory slot, not a
+model wrapper.
+
 Switching modes is purely a code-level choice — all four use the same API key
 and environment variables (see [Environment variables](#environment-variables)).
 To make it a deploy-time choice instead, see
@@ -636,6 +640,82 @@ runnable example covering every event.
 
 ---
 
+## eve Memory Provider
+
+[eve](https://eve.dev) owns an agent's memory slots: it locks who a slot's
+memory belongs to, asks the slot's provider to recall context before each turn
+and capture the turn after it, and gives the model the provider's tools.
+`@neo4j-labs/nams-ai-provider/eve` implements eve's
+[memory-provider contract](https://eve.dev/docs/memory/custom-provider) with
+NAMS. It needs eve 0.69, 0.70 or 0.71, and Node.js 24.
+
+```bash
+npm install @neo4j-labs/nams-ai-provider @neo4j-labs/agent-memory
+```
+
+```ts
+// agent/memory/nams.ts
+import { namsMemory } from '@neo4j-labs/nams-ai-provider/eve';
+import { defineMemory } from 'eve/memory';
+import { byPrincipal } from 'eve/memory/scope';
+
+export default defineMemory({
+  description: 'Durable facts and earlier sessions for the current user, from Neo4j Agent Memory.',
+  provider: namsMemory(), // reads MEMORY_API_KEY (and MEMORY_WORKSPACE_ID if set)
+  scope: byPrincipal,
+});
+```
+
+| eve phase | What the provider does |
+|---|---|
+| Recall (`turn.started`, `compaction.completed`) | One record, id `nams-memory`: notes saved with `remember`, the summaries NAMS wrote about earlier sessions, and messages from them that match the user's message. Each turn's record replaces the last. |
+| Capture (`turn.completed`) | The user's message and final answer, written to one NAMS conversation per eve session. NAMS extracts entities and writes summaries from it. |
+| Tools | `nams__search` finds messages in earlier sessions and notes; `nams__remember` saves a note. Both are bound to the locked scope. |
+
+**Isolation.** Every conversation the provider writes carries eve's opaque
+`memory.scope.key` as its NAMS `userId`, and every read starts from that
+scope's own conversations. The provider also checks the `userId` of every
+conversation it reads, so a server that returns other users' conversations
+cannot leak them. The raw principal id never reaches NAMS.
+
+**Replays.** A replayed recall returns the same record, and a replayed capture
+does not write the turn twice, also after a restart. Each tool's `execute` is
+an eve durable callback whose closure is the scope key, slot and session id:
+eve's workflow bundler leaves it intact, and the client and API key never
+enter durable state.
+
+**Limits.** The NAMS knowledge graph is per workspace, not per user, so
+entities are recalled only with `workspaceGraph: true` — use it when the
+workspace serves one tenant or holds no personal data. Hosted NAMS cannot
+delete a single message, so there is no `forget` tool yet.
+
+**Needs the next `@neo4j-labs/agent-memory` release.** Hosted NAMS rejects
+unknown request fields, and 0.5.0 sends two. Every message search carries
+`threshold`, so recall's matching messages and `nams__search` come back empty
+(notes and summaries still work). The user filter goes out as `user_id`, which
+hosted NAMS ignores, so reads see only the workspace's newest 200
+conversations.
+
+```ts
+namsMemory({
+  apiKey?:            string,  // Default: MEMORY_API_KEY
+  workspaceId?:       string,  // Default: MEMORY_WORKSPACE_ID
+  endpoint?:          string,  // Default: https://memory.neo4jlabs.com/v1
+  logger?:            NamsLogger,
+  crossSessionLimit?: number,  // Earlier sessions read per recall. 0 = off. Default: 3
+  maxMemories?:       number,  // Max lines in the recalled record. Default: 8
+  capture?:           boolean, // Write completed turns to NAMS. Default: true
+  tools?:             boolean, // Offer search and remember. Default: true
+  workspaceGraph?:    boolean, // Also recall workspace-wide entities. Default: false
+});
+```
+
+A rejected or missing API key fails the turn; any other NAMS error during
+recall is logged, and the turn goes on with a record that says memory is
+unavailable.
+
+---
+
 ## Configuration
 
 ```ts
@@ -671,7 +751,7 @@ variables:
 
 | Variable | Required | Used for |
 |----------|----------|----------|
-| `MEMORY_API_KEY` | yes | NAMS API key — pass it as `apiKey` (the examples and snippets read it from the environment) |
+| `MEMORY_API_KEY` | yes | NAMS API key — pass it as `apiKey` (the examples and snippets read it from the environment; the eve provider reads it when `apiKey` is not passed) |
 | `OPENAI_API_KEY` | yes* | Read by `@ai-sdk/openai`; *swap for whichever `@ai-sdk/*` provider key your base model needs |
 | `NAMS_DEMO_USER` | no | Overrides the demo `userId` in the [runnable examples](./examples) |
 | `NAMS_DEMO_MODEL` | no | Overrides the demo model id (default: `gpt-5.4-mini`) in the [runnable examples](./examples) |

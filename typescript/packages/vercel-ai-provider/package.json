@@ -1,12 +1,13 @@
 {
   "name": "@neo4j-labs/nams-ai-provider",
   "version": "0.3.0",
-  "description": "Neo4j Agent Memory (NAMS) provider for the Vercel AI SDK — persistent cross-session memory backed by Neo4j",
+  "description": "Neo4j Agent Memory (NAMS) for the Vercel AI SDK and eve — persistent cross-session memory backed by Neo4j",
   "keywords": [
     "ai",
     "ai-sdk",
     "vercel-ai",
     "provider",
+    "eve",
     "neo4j",
     "memory",
     "agent-memory",
@@ -35,6 +36,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./eve": {
+      "types": "./dist/eve.d.ts",
+      "import": "./dist/eve.js"
     }
   },
   "files": [
@@ -55,19 +60,24 @@
     "@ai-sdk/mcp": "^2.0.0",
     "@neo4j-labs/agent-memory": "~0.4.0 || ~0.5.0",
     "ai": "^7.0.0",
+    "eve": "~0.69.0 || ~0.70.0 || ~0.71.0",
     "zod": "^3.25.76 || ^4.1.8"
   },
   "peerDependenciesMeta": {
     "@ai-sdk/mcp": {
       "optional": true
+    },
+    "eve": {
+      "optional": true
     }
   },
   "devDependencies": {
-    "@ai-sdk/mcp": "^2.0.19",
-    "@ai-sdk/openai": "^4.0.24",
+    "@ai-sdk/mcp": "^2.0.66",
+    "@ai-sdk/openai": "^4.0.83",
     "@neo4j-labs/agent-memory": "^0.4.0",
     "@types/node": "^22",
-    "ai": "^7.0.42",
+    "ai": "^7.0.127",
+    "eve": "~0.71.0",
     "tsup": "^8.0.0",
     "typescript": "^5.0.0",
     "vitest": "^2.0.0",

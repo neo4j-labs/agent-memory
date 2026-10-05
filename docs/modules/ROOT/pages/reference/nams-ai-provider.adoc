@@ -261,6 +261,103 @@ write returns `stored: false` with `message: "Failed to store memory."`.
 what a denied tool returns to the model instead of its result — is `{
 blocked: true; toolName: string; reason: string }`.
 
+[[eve-memory-provider]]
+=== eve memory provider
+
+Exported from the `@neo4j-labs/nams-ai-provider/eve` entry point, which needs
+the optional `eve` peer.
+
+[cols="2,3", options="header"]
+|===
+| Export | Signature
+
+| `namsMemory(options?: NamsEveMemoryOptions)`
+| Returns an eve `MemoryProvider` for `defineMemory({ provider })`: `recall` on `turn.started` and `compaction.completed`, `capture` on `turn.completed`, and `tools` returning `search` and `remember`.
+|===
+
+`NamsEveMemoryOptions`:
+
+[cols="1,1,1,3", options="header"]
+|===
+| Field | Type | Default | Notes
+
+| `apiKey`
+| `string`
+| `MEMORY_API_KEY`
+| A missing key fails the first turn's recall, not module load.
+
+| `endpoint`
+| `string`
+| `https://memory.neo4jlabs.com/v1`
+|
+
+| `workspaceId`
+| `string`
+| `MEMORY_WORKSPACE_ID`
+| Without one, the key's own workspace.
+
+| `logger`
+| `NamsLogger`
+| console
+| Receives non-fatal errors.
+
+| `crossSessionLimit`
+| `number`
+| `3`
+| Earlier sessions of the scope read per recall. `0` turns cross-session recall off.
+
+| `maxMemories`
+| `number`
+| `8`
+| Max lines in the recalled record. Saved notes come first; the other sources take turns for what is left.
+
+| `capture`
+| `boolean`
+| `true`
+| Write each completed turn's user message and final answer to NAMS.
+
+| `tools`
+| `boolean`
+| `true`
+| Give the model `search` and `remember`. With `false`, `tools()` returns `null`.
+
+| `workspaceGraph`
+| `boolean`
+| `false`
+| Also recall entities from the NAMS knowledge graph, which is shared by the whole workspace rather than partitioned by scope.
+|===
+
+Behavior:
+
+* *Partitioning.* Each conversation the provider creates has eve's
+  `memory.scope.key` as its NAMS `userId`, and conversation metadata
+  `{ source: "eve", kind: "session" | "notes", slot, session?, title }`.
+  Every read lists conversations with that `userId` and keeps only the ones
+  whose `userId` and `slot` match, in case the server returns other users'.
+  `@neo4j-labs/agent-memory` 0.5.0 sends the filter as `user_id`, which hosted
+  NAMS ignores, so with it reads see the newest 200 conversations in the
+  workspace.
+* *Recall* returns one message with the id `nams-memory`, so each turn's
+  record supersedes the last. Its content is wrapped in `<nams_memory>` tags,
+  marked as data rather than instructions, with `<`, `>` and `&` escaped. It
+  lists saved notes, then summaries (`getContext` reflections and observations)
+  and query matches from up to `crossSessionLimit` earlier sessions, skipping
+  the current one. After a standalone compaction it has no query, so it lists
+  notes and summaries only. A replayed operation id returns the same result.
+* *Capture* writes one bulk request per turn to the eve session's conversation,
+  creating it on first use. A turn already at the end of the conversation is
+  not written again, so a replay after a restart does not duplicate it.
+* *Tools.* `search({ query, limit? })` returns
+  `{ results: [{ from, role, content, at }], workspaceGraph? }` from the
+  scope's notes and earlier sessions (up to 10 conversations). `remember({ memory })`
+  adds the note to the scope's notes conversation and returns
+  `{ remembered: true, memory }`. Both are built with eve's `defineTool` and
+  `defineDurableCallback`; the callback closure holds only the scope key, slot
+  and eve session id, never the API key.
+* *Errors.* An `AuthenticationError` or a missing key fails the turn. Other
+  recall errors are logged and the record says memory is unavailable. Capture
+  and tool errors propagate to eve.
+
 === Low-level utilities
 
 `makeClient`, `getLogger`, `resolveConversation`, `findExistingConversation`,
@@ -463,11 +560,15 @@ of failing the model call.
 
 | `MEMORY_API_KEY`
 | yes
-| NAMS API key — pass it as `apiKey`. Read by the runnable examples and snippets in code, not by the package itself.
+| NAMS API key. The AI SDK modes take it as `apiKey` and never read the variable themselves; `namsMemory()` reads it when `apiKey` is not passed.
+
+| `MEMORY_WORKSPACE_ID`
+| no
+| NAMS workspace, read by the `@neo4j-labs/agent-memory` client when `workspaceId` is not passed.
 |===
 
-No environment variable selects a mode; provider, middleware, tools, and hooks
-are chosen entirely in code.
+No environment variable selects a mode; provider, middleware, tools, hooks,
+and the eve provider are chosen entirely in code.
 
 == Peers, runtime, and versioning
 
@@ -486,11 +587,16 @@ are chosen entirely in code.
 
 | `@ai-sdk/mcp` _(optional)_
 | `^2.0.0` — only needed for `toolsWithMcp()`, loaded lazily.
+
+| `eve` _(optional)_
+| `~0.69.0 \|\| ~0.70.0 \|\| ~0.71.0` — only needed for the `/eve` entry point.
 |===
 
-Requires Node.js 22 or newer (`engines.node: ">=22"`). ESM-only (`"type":
-"module"`) with a single entry point — `package.json` declares no subpath
-exports, unlike `@neo4j-labs/agent-memory`.
+Requires Node.js 22 or newer (`engines.node: ">=22"`); the `/eve` entry point
+needs Node.js 24, which eve requires. ESM-only (`"type": "module"`) with two
+entry points: `@neo4j-labs/nams-ai-provider` for the AI SDK modes and
+`@neo4j-labs/nams-ai-provider/eve` for the eve memory provider. The main entry
+never loads eve.
 
 Releases are tagged `nams-ai-provider-v<X.Y.Z>` and published via
 `.github/workflows/publish-nams-ai-provider.yml`, independently of the SDK's
@@ -503,6 +609,7 @@ Releases are tagged `nams-ai-provider-v<X.Y.Z>` and published via
 * xref:how-to/typescript/nams-ai-provider-middleware-mode.adoc[Wrap a model in middleware mode]
 * xref:how-to/typescript/nams-ai-provider-tools-mode.adoc[Expose memory as tools]
 * xref:how-to/typescript/nams-ai-provider-hooks-mode.adoc[Control memory with lifecycle hooks]
+* xref:how-to/typescript/nams-ai-provider-eve.adoc[Add NAMS memory to an eve agent]
 * xref:explanation/nams-ai-provider-retrieval.adoc[How the NAMS AI provider retrieves memory]
 * xref:reference/typescript-api.adoc[TypeScript SDK API reference]
 * link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/packages/vercel-ai-provider[Package source and README on GitHub]

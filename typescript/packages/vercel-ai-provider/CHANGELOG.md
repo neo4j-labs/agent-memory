@@ -3,6 +3,37 @@
 Releases before 0.3.0 predate this file; see the
 [GitHub releases](https://github.com/neo4j-labs/agent-memory/releases) for those.
 
+### Added
+
+- **eve memory provider.** `namsMemory()` from the new
+  `@neo4j-labs/nams-ai-provider/eve` entry point backs an
+  [eve](https://eve.dev) memory slot with NAMS, following eve's
+  memory-provider contract. Recall returns one keyed record before each turn
+  (and after compaction): notes saved with `remember`, NAMS summaries of the
+  scope's earlier sessions, and messages from them that match the user's
+  message. Capture writes each completed turn to one NAMS conversation per eve
+  session. The model gets `search` and `remember`, bound to the locked scope.
+  Every conversation carries eve's `memory.scope.key` as its NAMS `userId`,
+  and reads also check it, in case the server returns other users'. The
+  workspace-wide entity graph is read only with `workspaceGraph: true`. A
+  replayed recall returns the same record; a replayed capture writes nothing,
+  also after a restart. Tool callbacks are durable and keep no secrets.
+- `eve` (`~0.69.0 || ~0.70.0 || ~0.71.0`) is a new optional peer dependency,
+  needed only for the `/eve` entry point. The main entry point never loads it.
+  `examples/eve-memory-eval` runs the provider inside eve's own runtime with a
+  mock model and a local fake of NAMS; it passes on eve 0.69.0, 0.70.3 and
+  0.71.0.
+
+### Fixed
+
+- **Searches no longer pass `threshold`.** Hosted NAMS never supported it, and
+  since October 2026 it rejects unknown fields, so every message search failed
+  and came back empty: recall's matching messages, `nams__search`, and the
+  current and cross-session searches of the AI SDK modes.
+  `@neo4j-labs/agent-memory` 0.5.0 still adds a default `threshold` of its
+  own, so hosted message search works again with the SDK release that drops
+  it.
+
 ## 0.3.0
 
 ### Added

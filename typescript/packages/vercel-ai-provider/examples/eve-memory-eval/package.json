@@ -1,0 +1,23 @@
+{
+  "name": "nams-eve-memory-eval",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "eval": "eve eval",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@neo4j-labs/agent-memory": "~0.5.0",
+    "@neo4j-labs/nams-ai-provider": "file:../..",
+    "ai": "^7.0.127",
+    "eve": "~0.71.0",
+    "zod": "^4.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.3"
+  }
+}
