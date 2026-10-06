@@ -460,6 +460,12 @@ name.
 
 ### Fixed
 
+- **Concurrent sentence-transformers embeds no longer crash on Apple Silicon.**
+  `SentenceTransformerEmbedder` ran `encode` on the default executor with no
+  serialization, and the provider string (`sentence-transformers/...`) picks the
+  `mps` device on Apple Silicon. Two concurrent embeds there could compile a
+  Metal kernel on two threads at once and segfault the process. `encode` now
+  runs under one process-wide lock.
 - **`MENTIONS` links for pre-existing entity nodes.** The entity `MERGE` keys on
   `(name, type)`, so `ON CREATE` does not run when the node already exists and
   the freshly generated uuid is discarded. The ingestion path now adopts the id
