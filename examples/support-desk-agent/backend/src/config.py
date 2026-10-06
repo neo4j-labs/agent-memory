@@ -13,7 +13,7 @@ from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
-#: ``examples/support-desk-agent/data`` — the Arrows ontology and the seed conversations.
+#: ``examples/support-desk-agent/data`` — the ontology and the STATE-Bench tasks the seed loads.
 DATA_DIR = BACKEND_DIR.parent / "data"
 
 #: ``AGENT_MODEL`` value that selects PydanticAI's keyless ``TestModel``.

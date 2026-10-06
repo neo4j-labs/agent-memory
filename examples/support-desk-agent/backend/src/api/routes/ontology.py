@@ -1,4 +1,4 @@
-"""The Ontology panel: revisions, diff, the Ticket -> SupportCase rename, activation.
+"""The Ontology panel: revisions, diff, the Warranty -> WarrantyCoverage rename, activation.
 
 Everything here goes through ``client.ontology`` (``BoltOntology``): revisions
 are immutable ``:OntologyVersion`` nodes, exactly one is active per database,
@@ -38,7 +38,7 @@ from src.api.schemas import (
     RevisionView,
 )
 from src.memory import MemoryService
-from src.ontology import DOMAIN_ID, rename_entity_type
+from src.ontology import DOMAIN_ID, DOMAIN_NAME, rename_entity_type
 
 router = APIRouter()
 
@@ -61,11 +61,11 @@ async def _active(client: BoltMemoryClient) -> ActiveOntology | None:
 async def _ontology_in_view(
     client: BoltMemoryClient, active: ActiveOntology | None
 ) -> Ontology | None:
-    """The active ontology, or the stored ``support-desk`` one when nothing is bound."""
+    """The active ontology, or the stored ``customer-support`` one when nothing is bound."""
     ontology_id = active.ontology_id if active is not None else None
     if ontology_id is None:
         stored = [s for s in await client.ontology.list() if not s.is_system]
-        match = next((s for s in stored if s.name == DOMAIN_ID), None)
+        match = next((s for s in stored if s.name in (DOMAIN_ID, DOMAIN_NAME)), None)
         ontology_id = match.id if match is not None else None
     if ontology_id is None:
         return None
@@ -166,7 +166,7 @@ async def diff(
     """What changed between two revisions of the ontology in view."""
     ontology = await _ontology_in_view(client, await _active(client))
     if ontology is None:
-        raise HTTPException(status_code=404, detail="No support-desk ontology is stored")
+        raise HTTPException(status_code=404, detail="No customer-support ontology is stored")
     try:
         result = await client.ontology.diff(ontology.record.id, from_revision, to_revision)
     except NotFoundError as exc:

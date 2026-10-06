@@ -4,39 +4,35 @@
 ![Status: Beta](https://img.shields.io/badge/Status-Beta-6366F1)
 ![Community Supported](https://img.shields.io/badge/Support-Community-6B7280)
 
-> A chat agent over an ontology-typed memory graph that remembers how it solved earlier requests — and a one-click type rename that re-labels the graph under it.
+> A customer-support agent that works real STATE-Bench requests against an ontology-typed memory graph, remembers how earlier requests were resolved, and writes every return, refund, exchange and cancellation back to the graph.
 
-The full-stack version of [`ontology-lifecycle-bolt/`](../ontology-lifecycle-bolt/). It uses the same support-desk ontology, imported from the same Arrows diagram, stored and activated in your own Neo4j, and the same support transcript, plus seven more conversations. A FastAPI + PydanticAI 2.x agent answers support questions over that graph. A Next.js + Chakra UI v3 app shows what the memory layer does underneath: the entities each message produced and their ontology labels, the graph, the ontology's revisions, and the agent's reasoning memory.
+A FastAPI + PydanticAI 2.x agent and a Next.js + Chakra UI v3 app, seeded with 24 customer-support conversations from Microsoft's [STATE-Bench](https://github.com/microsoft/STATE-Bench) benchmark. The store's records (customers, orders, order lines, products, warranties, policies) live in Neo4j as ontology-typed entities. The conversations are stored as short-term memory. Every tool call the benchmark's agent made is stored as reasoning memory. The agent has the benchmark's eleven tools under their own names, and they run the benchmark's own environment against the records in the graph. The app shows what the memory layer does underneath: the entities each message produced, the graph, the ontology's revisions and the agent's reasoning traces.
 
 > ⚠️ **Neo4j Labs Project**
 >
 > This example is part of [`neo4j-agent-memory`](https://github.com/neo4j-labs/agent-memory), a Neo4j Labs project. It is actively maintained but not officially supported. APIs may change. Community support is available via the [Neo4j Community Forum](https://community.neo4j.com).
 
 > [!WARNING]
-> **Use a database dedicated to this demo.** The seed activates the `support-desk` ontology, and activation is per database: every client that connects to it with `schema_config.use_active_ontology=True` (the default) extracts against `support-desk`. The Ontology panel's rename switches the database to a strict revision. `make reseed` removes everything the seed created and every chat started in the app.
+> **Use a database dedicated to this demo.** The seed activates the `customer-support` ontology, and activation is per database: every client that connects to it with `schema_config.use_active_ontology=True` (the default) extracts against `customer-support`. The Ontology panel's rename switches the database to a strict revision. `make reseed` removes everything the seed created and every chat started in the app.
 
 ## What it shows
 
-**Ontology-typed memory.** Every message is stored with `short_term.add_message`, and GLiNER2.5 extracts against the active ontology, keyless and in-process. Entities land as `:Entity:Person:Customer`, `:Entity:Event:Order`, `:Entity:Object:Product` and `:Entity:Event:Ticket`. Ingest-time resolution merges repeat mentions across conversations and parks the near-misses (`Priya` ~ `Priya Raman`, `Elena` ~ `Elena Fischer`) in the review band for you to confirm or reject.
+**Records and conversations in one graph.** The seed stores each task's starting records as entities typed by the ontology: `:Entity:Person:Customer`, `:Entity:Event:Order`, `:Entity:Object:OrderLine`, `:Entity:Object:Product`, `:Entity:Event:Warranty`, linked by `PLACED`, `CONTAINS`, `OF_PRODUCT`, `COVERS` and `REPLACED_BY`. Each entity also carries the environment's record as a JSON `record` property. Then each conversation is stored with `short_term.add_message`. GLiNER2.5 extracts against the active ontology, keyless and in-process, and ingest-time resolution merges each mention onto its record: `ORD-6014` onto the order, `PROD-2092` or "UltraShield Phone Case" onto the product, `cust_005` onto Priya Patel. Near-misses wait in the review band for you to confirm or reject: `Emma` ~ `Emma Chen`, `TechPhone` ~ `TechPhone Pro 16`.
 
-**Reasoning memory, both ways.** Each chat turn:
+**Reasoning memory, both ways.** Every assistant turn in the trajectories that called tools becomes a seeded `ReasoningTrace`, initiated by the user turn before it. It keeps the benchmark's tool calls, arguments and results, with `(:ReasoningStep)-[:TOUCHED]->(:Entity)` edges to the records each call named. That is 38 traces and 140 tool calls. Before a non-trivial request the live agent calls `recall_similar_tasks` (`reasoning.get_similar_traces()`) and follows how a similar case was handled: which policy it checked, what it previewed, what it confirmed. Each live turn is recorded the same way.
 
-1. stores the user message, then starts a `ReasoningTrace` linked to it (`(:ReasoningTrace)-[:INITIATED_BY]->(:Message)`);
-2. records every tool call as a `ReasoningStep` with its `ToolCall`, linked to the message (`TRIGGERED_BY`), with `(:ReasoningStep)-[:TOUCHED]->(:Entity)` audit edges to the customers, orders, products and tickets the tool returned;
-3. completes the trace with a `TraceOutcome` (success, summary, tool-call count).
+**Actions that change the graph.** `process_return`, `process_refund`, `process_exchange`, `cancel_order` and `process_warranty_claim` run STATE-Bench's environment, copied unchanged, on records loaded from the graph. Whatever they change is written back. A confirmed return updates the order line, an exchange adds the replacement line with its `REPLACED_BY` edge, and a partial return changes the order's status. The environment's own rules apply. A write needs `get_policies` for its topic first and a preview (`confirm=false`) before it confirms; that state is kept per chat session. Each order is evaluated at its own task's date, because return windows and fees depend on it.
 
-The agent also *reads* its reasoning memory. Before a non-trivial request it calls `recall_similar_tasks`, which runs `reasoning.get_similar_traces()` over earlier traces, so it can follow how a similar request was handled. The seed includes three traces of earlier agent work, marked `seeded`, so recall has something to find on the first chat.
-
-**A live ontology revision.** The Ontology panel renames `Ticket` → `SupportCase` in a strict revision 2. The backend runs `update`, `diff`, a `migrate` dry run, the migration itself and `activate`, then reconnects its memory client, because a Bolt client resolves its ontology when it connects. The tickets already in the graph are relabelled in place, and the agent's ticket tools follow the new label.
+**A live ontology revision.** The Ontology panel renames `Warranty` → `WarrantyCoverage` in a strict revision 2. The backend runs `update`, `diff`, a `migrate` dry run, the migration itself and `activate`, then reconnects its memory client, because a Bolt client resolves its ontology when it connects. The warranties already in the graph are relabelled in place.
 
 ## The app
 
 | Area | What it does | API |
 |---|---|---|
-| Threads sidebar | The eight seeded conversations, marked as seeded, and your chats, each titled after its first message | `GET/POST /api/threads`, `GET /api/threads/{id}` |
+| Threads sidebar | The 24 seeded conversations, titled with the customer and the task, and your chats, each titled after its first message | `GET/POST /api/threads`, `GET /api/threads/{id}` |
 | Chat | Streams the answer; tool calls appear as cards with arguments, result and the entities they touched, labelled by the ontology; each turn links to its trace. Reopening a chat shows the same cards, rebuilt from the recorded trace | `POST /api/chat` (SSE) |
 | Memory | Entities this conversation mentions, grouped by ontology label; pending review pairs with Confirm / Reject | `GET /api/memory/context`, `POST /api/memory/duplicates/review` |
-| Graph | NVL view of the conversation, its messages (`HAS_MESSAGE`, `MENTIONS`), entities, typed `RELATED_TO` edges and pending `SAME_AS` review pairs, or of all seeded data. A d3-force layout tuned per edge kind keeps facts together and lets busy messages fan out; only typed and `SAME_AS` edges are labelled until you select a node. Fitted to the panel (**Fit to view** re-fits); double-click to expand | `GET /api/graph`, `GET /api/graph/neighbors/{id}` |
+| Graph | NVL view of the conversation, its messages (`HAS_MESSAGE`, `MENTIONS`), the entities they mention and their record context (one typed edge away: an order's lines, a line's product), typed `RELATED_TO` edges and pending `SAME_AS` review pairs; or of every record and seeded mention. A d3-force layout tuned per edge kind keeps facts together and lets busy messages fan out; only typed and `SAME_AS` edges are labelled until you select a node. Fitted to the panel (**Fit to view** re-fits); double-click to expand | `GET /api/graph`, `GET /api/graph/neighbors/{id}` |
 | Ontology | Active revision and mode, the revision the app's client resolved, revision history, diff, label counts, rename and migrate, activate an older revision | `GET /api/ontology`, `GET /api/ontology/diff`, `POST /api/ontology/rename`, `POST /api/ontology/activate` |
 | Reasoning | The conversation's traces as a timeline; a trace's steps, tool calls and touched entities; similar past tasks (`exclude_id` leaves the selected trace out); tool statistics | `GET /api/traces`, `GET /api/traces/{id}`, `GET /api/traces/similar`, `GET /api/tool-stats` |
 
@@ -44,30 +40,56 @@ Both side columns are resizable: drag the edge between a column and the chat, or
 
 ### The agent's tools
 
+The eleven STATE-Bench tools keep the benchmark's names, descriptions and JSON schemas (`Tool.from_schema`), so live traces and seeded traces read the same way:
+
+| Tool | What it does |
+|---|---|
+| `get_customer`, `get_order`, `get_product_details`, `search_products`, `get_warranty_status` | Read records (from the graph) |
+| `get_policies` | The return, refund, exchange, cancellation, shipping or warranty policy; required before any write |
+| `process_return`, `process_refund`, `process_exchange`, `cancel_order`, `process_warranty_claim` | Preview with `confirm=false`, then apply with `confirm=true`; changes are written to the graph |
+
+Four more tools read memory itself:
+
 | Tool | What it reads |
 |---|---|
-| `recall_similar_tasks` | Earlier reasoning traces similar to the request (reasoning memory) |
-| `find_customer` | A customer, their orders and tickets (typed `RELATED_TO` edges) and the conversations that mention them |
-| `get_ticket` | A ticket under the active ticket label, with its order, product, customer and the messages that mention it |
-| `list_tickets` | Tickets, optionally for one customer |
-| `get_order` | An order with its products and tickets |
-| `search_support_history` | Messages from other conversations, each with the tickets and orders its conversation names, and matching entities |
+| `recall_similar_tasks` | Earlier reasoning traces for a similar request, with the tool calls that resolved it |
+| `find_customer` | A customer by name, email or id, with the `customer_id` that `get_customer` takes, their orders (`PLACED` edges) and the conversations that mention them |
+| `search_support_history` | Messages from other conversations, each with the orders and products its conversation names, and matching entities |
 | `get_ontology` | The active revision, its mode, labels and relationships |
 
 ## Data
 
-`data/support-desk.arrows.json` is the Arrows diagram both lifecycle examples import, byte for byte. `data/conversations.json` holds eight conversations, 34 messages. The first is exactly the lifecycle examples' transcript. The others involve the same people, orders and products, so resolution has repeat mentions to merge, first-name-only mentions to hold back, and tickets referenced from later conversations.
+`data/state-bench/` holds 24 of the 100 customer-support training trajectories in [microsoft/STATE-Bench](https://github.com/microsoft/STATE-Bench), at commit `5644b1838d96`, copied unchanged under its MIT licence (`data/state-bench/LICENSE`). There are one to three tasks per family: returns, exchanges, shipping claims, warranty claims, cancellations, price matches, compound requests and policy edge cases. Between them they cover all five customers and all eleven tools.
 
-After `make seed` on an empty database you should see:
+| Folder | What it holds |
+|---|---|
+| `trajectories/<id>.json` | The conversation, with each assistant turn's tool calls (name, arguments, the environment's result) |
+| `tasks/<id>.json` | The customer, the task's date (`now`), its type and a summary |
+| `task_envs/<id>.json` | The customers, orders, order items, products and warranties the task starts from |
 
-| Label | Count | Examples |
+`backend/src/statebench/vendor/` is the benchmark's customer-support environment, copied unchanged except for its import lines (same commit, same licence). The tests replay all 140 recorded tool calls against it and get the recorded results.
+
+Orders, items and warranties belong to one task, and the five customers are identical in every task, so the 24 starting environments merge into one world: 5 customers, 25 orders, 32 order lines, 3 warranties and 38 product records. The products appear under 14 names, so the seed stores one Product entity per name with every product id as an alias. Six Policy entities hold what `get_policies` returns. The seed does not replay the trajectories, so the records keep their starting state and every task can be worked again in the app.
+
+`data/customer-support.ontology.yaml` declares `Customer`, `Order`, `OrderLine`, `Product` and `Warranty`, with descriptions GLiNER2.5 reads as annotation guidelines. Two choices in it were measured on the seed messages:
+
+- **`OrderLine`, not STATE-Bench's "item".** With the label `Item`, GLiNER2.5 tagged 107 product mentions ("phone case", "SoundMax Basic Headphones") as order lines. With `OrderLine` they extract as products.
+- **Policies are records, not an entity type.** Declared as a type, `Policy` caught every "return" and "refund" in the text. The six policies are still entities (`:Entity:Object:Policy`) that `get_policies` calls touch, but nothing is extracted as one.
+
+GLiNER2.5 still types roughly one order-id mention in six as a product or an order line, and resolution never crosses types. So after storing each message the backend repairs it: a mention whose name is a record's id is moved onto that record (`world.repair_id_mentions`).
+
+After `make seed` on an empty database (about 45 seconds once the models are cached) you should see roughly:
+
+| Label | Count | What |
 |---|---|---|
-| Customer | 7 | Priya Raman, Marcus Bell, Elena Fischer, Daniel Okafor, Grace Liu, plus the first-name-only `Priya` and `Elena` |
-| Order | 8 | SO-4390 … SO-4510 |
-| Product | 7 | Aurora Desk Lamp, Halcyon Ergonomic Chair, Breeze Standing Desk, … |
-| Ticket | 7 | TK-2210 … TK-2226 |
+| Customer | 9 | the 5 customers, plus first-name and initial mentions held in review (`Emma`, `E. Chen`) |
+| Order | 26 | the 25 orders |
+| OrderLine | 32 | the 32 order lines |
+| Product | about 34 | the 14 catalogue products, plus product mentions such as "Elite headphones" |
+| Warranty | 4 | the 3 warranties |
+| Policy | 6 | one per `get_policies` topic |
 
-There are also 2 pending review pairs and 3 seeded traces.
+There are also about six pending review pairs, 38 seeded traces and 140 seeded tool calls.
 
 ## Prerequisites
 
@@ -84,10 +106,10 @@ cp backend/.env.example backend/.env      # set OPENAI_API_KEY
 cp frontend/.env.example frontend/.env.local
 make install                              # uv sync + npm ci
 make neo4j                                # Neo4j on 7474 / 7687, password test-password
-make seed                                 # ontology revision 1 + the eight conversations
+make seed                                 # ontology revision 1, the records, 24 conversations and their traces
 ```
 
-`make seed` refuses to run when the database already holds the `support-desk` ontology or any `seed-*` conversation, including a half-finished earlier seed, so it never seeds twice. `make reseed` removes both, and every chat started in the app, then seeds again.
+`make seed` refuses to run when the database already holds the `customer-support` ontology, its records or any `seed-*` conversation, including a half-finished earlier seed, so it never seeds twice. `make reseed` removes all of them, and every chat started in the app, then seeds again.
 
 Then, in two terminals:
 
@@ -116,14 +138,18 @@ If the repository's own test Neo4j (`make neo4j-start` at the root) already hold
 
 ## Things to try
 
-1. Open *Priya Raman: cracked Aurora Desk Lamp*. The Memory panel shows `TK-2210` as a Ticket and the `Priya` ~ `Priya Raman` review pair; confirm it and `Priya` becomes an alias.
-2. Start a chat: *"Which open tickets does Grace Liu have?"* `recall_similar_tasks` returns the seeded "Find the open tickets for a customer" trace, then the customer and ticket tools run. Open the turn's trace in the Reasoning panel to see the touched entities. *"Where is order SO-4471?"* recalls "Check the status of an order" instead. Your own turns become recallable too: ask a similar question later and the earlier trace comes back.
-3. In the Ontology panel, run **Rename Ticket → SupportCase and migrate**. The diff and the migration result appear. The label counts move from `Ticket` to `SupportCase`, and the app's client reports `strict`. Ask about a ticket again: the tools now read `:SupportCase`.
+1. Open *Priya Patel: Return full order*. The Memory panel shows Priya Patel, `ORD-6014` and the products she named. The Graph shows the order's three lines and their products through `PLACED`, `CONTAINS` and `OF_PRODUCT`. The Reasoning panel shows the benchmark agent's trace: `get_order`, `get_policies(topic="return")`, then a preview and a confirmation per item, each touching the records it read.
+2. Start a chat: *"Hi, I'm Priya Patel. I want to return everything from order ORD-6014."* The agent recalls the seeded trace, finds the customer, checks the return policy, previews the three returns and asks you to confirm. Reply *"Yes, go ahead"* and it processes them. The order lines turn `returned` in the graph, and the order becomes `fully_returned`.
+3. Try the other suggestions: Marcus Johnson cancelling `ORD-6015` before it ships, or David Kim's coffee maker that broke just after its warranty ended (`ORD-7232`).
+4. In the Memory panel, confirm or reject a review pair such as `Emma` ~ `Emma Chen`. A confirmed pair merges, and `Emma` becomes an alias.
+5. In the Ontology panel, run **Rename Warranty → WarrantyCoverage and migrate**. The diff and the migration result appear, the label counts move from `Warranty` to `WarrantyCoverage`, and the app's client reports `strict`.
 
-Activating revision 1 again does not migrate back. The tickets keep `:SupportCase`, and only tickets extracted afterwards are labelled `:Ticket`. To start over, run `make reseed`.
+Activating revision 1 again does not migrate back: the warranties keep `:WarrantyCoverage`. To start over, run `make reseed`.
 
 ## Known limitations
 
+- **Each order lives at its task's date.** The 24 tasks are set on different days, so a policy window is evaluated at the date of the order's own task, not today.
+- **The policy gate and previews are kept in the backend's memory,** per chat session. After a backend restart the agent has to check the policy and preview again before it confirms.
 - **`AGENT_MODEL=test` sends no message history,** because `TestModel` only calls tools on a turn with no earlier model response.
 - **Re-activating revision 1 does not migrate back** (see above); `make reseed` starts over.
 
@@ -137,7 +163,20 @@ make -C examples/support-desk-agent test
 RUN_INTEGRATION_TESTS=1 uv run pytest tests/examples/test_support_desk_agent_example.py -q
 ```
 
-`tests/examples/test_support_desk_agent_example.py` checks the structure, the pins and the parity with `ontology-lifecycle-bolt`: the Arrows file, the transcript and the type repairs. It builds the agent offline on `TestModel`, and runs an end-to-end test against Neo4j. That test seeds the database, sends a chat turn through the FastAPI app, checks the trace, its tool calls and `TOUCHED` edges, renames and migrates, then removes the seed and restores the previous ontology binding. CI type-checks, lints and builds the frontend in the `frontend-build` job.
+`tests/examples/test_support_desk_agent_example.py` checks the structure and the pins, then the data:
+- the licence and the source commit of the copied data and code;
+- the 24 tasks covering every family, customer and tool;
+- every recorded tool call replaying to its recorded result in the copied environment;
+- the ontology.
+
+It builds the agent offline on `TestModel`. An end-to-end test against Neo4j then:
+- seeds the database;
+- checks a seeded thread's memory and graph;
+- sends a chat turn through the FastAPI app;
+- runs a return through the graph-backed environment (policy gate, preview, confirmation, graph write);
+- renames and migrates, then removes the seed and restores the previous ontology binding.
+
+CI type-checks, lints and builds the frontend in the `frontend-build` job.
 
 ## Support
 
@@ -147,4 +186,4 @@ RUN_INTEGRATION_TESTS=1 uv run pytest tests/examples/test_support_desk_agent_exa
 
 ---
 
-> _Verified against `neo4j-agent-memory` 0.7.0 (in-tree, branch `gliner-2.5`), PydanticAI 2.31, FastAPI, Next.js 16, Chakra UI v3, `gliner2` 2.0.0 with `fastino/gliner2.5-base-v1`, MiniLM and Neo4j 5.26 Community (Docker) on 2026-10-01: `make seed` on an empty database, chat turns through the running backend and frontend with `AGENT_MODEL=test` (message stored with typed entities, trace with seven tool calls and `TOUCHED` edges, recall of the seeded traces), the rename and migration of seven tickets, and the example's test module against a testcontainers Neo4j. The frontend type-checks, lints and builds. On 2026-10-02 the running app was also driven in headless Chrome with `AGENT_MODEL=openai:gpt-5-mini`: real-model chat turns (tool cards with ontology labels, thread titles, recall), a reopened chat's tool cards, every panel, the graph fitted to the panel, dark mode and a 390 px phone layout, with no console errors._
+> _Verified against `neo4j-agent-memory` 0.7.0 (in-tree, branch `gliner-2.5`), PydanticAI 2.52, FastAPI, Next.js 16, Chakra UI v3, `gliner2` 2.0.0 with `fastino/gliner2.5-base-v1`, MiniLM and Neo4j 5.26 Community (Docker) on 2026-10-04: `make reseed` on the demo database (24 conversations, 38 seeded traces, 140 tool calls) and the example's test module against a testcontainers Neo4j. With `AGENT_MODEL=openai:gpt-5-mini`, Priya Patel's full return of `ORD-6014` was run through the app in headless Chrome: recall, customer, order and policy lookups, three previews, then three confirmed returns ($51 + $16 + $27 = $94, as in the STATE-Bench trajectory) written back to the graph. The frontend type-checks, lints and builds._

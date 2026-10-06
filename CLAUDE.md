@@ -2240,7 +2240,7 @@ no README footer, no index row, or no test module. The shape of the tree:
 | Runtime + tooling | `no_llm/`, `domain-schemas/` |
 | Ontologies on bolt | `ontology-extraction/`, `ontology-lifecycle-bolt/` (bolt twin of `ontology-lifecycle/`) |
 | Framework integrations | `strands-session-manager/`, `strands-memory-store/`, `google_adk_demo/`, `google_cloud_integration/`, `microsoft_agent_retail_assistant/` |
-| Full-stack apps | `full-stack-chat-agent/`, `lennys-memory/`, `financial-services-advisor/` (AWS Strands + Google ADK twins), `support-desk-agent/` (bolt ontology + reasoning memory, PydanticAI) |
+| Full-stack apps | `full-stack-chat-agent/`, `lennys-memory/`, `financial-services-advisor/` (AWS Strands + Google ADK twins), `support-desk-agent/` (STATE-Bench customer support on bolt: ontology-typed records, seeded reasoning traces, actions written back, PydanticAI) |
 | TypeScript | `typescript/examples/` — ten examples, flagship `nextjs-memory-chat/` |
 
 `hello-memory/` is the only example allowed to use a PEP 723 header; every other

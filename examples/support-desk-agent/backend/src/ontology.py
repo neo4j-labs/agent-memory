@@ -1,88 +1,66 @@
-"""The support-desk ontology: import, repair, rename, and label lookups.
+"""The customer-support ontology: loading it, renaming a type, label lookups.
 
-``REPAIRS``, :func:`repair_draft` and :func:`rename_entity_type` are copied
-from ``examples/ontology-lifecycle-bolt/main.py`` (a parity test keeps
-``REPAIRS`` identical): the local Arrows import maps every label onto
-``OBJECT``, so the draft is repaired with the POLE+O types and descriptions
-GLiNER2.5 reads as annotation guidelines.
+``data/customer-support.ontology.yaml`` is shaped after the STATE-Bench
+customer-support environment: customers, orders, order lines, products and
+warranties. The seed stores it as revision 1 and activates it; the Ontology
+panel's revision renames ``Warranty`` to ``WarrantyCoverage``.
 
-Tools and routes never hard-code ``:Ticket``. They ask the active document for
-the label of ``EVENT:TICKET`` (:func:`ticket_label`), so the same code works
-before and after the ``Ticket`` -> ``SupportCase`` rename.
+Tools and routes never hard-code a label. They ask the active document for the
+label of a ``(POLE_TYPE, SUBTYPE)`` role (:func:`role_label`), so the same code
+works before and after the rename.
+
+Policies are records too (``OBJECT:POLICY``), but the ontology does not declare
+them: as an extraction label, "Policy" caught every "return" and "refund".
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from neo4j_agent_memory import BoltMemoryClient
-from neo4j_agent_memory.ontology import OntologyDocument
+from neo4j_agent_memory.ontology import OntologyDocument, load_ontology
 from src.config import DATA_DIR
 
-ARROWS_FILE = DATA_DIR / "support-desk.arrows.json"
+ONTOLOGY_FILE = DATA_DIR / "customer-support.ontology.yaml"
 
 #: The ontology's identity comes from the document's ``domain`` block.
-DOMAIN_ID = "support-desk"
-DOMAIN_NAME = "Support Desk"
-
-#: What the Arrows import cannot know. The hosted service infers these POLE+O
-#: types itself; the local converter falls back to OBJECT and says so. Each
-#: description ends in the negative case, because GLiNER2.5 reads descriptions
-#: as annotation guidelines.
-REPAIRS: dict[str, tuple[str, str, str]] = {
-    "Customer": (
-        "PERSON",
-        "CUSTOMER",
-        "A shopper who contacts support, named in full (Priya Raman). "
-        "Never a product, an order or a ticket.",
-    ),
-    "Order": (
-        "EVENT",
-        "ORDER",
-        "A purchase, identified by an order number that starts with SO- (SO-4417). "
-        "Never the product it contains.",
-    ),
-    "Product": (
-        "OBJECT",
-        "PRODUCT",
-        "An item the store sells, named by its product name (Aurora Desk Lamp). "
-        "Never an order number or a ticket number.",
-    ),
-    "Ticket": (
-        "EVENT",
-        "TICKET",
-        "A support ticket, identified by a reference that starts with TK- (TK-2210). "
-        "Never the order or the product it is about.",
-    ),
-}
+DOMAIN_ID = "customer-support"
+DOMAIN_NAME = "Customer Support (STATE-Bench)"
 
 #: The POLE+O pair behind each role the tools look up. The *label* for each
 #: pair comes from whichever revision is active.
 CUSTOMER = ("PERSON", "CUSTOMER")
 ORDER = ("EVENT", "ORDER")
+ORDER_LINE = ("OBJECT", "ORDER_LINE")
 PRODUCT = ("OBJECT", "PRODUCT")
-TICKET = ("EVENT", "TICKET")
+WARRANTY = ("EVENT", "WARRANTY")
+POLICY = ("OBJECT", "POLICY")
 
 #: The label a role falls back to when nothing declares it (no active ontology).
-_FALLBACK_LABELS = {CUSTOMER: "Customer", ORDER: "Order", PRODUCT: "Product", TICKET: "Ticket"}
+_FALLBACK_LABELS = {
+    CUSTOMER: "Customer",
+    ORDER: "Order",
+    ORDER_LINE: "OrderLine",
+    PRODUCT: "Product",
+    WARRANTY: "Warranty",
+    POLICY: "Policy",
+}
+
+#: The revision the Ontology panel demonstrates: a terminology change (what a
+#: warranty record holds is the coverage), migrated onto the existing nodes.
+RENAME_FROM = "Warranty"
+RENAME_TO = "WarrantyCoverage"
 
 #: POLE+O labels. Every entity node carries one besides its ontology label.
 POLE_LABELS = frozenset({"Person", "Object", "Location", "Event", "Organization"})
 
 
-def repair_draft(document: OntologyDocument) -> OntologyDocument:
-    """Return the imported draft with POLE+O types, subtypes and descriptions set."""
-    repaired = document.model_copy(deep=True)
-    repaired.domain.id = DOMAIN_ID
-    repaired.domain.name = DOMAIN_NAME
-    repaired.domain.description = "E-commerce support desk: customers, orders, products, tickets"
-    for entity_type in repaired.entity_types:
-        if entity_type.label in REPAIRS:
-            pole_type, subtype, description = REPAIRS[entity_type.label]
-            entity_type.pole_type = pole_type
-            entity_type.subtype = subtype
-            entity_type.description = description
-    return repaired
+def load_document() -> OntologyDocument:
+    """``data/customer-support.ontology.yaml`` as an :class:`OntologyDocument`."""
+    document = load_ontology(ONTOLOGY_FILE)
+    problems = document.validate_structure()
+    if problems:
+        raise ValueError(f"{ONTOLOGY_FILE.name} is not a valid ontology: {problems}")
+    return document
 
 
 def rename_entity_type(document: OntologyDocument, old: str, new: str) -> OntologyDocument:
@@ -104,16 +82,6 @@ def rename_entity_type(document: OntologyDocument, old: str, new: str) -> Ontolo
     return revised
 
 
-async def import_support_desk(client: BoltMemoryClient) -> OntologyDocument:
-    """Convert ``data/support-desk.arrows.json`` locally and repair the draft."""
-    draft = await client.ontology.import_(
-        content=ARROWS_FILE.read_text(encoding="utf-8"), format="arrows"
-    )
-    if draft.document is None:
-        raise RuntimeError(f"Could not convert {ARROWS_FILE.name}: {draft.warnings}")
-    return repair_draft(draft.document)
-
-
 def role_label(document: OntologyDocument | None, role: tuple[str, str]) -> str:
     """The label ``document`` declares for a ``(POLE_TYPE, SUBTYPE)`` role."""
     if document is not None:
@@ -123,15 +91,10 @@ def role_label(document: OntologyDocument | None, role: tuple[str, str]) -> str:
     return _FALLBACK_LABELS[role]
 
 
-def ticket_label(document: OntologyDocument | None) -> str:
-    """``Ticket`` under revision 1, ``SupportCase`` after the rename."""
-    return role_label(document, TICKET)
-
-
 def entity_labels(labels: list[str] | tuple[str, ...]) -> list[str]:
     """An entity's labels without ``Entity``, most specific first.
 
-    ``[:Entity, :Event, :Ticket]`` becomes ``["Ticket", "Event"]``: the
+    ``[:Entity, :Object, :OrderLine]`` becomes ``["OrderLine", "Object"]``: the
     ontology label leads and the POLE+O label follows.
     """
     kept = [label for label in labels if label != "Entity"]

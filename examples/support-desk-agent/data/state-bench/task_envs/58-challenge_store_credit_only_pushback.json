@@ -1,0 +1,121 @@
+{
+  "products": [
+    {
+      "product_id": "PROD-3044",
+      "name": "SoundMax Wireless Headphones",
+      "category": "electronics",
+      "subcategory": "headphones",
+      "price": 249,
+      "warranty_months": 12,
+      "return_window_days": 15,
+      "restocking_fee_pct": 15,
+      "weight_lbs": 0.6,
+      "is_fragile": false,
+      "in_stock": true,
+      "current_price": null
+    }
+  ],
+  "orders": [
+    {
+      "order_id": "ORD-7044",
+      "customer_id": "cust_001",
+      "order_date": "2026-05-10T10:00:00",
+      "status": "delivered",
+      "shipping_status": "delivered",
+      "shipping_method": "standard",
+      "shipping_cost": 0,
+      "tracking_number": "TRK45026372",
+      "delivery_date": "2026-05-15T14:00:00",
+      "delivery_promised_date": "2026-06-05T18:00:00",
+      "signature_required": false,
+      "signature_on_file": null,
+      "payment_method": "credit_card",
+      "payment_details": {
+        "credit_card": 249
+      },
+      "subtotal": 249,
+      "discount_code": null,
+      "discount_amount": 0,
+      "total_paid": 249,
+      "is_gift": false,
+      "gift_sender": null
+    }
+  ],
+  "order_items": [
+    {
+      "item_id": "ITEM-10044",
+      "order_id": "ORD-7044",
+      "product_id": "PROD-3044",
+      "quantity": 1,
+      "unit_price": 249,
+      "item_status": "delivered",
+      "return_reason": null,
+      "refund_amount": null,
+      "refund_method": null,
+      "restocking_fee": null,
+      "return_label_issued": false,
+      "replacement_item_id": null,
+      "goodwill_credit": 0,
+      "goodwill_credit_method": null,
+      "store_credit_only": false
+    }
+  ],
+  "customers": [
+    {
+      "customer_id": "cust_001",
+      "name": "Emma Chen",
+      "email": "emma.chen@example.com",
+      "membership_tier": "platinum",
+      "account_created": "2020-03-15",
+      "total_orders": 87,
+      "preferred_refund_method": "original_payment",
+      "store_credit_balance": 150,
+      "has_prime_shipping": true
+    },
+    {
+      "customer_id": "cust_002",
+      "name": "Marcus Johnson",
+      "email": "marcus.j@example.com",
+      "membership_tier": "standard",
+      "account_created": "2024-06-01",
+      "total_orders": 12,
+      "preferred_refund_method": "store_credit",
+      "store_credit_balance": 0,
+      "has_prime_shipping": false
+    },
+    {
+      "customer_id": "cust_003",
+      "name": "Sarah Williams",
+      "email": "sarah.w@example.com",
+      "membership_tier": "gold",
+      "account_created": "2021-11-20",
+      "total_orders": 53,
+      "preferred_refund_method": "original_payment",
+      "store_credit_balance": 45,
+      "has_prime_shipping": true
+    },
+    {
+      "customer_id": "cust_004",
+      "name": "David Kim",
+      "email": "david.kim@example.com",
+      "membership_tier": "silver",
+      "account_created": "2022-08-10",
+      "total_orders": 31,
+      "preferred_refund_method": "original_payment",
+      "store_credit_balance": 25,
+      "has_prime_shipping": false
+    },
+    {
+      "customer_id": "cust_005",
+      "name": "Priya Patel",
+      "email": "priya.p@example.com",
+      "membership_tier": "standard",
+      "account_created": "2025-12-01",
+      "total_orders": 4,
+      "preferred_refund_method": "store_credit",
+      "store_credit_balance": 0,
+      "has_prime_shipping": false
+    }
+  ],
+  "warranties": []
+}

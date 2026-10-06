@@ -1,0 +1,60 @@
+{
+  "task_id": "14-cancel_split_payment",
+  "user_id": "cust_003",
+  "now": "2026-06-12T10:00:00",
+  "opening_message": "I need to cancel order ORD-6017. I paid with both my credit card and a gift card.",
+  "user_simulator": {
+    "known_info": [
+      "order_id: ORD-6017",
+      "payment: credit card $30 + gift card $5"
+    ],
+    "task_rules": [
+      "Keep the request scoped to cancelling ORD-6017 and getting the refund returned to the original split payment methods; do not ask for unrelated order changes or alternate refund methods.",
+      "If the agent asks for identifying or payment details, provide the order ID and that you paid with a $30 credit card charge plus a $5 gift card; do not volunteer policy, eligibility, or internal order-state facts.",
+      "When the agent presents a cancellation preview, check that it covers the order cancellation, a $35 total refund, and no unexpected fee before agreeing.",
+      "Before confirming cancellation, ask how the refund will be divided if the agent has not explicitly stated both the $30 credit-card refund and the $5 gift-card refund.",
+      "Push back if the agent sends the full refund to one payment method, omits the gift card, changes the split amounts, or proposes a return or shipping intervention instead of cancellation.",
+      "Accept only after the preview states that the cancellation refund will be split as $30 back to the credit card and $5 back to the gift card.",
+      "End only after the agent confirms ORD-6017 has been cancelled and the split refund has been recorded with $30 to the credit card and $5 to the gift card."
+    ],
+    "unknown_info": [],
+    "user_sim_context": "You want to cancel an order that was paid for with more than one payment source. You are mainly thinking about stopping the order and getting your money back, not about how the refund gets divided. You need the agent to sort out the payment-method details clearly."
+  },
+  "task_summary": "**Task:** The customer wants to cancel an order that was paid with both a credit card and a gift card. The cancellation should go through normally, but the $35 refund has to be routed back across the original payment methods instead of being dumped into a single bucket.\n\n**Challenge:** Refund allocation matters more than the cancellation itself. Weak agents ignore the split tender, send everything back to one payment method, or answer at a high level without actually respecting the payment breakdown.",
+  "task_requirements": [
+    {
+      "evidence": "conversation",
+      "id": "14_cancel_split_payment_agent_must_handle_split_refund",
+      "kind": "must",
+      "requirement": "Agent must explain that the $35 refund is split back to the original payment methods: $30 to the credit card and $5 to the gift card."
+    }
+  ],
+  "state_requirements": [
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-9110",
+      "field": "item_status",
+      "expected_value": "cancelled"
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-9110",
+      "field": "refund_amount",
+      "expected_value": 35
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-9110",
+      "field": "refund_method",
+      "expected_value": "split"
+    },
+    {
+      "entity_type": "orders",
+      "record_key": "ORD-6017",
+      "field": "status",
+      "expected_value": "cancelled"
+    }
+  ],
+  "task_type": "cancel_order",
+  "task_env_path": "state_bench/domains/customer_support/task_envs/14-cancel_split_payment.json"
+}

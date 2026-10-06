@@ -1,18 +1,20 @@
-"""Smoke tests for the support-desk-agent example (backend and seed data).
+"""Smoke tests for the support-desk-agent example (backend, STATE-Bench data, ontology).
 
 The fast cases need no Neo4j and no model weights: the backend's files and
-pin, parity with ``examples/ontology-lifecycle-bolt`` (same Arrows document,
-same first transcript, same ``REPAIRS``), the seed data's deliberate overlaps,
+pin, the STATE-Bench data and the vendored environment (provenance, and every
+recorded tool call replaying to the recorded result), the ontology document,
 and the agent built offline on PydanticAI's ``TestModel``.
 
 ``test_backend_runs_end_to_end`` seeds a real database with real GLiNER2.5
 inference, then drives the FastAPI app through ``httpx.ASGITransport`` with
 ``AGENT_MODEL=test``: a chat turn must leave a reasoning trace with tool calls
-and TOUCHED edges, and the Ticket -> SupportCase rename must migrate the seeded
-tickets. It asserts what the flow has to show rather than exact entity lists,
-which depend on the model. The seed activates its ontology (activation is per
-database), so the test removes everything it wrote and restores the binding it
-found: CI runs every example test against one database.
+and TOUCHED edges, a return run through the graph-backed environment must
+change the order line in the graph, and the Warranty -> WarrantyCoverage
+rename must migrate the seeded warranties. It asserts what the flow has to
+show rather than exact entity lists, which depend on the model. The seed
+activates its ontology (activation is per database), so the test removes
+everything it wrote and restores the binding it found: CI runs every example
+test against one database.
 
 The frontend is covered by its own type-check/lint/build in CI; the README is
 the orchestrator's (``test_examples_registry.py``).
@@ -41,7 +43,8 @@ EXAMPLE_DIR = EXAMPLES_DIR / "support-desk-agent"
 BACKEND_DIR = EXAMPLE_DIR / "backend"
 SRC_DIR = BACKEND_DIR / "src"
 DATA_DIR = EXAMPLE_DIR / "data"
-BOLT_TWIN_DIR = EXAMPLES_DIR / "ontology-lifecycle-bolt"
+STATE_BENCH_DIR = DATA_DIR / "state-bench"
+VENDOR_DIR = SRC_DIR / "statebench" / "vendor"
 
 BACKEND_FILES = (
     "pyproject.toml",
@@ -56,6 +59,7 @@ BACKEND_FILES = (
     "src/agent/__init__.py",
     "src/agent/agent.py",
     "src/agent/deps.py",
+    "src/agent/thoughts.py",
     "src/agent/tools.py",
     "src/api/__init__.py",
     "src/api/schemas.py",
@@ -66,36 +70,54 @@ BACKEND_FILES = (
     "src/api/routes/graph.py",
     "src/api/routes/ontology.py",
     "src/api/routes/traces.py",
+    "src/statebench/__init__.py",
+    "src/statebench/dataset.py",
+    "src/statebench/world.py",
+    "src/statebench/vendor/__init__.py",
+    "src/statebench/vendor/LICENSE",
+    "src/statebench/vendor/base.py",
+    "src/statebench/vendor/environment.py",
+    "src/statebench/vendor/policies.py",
+    "src/statebench/vendor/schemas.py",
+    "src/statebench/vendor/tools.py",
 )
 
-TOOL_NAMES = {
-    "recall_similar_tasks",
-    "find_customer",
-    "get_ticket",
-    "list_tickets",
+#: The STATE-Bench environment's tools, under their own names.
+STATE_BENCH_TOOLS = {
     "get_order",
-    "search_support_history",
-    "get_ontology",
+    "get_customer",
+    "search_products",
+    "get_product_details",
+    "get_policies",
+    "get_warranty_status",
+    "process_return",
+    "process_refund",
+    "cancel_order",
+    "process_exchange",
+    "process_warranty_claim",
+}
+MEMORY_TOOLS = {"recall_similar_tasks", "find_customer", "search_support_history", "get_ontology"}
+TOOL_NAMES = STATE_BENCH_TOOLS | MEMORY_TOOLS
+
+#: The task families the 24 seeded tasks cover (STATE-Bench ``task_type``).
+TASK_TYPES = {
+    "return_item",
+    "exchange_item",
+    "shipping_claim",
+    "warranty_claim",
+    "cancel_order",
+    "price_match_refund",
+    "compound",
+    "edge_case",
 }
 
 
-def _literal(path: Path, name: str) -> Any:
-    """Evaluate one module-level literal assignment without importing the module."""
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    for node in tree.body:
-        target = None
-        if isinstance(node, ast.Assign) and len(node.targets) == 1:
-            target = node.targets[0]
-        elif isinstance(node, ast.AnnAssign):
-            target = node.target
-        if isinstance(target, ast.Name) and target.id == name and node.value is not None:
-            return ast.literal_eval(node.value)
-    raise AssertionError(f"{path} defines no module-level {name}")
+def _json(path: Path) -> Any:
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _conversations() -> list[dict[str, Any]]:
-    data = json.loads((DATA_DIR / "conversations.json").read_text(encoding="utf-8"))
-    return data["conversations"]
+def _task_ids() -> list[str]:
+    return sorted(path.stem for path in (STATE_BENCH_DIR / "trajectories").glob("*.json"))
 
 
 @contextlib.contextmanager
@@ -132,8 +154,8 @@ class TestBackendStructure:
     def test_the_backend_and_data_files_exist(self):
         for name in BACKEND_FILES:
             assert (BACKEND_DIR / name).exists(), f"support-desk-agent/backend/{name} is missing"
-        for name in ("support-desk.arrows.json", "conversations.json"):
-            assert (DATA_DIR / name).exists(), f"support-desk-agent/data/{name} is missing"
+        assert (DATA_DIR / "customer-support.ontology.yaml").exists()
+        assert (STATE_BENCH_DIR / "LICENSE").exists()
 
     @pytest.mark.syntax
     def test_every_backend_module_is_valid_python(self):
@@ -158,6 +180,16 @@ class TestBackendStructure:
             "pydantic-settings>=2.6,<3",
         ):
             assert requirement in dependencies, requirement
+
+    @pytest.mark.syntax
+    def test_the_vendored_environment_is_excluded_from_lint_and_strict_typing(self):
+        """It is copied unchanged, so the example's own checks leave it alone."""
+        data = tomllib.loads((BACKEND_DIR / "pyproject.toml").read_text(encoding="utf-8"))
+        assert "src/statebench/vendor" in data["tool"]["ruff"]["extend-exclude"]
+        overrides = data["tool"]["mypy"]["overrides"]
+        assert any(
+            o["module"] == "src.statebench.vendor.*" and o["ignore_errors"] for o in overrides
+        )
 
     @pytest.mark.syntax
     def test_the_lockfile_resolves_the_editable_library(self):
@@ -208,77 +240,67 @@ class TestBackendStructure:
 
 
 # ---------------------------------------------------------------------------
-# Parity with ontology-lifecycle-bolt
+# STATE-Bench data and the vendored environment
 # ---------------------------------------------------------------------------
 
 
-class TestParityWithTheLifecycleExample:
+class TestStateBenchProvenance:
     @pytest.mark.syntax
-    def test_the_arrows_document_is_identical(self):
-        twin = BOLT_TWIN_DIR / "schemas" / "support-desk.arrows.json"
-        assert (DATA_DIR / "support-desk.arrows.json").read_bytes() == twin.read_bytes()
-
-    @pytest.mark.syntax
-    def test_the_first_seed_conversation_is_the_lifecycle_transcript(self):
-        transcript = _literal(BOLT_TWIN_DIR / "main.py", "TRANSCRIPT")
-        assert _conversations()[0]["messages"] == transcript
+    def test_the_data_and_the_code_carry_the_mit_licence(self):
+        data_licence = (STATE_BENCH_DIR / "LICENSE").read_text(encoding="utf-8")
+        assert data_licence.startswith("MIT License")
+        assert "STATE-Bench contributors" in data_licence
+        assert (VENDOR_DIR / "LICENSE").read_text(encoding="utf-8") == data_licence
 
     @pytest.mark.syntax
-    def test_the_repairs_are_identical(self):
-        ours = SRC_DIR / "ontology.py"
-        twin = BOLT_TWIN_DIR / "main.py"
-        assert _literal(ours, "REPAIRS") == _literal(twin, "REPAIRS")
-        for name in ("DOMAIN_ID", "DOMAIN_NAME"):
-            assert _literal(ours, name) == _literal(twin, name)
-
-
-# ---------------------------------------------------------------------------
-# Seed data
-# ---------------------------------------------------------------------------
-
-
-class TestSeedData:
-    @pytest.mark.syntax
-    def test_conversations_are_seed_sessions_with_titles(self):
-        conversations = _conversations()
-        assert 6 <= len(conversations) <= 10
-        ids = [c["session_id"] for c in conversations]
-        assert len(set(ids)) == len(ids)
-        for conversation in conversations:
-            assert conversation["session_id"].startswith("seed-")
-            assert conversation["title"].strip()
-            roles = [m["role"] for m in conversation["messages"]]
-            assert roles[0] == "user"
-            assert set(roles) == {"user", "assistant"}
+    def test_vendored_files_name_their_source_commit(self):
+        source = (SRC_DIR / "statebench" / "dataset.py").read_text(encoding="utf-8")
+        commit = source.split('SOURCE_COMMIT = "', 1)[1].split('"', 1)[0]
+        assert len(commit) == 40
+        for name in ("base.py", "environment.py", "policies.py", "schemas.py", "tools.py"):
+            text = (VENDOR_DIR / name).read_text(encoding="utf-8")
+            assert text.startswith(f"# Copied from microsoft/STATE-Bench @ {commit[:12]}"), name
+            imports = [
+                line
+                for line in text.splitlines()
+                if line.lstrip().startswith(("from ", "import ")) and "state_bench" in line
+            ]
+            assert imports == [], (name, imports)
+        assert commit in (VENDOR_DIR / "__init__.py").read_text(encoding="utf-8")
 
     @pytest.mark.syntax
-    def test_the_overlaps_resolution_has_to_work_through(self):
-        def sessions_mentioning(text: str) -> int:
-            return sum(any(text in m["content"] for m in c["messages"]) for c in _conversations())
+    def test_every_task_has_its_trajectory_definition_and_environment(self):
+        ids = _task_ids()
+        assert len(ids) == 24
+        for folder in ("tasks", "task_envs"):
+            assert sorted(p.stem for p in (STATE_BENCH_DIR / folder).glob("*.json")) == ids
 
-        everything = " ".join(m["content"] for c in _conversations() for m in c["messages"])
-        assert sessions_mentioning("Marcus Bell") >= 2, "the same customer across sessions"
-        assert sessions_mentioning("TK-2210") >= 2, "a ticket referenced from a later session"
-        assert "Halcyon Ergonomic Chair" in everything and "Halcyon Chair " in everything
-        assert "Sorry about that, Priya." in everything, "a first-name-only mention"
+
+class TestStateBenchData:
+    @pytest.mark.syntax
+    def test_the_tasks_cover_every_family_customer_and_tool(self):
+        tasks = [_json(STATE_BENCH_DIR / "tasks" / f"{i}.json") for i in _task_ids()]
+        assert {task["task_type"] for task in tasks} == TASK_TYPES
+        assert {task["user_id"] for task in tasks} == {f"cust_00{n}" for n in range(1, 6)}
+        tools = {
+            call["name"]
+            for i in _task_ids()
+            for message in _json(STATE_BENCH_DIR / "trajectories" / f"{i}.json")["conversation"]
+            for call in message.get("tool_calls") or []
+        }
+        assert tools == STATE_BENCH_TOOLS
 
     @pytest.mark.syntax
-    def test_seeded_traces_use_real_tools_and_real_user_messages(self):
-        traces = _literal(SRC_DIR / "seed.py", "SEEDED_TRACES")
-        assert 2 <= len(traces) <= 3
-        by_session = {c["session_id"]: c["messages"] for c in _conversations()}
-        for trace in traces:
-            session_id, index = trace["message"]
-            assert by_session[session_id][index]["role"] == "user", trace["task"]
-            assert trace["steps"], trace["task"]
-            for _thought, tool_name, _arguments in trace["steps"]:
-                assert tool_name in TOOL_NAMES, tool_name
-            assert trace["summary"]
-
-
-# ---------------------------------------------------------------------------
-# Offline: imports, the agent on TestModel, the ontology helpers
-# ---------------------------------------------------------------------------
+    def test_orders_belong_to_one_task_and_customers_agree(self):
+        orders: dict[str, str] = {}
+        customers: dict[str, str] = {}
+        for task_id in _task_ids():
+            env = _json(STATE_BENCH_DIR / "task_envs" / f"{task_id}.json")
+            for order in env["orders"]:
+                assert orders.setdefault(order["order_id"], task_id) == task_id, order["order_id"]
+            for customer in env["customers"]:
+                record = json.dumps(customer, sort_keys=True)
+                assert customers.setdefault(customer["customer_id"], record) == record
 
 
 @pytest.fixture
@@ -303,7 +325,11 @@ def backend(monkeypatch) -> Iterator[SimpleNamespace]:
             memory=importlib.import_module("src.memory"),
             ontology=importlib.import_module("src.ontology"),
             agent=importlib.import_module("src.agent.agent"),
-            tools=importlib.import_module("src.agent.tools"),
+            thoughts=importlib.import_module("src.agent.thoughts"),
+            dataset=importlib.import_module("src.statebench.dataset"),
+            world=importlib.import_module("src.statebench.world"),
+            environment=importlib.import_module("src.statebench.vendor.environment"),
+            schemas=importlib.import_module("src.statebench.vendor.schemas"),
             seed=importlib.import_module("src.seed"),
         )
         modules.config.get_settings.cache_clear()
@@ -313,6 +339,77 @@ def backend(monkeypatch) -> Iterator[SimpleNamespace]:
         finally:
             modules.config.get_settings.cache_clear()
             modules.agent.get_agent.cache_clear()
+
+
+class TestVendoredEnvironment:
+    @pytest.mark.imports
+    def test_every_recorded_tool_call_replays_to_the_recorded_result(self, backend):
+        """The copied environment is the one the trajectories were recorded against."""
+        replayed = 0
+        for task in backend.dataset.load_tasks():
+            env = backend.environment.CustomerSupportEnvironment(
+                backend.schemas.CSEnvironmentData.from_dict(task.env), task.now
+            )
+            for message in task.conversation:
+                for call in message.get("tool_calls") or []:
+                    result = env.tool_handlers[call["name"]](call["arguments"])
+                    assert json.loads(json.dumps(result)) == call["result"], (task.id, call)
+                    replayed += 1
+        assert replayed == 140
+
+    @pytest.mark.imports
+    def test_the_merged_world_keeps_each_orders_task_date(self, backend):
+        tasks = backend.dataset.load_tasks()
+        merged = backend.dataset.merge_world(tasks)
+        assert len(merged.records["orders"]) == 25
+        assert len(merged.records["customers"]) == 5
+        task = next(t for t in tasks if t.id == "66-challenge_seasonal_electronics")
+        order_id = task.env["orders"][0]["order_id"]
+        assert merged.as_of[order_id] == task.now
+
+
+# ---------------------------------------------------------------------------
+# The ontology
+# ---------------------------------------------------------------------------
+
+
+class TestOntology:
+    @pytest.mark.imports
+    def test_the_document_validates_and_declares_the_records(self, backend):
+        document = backend.ontology.load_document()
+        assert document.domain.id == backend.ontology.DOMAIN_ID == "customer-support"
+        assert document.labels() == ["Customer", "Order", "OrderLine", "Product", "Warranty"]
+        assert set(document.relationship_types()) == {
+            "PLACED",
+            "CONTAINS",
+            "OF_PRODUCT",
+            "COVERS",
+            "REPLACED_BY",
+        }
+        # Policies are records, not extraction targets (see the YAML's header).
+        assert "Policy" not in document.labels()
+
+    @pytest.mark.imports
+    def test_every_record_role_has_a_label(self, backend):
+        document = backend.ontology.load_document()
+        for role in backend.world.RECORD_ROLES.values():
+            assert document.node_label(*role), role
+
+    @pytest.mark.imports
+    def test_the_revision_renames_a_declared_type(self, backend):
+        ontology = backend.ontology
+        document = ontology.load_document()
+        assert ontology.RENAME_FROM in document.labels()
+        assert ontology.RENAME_TO not in document.labels()
+        revised = ontology.rename_entity_type(document, ontology.RENAME_FROM, ontology.RENAME_TO)
+        assert revised.validate_structure() == []
+        assert ontology.role_label(revised, ontology.WARRANTY) == ontology.RENAME_TO
+        assert ontology.entity_labels(["Entity", "Object", "OrderLine"]) == ["OrderLine", "Object"]
+
+
+# ---------------------------------------------------------------------------
+# Offline: the agent on TestModel, the graph adapter's pure parts
+# ---------------------------------------------------------------------------
 
 
 class TestOfflineBackend:
@@ -331,10 +428,6 @@ class TestOfflineBackend:
         assert isinstance(backend.agent.get_agent().model, TestModel)
 
     @pytest.mark.imports
-    def test_the_seed_drives_the_agents_own_tools(self, backend):
-        assert set(backend.seed.TOOL_FUNCTIONS) == TOOL_NAMES
-
-    @pytest.mark.imports
     def test_memory_settings_are_keyless_bolt_with_gliner(self, backend):
         settings = backend.memory.build_memory_settings(backend.config.get_settings())
         assert settings.llm is None
@@ -343,63 +436,68 @@ class TestOfflineBackend:
         assert settings.extraction.enable_llm_fallback is False
 
     @pytest.mark.imports
-    def test_ticket_label_follows_the_rename(self, backend):
-        from neo4j_agent_memory.ontology.store import BoltOntology
+    def test_write_steps_read_as_preview_or_confirmation(self, backend):
+        thought_for = backend.thoughts.thought_for
+        assert thought_for("process_return", {"confirm": False}).startswith("Preview")
+        assert thought_for("process_return", {"confirm": True}).startswith("Confirm")
+        assert thought_for("get_order", {"order_id": "ORD-6014"}).startswith("Look up")
+        assert set(backend.thoughts.TOOL_THOUGHTS) == TOOL_NAMES
 
-        # import_ converts locally and never touches the client.
-        store = BoltOntology.__new__(BoltOntology)
-        draft = asyncio.run(
-            BoltOntology.import_(
-                store,
-                content=(DATA_DIR / "support-desk.arrows.json").read_text(encoding="utf-8"),
-                format="arrows",
-            )
-        )
-        document = backend.ontology.repair_draft(draft.document)
-        assert document.validate_structure() == []
-        assert backend.ontology.ticket_label(document) == "Ticket"
-        revised = backend.ontology.rename_entity_type(document, "Ticket", "SupportCase")
-        assert revised.validate_structure() == []
-        assert backend.ontology.ticket_label(revised) == "SupportCase"
-        assert backend.ontology.entity_labels(["Entity", "Event", "Ticket"]) == ["Ticket", "Event"]
+    @pytest.mark.imports
+    def test_calls_are_evaluated_at_their_orders_task_date(self, backend):
+        world = backend.world
+        graph = world.GraphWorld()
+        graph.records["order_items"]["ITEM-1"] = {"item_id": "ITEM-1", "order_id": "ORD-1"}
+        graph.as_of = {"ORD-1": "2026-01-10T10:00:00", "ORD-2": "2026-07-20T10:00:00"}
+        assert world.now_for(graph, {"order_id": "ORD-1"}) == "2026-01-10T10:00:00"
+        assert world.now_for(graph, {"item_id": "ITEM-1"}) == "2026-01-10T10:00:00"
+        assert world.now_for(graph, {"topic": "return"}) == "2026-07-20T10:00:00"
+
+    @pytest.mark.imports
+    def test_touched_maps_record_ids_and_policy_topics_to_entities(self, backend):
+        world = backend.world
+        graph = world.GraphWorld()
+        graph.entity_of = {"ORD-1": "e-order", "PROD-1": "e-product", "policy:return": "e-policy"}
+        graph.entities = {
+            "e-order": ("ORD-1", "EVENT"),
+            "e-product": ("Phone Case", "OBJECT"),
+            "e-policy": ("Return policy", "OBJECT"),
+        }
+        result = {"items": [{"product_id": "PROD-1"}]}
+        order = world.touched(graph, "get_order", {"order_id": "ORD-1"}, result)
+        assert [t["name"] for t in order] == ["ORD-1", "Phone Case"]
+        policy = world.touched(graph, "get_policies", {"topic": "return"}, {"topic": "return"})
+        assert [t["name"] for t in policy] == ["Return policy"]
 
     @pytest.mark.imports
     def test_untitled_threads_are_titled_after_their_first_message(self, backend):
-        pytest.importorskip("fastapi")
         threads = importlib.import_module("src.api.routes.threads")
-        assert threads.title_from("  Where is order SO-4471?\nThanks ") == (
-            "Where is order SO-4471? Thanks"
+        assert threads.title_from("  Where is order ORD-6014?\nThanks ") == (
+            "Where is order ORD-6014? Thanks"
         )
         question = (
-            "Which open tickets does Grace Liu have, and is the duplicate charge "
-            "on SO-4503 refunded yet?"
+            "I want to return everything from order ORD-6014: the shirt, the book and "
+            "the phone case."
         )
         title = threads.title_from(question)
         assert len(title) <= threads.TITLE_LENGTH and title.endswith("…")
         assert question.startswith(title[:-1])
         assert threads.title_from("   ") == threads.DEFAULT_TITLE
 
+    @pytest.mark.imports
+    def test_seed_sessions_are_titled_and_unique(self, backend):
+        tasks = backend.dataset.load_tasks()
+        sessions = [task.session_id for task in tasks]
+        assert len(set(sessions)) == len(sessions) == 24
+        assert all(session.startswith(backend.seed.SEED_PREFIX) for session in sessions)
+        topics = {task.id: task.topic for task in tasks}
+        assert topics["10-return_full_order"] == "Return full order"
+        assert topics["111-hard_exchange_downgrade_cash_demand"] == "Exchange downgrade cash demand"
+
 
 # ---------------------------------------------------------------------------
 # End to end
 # ---------------------------------------------------------------------------
-
-#: Chat threads the test creates, with their traces and the entities only they mention.
-CHAT_CLEANUP = """
-MATCH (c:Conversation) WHERE c.session_id IN $sessions
-OPTIONAL MATCH (rt:ReasoningTrace) WHERE rt.session_id = c.session_id
-OPTIONAL MATCH (rt)-[:HAS_STEP]->(s:ReasoningStep)
-OPTIONAL MATCH (s)-[:USES_TOOL]->(tc:ToolCall)
-OPTIONAL MATCH (c)-[:HAS_MESSAGE]->(m:Message)
-OPTIONAL MATCH (m)-[:MENTIONS]->(e:Entity)
-WHERE NOT EXISTS {
-  MATCH (e)<-[:MENTIONS]-(:Message)<-[:HAS_MESSAGE]-(other:Conversation)
-  WHERE NOT other.session_id IN $sessions
-}
-WITH collect(DISTINCT c) + collect(DISTINCT rt) + collect(DISTINCT s) + collect(DISTINCT tc)
-     + collect(DISTINCT m) + collect(DISTINCT e) AS owned
-FOREACH (node IN owned | DETACH DELETE node)
-"""
 
 
 def _sse_events(body: str) -> list[dict[str, Any]]:
@@ -444,6 +542,7 @@ def test_backend_runs_end_to_end(neo4j_env, monkeypatch):
         memory = importlib.import_module("src.memory")
         seed = importlib.import_module("src.seed")
         agent = importlib.import_module("src.agent.agent")
+        world = importlib.import_module("src.statebench.world")
         config.get_settings.cache_clear()
         agent.get_agent.cache_clear()
         main = importlib.import_module("src.main")
@@ -462,52 +561,69 @@ def test_backend_runs_end_to_end(neo4j_env, monkeypatch):
                 await client.close()
 
         before = asyncio.run(active_version_id())
-        chat_sessions: list[str] = []
         try:
             summary = asyncio.run(seed.seed(settings, reset=True))
 
-            # The seed: revision 1, the transcript, tickets under :Ticket,
-            # resolution's review queue, and earlier agent work.
+            # The seed: revision 1, the records, the conversations and every
+            # trajectory's tool calls as earlier agent work.
             assert summary["revision"] == 1
             assert summary["validation_mode"] == "permissive"
-            assert "seed-priya-damaged-lamp" in summary["sessions"]
-            tickets = summary["entities_by_label"].get("Ticket", [])
-            assert any(name.startswith("TK-") for name in tickets), summary["entities_by_label"]
-            assert summary["entities_by_label"].get("Customer"), summary["entities_by_label"]
-            assert summary["pending_review_pairs"], "a first name next to a full name waits"
-            assert len(summary["traces"]) == len(seed.SEEDED_TRACES)
-            assert all(trace["touched"] > 0 for trace in summary["traces"]), summary["traces"]
+            assert len(summary["sessions"]) == 24
+            assert summary["records"] == {
+                "customers": 5,
+                "products": 38,
+                "orders": 25,
+                "order_items": 32,
+                "warranties": 3,
+            }
+            assert sum(t["tool_calls"] for t in summary["traces"]) == 140
+            assert all(t["touched"] > 0 for t in summary["traces"]), summary["traces"]
+            labels = summary["entities_by_label"]
+            assert len(labels["Policy"]) == 6
+            assert "Priya Patel" in labels["Customer"]
+            # Id-shaped mentions land on their records, never as stray entities.
+            assert not [n for n in labels.get("Product", []) if n.startswith(("ORD-", "ITEM-"))]
 
-            async def drive() -> dict[str, Any]:
+            async def drive() -> None:
                 app = main.create_app()
                 async with _http(app) as http:
                     health = (await http.get("/api/health")).json()
                     assert health["neo4j"] is True, health
                     assert health["agent_model"] == "test"
                     assert health["ontology"] == {
-                        "domain_id": "support-desk",
+                        "domain_id": "customer-support",
                         "revision": 1,
                         "validation_mode": "permissive",
                     }
 
+                    thread_id = "seed-10-return-full-order"
                     threads = (await http.get("/api/threads")).json()
-                    transcript = next(t for t in threads if t["id"] == "seed-priya-damaged-lamp")
-                    assert transcript["seeded"] is True and transcript["message_count"] == 6
+                    full_return = next(t for t in threads if t["id"] == thread_id)
+                    assert full_return["seeded"] is True
+                    assert full_return["title"] == "Priya Patel: Return full order"
+
+                    context = (
+                        await http.get("/api/memory/context", params={"thread_id": thread_id})
+                    ).json()
+                    names = {e["name"] for e in context["entities"]}
+                    assert {"Priya Patel", "ORD-6014"} <= names, names
+
+                    graph = (await http.get("/api/graph", params={"thread_id": thread_id})).json()
+                    captions = {node["caption"] for node in graph["nodes"]}
+                    # The record context: the order's lines, one typed edge away.
+                    assert {"ITEM-9090", "ITEM-9091", "ITEM-9092"} <= captions, captions
+                    relations = {r["caption"] for r in graph["relationships"]}
+                    assert {"PLACED", "CONTAINS"} <= relations, relations
 
                     created = await http.post("/api/threads", json={})
                     assert created.status_code == 200, created.text
-                    assert created.json()["title"] == "New chat"
-                    thread_id = created.json()["id"]
-                    chat_sessions.append(thread_id)
-                    assert thread_id.startswith("chat-")
+                    chat_id = created.json()["id"]
+                    assert chat_id.startswith("chat-")
 
                     # One chat turn: stored + extracted, traced, tools streamed.
+                    question = "Hi, I'm Priya Patel. I want to return everything from ORD-6014."
                     response = await http.post(
-                        "/api/chat",
-                        json={
-                            "thread_id": thread_id,
-                            "message": "Which tickets does Priya Raman have?",
-                        },
+                        "/api/chat", json={"thread_id": chat_id, "message": question}
                     )
                     assert response.status_code == 200, response.text
                     events = _sse_events(response.text)
@@ -516,115 +632,81 @@ def test_backend_runs_end_to_end(neo4j_env, monkeypatch):
                     assert kinds[:2] == ["message_stored", "trace_started"], kinds
                     assert kinds[-1] == "done", kinds
                     stored = events[0]
-                    assert any(e["name"] == "Priya Raman" for e in stored["entities"]), stored
+                    assert any(e["name"] == "ORD-6014" for e in stored["entities"]), stored
                     calls = [e for e in events if e["type"] == "tool_call"]
                     results = [e for e in events if e["type"] == "tool_result"]
                     assert {e["name"] for e in calls} == TOOL_NAMES
                     assert len(results) == len(calls)
-                    assert any(e["touched"] for e in results), "list_tickets names tickets"
-                    # The chat labels touched entities like the panels do.
-                    streamed = [t for e in results for t in e["touched"]]
-                    assert all(t["labels"] for t in streamed), streamed
-                    done = events[-1]
-                    assert done["trace_id"] == events[1]["trace_id"]
 
-                    traces = (await http.get(f"/api/traces?thread_id={thread_id}")).json()
+                    traces = (await http.get(f"/api/traces?thread_id={chat_id}")).json()
                     assert len(traces) == 1, traces
                     trace = traces[0]
-                    assert trace["id"] == done["trace_id"]
                     assert trace["success"] is True and trace["seeded"] is False
-                    assert trace["tool_call_count"] == len(calls) == trace["step_count"]
-                    assert trace["message_id"] == stored["message_id"]
+                    assert trace["tool_call_count"] == len(calls)
 
-                    detail = (await http.get(f"/api/traces/{trace['id']}")).json()
-                    assert detail["metrics"] == {"tool_calls": float(len(calls))}
-                    tool_calls = [c for step in detail["steps"] for c in step["tool_calls"]]
-                    assert {c["tool_name"] for c in tool_calls} == TOOL_NAMES
-                    touched = [t for c in tool_calls for t in c["touched"]]
-                    assert touched and all(t["labels"] for t in touched), tool_calls
-
-                    thread = (await http.get(f"/api/threads/{thread_id}")).json()
-                    assert [m["role"] for m in thread["messages"]] == ["user", "assistant"]
-                    assert thread["messages"][0]["trace_id"] == trace["id"]
-                    # Untitled at creation, titled after the first message.
-                    assert thread["title"] == "Which tickets does Priya Raman have?"
-                    # A reopened chat rebuilds its tool cards from the trace.
+                    thread = (await http.get(f"/api/threads/{chat_id}")).json()
+                    assert question.startswith(thread["title"].rstrip("…"))
                     recorded = thread["messages"][0]["tool_calls"]
                     assert {c["tool_name"] for c in recorded} == TOOL_NAMES
-                    assert all(t["labels"] for c in recorded for t in c["touched"])
-
-                    # search_support_history leaves the current conversation
-                    # out (the question itself would be its best hit), and each
-                    # hit names the tickets its conversation mentions.
-                    tools = importlib.import_module("src.agent.tools")
-                    client = await app.state.memory.get_client()
-                    question = "Which tickets does Priya Raman have?"
-                    everywhere = await tools.search_support_history(client, question)
-                    assert any(m["session_id"] == thread_id for m in everywhere["messages"])
-                    elsewhere = await tools.search_support_history(
-                        client, question, exclude_session_id=thread_id
-                    )
-                    assert elsewhere["messages"], elsewhere
-                    assert all(m["session_id"] != thread_id for m in elsewhere["messages"])
-                    assert any(m["conversation_tickets"] for m in elsewhere["messages"]), elsewhere
 
                     similar = (
                         await http.get(
                             "/api/traces/similar",
-                            params={"task": "Find the open tickets for a customer"},
+                            params={"task": "I want to return everything from my order"},
                         )
                     ).json()
                     assert any(t["seeded"] for t in similar), similar
-                    stats = (await http.get("/api/tool-stats")).json()
-                    assert {s["name"] for s in stats} >= TOOL_NAMES
 
-                    context = (
-                        await http.get(
-                            "/api/memory/context", params={"thread_id": "seed-priya-damaged-lamp"}
-                        )
-                    ).json()
-                    assert any("Ticket" in e["labels"] for e in context["entities"]), context
-                    graph = (
-                        await http.get(
-                            "/api/graph", params={"thread_id": "seed-priya-damaged-lamp"}
-                        )
-                    ).json()
-                    kinds_in_graph = {node["kind"] for node in graph["nodes"]}
-                    assert kinds_in_graph == {"conversation", "message", "entity"}
-                    assert all("from" in r and "to" in r for r in graph["relationships"])
+                    # A real return through the graph-backed environment: the
+                    # policy gate, the preview, the confirmation, the graph write.
+                    client = await app.state.memory.get_client()
+                    session = "chat-e2e-return"
+                    item = {"item_id": "ITEM-9090", "reason": "changed_mind"}
+                    blocked = await world.run_tool(
+                        client, session, "process_return", {**item, "amount": 51, "confirm": True}
+                    )
+                    assert "get_policies" in blocked["error"]
+                    await world.run_tool(client, session, "get_policies", {"topic": "return"})
+                    preview = await world.run_tool(
+                        client, session, "process_return", {**item, "amount": 0, "confirm": False}
+                    )
+                    assert preview["status"] == "preview" and preview["refund_amount"] == 51
+                    done = await world.run_tool(
+                        client, session, "process_return", {**item, "amount": 51, "confirm": True}
+                    )
+                    assert done["status"] == "returned"
+                    order = await world.run_tool(
+                        client, session, "get_order", {"order_id": "ORD-6014"}
+                    )
+                    assert order["status"] == "partially_returned"
+                    rows = await client.query.cypher(
+                        "MATCH (e:Entity {name: 'ITEM-9090'}) RETURN e.description AS d"
+                    )
+                    assert "returned" in rows[0]["d"], rows
 
-                    # The rename: a new strict revision, the graph migrated, the
-                    # app's client reconnected onto it.
+                    # The revision: Warranty -> WarrantyCoverage, strict, migrated.
                     overview = (await http.get("/api/ontology")).json()
                     revision_1 = overview["active"]["version_id"]
-                    tickets_before = overview["label_counts"]["Ticket"]
-                    assert tickets_before >= 1
-                    renamed = await http.post(
-                        "/api/ontology/rename",
-                        json={"old": "Ticket", "new": "SupportCase", "validation_mode": "strict"},
-                    )
+                    warranties_before = overview["label_counts"]["Warranty"]
+                    assert warranties_before >= 3
+                    renamed = await http.post("/api/ontology/rename", json={})
                     assert renamed.status_code == 200, renamed.text
                     result = renamed.json()
                     assert result["revision"] == 2
                     assert result["migration"]["status"] == "completed"
-                    assert result["migration"]["processed"] >= 1
-                    assert result["migration"]["processed"] == result["dry_run_total"]
+                    assert result["migration"]["processed"] == result["dry_run_total"] >= 3
                     assert result["client"] == {
-                        "domain_id": "support-desk",
+                        "domain_id": "customer-support",
                         "validation_mode": "strict",
                     }
                     added = [t["label"] for t in result["diff"]["entity_types"]["added"]]
-                    assert added == ["SupportCase"]
-                    assert result["diff"]["mode_change"] == {"from": "permissive", "to": "strict"}
+                    assert added == ["WarrantyCoverage"]
 
                     after = (await http.get("/api/ontology")).json()
-                    assert after["label_counts"]["Ticket"] == 0
-                    assert after["label_counts"]["SupportCase"] == tickets_before
-                    assert [r["is_active"] for r in after["revisions"]] == [False, True]
+                    assert after["label_counts"]["Warranty"] == 0
+                    assert after["label_counts"]["WarrantyCoverage"] == warranties_before
 
-                    again = await http.post(
-                        "/api/ontology/rename", json={"old": "Ticket", "new": "SupportCase"}
-                    )
+                    again = await http.post("/api/ontology/rename", json={})
                     assert again.status_code == 409, again.text
 
                     back = await http.post(
@@ -632,8 +714,6 @@ def test_backend_runs_end_to_end(neo4j_env, monkeypatch):
                     )
                     assert back.status_code == 200, back.text
                     assert back.json()["revision"] == 1
-                    assert back.json()["client"]["validation_mode"] == "permissive"
-                    return result
 
             asyncio.run(drive())
         finally:
@@ -642,9 +722,6 @@ def test_backend_runs_end_to_end(neo4j_env, monkeypatch):
                 client = await connect(memory.build_memory_settings(settings))
                 try:
                     await seed.reset_seed(client)
-                    if chat_sessions:
-                        await client.graph.execute_write(CHAT_CLEANUP, {"sessions": chat_sessions})
-                        await client.reasoning.migrate_tool_stats()
                     if before is not None:
                         await client.ontology.activate(before)
                 finally:

@@ -48,6 +48,7 @@ from neo4j_agent_memory.memory.reasoning import ToolCallStatus
 from neo4j_agent_memory.schema.models import EntityRef, TraceOutcome
 from src.agent.agent import get_agent
 from src.agent.deps import SupportDeskDeps
+from src.agent.thoughts import thought_for
 from src.agent.tools import entity_refs
 from src.api import memory_service
 from src.api.routes.threads import DEFAULT_TITLE, set_title, title_from
@@ -55,23 +56,13 @@ from src.api.schemas import ChatRequest
 from src.config import get_settings
 from src.memory import jsonable
 from src.ontology import entity_labels
+from src.statebench import world
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 #: Prior messages replayed to the model, so a follow-up question has context.
 HISTORY_LIMIT = 20
-
-#: What each tool call is recorded as having been *for* (the step's thought).
-TOOL_THOUGHTS = {
-    "recall_similar_tasks": "Recall earlier agent work on a similar task",
-    "find_customer": "Identify the customer the user named",
-    "get_ticket": "Read the ticket the user referred to",
-    "list_tickets": "List tickets with their orders and products",
-    "get_order": "Look up the order and what it contains",
-    "search_support_history": "Search past support conversations",
-    "get_ontology": "Check which ontology revision is active",
-}
 
 MESSAGE_ENTITIES = """
 MATCH (m:Message {id: $id})-[:MENTIONS]->(e:Entity)
@@ -114,9 +105,19 @@ def _touched(result: Any) -> list[dict[str, Any]]:
     return [item for item in touched if isinstance(item, dict)] if isinstance(touched, list) else []
 
 
-async def _touched_refs(client: BoltMemoryClient, result: Any) -> list[dict[str, Any]]:
-    """The entities a tool result named, with their labels. Never raises."""
-    touched = _touched(result)
+async def _touched_for(
+    client: BoltMemoryClient, tool_name: str, arguments: dict[str, Any], result: Any
+) -> list[dict[str, Any]]:
+    """The entities a call named: STATE-Bench calls by the record ids they mention."""
+    if tool_name in world.TOOL_NAMES:
+        return world.touched(await world.load_world(client), tool_name, arguments, result)
+    return _touched(result)
+
+
+async def _touched_refs(
+    client: BoltMemoryClient, touched: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """The touched entities with their labels, for the stream. Never raises."""
     try:
         return await entity_refs(client, touched)
     except Exception:
@@ -175,17 +176,18 @@ async def _record_step(
     duration_ms: int,
     failed: bool,
     message_id: str | None,
+    touched_entities: list[dict[str, Any]],
 ) -> None:
     """One ReasoningStep + ToolCall + TOUCHED edges. Logged, never raised."""
     try:
         step = await client.reasoning.add_step(
             trace_id,
-            thought=TOOL_THOUGHTS.get(tool_name, f"Call {tool_name}"),
+            thought=thought_for(tool_name, arguments),
             action=tool_name,
         )
         touched = [
             EntityRef(id=item["id"], name=item.get("name"), type=item.get("type"))
-            for item in _touched(result)
+            for item in touched_entities
             if item.get("id")
         ]
         await client.reasoning.record_tool_call(
@@ -229,6 +231,7 @@ async def stream_turn(request: ChatRequest, http_request: Request) -> AsyncItera
         try:
             stored = await client.short_term.add_message(session_id, "user", request.message)
             user_message_id = str(stored.id)
+            await world.repair_id_mentions(client, [user_message_id])
             await _ensure_title(client, session_id, request.message)
             entities = await _message_entities(client, user_message_id)
             yield _event(
@@ -288,6 +291,13 @@ async def stream_turn(request: ChatRequest, http_request: Request) -> AsyncItera
                     duration_ms = int((time.monotonic() - started) * 1000)
                     failed = isinstance(event.part, RetryPromptPart)
                     result = _tool_result(event.part.content)
+                    try:
+                        touched = await _touched_for(client, tool_name, args, result)
+                    except Exception:
+                        logger.warning(
+                            "Could not work out what %s touched", tool_name, exc_info=True
+                        )
+                        touched = []
                     yield _event(
                         {
                             "type": "tool_result",
@@ -295,7 +305,7 @@ async def stream_turn(request: ChatRequest, http_request: Request) -> AsyncItera
                             "name": tool_name,
                             "result": result,
                             "duration_ms": duration_ms,
-                            "touched": await _touched_refs(client, result),
+                            "touched": await _touched_refs(client, touched),
                         }
                     )
                     if trace_id is not None:
@@ -308,6 +318,7 @@ async def stream_turn(request: ChatRequest, http_request: Request) -> AsyncItera
                             duration_ms=duration_ms,
                             failed=failed,
                             message_id=user_message_id,
+                            touched_entities=touched,
                         )
                 elif isinstance(event, AgentRunResultEvent):
                     output = str(event.result.output or "")
@@ -326,6 +337,7 @@ async def stream_turn(request: ChatRequest, http_request: Request) -> AsyncItera
                 extract_entities=not settings.uses_test_model,
             )
             assistant_message_id = str(answer.id)
+            await world.repair_id_mentions(client, [assistant_message_id])
         except Exception:
             logger.warning("Could not store the assistant message", exc_info=True)
         if trace_id is not None:

@@ -20,9 +20,9 @@ import { PromptInput } from "./PromptInput";
 
 /** Starter prompts that exercise the tools against the seeded data. */
 const SUGGESTIONS = [
-  "What open tickets does Priya Raman have?",
-  "What's the status of order SO-4417?",
-  "Show me ticket TK-2210 and everything linked to it.",
+  "Hi, I'm Priya Patel. I want to return everything from order ORD-6014.",
+  "This is Marcus Johnson. Please cancel order ORD-6015, I found a better deal.",
+  "I'm David Kim. My coffee maker from ORD-7232 broke just after the warranty ended.",
   "Has anyone else reported problems with the Aurora Desk Lamp?",
 ];
 
@@ -150,10 +150,12 @@ export function ChatPanel({
             <Stack gap="4" maxW="lg" textAlign="center" alignItems="center">
               <Heading size="md">Ask the support-desk agent</Heading>
               <Text color="fg.muted" fontSize="sm">
-                The agent reads the support graph — customers, orders, products
-                and tickets typed by the <code>support-desk</code> ontology —
-                and records every turn as a reasoning trace. Watch the Memory,
-                Graph and Reasoning tabs as it works.
+                The agent works STATE-Bench support requests against the memory
+                graph — customers, orders, order lines, products and warranties
+                typed by the <code>customer-support</code> ontology — recalls how
+                earlier requests were handled, and records every turn as a
+                reasoning trace. Watch the Memory, Graph and Reasoning tabs as
+                it works.
               </Text>
               <Flex gap="2" flexWrap="wrap" justifyContent="center">
                 {SUGGESTIONS.map((suggestion) => (

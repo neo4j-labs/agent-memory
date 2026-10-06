@@ -1,21 +1,18 @@
-"""The agent's tools, as plain async functions over a connected client.
+"""The agent's memory tools, as plain async functions over a connected client.
 
-``agent.py`` wraps each one as a PydanticAI tool; ``seed.py`` calls the same
-functions to record the seeded reasoning traces, so a seeded tool call carries
-a real result.
+The STATE-Bench tools (``get_order``, ``process_return`` ...) run the vendored
+environment against the records in the graph (:mod:`src.statebench.world`).
+These are the tools that read *memory* instead:
+
+- ``recall_similar_tasks``: reasoning memory, earlier traces for a similar task;
+- ``find_customer``: a customer by name, email or id, with their orders;
+- ``search_support_history``: earlier conversations, by meaning;
+- ``get_ontology``: the active ontology revision.
 
 Every read goes through ``client.query.cypher()``, the library's read-only
 accessor. Labels are never hard-coded: each lookup asks the client's ontology
-document which label a role (``EVENT:TICKET`` and so on) has, so the tools
-work before and after the ``Ticket`` -> ``SupportCase`` rename.
-
-How entities are related. Typed ``RELATED_TO`` edges come first (GLiNER2.5
-extracts them against the ontology's relationships); a co-mention fills in
-what extraction did not connect. Tickets, orders and products are related when
-one *message* mentions them together; a customer is related to the tickets and
-orders mentioned in the *conversations* they took part in, because a customer
-introduces themselves in one message and the ticket is opened in the reply.
-Each related item says which it was (``via``).
+which label a role (``PERSON:CUSTOMER`` and so on) has, so the tools work
+before and after the ``Warranty`` -> ``WarrantyCoverage`` rename.
 
 Every result that names entities carries ``touched`` — ``[{"id", "name",
 "type"}]`` — which the chat route records as
@@ -24,14 +21,14 @@ Every result that names entities carries ``touched`` — ``[{"id", "name",
 
 from __future__ import annotations
 
-from typing import Any, Literal
-from uuid import UUID
+import json
+from typing import Any
 
 from neo4j_agent_memory import BoltMemoryClient
 from neo4j_agent_memory.core.exceptions import NotSupportedError
 from neo4j_agent_memory.ontology import OntologyDocument
-from src.memory import iso, jsonable, parse_json_map, resolved_binding
-from src.ontology import CUSTOMER, ORDER, PRODUCT, TICKET, entity_labels, role_label
+from src.memory import iso, parse_json_map, resolved_binding
+from src.ontology import CUSTOMER, ORDER, ORDER_LINE, PRODUCT, entity_labels, role_label
 
 #: Cap on audit edges per tool call, so one broad listing cannot flood the graph.
 MAX_TOUCHED = 12
@@ -39,74 +36,35 @@ MAX_TOUCHED = 12
 #: Similarity floor for ``recall_similar_tasks`` (MiniLM cosine).
 RECALL_THRESHOLD = 0.6
 
-#: Similarity floor for the last-resort semantic customer lookup (a misspelt
-#: name still clears it; a one-letter query does not).
-CUSTOMER_SEARCH_THRESHOLD = 0.75
-
 #: Messages ``search_support_history`` returns, and how many extra it fetches
 #: so that leaving the current conversation out still leaves that many.
 MESSAGE_HITS = 8
 MESSAGE_HITS_SLACK = 6
 
-Scope = Literal["message", "conversation"]
-
-ENTITY_FIELDS = """
-       e.id AS id, e.name AS name, e.type AS type, e.subtype AS subtype,
-       coalesce(properties(e).aliases, []) AS aliases, labels(e) AS labels,
-       properties(e).merged_into AS merged_into
-"""
-
-FIND_BY_NAME = f"""
-MATCH (e:Entity)
-WHERE $label IN labels(e)
-  AND (toLower(e.name) = toLower($name)
-       OR any(alias IN coalesce(properties(e).aliases, []) WHERE toLower(alias) = toLower($name)))
-RETURN {ENTITY_FIELDS},
-       CASE WHEN toLower(e.name) = toLower($name) THEN 'exact' ELSE 'alias' END AS matched
-ORDER BY matched DESC, merged_into IS NULL DESC
-LIMIT 1
-"""
-
-#: First-name-only lookups: "Priya" finds "Priya Raman".
-FIND_BY_PREFIX = f"""
+FIND_CUSTOMER = """
 MATCH (e:Entity)
 WHERE $label IN labels(e) AND NOT 'merged_into' IN keys(e)
-  AND toLower(e.name) STARTS WITH toLower($name) + ' '
-RETURN {ENTITY_FIELDS}, 'prefix' AS matched
-ORDER BY size(e.name)
+  AND (toLower(e.name) = toLower($name)
+       OR toLower(e.name) STARTS WITH toLower($name) + ' '
+       OR any(alias IN coalesce(properties(e).aliases, []) WHERE toLower(alias) = toLower($name)))
+RETURN e.id AS id, e.name AS name, e.type AS type, properties(e).record AS record,
+       coalesce(properties(e).aliases, []) AS aliases,
+       CASE WHEN toLower(e.name) = toLower($name) THEN 0
+            WHEN any(alias IN coalesce(properties(e).aliases, [])
+                     WHERE toLower(alias) = toLower($name)) THEN 1
+            ELSE 2 END AS rank
+ORDER BY rank, e.name
 LIMIT 5
 """
 
-GET_BY_ID = f"""
-MATCH (e:Entity {{id: $id}})
-RETURN {ENTITY_FIELDS}
-"""
-
-GET_BY_IDS = """
-MATCH (e:Entity) WHERE e.id IN $ids
-RETURN e.id AS id, labels(e) AS labels, properties(e).merged_into AS merged_into
-"""
-
-RELATED_BY_EDGE = """
-MATCH (e:Entity {id: $id})-[r:RELATED_TO]-(x:Entity)
-WHERE $label IN labels(x) AND NOT 'merged_into' IN keys(x)
-RETURN DISTINCT x.id AS id, x.name AS name, x.type AS type, r.type AS via
-ORDER BY name
-"""
-
-CO_MENTIONED_IN_MESSAGE = """
-MATCH (e:Entity {id: $id})<-[:MENTIONS]-(m:Message)-[:MENTIONS]->(x:Entity)
-WHERE $label IN labels(x) AND x <> e AND NOT 'merged_into' IN keys(x)
-RETURN x.id AS id, x.name AS name, x.type AS type, count(DISTINCT m) AS together
-ORDER BY together DESC, name
-"""
-
-CO_MENTIONED_IN_CONVERSATION = """
-MATCH (e:Entity {id: $id})<-[:MENTIONS]-(:Message)<-[:HAS_MESSAGE]-(c:Conversation)
-MATCH (c)-[:HAS_MESSAGE]->(m:Message)-[:MENTIONS]->(x:Entity)
-WHERE $label IN labels(x) AND x <> e AND NOT 'merged_into' IN keys(x)
-RETURN x.id AS id, x.name AS name, x.type AS type, count(DISTINCT c) AS together
-ORDER BY together DESC, name
+CUSTOMER_ORDERS = """
+MATCH (c:Entity {id: $id})-[r:RELATED_TO {type: 'PLACED'}]->(o:Entity)
+WHERE NOT 'merged_into' IN keys(o)
+OPTIONAL MATCH (o)-[:RELATED_TO {type: 'CONTAINS'}]->(i:Entity)
+               -[:RELATED_TO {type: 'OF_PRODUCT'}]->(p:Entity)
+RETURN o.id AS id, o.name AS name, o.type AS type, properties(o).record AS record,
+       collect(DISTINCT p.name) AS products
+ORDER BY o.name
 """
 
 CONVERSATIONS_MENTIONING = """
@@ -117,14 +75,6 @@ ORDER BY last_mentioned DESC
 LIMIT 10
 """
 
-MESSAGES_MENTIONING = """
-MATCH (c:Conversation)-[:HAS_MESSAGE]->(m:Message)-[:MENTIONS]->(e:Entity {id: $id})
-RETURN c.session_id AS session_id, c.title AS title, m.id AS message_id,
-       m.role AS role, m.content AS content, m.timestamp AS timestamp
-ORDER BY m.timestamp
-LIMIT 12
-"""
-
 PENDING_SAME_AS = """
 MATCH (e:Entity {id: $id})-[r:SAME_AS]-(other:Entity)
 WHERE r.status = 'pending'
@@ -133,19 +83,9 @@ RETURN other.id AS id, other.name AS name, r.confidence AS confidence,
 ORDER BY confidence DESC
 """
 
-ALL_WITH_LABEL = """
-MATCH (e:Entity)
-WHERE $label IN labels(e) AND NOT 'merged_into' IN keys(e)
-RETURN e.id AS id, e.name AS name, e.type AS type, e.subtype AS subtype
-ORDER BY e.name
-LIMIT $limit
-"""
-
-NAMES_ANY_LABEL = """
-MATCH (e:Entity)
-WHERE toLower(e.name) = toLower($name)
-RETURN e.name AS name, labels(e) AS labels
-LIMIT 5
+GET_BY_IDS = """
+MATCH (e:Entity) WHERE e.id IN $ids
+RETURN e.id AS id, labels(e) AS labels, properties(e).merged_into AS merged_into
 """
 
 MESSAGE_SESSIONS = """
@@ -154,8 +94,8 @@ WHERE m.id IN $ids
 RETURN m.id AS id, c.session_id AS session_id, c.title AS title
 """
 
-#: The tickets and orders each conversation mentions anywhere. A search hit is
-#: one message, and the ticket is usually named in a different one (the reply).
+#: The orders and products each conversation mentions anywhere. A search hit is
+#: one message, and the order it is about is often named in another one.
 CONVERSATION_RECORDS = """
 MATCH (c:Conversation)-[:HAS_MESSAGE]->(:Message)-[:MENTIONS]->(e:Entity)
 WHERE c.session_id IN $sessions AND NOT 'merged_into' IN keys(e)
@@ -186,11 +126,8 @@ def _document(client: BoltMemoryClient) -> OntologyDocument | None:
 
 
 def _ref(row: dict[str, Any]) -> dict[str, Any]:
-    """An entity summary: ``{"id", "name", "type"}`` (plus ``via`` when known)."""
-    ref = {"id": row["id"], "name": row["name"], "type": row.get("type")}
-    if row.get("via"):
-        ref["via"] = row["via"]
-    return ref
+    """An entity summary: ``{"id", "name", "type"}``."""
+    return {"id": row["id"], "name": row["name"], "type": row.get("type")}
 
 
 def _touched(*groups: list[dict[str, Any]] | dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -216,43 +153,14 @@ def _snippet(text: str | None, limit: int = 220) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
-def _entity_view(row: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "id": row["id"],
-        "name": row["name"],
-        "type": row.get("type"),
-        "subtype": row.get("subtype"),
-        "labels": entity_labels(row.get("labels") or []),
-        "aliases": list(row.get("aliases") or []),
-    }
-
-
-async def _find(client: BoltMemoryClient, label: str, name: str) -> dict[str, Any] | None:
-    """Exact name or alias match under ``label``, following ``merged_into``."""
-    rows = await client.query.cypher(FIND_BY_NAME, {"label": label, "name": name.strip()})
-    if not rows:
-        return None
-    row = dict(rows[0])
-    if row.get("merged_into"):
-        merged = await client.query.cypher(GET_BY_ID, {"id": row["merged_into"]})
-        if merged:
-            return {**dict(merged[0]), "matched": "merged", "matched_name": row["name"]}
-    return row
-
-
-async def related(
-    client: BoltMemoryClient, entity_id: str, label: str, scope: Scope
-) -> list[dict[str, Any]]:
-    """Entities under ``label`` related to ``entity_id``: typed edges, then co-mentions."""
-    params = {"id": entity_id, "label": label}
-    found: dict[str, dict[str, Any]] = {}
-    for row in await client.query.cypher(RELATED_BY_EDGE, params):
-        found.setdefault(row["id"], _ref(row))
-    co_mentions = CO_MENTIONED_IN_MESSAGE if scope == "message" else CO_MENTIONED_IN_CONVERSATION
-    via = "same message" if scope == "message" else "same conversation"
-    for row in await client.query.cypher(co_mentions, params):
-        found.setdefault(row["id"], _ref({**row, "via": via}))
-    return list(found.values())
+def _record(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, str) or not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 async def _conversations(client: BoltMemoryClient, entity_id: str) -> list[dict[str, Any]]:
@@ -268,30 +176,30 @@ async def _conversations(client: BoltMemoryClient, entity_id: str) -> list[dict[
     ]
 
 
-async def _conversation_records(
-    client: BoltMemoryClient, session_ids: set[str]
-) -> dict[str, dict[str, list[dict[str, Any]]]]:
-    """``{session_id: {"tickets": [...], "orders": [...]}}`` under the active labels."""
-    if not session_ids:
-        return {}
-    document = _document(client)
-    ticket, order = role_label(document, TICKET), role_label(document, ORDER)
-    rows = await client.query.cypher(
-        CONVERSATION_RECORDS, {"sessions": sorted(session_ids), "labels": [ticket, order]}
-    )
-    records: dict[str, dict[str, list[dict[str, Any]]]] = {}
-    for row in rows:
-        kind = "tickets" if ticket in row["labels"] else "orders"
-        bucket = records.setdefault(row["session_id"], {"tickets": [], "orders": []})[kind]
-        bucket.append(_ref(row))
-    return records
-
-
 async def _trace_metadata(client: BoltMemoryClient, ids: list[str]) -> dict[str, dict[str, Any]]:
     if not ids:
         return {}
     rows = await client.query.cypher(TRACE_METADATA, {"ids": ids})
     return {row["id"]: parse_json_map(row.get("metadata")) for row in rows}
+
+
+async def _conversation_records(
+    client: BoltMemoryClient, session_ids: set[str]
+) -> dict[str, dict[str, list[dict[str, Any]]]]:
+    """``{session_id: {"orders": [...], "products": [...]}}`` under the active labels."""
+    if not session_ids:
+        return {}
+    document = _document(client)
+    order, product = role_label(document, ORDER), role_label(document, PRODUCT)
+    rows = await client.query.cypher(
+        CONVERSATION_RECORDS, {"sessions": sorted(session_ids), "labels": [order, product]}
+    )
+    records: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    for row in rows:
+        kind = "orders" if order in row["labels"] else "products"
+        bucket = records.setdefault(row["session_id"], {"orders": [], "products": []})[kind]
+        bucket.append(_ref(row))
+    return records
 
 
 # ---------------------------------------------------------------------------
@@ -309,19 +217,22 @@ async def recall_similar_tasks(client: BoltMemoryClient, task: str) -> dict[str,
     for trace in traces:
         full = await client.reasoning.get_trace_with_steps(trace.id)
         steps = full.steps if full is not None else []
+        meta = metadata.get(str(trace.id), {})
         similar.append(
             {
                 "id": str(trace.id),
                 "task": trace.task,
                 "similarity": round(float(trace.metadata.get("similarity", 0.0)), 3),
                 "outcome": _snippet(trace.outcome, 300),
-                "seeded": bool(metadata.get(str(trace.id), {}).get("seeded")),
+                "seeded": bool(meta.get("seeded")),
+                "task_type": meta.get("task_type"),
                 "steps": [
                     {
-                        "action": step.action,
-                        "tools": [call.tool_name for call in step.tool_calls],
+                        "tool": call.tool_name,
+                        "arguments": call.arguments,
                     }
                     for step in steps
+                    for call in step.tool_calls
                 ],
             }
         )
@@ -329,170 +240,40 @@ async def recall_similar_tasks(client: BoltMemoryClient, task: str) -> dict[str,
 
 
 async def find_customer(client: BoltMemoryClient, name: str) -> dict[str, Any]:
-    """A customer by exact name, alias, first name or meaning, with orders and tickets."""
+    """A customer by full name, first name, email or customer id, with their orders."""
     document = _document(client)
-    customer_label = role_label(document, CUSTOMER)
-    row = await _find(client, customer_label, name)
-    candidates: list[dict[str, Any]] = []
-    if row is None:
-        prefix_rows = await client.query.cypher(
-            FIND_BY_PREFIX, {"label": customer_label, "name": name.strip()}
-        )
-        if prefix_rows:
-            row = dict(prefix_rows[0])
-            candidates = [_entity_view(dict(r)) for r in prefix_rows[1:]]
-    if row is None:
-        hits = await client.long_term.search_entities(
-            name, entity_types=[CUSTOMER[0]], limit=5, threshold=CUSTOMER_SEARCH_THRESHOLD
-        )
-        hits = [hit for hit in hits if (hit.subtype or "").upper() == CUSTOMER[1]]
-        if hits:
-            best = await client.query.cypher(GET_BY_ID, {"id": str(hits[0].id)})
-            if best:
-                row = {**dict(best[0]), "matched": "semantic"}
-            candidates = [{"id": str(hit.id), "name": hit.name} for hit in hits[1:]]
-    if row is None:
+    rows = await client.query.cypher(
+        FIND_CUSTOMER, {"label": role_label(document, CUSTOMER), "name": name.strip()}
+    )
+    if not rows:
         return {"query": name, "found": False, "customer": None, "touched": []}
-
-    customer = _entity_view(row)
-    orders = await related(client, row["id"], role_label(document, ORDER), "conversation")
-    tickets = await related(client, row["id"], role_label(document, TICKET), "conversation")
+    row = dict(rows[0])
+    record = _record(row.get("record"))
+    orders = [
+        {
+            **_ref(order),
+            "status": _record(order.get("record")).get("status"),
+            "order_date": _record(order.get("record")).get("order_date"),
+            "products": [product for product in order.get("products") or [] if product],
+        }
+        for order in await client.query.cypher(CUSTOMER_ORDERS, {"id": row["id"]})
+    ]
     pending = await client.query.cypher(PENDING_SAME_AS, {"id": row["id"]})
     return {
         "query": name,
         "found": True,
-        "matched_by": row.get("matched"),
-        "customer": customer,
-        "possible_duplicates": [jsonable(dict(p)) for p in pending],
-        "other_candidates": candidates,
+        "customer": {
+            "id": row["id"],
+            "name": row["name"],
+            "customer_id": record.get("customer_id"),
+            "membership_tier": record.get("membership_tier"),
+            "aliases": list(row.get("aliases") or []),
+        },
+        "other_matches": [{"name": other["name"]} for other in rows[1:]],
+        "possible_duplicates": [dict(p) for p in pending],
         "orders": orders,
-        "tickets": tickets,
         "conversations": await _conversations(client, row["id"]),
-        "touched": _touched(
-            {"id": row["id"], "name": row["name"], "type": row.get("type")}, orders, tickets
-        ),
-    }
-
-
-async def get_ticket(client: BoltMemoryClient, reference: str) -> dict[str, Any]:
-    """One ticket under the active ticket label, with its order, product and customer."""
-    document = _document(client)
-    ticket_label = role_label(document, TICKET)
-    row = await _find(client, ticket_label, reference)
-    if row is None:
-        others = await client.query.cypher(NAMES_ANY_LABEL, {"name": reference.strip()})
-        return {
-            "reference": reference,
-            "found": False,
-            "ticket_label": ticket_label,
-            "same_name_under_other_labels": [
-                {"name": o["name"], "labels": entity_labels(o["labels"])} for o in others
-            ],
-            "touched": [],
-        }
-    orders = await related(client, row["id"], role_label(document, ORDER), "message")
-    products = await related(client, row["id"], role_label(document, PRODUCT), "message")
-    customers = await related(client, row["id"], role_label(document, CUSTOMER), "conversation")
-    messages = await client.query.cypher(MESSAGES_MENTIONING, {"id": row["id"]})
-    return {
-        "reference": reference,
-        "found": True,
-        "ticket_label": ticket_label,
-        "ticket": _entity_view(row),
-        "orders": orders,
-        "products": products,
-        "customers": customers,
-        "mentions": [
-            {
-                "session_id": m["session_id"],
-                "title": m.get("title"),
-                "message_id": m["message_id"],
-                "role": m["role"],
-                "snippet": _snippet(m.get("content")),
-                "timestamp": iso(m.get("timestamp")),
-            }
-            for m in messages
-        ],
-        "touched": _touched(
-            {"id": row["id"], "name": row["name"], "type": row.get("type")},
-            orders,
-            products,
-            customers,
-        ),
-    }
-
-
-async def list_tickets(client: BoltMemoryClient, customer: str | None = None) -> dict[str, Any]:
-    """Tickets under the active label, each with its order and product."""
-    document = _document(client)
-    label = role_label(document, TICKET)
-    customer_row: dict[str, Any] | None = None
-    if customer:
-        customer_row = await _find(client, role_label(document, CUSTOMER), customer)
-        if customer_row is None:
-            return {
-                "ticket_label": label,
-                "customer": customer,
-                "customer_found": False,
-                "tickets": [],
-                "touched": [],
-            }
-        rows = await related(client, customer_row["id"], label, "conversation")
-    else:
-        rows = [
-            dict(r)
-            for r in await client.query.cypher(ALL_WITH_LABEL, {"label": label, "limit": 50})
-        ]
-
-    tickets: list[dict[str, Any]] = []
-    for row in rows:
-        orders = await related(client, row["id"], role_label(document, ORDER), "message")
-        products = await related(client, row["id"], role_label(document, PRODUCT), "message")
-        tickets.append(
-            {
-                "id": row["id"],
-                "name": row["name"],
-                "type": row.get("type"),
-                "orders": orders,
-                "products": products,
-            }
-        )
-    result: dict[str, Any] = {"ticket_label": label, "tickets": tickets}
-    if customer_row is not None:
-        result["customer"] = {"id": customer_row["id"], "name": customer_row["name"]}
-        result["customer_found"] = True
-    result["touched"] = _touched(
-        [{"id": customer_row["id"], "name": customer_row["name"], "type": customer_row.get("type")}]
-        if customer_row
-        else None,
-        tickets,
-    )
-    return result
-
-
-async def get_order(client: BoltMemoryClient, order_number: str) -> dict[str, Any]:
-    """One order with its products, tickets and customer."""
-    document = _document(client)
-    row = await _find(client, role_label(document, ORDER), order_number)
-    if row is None:
-        return {"order_number": order_number, "found": False, "touched": []}
-    products = await related(client, row["id"], role_label(document, PRODUCT), "message")
-    tickets = await related(client, row["id"], role_label(document, TICKET), "message")
-    customers = await related(client, row["id"], role_label(document, CUSTOMER), "conversation")
-    return {
-        "order_number": order_number,
-        "found": True,
-        "order": _entity_view(row),
-        "products": products,
-        "tickets": tickets,
-        "customers": customers,
-        "conversations": await _conversations(client, row["id"]),
-        "touched": _touched(
-            {"id": row["id"], "name": row["name"], "type": row.get("type")},
-            products,
-            tickets,
-            customers,
-        ),
+        "touched": _touched(_ref(row), orders),
     }
 
 
@@ -503,9 +284,8 @@ async def search_support_history(
 
     ``exclude_session_id`` leaves the conversation the agent is answering in
     out: its messages, including the question just asked, are already in the
-    model's context. Each hit lists the tickets and orders its conversation
-    mentions, because the ticket for a complaint is usually opened in the
-    reply rather than in the message that matched.
+    model's context. Each hit lists the orders and products its conversation
+    mentions.
     """
     found = await client.short_term.search_messages(
         query, limit=MESSAGE_HITS + MESSAGE_HITS_SLACK, threshold=0.5
@@ -556,13 +336,12 @@ async def search_support_history(
                 "role": message.role.value,
                 "snippet": _snippet(message.content),
                 "similarity": round(float(message.metadata.get("similarity", 0.0)), 3),
-                # What the rest of that conversation names: check these with
-                # get_ticket / get_order before saying a record does not exist.
-                "conversation_tickets": records.get(session_of(message.id) or "", {}).get(
-                    "tickets", []
-                ),
+                # What the rest of that conversation names.
                 "conversation_orders": records.get(session_of(message.id) or "", {}).get(
                     "orders", []
+                ),
+                "conversation_products": records.get(session_of(message.id) or "", {}).get(
+                    "products", []
                 ),
             }
             for message in messages
@@ -592,7 +371,7 @@ async def get_ontology(client: BoltMemoryClient) -> dict[str, Any]:
     return {
         "active": active_view,
         "client": resolved_binding(client),
-        "ticket_label": role_label(_document(client), TICKET),
+        "order_line_label": role_label(_document(client), ORDER_LINE),
     }
 
 
@@ -620,11 +399,3 @@ async def entity_refs(
         }
         for item in refs
     ]
-
-
-def is_uuid(value: str) -> bool:
-    try:
-        UUID(str(value))
-    except ValueError:
-        return False
-    return True

@@ -1,0 +1,59 @@
+{
+  "task_id": "11-cancel_before_shipment",
+  "user_id": "cust_002",
+  "now": "2026-06-12T10:00:00",
+  "opening_message": "I'd like to cancel my order ORD-6015. I found a better deal elsewhere.",
+  "user_simulator": {
+    "known_info": [
+      "order_id: ORD-6015",
+      "item: tablet"
+    ],
+    "task_rules": [
+      "Keep the request scoped to cancelling the full ORD-6015 tablet order because you found a better deal elsewhere.",
+      "If the agent asks for identifying details, provide the order ID and item, but do not volunteer policy, refund, fee, or shipping-status facts beyond saying you believe it has not shipped.",
+      "If the agent mentions an intercept fee, restocking fee, return process, partial cancellation, or says the order is already in transit, ask them to recheck because you are trying to cancel before shipment.",
+      "Confirm cancellation only after the agent previews a full-order cancellation for the tablet with no fee and a full $599 refund to the credit card.",
+      "If the agent asks for approval before showing the cancellation terms, ask to see the fee and refund details first.",
+      "End only after the agent confirms ORD-6015 has been cancelled and the tablet refund is $599 back to the credit card."
+    ],
+    "unknown_info": [],
+    "user_sim_context": "You want to cancel an order that has not shipped yet because you found a better option elsewhere. In your mind this should be the simplest kind of cancellation. You expect the agent to tell you whether it can still be stopped and what refund to expect."
+  },
+  "task_summary": "**Task:** The customer wants to cancel an order that has not shipped yet. The correct handling is a straightforward pre-shipment cancellation with no fee and a full refund on the cancelled order.\n\n**Challenge:** This is simple only if the agent keeps it simple. Weak agents invent an intercept fee, overcomplicate the workflow, or treat an unshipped order as if it were already in transit.",
+  "task_requirements": [
+    {
+      "evidence": "conversation_or_tool_calls",
+      "id": "11_cancel_before_shipment_agent_must_preview_first",
+      "kind": "must",
+      "requirement": "Agent must call cancel_order with confirm=false for ORD-6015 before calling cancel_order with confirm=true."
+    }
+  ],
+  "state_requirements": [
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-9100",
+      "field": "item_status",
+      "expected_value": "cancelled"
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-9100",
+      "field": "refund_amount",
+      "expected_value": 599
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-9100",
+      "field": "refund_method",
+      "expected_value": "credit_card"
+    },
+    {
+      "entity_type": "orders",
+      "record_key": "ORD-6015",
+      "field": "status",
+      "expected_value": "cancelled"
+    }
+  ],
+  "task_type": "cancel_order",
+  "task_env_path": "state_bench/domains/customer_support/task_envs/11-cancel_before_shipment.json"
+}

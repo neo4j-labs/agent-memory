@@ -38,8 +38,12 @@ import type {
 } from "@/lib/types";
 import { DiffView } from "./DiffView";
 
-/** The demo's one revision step (the same one ontology-lifecycle-bolt runs). */
-const RENAME = { old: "Ticket", new: "SupportCase", validation_mode: "strict" };
+/**
+ * The demo's one revision step: a terminology change (a warranty record holds
+ * the coverage), in strict mode, migrated onto the existing nodes.
+ */
+const RENAME = { old: "Warranty", new: "WarrantyCoverage", validation_mode: "strict" };
+const RENAME_LABEL = `${RENAME.old} → ${RENAME.new}`;
 
 interface OntologyPanelProps {
   refreshKey: number;
@@ -214,8 +218,8 @@ function DiffExplorer({ revisions }: { revisions: OntologyRevision[] }) {
   if (numbers.length < 2) {
     return (
       <EmptyRow>
-        Only one revision so far. Rename Ticket → SupportCase below to mint a
-        second one, then compare them here.
+        Only one revision so far. Rename {RENAME_LABEL} below to mint a second
+        one, then compare them here.
       </EmptyRow>
     );
   }
@@ -297,9 +301,9 @@ function RenameResult({
 }
 
 /**
- * The stored `support-desk` ontology on bolt: the active revision, what the
- * app's own client resolved, every revision (with activation), a diff
- * between any two, label counts, and the Ticket → SupportCase migration.
+ * The stored `customer-support` ontology on bolt: the active revision, what
+ * the app's own client resolved, every revision (with activation), a diff
+ * between any two, label counts, and the Warranty → WarrantyCoverage migration.
  */
 export function OntologyPanel({ refreshKey, onOntologyChanged }: OntologyPanelProps) {
   const load = useCallback(
@@ -496,7 +500,7 @@ export function OntologyPanel({ refreshKey, onOntologyChanged }: OntologyPanelPr
       </PanelSection>
 
       <PanelSection
-        title="Revise: Ticket → SupportCase"
+        title={`Revise: ${RENAME_LABEL}`}
         icon={<LuReplace size={16} />}
         description="Mints a new revision with the label renamed and strict mode, diffs it, dry-runs then runs the migration that relabels existing nodes, activates it and reconnects the app's client."
       >
@@ -508,13 +512,14 @@ export function OntologyPanel({ refreshKey, onOntologyChanged }: OntologyPanelPr
           disabled={!canRename || renaming}
         >
           <LuReplace />
-          Rename Ticket → SupportCase and migrate
+          Rename {RENAME_LABEL} and migrate
         </Button>
         {!canRename && active ? (
           <Text fontSize="xs" color="fg.muted">
-            The active revision does not declare <Code size="sm">Ticket</Code>
+            The active revision does not declare{" "}
+            <Code size="sm">{RENAME.old}</Code>
             {active.entity_types.some((t) => t.label === RENAME.new)
-              ? " — it has already been renamed to SupportCase."
+              ? ` — it has already been renamed to ${RENAME.new}.`
               : "."}
           </Text>
         ) : null}
@@ -548,7 +553,7 @@ export function OntologyPanel({ refreshKey, onOntologyChanged }: OntologyPanelPr
 
       <ConfirmDialog
         open={renameOpen}
-        title="Rename Ticket → SupportCase and migrate?"
+        title={`Rename ${RENAME_LABEL} and migrate?`}
         confirmLabel="Rename, migrate and activate"
         confirmPalette="orange"
         loading={renaming}
@@ -559,16 +564,17 @@ export function OntologyPanel({ refreshKey, onOntologyChanged }: OntologyPanelPr
           <Text>This runs the whole revision cycle against the database:</Text>
           <List.Root ps="5" gap="1">
             <List.Item>
-              creates a new revision with <Code size="sm">Ticket</Code> renamed
-              to <Code size="sm">SupportCase</Code>;
+              creates a new revision with <Code size="sm">{RENAME.old}</Code>{" "}
+              renamed to <Code size="sm">{RENAME.new}</Code>;
             </List.Item>
             <List.Item>
               switches validation to <b>strict</b> — undeclared entities are
               dropped on ingest and writes that break the ontology raise;
             </List.Item>
             <List.Item>
-              dry-runs, then migrates the existing <Code size="sm">:Ticket</Code>{" "}
-              nodes to <Code size="sm">:SupportCase</Code>;
+              dry-runs, then migrates the existing{" "}
+              <Code size="sm">:{RENAME.old}</Code> nodes to{" "}
+              <Code size="sm">:{RENAME.new}</Code>;
             </List.Item>
             <List.Item>activates the new revision and reconnects the app.</List.Item>
           </List.Root>

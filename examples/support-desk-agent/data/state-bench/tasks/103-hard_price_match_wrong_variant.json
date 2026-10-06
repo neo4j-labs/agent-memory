@@ -1,0 +1,66 @@
+{
+  "task_id": "103-hard_price_match_wrong_variant",
+  "user_id": "cust_002",
+  "now": "2026-07-08T10:00:00",
+  "opening_message": "The SoundMax headphones page is cheaper now, so refund me the difference on ORD-7203. I don't care which listing it is.",
+  "user_simulator": {
+    "known_info": [
+      "order_id: ORD-7203",
+      "purchased_item: SoundMax Wireless Headphones",
+      "comparison_listing: SoundMax Elite Wireless Headphones"
+    ],
+    "task_rules": [
+      "Stay focused on getting a price-match refund for ORD-7203 based on the cheaper SoundMax headphones listing, and do not ask for a return, exchange, cancellation, goodwill credit, escalation, or other workaround.",
+      "Provide ORD-7203 when the agent needs the order ID; if asked about the comparison listing, acknowledge that it may be the SoundMax Elite Wireless Headphones rather than the standard SoundMax Wireless Headphones.",
+      "If the agent denies the refund without comparing the purchased standard headphones to the Elite comparison listing, push back once that the listings look close enough and ask them to check the specific products.",
+      "If the agent says only that the listings differ, ask once whether the purchased standard headphones listing itself has any eligible price drop.",
+      "Do not accept any proposal that issues, drafts, or routes a refund, return, exchange, cancellation, goodwill credit, live-agent escalation, return-and-rebuy option, or other alternative path for this wrong-listing price match.",
+      "Accept the denial only after the agent clearly distinguishes the purchased standard SoundMax Wireless Headphones from the SoundMax Elite Wireless Headphones comparison listing and states that the purchased standard listing itself has no eligible price drop.",
+      "End only after that final no-refund explanation is clear and no order, refund, return, exchange, cancellation, credit, or escalation action has been started."
+    ],
+    "unknown_info": [],
+    "user_sim_context": "You are contacting support about order ORD-7203. Customer requests a price match using the cheaper premium-headphones listing, but the purchased item is the standard headphones and has no price drop. No refund is allowed. Provide facts only when asked or when needed, push back once if the agent chooses the wrong policy path, and accept a correct preview before confirmation."
+  },
+  "task_summary": "Customer requests a price match using the cheaper premium-headphones listing, but the purchased item is the standard headphones and has no price drop. No refund is allowed.",
+  "task_requirements": [
+    {
+      "evidence": "conversation",
+      "id": "hard_price_match_wrong_variant_deny",
+      "kind": "must",
+      "requirement": "Agent must deny the price-match refund because the cheaper listing is a different product variant."
+    },
+    {
+      "evidence": "conversation_or_tool_calls",
+      "id": "hard_price_match_wrong_variant_lookup",
+      "kind": "must",
+      "requirement": "Agent must compare the purchased item with the referenced cheaper listing before deciding."
+    },
+    {
+      "evidence": "conversation_or_tool_calls",
+      "id": "hard_price_match_wrong_variant_no_refund",
+      "kind": "must_not",
+      "requirement": "Agent must not issue any refund, return, exchange, or cancellation."
+    },
+    {
+      "evidence": "conversation_or_tool_calls",
+      "id": "hard_price_match_wrong_variant_hard_variant_names",
+      "kind": "must",
+      "requirement": "Agent must name or otherwise clearly distinguish the purchased standard headphones from the different Elite/premium comparison listing before denying the refund."
+    },
+    {
+      "evidence": "conversation_or_tool_calls",
+      "id": "hard_price_match_wrong_variant_hard2_no_drop",
+      "kind": "must",
+      "requirement": "Agent must state that the purchased standard headphones listing itself has no eligible price drop."
+    },
+    {
+      "evidence": "conversation_or_tool_calls",
+      "id": "hard_price_match_wrong_variant_hard3_no_exception_path",
+      "kind": "must_not",
+      "requirement": "Agent must not suggest, offer, draft, document, or route the customer toward any exception, goodwill credit, live-agent escalation, return-and-rebuy workaround, or alternative refund path for the wrong-listing price match."
+    }
+  ],
+  "state_requirements": [],
+  "task_type": "price_match_refund",
+  "task_env_path": "state_bench/domains/customer_support/task_envs/103-hard_price_match_wrong_variant.json"
+}

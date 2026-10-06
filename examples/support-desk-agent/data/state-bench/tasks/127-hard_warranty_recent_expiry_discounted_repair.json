@@ -1,0 +1,80 @@
+{
+  "task_id": "127-hard_warranty_recent_expiry_discounted_repair",
+  "user_id": "cust_004",
+  "now": "2026-07-20T10:00:00",
+  "opening_message": "My coffee maker from ORD-7232 broke just after the warranty ended. Is there any help or am I out of luck?",
+  "user_simulator": {
+    "known_info": [
+      "order_id: ORD-7232",
+      "item: BrewPerfect Coffee Maker",
+      "warranty_id: WRT-4102"
+    ],
+    "task_rules": [
+      "Keep the request scoped to getting help for the BrewPerfect Coffee Maker from ORD-7232 after its warranty recently expired; do not volunteer policy, cost, eligibility, or resolution details unless the agent asks or needs them to proceed.",
+      "Provide the order ID, item, warranty ID, and that the coffee maker broke just after the warranty ended when asked or when needed to keep the claim on track.",
+      "If the agent says no warranty help exists because the warranty expired, ask once whether a recent-expiry discounted paid repair option is available.",
+      "If the agent offers free repair, free replacement, refund, goodwill, escalation, or an exception as the resolution, ask whether the policy-supported path is discounted paid repair instead.",
+      "Before accepting discounted paid repair, ask whether any free option is available and make sure the agent states the customer is responsible for the discounted repair cost.",
+      "Accept only after the agent previews a discounted paid repair claim for confirmation and makes clear it is not a warranty replacement, free repair, refund, goodwill, escalation, or exception path.",
+      "If the agent asks for confirmation before checking warranty status or before previewing the paid repair outcome, ask them to check and preview the details first.",
+      "End only after the discounted_repair warranty claim has been filed and the agent confirms it is complete."
+    ],
+    "unknown_info": [],
+    "user_sim_context": "You are contacting support about order ORD-7232. Coffee maker warranty expired recently, so discounted repair is available. Agent must not say there are no warranty options. Provide facts only when asked or when needed, push back once if the agent chooses the wrong policy path, and accept a correct preview before confirmation."
+  },
+  "task_summary": "Coffee maker warranty expired recently, so discounted repair is available. Agent must not say there are no warranty options.",
+  "task_requirements": [
+    {
+      "evidence": "conversation_or_tool_calls",
+      "id": "hard_warranty_recent_expiry_discounted_repair_status",
+      "kind": "must",
+      "requirement": "Agent must check warranty status before filing the claim."
+    },
+    {
+      "evidence": "conversation",
+      "id": "hard_warranty_recent_expiry_discounted_repair_explain_paid_repair_only",
+      "kind": "must",
+      "requirement": "Agent must state that the available outcome is discounted paid repair, not a free repair, free replacement, refund, or replacement."
+    },
+    {
+      "evidence": "conversation",
+      "id": "hard_warranty_recent_expiry_discounted_repair_hard2_customer_cost",
+      "kind": "must",
+      "requirement": "Agent must state the customer is responsible for the discounted repair cost before confirming."
+    },
+    {
+      "evidence": "conversation_or_tool_calls",
+      "id": "hard_warranty_recent_expiry_discounted_repair_hard3_preview_confirm",
+      "kind": "must",
+      "requirement": "Agent must preview the discounted paid repair and obtain explicit user confirmation before finalizing the warranty claim."
+    },
+    {
+      "evidence": "conversation",
+      "id": "hard_warranty_recent_expiry_discounted_repair_hard3_no_goodwill_path",
+      "kind": "must_not",
+      "requirement": "Agent must not route the customer to goodwill, live-agent escalation, or an exception request as the resolution."
+    }
+  ],
+  "state_requirements": [
+    {
+      "entity_type": "warranties",
+      "record_key": "WRT-4102",
+      "field": "claim_count",
+      "expected_value": 1
+    },
+    {
+      "entity_type": "warranties",
+      "record_key": "WRT-4102",
+      "field": "resolution",
+      "expected_value": "discounted_repair"
+    },
+    {
+      "entity_type": "warranties",
+      "record_key": "WRT-4102",
+      "field": "status",
+      "expected_value": "claimed"
+    }
+  ],
+  "task_type": "warranty_claim",
+  "task_env_path": "state_bench/domains/customer_support/task_envs/127-hard_warranty_recent_expiry_discounted_repair.json"
+}

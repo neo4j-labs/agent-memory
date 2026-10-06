@@ -187,11 +187,15 @@ name.
   writes and leaves revision 2 active, so it runs only through
   `make example-ontology-lifecycle-bolt`, never `make examples`.
 - **`examples/support-desk-agent/`** — a full-stack app (FastAPI + PydanticAI
-  2.x, Next.js 16 + Chakra UI v3) on the same support-desk ontology with eight
-  seeded conversations. The agent uses reasoning memory both ways: every turn is
-  a trace linked to its message, with `TOUCHED` edges per tool call, and it
-  recalls similar past traces before acting. Memory, Graph, Ontology (revisions,
-  diff, a one-click rename + migration) and Reasoning panels.
+  2.x, Next.js 16 + Chakra UI v3) seeded with 24 customer-support conversations
+  from Microsoft's STATE-Bench (MIT; data and the benchmark's environment copied
+  unchanged). The tasks' records are entities typed by a `customer-support`
+  ontology, and every recorded tool call is a seeded reasoning trace with
+  `TOUCHED` edges. The agent has the benchmark's eleven tools; they run the
+  benchmark's environment against the graph and write confirmed returns,
+  refunds, exchanges and cancellations back. It recalls similar past traces
+  before acting. Memory, Graph, Ontology (revisions, diff, a one-click rename +
+  migration) and Reasoning panels.
 - **How-to "Rename an ontology type and migrate a Bolt graph"**
   (`how-to/migrate-a-bolt-ontology.adoc`), which runs the
   `ontology-lifecycle-bolt` program.

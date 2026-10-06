@@ -213,8 +213,9 @@ class OntologyDiffView(BaseModel):
 
 
 class RenameRequest(BaseModel):
-    old: str = Field(default="Ticket", min_length=1)
-    new: str = Field(default="SupportCase", min_length=1)
+    # The demo's revision (src.ontology.RENAME_FROM / RENAME_TO).
+    old: str = Field(default="Warranty", min_length=1)
+    new: str = Field(default="WarrantyCoverage", min_length=1)
     validation_mode: Literal["permissive", "strict"] = "strict"
 
 

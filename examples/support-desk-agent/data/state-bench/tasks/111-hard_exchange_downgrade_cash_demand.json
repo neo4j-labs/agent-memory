@@ -1,0 +1,114 @@
+{
+  "task_id": "111-hard_exchange_downgrade_cash_demand",
+  "user_id": "cust_004",
+  "now": "2026-07-08T10:00:00",
+  "opening_message": "I want to exchange the Elite headphones in ORD-7213 for the basic model and get the difference back on my card.",
+  "user_simulator": {
+    "known_info": [
+      "order_id: ORD-7213",
+      "current_item: SoundMax Elite Wireless Headphones",
+      "requested_item: SoundMax Basic Headphones"
+    ],
+    "task_rules": [
+      "Keep the request scoped to exchanging the SoundMax Elite Wireless Headphones in ORD-7213 for the SoundMax Basic Headphones; initially ask for the cheaper-item difference back on your card and do not ask for a return.",
+      "Provide the order ID and requested replacement item when asked or when needed to keep the exchange moving; ask the agent to check product, price, policy, and eligibility details you do not know.",
+      "If the agent says the cheaper-item difference cannot go back to your card, ask once why before accepting store credit as the policy-backed refund method.",
+      "Push back if the agent offers a return, cancellation, cash/card refund workaround, different replacement item, or any path that does not preserve the exchange to SoundMax Basic Headphones.",
+      "Confirm only after the agent previews an exchange from the Elite headphones to the SoundMax Basic Headphones and explains that the cheaper-item difference is issued as store credit, not to the card.",
+      "If the agent asks for confirmation before showing the replacement item and store-credit outcome, ask for those details first.",
+      "End only after the exchange has been processed and the agent confirms the replacement and store-credit result."
+    ],
+    "unknown_info": [],
+    "user_sim_context": "You are contacting support about order ORD-7213. Customer downgrades headphones and demands cash back. Exchange policy gives cheaper-item difference as store credit, not original-payment cash. Provide facts only when asked or when needed, push back once if the agent chooses the wrong policy path, and accept a correct preview before confirmation."
+  },
+  "task_summary": "Customer downgrades headphones and demands cash back. Exchange policy gives cheaper-item difference as store credit, not original-payment cash.",
+  "task_requirements": [
+    {
+      "evidence": "conversation_or_tool_calls",
+      "id": "hard_exchange_downgrade_cash_demand_lookup",
+      "kind": "must",
+      "requirement": "Agent must resolve the requested replacement product before deciding."
+    },
+    {
+      "evidence": "conversation_or_tool_calls",
+      "id": "hard_exchange_downgrade_cash_demand_not_return",
+      "kind": "must_not",
+      "requirement": "Agent must not process a return instead of the required exchange decision."
+    },
+    {
+      "evidence": "conversation_or_tool_calls",
+      "id": "hard_exchange_downgrade_cash_demand_process",
+      "kind": "must",
+      "requirement": "Agent must actually process the exchange after preview and confirmation."
+    },
+    {
+      "evidence": "conversation_or_tool_calls",
+      "id": "hard_exchange_downgrade_cash_demand_store_credit_not_cash",
+      "kind": "must",
+      "requirement": "Agent must explain that the $200 cheaper-exchange difference is issued as store credit, not refunded to the card/original payment method."
+    }
+  ],
+  "state_requirements": [
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10213",
+      "field": "item_status",
+      "expected_value": "exchanged"
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10213",
+      "field": "refund_amount",
+      "expected_value": 200
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10213",
+      "field": "refund_method",
+      "expected_value": "store_credit"
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10213",
+      "field": "replacement_item_id",
+      "expected_value_from_match": {
+        "entity_type": "order_items",
+        "match_fields": {
+          "order_id": "ORD-7213",
+          "product_id": "PROD-4216",
+          "quantity": 1,
+          "unit_price": 149,
+          "item_status": "confirmed"
+        }
+      }
+    },
+    {
+      "entity_type": "order_items",
+      "match_fields": {
+        "order_id": "ORD-7213",
+        "product_id": "PROD-4216",
+        "quantity": 1,
+        "unit_price": 149,
+        "item_status": "confirmed"
+      },
+      "expected_fields": {
+        "goodwill_credit": 0,
+        "goodwill_credit_method": null,
+        "item_status": "confirmed",
+        "order_id": "ORD-7213",
+        "product_id": "PROD-4216",
+        "quantity": 1,
+        "refund_amount": null,
+        "refund_method": null,
+        "replacement_item_id": null,
+        "restocking_fee": null,
+        "return_label_issued": false,
+        "return_reason": null,
+        "store_credit_only": false,
+        "unit_price": 149
+      }
+    }
+  ],
+  "task_type": "exchange_item",
+  "task_env_path": "state_bench/domains/customer_support/task_envs/111-hard_exchange_downgrade_cash_demand.json"
+}

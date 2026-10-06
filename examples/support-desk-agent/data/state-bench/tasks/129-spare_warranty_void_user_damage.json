@@ -1,0 +1,41 @@
+{
+  "task_id": "129-spare_warranty_void_user_damage",
+  "user_id": "cust_002",
+  "now": "2026-07-08T10:00:00",
+  "opening_message": "My tablet from ORD-7275 has an active warranty, but I spilled coffee on it. Can you still file the claim?",
+  "user_simulator": {
+    "known_info": [
+      "order_id: ORD-7275",
+      "damage: liquid spill",
+      "warranty_id: WRT-4115"
+    ],
+    "task_rules": [
+      "Keep the request scoped to whether a warranty claim can be filed for the tablet on ORD-7275 after the coffee spill.",
+      "Provide the order ID, warranty ID, and liquid-spill details only when asked or when needed to correct the agent.",
+      "If the agent suggests filing a warranty claim, return, refund, exchange, cancellation, or other order action, push back that you only need to know whether the warranty claim is allowed after the spill.",
+      "If the agent denies coverage without addressing the active warranty, ask once why the active warranty does not cover this situation.",
+      "Accept only a clear final denial that explains liquid or user damage voids the warranty claim, with no claim, return, refund, exchange, or cancellation filed.",
+      "End only after the agent has clearly denied the warranty claim for the spill and confirmed that no order or warranty action will be taken."
+    ],
+    "unknown_info": [],
+    "user_sim_context": "You are contacting support about order ORD-7275. Tablet has active warranty, but customer admits liquid damage. Agent must deny warranty claim and avoid filing any claim or return. Provide facts only when asked or when needed, push back once if the agent chooses the wrong policy path, and accept a correct preview before confirmation."
+  },
+  "task_summary": "Tablet has active warranty, but customer admits liquid damage. Agent must deny warranty claim and avoid filing any claim or return.",
+  "task_requirements": [
+    {
+      "evidence": "conversation",
+      "id": "spare_warranty_void_user_damage_deny",
+      "kind": "must",
+      "requirement": "Agent must deny warranty coverage because the issue is admitted liquid/user damage."
+    },
+    {
+      "evidence": "conversation_or_tool_calls",
+      "id": "spare_warranty_void_user_damage_no_claim",
+      "kind": "must_not",
+      "requirement": "Agent must not file a warranty claim, return, refund, exchange, or cancellation."
+    }
+  ],
+  "state_requirements": [],
+  "task_type": "warranty_claim",
+  "task_env_path": "state_bench/domains/customer_support/task_envs/129-spare_warranty_void_user_damage.json"
+}

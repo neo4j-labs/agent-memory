@@ -18,7 +18,7 @@ export function PromptInput({
   onStop,
   isStreaming = false,
   disabled = false,
-  placeholder = "Ask about a customer, an order or a ticket…",
+  placeholder = "Ask about an order, a return, an exchange or a warranty…",
 }: PromptInputProps) {
   const [value, setValue] = useState("");
 

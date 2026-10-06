@@ -1,5 +1,12 @@
 """The support-desk agent (PydanticAI 2.x).
 
+The agent has the eleven tools of the STATE-Bench customer-support environment,
+under their own names and JSON schemas (``get_order``, ``get_policies``,
+``process_return`` ...). They run the vendored environment against the records
+in the memory graph, so a confirmed return or exchange changes the graph. Four
+more tools read memory itself: earlier traces, customers, earlier conversations
+and the ontology.
+
 ``AGENT_MODEL`` is any PydanticAI model string (``openai:gpt-5-mini`` by
 default). ``AGENT_MODEL=test`` selects PydanticAI's ``TestModel``: it calls
 every tool once with placeholder arguments and answers with a JSON dump of the
@@ -13,55 +20,60 @@ import os
 from functools import lru_cache
 from typing import Any
 
-from pydantic_ai import Agent, RunContext
+from pydantic_ai import Agent, RunContext, Tool
 from pydantic_ai.models import Model
 from pydantic_ai.models.test import TestModel
 
 from src.agent import tools
 from src.agent.deps import SupportDeskDeps
 from src.config import TEST_MODEL, get_settings
-from src.ontology import TICKET, role_label
+from src.ontology import ORDER_LINE, role_label
+from src.statebench import world
+from src.statebench.vendor import tools as statebench_tools
 
-#: The tools, in the order the instructions introduce them.
-TOOL_NAMES = (
+#: The memory tools, then the STATE-Bench tools.
+MEMORY_TOOL_NAMES = (
     "recall_similar_tasks",
     "find_customer",
-    "get_ticket",
-    "list_tickets",
-    "get_order",
     "search_support_history",
     "get_ontology",
 )
+TOOL_NAMES: tuple[str, ...] = MEMORY_TOOL_NAMES + world.TOOL_NAMES
 
 INSTRUCTIONS = """\
-You are a support-desk assistant for an online furniture and desk-accessories store.
+You are a customer service agent for an e-commerce company. You help customers
+with orders, returns, refunds, exchanges, cancellations, shipping problems and
+warranty claims.
 
-Your memory is a Neo4j knowledge graph built from earlier support conversations.
-It is typed by the `support-desk` ontology: customers, orders (numbers start
-with SO-), products, and support tickets (references start with TK-). Which label
-tickets carry depends on the active ontology revision: `Ticket` in revision 1,
-`SupportCase` after the rename. The tools always use the active one.
+Your memory is a Neo4j knowledge graph. It holds the store's records
+(customers, orders, order lines, products, warranties and policies), earlier
+support conversations, and reasoning traces: how earlier requests were handled,
+tool call by tool call.
 
 How to work:
-1. For any request that needs more than a greeting, call `recall_similar_tasks`
-   first with a one-line description of the task. Earlier successful work shows
-   which tools answered a similar question; follow it when it fits.
-2. Look things up rather than guessing: `find_customer`, `get_ticket`,
-   `list_tickets`, `get_order`, `search_support_history`, `get_ontology`.
-3. Related items come from typed relationships when extraction found them, and
-   from being mentioned together otherwise; each item says which (`via`).
-   Treat "same conversation" links as likely, not certain.
-4. A search hit is a lead, not the whole record. Before you say that an order
-   or a customer has no ticket, check with `get_order` or `find_customer`; the
-   ticket is often named in a different message of the same conversation
-   (`conversation_tickets` on each search hit).
-5. A customer may appear twice, once by first name only, with a pending review
-   pair (`possible_duplicates`). Say so instead of silently merging them.
-6. Cite ticket and order ids (TK-…, SO-…) in your answer, keep it short, and
-   say plainly when the graph has nothing on a question.
-7. Write for a support colleague, in plain language. Say how things relate
-   ("TK-2223 is about order SO-4503"), never how the graph stores it: no
-   relationship types (OPENED, ABOUT), `via` values, labels or "same message".
+1. When a new request starts, call `recall_similar_tasks` with a one-line
+   description of it. Earlier work shows which tools and policy checks resolved
+   a similar case; follow it when it fits. A follow-up in the same conversation
+   ("yes, go ahead") continues the request: do not recall or look up again.
+2. Identify the customer. `find_customer` turns a name, email or customer id
+   into the customer and their orders; `get_customer` then gives the profile
+   (membership tier, store credit, Prime shipping).
+3. Look things up rather than guessing: `get_order`, `get_product_details`,
+   `search_products`, `get_warranty_status`.
+4. Before any change, call `get_policies` for the topic (return, refund,
+   exchange, cancellation, shipping or warranty). Every change is two steps:
+   call the tool with confirm=false to preview it, tell the customer what will
+   happen, and only call it again with confirm=true once they agree. For
+   `process_return`, submit as `amount` the net refund computed from the
+   preview's breakdown.
+5. Do not decide eligibility, windows, fees or amounts yourself. Each order is
+   evaluated at its own date (`today` in the tool results), not at the
+   calendar date; the preview says what is eligible and what it costs.
+6. Never make a change the customer has not asked for. If a request is
+   ambiguous (which item? which order?), ask instead of guessing.
+7. Keep customer-facing replies natural and direct, usually 1-4 sentences. Do
+   not reveal tool names or policy categories; you may say you checked the
+   policy. Cite order and item ids (ORD-…, ITEM-…) when they help.
 """
 
 
@@ -71,6 +83,24 @@ def _resolve_model(model: str | Model) -> str | Model:
     return model
 
 
+def _statebench_tool(schema: dict[str, Any]) -> Tool[SupportDeskDeps]:
+    """One STATE-Bench tool, with the benchmark's own name, description and schema."""
+    name = str(schema["name"])
+
+    async def call(ctx: RunContext[SupportDeskDeps], **arguments: Any) -> dict[str, Any]:
+        return await world.run_tool(ctx.deps.client, ctx.deps.session_id, name, arguments)
+
+    return Tool.from_schema(
+        call,
+        name=name,
+        description=str(schema.get("description") or ""),
+        json_schema=schema["parameters"],
+        takes_ctx=True,
+        # A write reads, changes and stores records: one at a time.
+        sequential=name in world.WRITE_TOOL_NAMES,
+    )
+
+
 def build_agent(model: str | Model) -> Agent[SupportDeskDeps, str]:
     """Build the agent for ``model`` (a PydanticAI model string, ``test``, or a Model)."""
     agent: Agent[SupportDeskDeps, str] = Agent(
@@ -78,17 +108,18 @@ def build_agent(model: str | Model) -> Agent[SupportDeskDeps, str]:
         deps_type=SupportDeskDeps,
         output_type=str,
         instructions=INSTRUCTIONS,
+        tools=[_statebench_tool(schema) for schema in statebench_tools.TOOL_SCHEMAS],
     )
 
     @agent.instructions
     def active_labels(ctx: RunContext[SupportDeskDeps]) -> str:
-        """Name the ticket label this client extracts and queries with."""
+        """Name the ontology and the order-line label this client uses."""
         client = ctx.deps.client
         document = client.ontology_document
         domain = document.domain.id if document is not None else "none"
         return (
             f"This session's ontology: {domain} ({client.validation_mode}); "
-            f"tickets carry the `{role_label(document, TICKET)}` label."
+            f"order lines carry the `{role_label(document, ORDER_LINE)}` label."
         )
 
     @agent.tool
@@ -98,50 +129,21 @@ def build_agent(model: str | Model) -> Agent[SupportDeskDeps, str]:
         Call this first for any non-trivial request.
 
         Args:
-            task: A one-line description of what the user wants done.
+            task: A one-line description of what the customer wants done.
         """
         return await tools.recall_similar_tasks(ctx.deps.client, task)
 
     @agent.tool
     async def find_customer(ctx: RunContext[SupportDeskDeps], name: str) -> dict[str, Any]:
-        """Look up a customer by full name, first name or alias.
+        """Find a customer by full name, first name, email or customer id.
 
-        Returns the customer, their orders and tickets, possible duplicate
-        records, and the conversations that mention them.
+        Returns the customer (with the `customer_id` that `get_customer` takes),
+        their orders and the conversations that mention them.
 
         Args:
-            name: The customer's name as the user wrote it.
+            name: The customer's name, email or id, as the customer gave it.
         """
         return await tools.find_customer(ctx.deps.client, name)
-
-    @agent.tool
-    async def get_ticket(ctx: RunContext[SupportDeskDeps], reference: str) -> dict[str, Any]:
-        """Get one support ticket with its order, product, customer and message history.
-
-        Args:
-            reference: The ticket reference, e.g. TK-2210.
-        """
-        return await tools.get_ticket(ctx.deps.client, reference)
-
-    @agent.tool
-    async def list_tickets(
-        ctx: RunContext[SupportDeskDeps], customer: str | None = None
-    ) -> dict[str, Any]:
-        """List support tickets with their orders and products.
-
-        Args:
-            customer: Only this customer's tickets (a name). Omit to list all tickets.
-        """
-        return await tools.list_tickets(ctx.deps.client, customer)
-
-    @agent.tool
-    async def get_order(ctx: RunContext[SupportDeskDeps], order_number: str) -> dict[str, Any]:
-        """Get one order with its products, tickets and customer.
-
-        Args:
-            order_number: The order number, e.g. SO-4417.
-        """
-        return await tools.get_order(ctx.deps.client, order_number)
 
     @agent.tool
     async def search_support_history(
@@ -150,7 +152,7 @@ def build_agent(model: str | Model) -> Agent[SupportDeskDeps, str]:
         """Search earlier support conversations by meaning, plus matching entities.
 
         Leaves out this conversation, which you already have. Each hit lists
-        the tickets and orders its conversation mentions.
+        the orders and products its conversation mentions.
 
         Args:
             query: What to look for, in plain words.

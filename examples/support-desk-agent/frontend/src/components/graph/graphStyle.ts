@@ -75,7 +75,7 @@ export function edgeKind(rel: GraphRelationship): EdgeKind {
 /**
  * NVL's node caption size. Only 1, 2 or 3 are valid: the font is the node's
  * radius divided by 3.5, 2.75 or 2, and any other value renders no caption.
- * 2 keeps ids such as `TK-2210` on one line; 3 breaks them across two.
+ * 2 keeps ids such as `ORD-6014` on one line; 3 breaks them across two.
  */
 export function nodeCaptionSize(node: GraphNode): 1 | 2 | 3 {
   return node.kind === "message" ? 1 : 2;

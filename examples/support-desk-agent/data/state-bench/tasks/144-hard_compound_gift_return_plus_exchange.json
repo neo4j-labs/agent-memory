@@ -1,0 +1,127 @@
+{
+  "task_id": "144-hard_compound_gift_return_plus_exchange",
+  "user_id": "cust_003",
+  "now": "2026-07-08T10:00:00",
+  "opening_message": "I got ORD-7255 as a gift. I want to return the book for credit and exchange the shirt for a large.",
+  "user_simulator": {
+    "known_info": [
+      "order_id: ORD-7255",
+      "gift: yes",
+      "return: book",
+      "exchange: shirt"
+    ],
+    "task_rules": [
+      "Keep the request scoped to two separate actions for gift order ORD-7255: return the book for recipient store credit and exchange only the shirt for Large.",
+      "When the agent asks for identifying or scope details, provide the order ID, say it was a gift, and identify the book as the return item and the shirt as the exchange item.",
+      "If the agent proposes refunding the gift sender, the original payment method, or any non-store-credit refund path for the book, say this was a gift and you need recipient store credit for the book instead.",
+      "If the agent tries to return both items, exchange both items, combine the two items into one action, or apply the wrong action to either item, clarify that the book should be returned for store credit and only the shirt should be exchanged for Large.",
+      "Accept a preview only if it covers both separate outcomes: the book returned as gift store credit at the current $20 price with no sender refund, and the shirt exchanged for Large.",
+      "If the agent asks for confirmation before previewing both the book return and the shirt exchange, ask to see the store-credit amount, refund recipient path, and Large-shirt exchange details first.",
+      "End only after the book return has been processed as $20 store credit and the shirt exchange to Large has been processed as a separate action."
+    ],
+    "unknown_info": [],
+    "user_sim_context": "You are contacting support about order ORD-7255. Gift order with two needs: return the book to store credit at current price and exchange the shirt for Large. Agent must not refund the gift sender or collapse both into one process. Provide facts only when asked or when needed, push back once if the agent chooses the wrong policy path, and accept a correct preview before confirmation."
+  },
+  "task_summary": "Gift order with two needs: return the book to store credit at current price and exchange the shirt for Large. Agent must not refund the gift sender or collapse both into one process.",
+  "task_requirements": [
+    {
+      "evidence": "conversation",
+      "id": "hard_compound_gift_return_plus_exchange_sender",
+      "kind": "must",
+      "requirement": "Agent must tell the customer the book's gift return is issued as store credit to their account. Stating that the return goes to store credit satisfies this; an explicit negation of the sender's payment method is not required."
+    }
+  ],
+  "state_requirements": [
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10258",
+      "field": "item_status",
+      "expected_value": "returned"
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10258",
+      "field": "refund_amount",
+      "expected_value": 20
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10258",
+      "field": "refund_method",
+      "expected_value": "store_credit"
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10258",
+      "field": "restocking_fee",
+      "expected_value": 0
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10258",
+      "field": "return_reason",
+      "expected_value": "changed_mind"
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10258",
+      "field": "store_credit_only",
+      "expected_value": true
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10259",
+      "field": "item_status",
+      "expected_value": "exchanged"
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10259",
+      "field": "replacement_item_id",
+      "expected_value_from_match": {
+        "entity_type": "order_items",
+        "match_fields": {
+          "order_id": "ORD-7255",
+          "product_id": "PROD-4271",
+          "quantity": 1,
+          "unit_price": 59,
+          "item_status": "confirmed"
+        }
+      }
+    },
+    {
+      "entity_type": "orders",
+      "record_key": "ORD-7255",
+      "field": "status",
+      "expected_value": "partially_returned"
+    },
+    {
+      "entity_type": "order_items",
+      "match_fields": {
+        "order_id": "ORD-7255",
+        "product_id": "PROD-4271",
+        "quantity": 1,
+        "unit_price": 59,
+        "item_status": "confirmed"
+      },
+      "expected_fields": {
+        "goodwill_credit": 0,
+        "goodwill_credit_method": null,
+        "item_status": "confirmed",
+        "order_id": "ORD-7255",
+        "product_id": "PROD-4271",
+        "quantity": 1,
+        "refund_amount": null,
+        "refund_method": null,
+        "replacement_item_id": null,
+        "restocking_fee": null,
+        "return_label_issued": false,
+        "return_reason": null,
+        "store_credit_only": false,
+        "unit_price": 59
+      }
+    }
+  ],
+  "task_type": "compound",
+  "task_env_path": "state_bench/domains/customer_support/task_envs/144-hard_compound_gift_return_plus_exchange.json"
+}

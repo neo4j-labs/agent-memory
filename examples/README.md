@@ -37,7 +37,7 @@ For examples using the Python `bolt` backend, first follow [the shared Aura setu
 | Give a Strands agent cross-session recall from a graph | [`strands-memory-store/`](#strands-memory-store) |
 | Wire it to Google Cloud (Vertex AI, ADK, MCP) | [`google_cloud_integration/`](#google-cloud-integration) |
 | See a full-stack reference app | [`full-stack-chat-agent/`](#full-stack-chat-agent), [`lennys-memory/`](#lennys-podcast-memory-explorer) |
-| Chat with an agent over an ontology-typed graph, with reasoning memory and a live type rename | [`support-desk-agent/`](#support-desk-agent) |
+| Work real customer-support requests (STATE-Bench) against an ontology-typed graph, with reasoning memory and actions written back | [`support-desk-agent/`](#support-desk-agent) |
 | See a multi-agent compliance workflow | [`financial-services-advisor/`](#financial-services-advisor) |
 | Write the memory layer in TypeScript instead | [`../typescript/examples/`](#typescript-examples) |
 
@@ -166,7 +166,7 @@ These four examples cover the v0.2 feature drop. Each is self-contained, runs wi
 
 ### Support-desk agent
 
-[`support-desk-agent/`](support-desk-agent/) — the full-stack version of [`ontology-lifecycle-bolt/`](ontology-lifecycle-bolt/): the same support-desk ontology (imported from the Arrows diagram, stored and activated on bolt) and transcript, plus a seed of eight support conversations. A FastAPI + PydanticAI 2.x agent answers over the ontology-typed graph and uses reasoning memory both ways: every turn records a trace (linked to the message that started it, tool calls with `:TOUCHED` audit edges), and the agent recalls similar past traces before acting. The Next.js + Chakra UI v3 frontend has Memory (entities with their ontology labels, review-band pairs to confirm or reject), Graph (NVL), Ontology (revisions, diff, and a one-click `Ticket` → `SupportCase` rename and migration) and Reasoning (trace timeline, similar tasks, tool stats) panels. GLiNER2.5 extraction is keyless; the chat needs `OPENAI_API_KEY` (or another `AGENT_MODEL`).
+[`support-desk-agent/`](support-desk-agent/) — a customer-support agent seeded with 24 conversations from Microsoft's [STATE-Bench](https://github.com/microsoft/STATE-Bench) (MIT). The tasks' records (customers, orders, order lines, products, warranties, policies) are ontology-typed entities on bolt. The conversations are short-term memory, and every recorded tool call is a seeded reasoning trace with `:TOUCHED` edges. A FastAPI + PydanticAI 2.x agent has the benchmark's eleven tools under their own names; they run the benchmark's environment, copied unchanged, against the graph, so a confirmed return, refund, exchange or cancellation is written back. The agent recalls similar earlier traces before acting. The Next.js + Chakra UI v3 frontend has Memory (entities with their ontology labels, review-band pairs to confirm or reject), Graph (NVL), Ontology (revisions, diff, and a one-click `Warranty` → `WarrantyCoverage` rename and migration) and Reasoning (trace timeline, similar tasks, tool stats) panels. GLiNER2.5 extraction is keyless; the chat needs an `AGENT_MODEL` key (`AGENT_MODEL=test` runs keyless on TestModel).
 
 ### Lenny's Podcast Memory Explorer
 

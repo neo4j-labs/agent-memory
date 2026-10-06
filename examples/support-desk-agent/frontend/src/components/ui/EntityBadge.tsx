@@ -11,7 +11,7 @@ interface EntityBadgeProps {
   highlighted?: boolean;
 }
 
-/** `● Priya Raman · Customer`, coloured like the node in the graph. */
+/** `● Priya Patel · Customer`, coloured like the node in the graph. */
 export function EntityBadge({
   name,
   label,

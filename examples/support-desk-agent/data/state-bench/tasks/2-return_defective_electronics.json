@@ -1,0 +1,78 @@
+{
+  "task_id": "2-return_defective_electronics",
+  "user_id": "cust_004",
+  "now": "2026-06-12T10:00:00",
+  "opening_message": "My laptop from order ORD-6006 has a defective screen — it flickers constantly. I'd like to return it.",
+  "user_simulator": {
+    "known_info": [
+      "order_id: ORD-6006",
+      "item: ProBook Laptop",
+      "defect: screen flickering"
+    ],
+    "task_rules": [
+      "Keep the request scoped to returning the defective ProBook Laptop from ORD-6006; do not shift to a warranty repair, discretionary return, exchange, or unrelated order action.",
+      "When the agent asks for identifying details, provide only the order ID, item, and screen-flickering defect from what you know.",
+      "If the agent suggests warranty repair, buyer's-remorse handling, or any non-defective return path, push back that the laptop is defective because the screen flickers constantly and you want to return it.",
+      "If the agent mentions a restocking fee, paid return shipping, or no return label, ask whether the defective-item return path should provide a full refund with a free label.",
+      "Accept only after the agent previews a defective-item return with a full refund, no restocking fee, and a free return label; if the agent asks for confirmation before those details, ask for the preview first.",
+      "End only after the agent confirms the return has been processed with the defective reason, original-payment refund, no restocking fee, and free return label issued."
+    ],
+    "unknown_info": [],
+    "user_sim_context": "Your laptop has a real hardware problem and you want to send it back because it is not usable in this condition. You are treating this as a defective-product issue, not ordinary buyer's remorse. You expect the return process to reflect that the item arrived with a serious problem."
+  },
+  "task_summary": "**Task:** The customer has a genuinely defective laptop and needs a standard defective-item return. The correct handling is a full refund with no restocking fee and a free return label, keeping the case clearly on the defect path rather than a discretionary return path.\n\n**Challenge:** Classification is the whole issue. Weak agents quietly apply changed-mind logic, add restocking anyway, or forget that a defective-item return should include the free-label treatment.",
+  "task_requirements": [
+    {
+      "evidence": "conversation",
+      "id": "2_return_defective_electronics_agent_must_provide_free_return_label",
+      "kind": "must",
+      "requirement": "Agent must tell the customer that the defective-item return includes a free return shipping label."
+    }
+  ],
+  "state_requirements": [
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-9050",
+      "field": "item_status",
+      "expected_value": "returned"
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-9050",
+      "field": "refund_amount",
+      "expected_value": 1299
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-9050",
+      "field": "refund_method",
+      "expected_value": "original_payment"
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-9050",
+      "field": "restocking_fee",
+      "expected_value": 0
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-9050",
+      "field": "return_label_issued",
+      "expected_value": true
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-9050",
+      "field": "return_reason",
+      "expected_value": "defective"
+    },
+    {
+      "entity_type": "orders",
+      "record_key": "ORD-6006",
+      "field": "status",
+      "expected_value": "fully_returned"
+    }
+  ],
+  "task_type": "return_item",
+  "task_env_path": "state_bench/domains/customer_support/task_envs/2-return_defective_electronics.json"
+}

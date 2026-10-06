@@ -3,8 +3,8 @@
  *
  * Entity nodes carry `:Entity`, a POLE+O label (`:Person`, `:Event`, ...) and,
  * on bolt with an active ontology, the ontology's own label (`:Customer`,
- * `:Ticket`, and `:SupportCase` after the rename migration). The ontology
- * label is the interesting one, so it wins.
+ * `:OrderLine`, `:Warranty` and `:WarrantyCoverage` after the rename
+ * migration). The ontology label is the interesting one, so it wins.
  *
  * NVL draws on a canvas and needs literal colours; the chrome around it uses
  * the Chakra palette names returned by `labelPalette`.
@@ -28,8 +28,10 @@ const LABEL_COLORS: Record<string, string> = {
   Customer: "#C990C0",
   Order: "#FFC454",
   Product: "#68BDF6",
-  Ticket: "#F16667",
-  SupportCase: "#F79767",
+  OrderLine: "#F79767",
+  Warranty: "#F16667",
+  WarrantyCoverage: "#DA7194",
+  Policy: "#8DCC93",
   Person: "#DE9BF9",
   Organization: "#FB95AF",
   Location: "#8DCC93",
@@ -54,8 +56,10 @@ const LABEL_PALETTES: Record<string, string> = {
   Customer: "purple",
   Order: "yellow",
   Product: "blue",
-  Ticket: "red",
-  SupportCase: "orange",
+  OrderLine: "orange",
+  Warranty: "red",
+  WarrantyCoverage: "pink",
+  Policy: "green",
   Person: "purple",
   Organization: "pink",
   Location: "green",
@@ -83,7 +87,7 @@ export function labelPalette(label: string): string {
   return LABEL_PALETTES[label] ?? "gray";
 }
 
-/** `PERSON` -> `Person`, `SUPPORT_CASE` -> `SupportCase`. */
+/** `PERSON` -> `Person`, `ORDER_LINE` -> `OrderLine`. */
 export function pascalCase(value: string): string {
   return value
     .toLowerCase()

@@ -23,6 +23,8 @@ router = APIRouter()
 OVERVIEW_NODE_LIMIT = 300
 #: Cap on one expansion.
 NEIGHBOR_LIMIT = 50
+#: Cap on the record context added to a thread's graph.
+CONTEXT_LIMIT = 60
 
 THREAD_NODES = """
 MATCH (c:Conversation {session_id: $session_id})
@@ -43,20 +45,39 @@ MATCH (:Conversation {session_id: $session_id})-[:HAS_MESSAGE]->(m:Message)-[r:M
 WHERE NOT 'merged_into' IN keys(e)
 RETURN elementId(r) AS id, m.id AS from, e.id AS to, type(r) AS type, null AS relation,
        properties(r) AS properties
-UNION
-MATCH (:Conversation {session_id: $session_id})-[:HAS_MESSAGE]->(:Message)-[:MENTIONS]->(a:Entity)
-MATCH (a)-[r:RELATED_TO|SAME_AS]->(b:Entity)
-WHERE EXISTS {
-  MATCH (:Conversation {session_id: $session_id})-[:HAS_MESSAGE]->(:Message)-[:MENTIONS]->(b)
-}
-RETURN elementId(r) AS id, a.id AS from, b.id AS to, type(r) AS type, r.type AS relation,
-       properties(r) AS properties
 """
 
+#: The records one typed edge away from what a thread mentions, following
+#: ownership outwards (a customer's orders, an order's lines, a line's product,
+#: a warranty's line) plus the customer who placed a mentioned order. Not the
+#: other way round: a mentioned product would pull in every order line, from
+#: every order, that contains it.
+RECORD_CONTEXT = """
+CALL (*) {
+  MATCH (a:Entity)-[r:RELATED_TO]->(x:Entity)
+  WHERE a.id IN $ids AND r.type IN ['PLACED', 'CONTAINS', 'OF_PRODUCT', 'COVERS', 'REPLACED_BY']
+  RETURN x
+  UNION
+  MATCH (x:Entity)-[:RELATED_TO {type: 'PLACED'}]->(a:Entity)
+  WHERE a.id IN $ids
+  RETURN x
+}
+WITH DISTINCT x
+WHERE NOT x.id IN $ids AND NOT 'merged_into' IN keys(x)
+LIMIT $limit
+RETURN x AS node, labels(x) AS labels
+"""
+
+#: Every record entity and every entity a seeded conversation mentions.
 SEEDED_ENTITIES = """
-MATCH (c:Conversation)-[:HAS_MESSAGE]->(:Message)-[:MENTIONS]->(e:Entity)
-WHERE c.session_id STARTS WITH 'seed-' AND NOT 'merged_into' IN keys(e)
-WITH DISTINCT e
+MATCH (e:Entity)
+WHERE NOT 'merged_into' IN keys(e)
+  AND ('record_kind' IN keys(e)
+       OR EXISTS {
+         MATCH (c:Conversation)-[:HAS_MESSAGE]->(:Message)-[:MENTIONS]->(e)
+         WHERE c.session_id STARTS WITH 'seed-'
+       })
+WITH e
 ORDER BY e.type, e.name
 LIMIT $limit
 RETURN collect({node: e, labels: labels(e)}) AS entities
@@ -157,10 +178,13 @@ def _graph(nodes: list[GraphNode | None], rows: list[dict[str, Any]]) -> Graph:
 async def thread_graph(
     client: MemoryClientDep, thread_id: str | None = Query(default=None)
 ) -> Graph:
-    """The thread's conversation, messages, mentioned entities and the edges among them.
+    """The thread's conversation, messages, mentioned entities, their record context.
 
-    Without ``thread_id``: every entity the seeded conversations mention
-    (at most 300) and the typed relationships among them.
+    The context is what is one typed relationship away from a mentioned entity
+    (an order's lines, a line's product), with the typed and ``SAME_AS`` edges
+    among all of it. Without ``thread_id``: every record entity and every
+    entity the seeded conversations mention (at most 300), with the typed
+    relationships among them.
     """
     if not thread_id:
         rows = await client.query.cypher(SEEDED_ENTITIES, {"limit": OVERVIEW_NODE_LIMIT})
@@ -175,9 +199,18 @@ async def thread_graph(
     row = rows[0]
     nodes = [_node(row["conversation"], row["conversation_labels"])]
     nodes += [_node(item["node"], item["labels"]) for item in row["messages"]]
-    nodes += [_node(item["node"], item["labels"]) for item in row["entities"]]
+    mentioned = [_node(item["node"], item["labels"]) for item in row["entities"]]
+    mentioned_ids = [node.id for node in mentioned if node is not None]
+    context = [
+        _node(item["node"], item["labels"])
+        for item in await client.query.cypher(
+            RECORD_CONTEXT, {"ids": mentioned_ids, "limit": CONTEXT_LIMIT}
+        )
+    ]
+    entity_ids = mentioned_ids + [node.id for node in context if node is not None]
     edges = await client.query.cypher(THREAD_EDGES, {"session_id": thread_id})
-    return _graph(nodes, edges)
+    edges += await client.query.cypher(EDGES_AMONG, {"ids": entity_ids})
+    return _graph(nodes + mentioned + context, edges)
 
 
 @router.get("/graph/neighbors/{node_id}", response_model=Graph, response_model_by_alias=True)

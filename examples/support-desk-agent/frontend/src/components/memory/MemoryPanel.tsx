@@ -34,7 +34,15 @@ import type {
 } from "@/lib/types";
 
 /** The support-desk ontology's labels first, anything else after. */
-const GROUP_ORDER = ["Customer", "Order", "Product", "Ticket", "SupportCase"];
+const GROUP_ORDER = [
+  "Customer",
+  "Order",
+  "OrderLine",
+  "Product",
+  "Warranty",
+  "WarrantyCoverage",
+  "Policy",
+];
 
 interface MemoryPanelProps {
   threadId: string | null;
@@ -302,8 +310,9 @@ export function MemoryPanel({
           <LoadingRow label="Loading memory…" />
         ) : data && entityCount === 0 ? (
           <EmptyRow>
-            No entities yet. Mention a customer, an order (SO-…), a product or a
-            ticket (TK-…) and extraction will type it with the ontology.
+            No entities yet. Mention a customer, an order (ORD-…), an order line
+            (ITEM-…), a product or a warranty (WRT-…) and extraction will type it
+            with the ontology.
           </EmptyRow>
         ) : (
           <Stack gap="4">
