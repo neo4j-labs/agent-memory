@@ -78,7 +78,15 @@ def from_entity_schema(schema: EntitySchemaConfig) -> OntologyDocument:
     Each ``EntityTypeConfig`` contributes a label for the type itself plus,
     when subtypes are enabled and declared, one label per subtype. The base
     label is what relationship endpoints refer to, which keeps the round trip
-    through :func:`to_entity_schema` exact.
+    through :func:`to_entity_schema` exact for a POLE+O schema.
+
+    A type name that is not one of the five POLE+O types (``PATIENT``,
+    ``CONDITION``) is mapped onto one with
+    :func:`~neo4j_agent_memory.extraction.label_mapping.map_label_to_poleo`
+    and keeps its own name as the subtype (``PERSON:PATIENT`` when the label
+    table knows it, ``OBJECT:CONDITION`` otherwise), because
+    :meth:`OntologyDocument.validate_structure` accepts POLE+O ``pole_type``
+    values only. Its subtypes sit under the same POLE+O type.
 
     A subtype name that collides with another declared label is qualified as
     ``TYPE_SUBTYPE`` by :func:`_subtype_label`; its ``pole_type``/``subtype``
@@ -102,20 +110,28 @@ def from_entity_schema(schema: EntitySchemaConfig) -> OntologyDocument:
     Returns:
         An equivalent :class:`OntologyDocument`, sound by construction.
     """
+    from neo4j_agent_memory.extraction.label_mapping import POLEO_TYPE_NAMES, map_label_to_poleo
+
     entity_types: list[EntityTypeDef] = []
-    # Type name (upper) -> the labels that stand in for it in relationships.
+    # Type name (upper) -> the label that stands in for it in relationships.
     endpoint_labels: dict[str, str] = {}
     # Every label spoken for, lower-cased. Seeded with the base type names so
     # a subtype shadowing a type declared *later* is qualified too.
     declared: set[str] = {et.name.lower() for et in schema.entity_types}
 
     for et in schema.entity_types:
-        pole_type = et.name.upper()
-        endpoint_labels[pole_type] = et.name
+        base_subtype: str | None
+        if et.name.upper() in POLEO_TYPE_NAMES:
+            pole_type, base_subtype = et.name.upper(), None
+        else:
+            pole_type, base_subtype = map_label_to_poleo(et.name)
+            base_subtype = base_subtype or et.name.upper()
+        endpoint_labels[et.name.upper()] = et.name
         entity_types.append(
             EntityTypeDef(
                 label=et.name,
                 pole_type=pole_type,
+                subtype=base_subtype,
                 description=et.description,
                 color=et.color,
                 properties=[PropertyDef(name=attr, type="string") for attr in et.attributes],

@@ -621,6 +621,14 @@ class TestNormalizeName:
         """Decomposed and composed forms normalise to the same key."""
         assert normalize_name("São Paulo") == normalize_name("São Paulo")
 
+    def test_matches_the_resolver_key(self):
+        """Scoring and resolution agree on when two surface forms are one name."""
+        from neo4j_agent_memory.resolution.ontology import normalize_name as resolver_key
+
+        for name in ("Acme Corp.", "  The  Veneto Review ", "AT&T", "São Paulo", "The"):
+            assert normalize_name(name) == resolver_key(name).key
+        assert normalize_name("Acme Corp.") == normalize_name("acme corp")
+
     def test_used_by_expected_entity(self):
         """ExpectedEntity matching uses the same normalisation."""
         expected = ExpectedEntity(name="Veneto Review", entity_type="ORGANIZATION")

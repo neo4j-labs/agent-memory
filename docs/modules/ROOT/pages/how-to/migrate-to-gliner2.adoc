@@ -367,6 +367,12 @@ settings = MemorySettings(
 Or set `NAM_SCHEMA_CONFIG__BACKFILL_RELATION_TYPES=false`. On a very large
 graph, prefer this and migrate during a maintenance window.
 
+The same switch gates a second one-time backfill, `entity_keys_backfill`, which
+fills the `name_key` and `surface_keys` properties entity resolution looks
+entities up by. Run it yourself too when you turn the switch off; the
+xref:reference/schema-objects.adoc[schema objects reference] describes both
+properties.
+
 Because the merge key changed, one pair of entities can now carry several
 differently-typed edges where before a second type would overwrite the first.
 Expect the edge count to grow on re-ingestion.

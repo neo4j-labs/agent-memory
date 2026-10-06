@@ -342,8 +342,11 @@ server-side) and both are wired in `_connect_bolt`.
   `schema_config.ontology_path` → `schema_config.custom_schema_path` → active
   stored `:OntologyVersion` (when `use_active_ontology`) → `SchemaModel.CUSTOM` +
   `entity_types` (ad-hoc document) → `get_template(schema_config.ontology_template)`
-  → `POLEO_ONTOLOGY`. Read it back with `client.ontology_document` /
-  `client.validation_mode`. Activation therefore affects the *next* connect.
+  → `POLEO_ONTOLOGY`. `extraction.gliner_schema` overrides the whole list when
+  the client builds a `gliner`/`pipeline` extractor itself (the factory gives it
+  precedence, and the two must agree). Read it back with
+  `client.ontology_document` / `client.validation_mode`. Activation therefore
+  affects the *next* connect.
 - **Validation modes.** Relations the ontology forbids are dropped in **both**
   modes (`ExtractionResult.validate_relations(ontology, mode="warn"|"drop"|"raise")`;
   the pipeline uses `mode="drop"`). `strict` adds entity enforcement:
@@ -352,7 +355,11 @@ server-side) and both are wired in `_connect_bolt`.
 - **`OntologyResolver`** (`resolution/ontology.py`) — `normalize_name()` (module
   level, reused by `core/metrics.py`) → type-constrained blocking in Cypher
   (`FIND_ENTITIES_BY_NORMALIZED_KEYS`, `FIND_ENTITIES_BY_TOKEN_PREFIX`,
-  `FIND_SIMILAR_ENTITIES_BY_EMBEDDING`, each with a `_FOR_USER` variant) → score
+  `FIND_SIMILAR_ENTITIES_BY_EMBEDDING`, each with a `_FOR_USER` variant; the
+  first two match the stored, indexed `e.surface_keys` / `e.name_key`, so
+  **every Cypher write that creates an entity or changes its `name`,
+  `canonical_name` or `aliases` must append `queries.entity_keys_set_clause()`**,
+  and the `entity_keys_backfill` marker fills them on older graphs) → score
   (exact 1.0, alias 1.0, acronym 0.97 (organizations only), whole-token prefix for
   every type 0.92 when independent context corroborates it / 0.88 otherwise — name
   embeddings never corroborate a prefix — else `0.45·fuzzy + 0.40·embed + 0.15·context` renormalized, −0.25
@@ -401,6 +408,8 @@ Constraints on `Ontology.id` and `OntologyVersion.id`, plus an index on
 `queries.BACKFILL_RELATION_TYPE` backfill once per database: success is recorded
 on a `(:SchemaMigration {name: "relation_type_backfill"})` marker that later
 connects check first, and `schema_config.backfill_relation_types=False` skips it.
+The same switch gates `queries.BACKFILL_ENTITY_KEYS` (marker
+`entity_keys_backfill`), which fills the resolver's lookup keys.
 
 **Configuration (v0.7):**
 

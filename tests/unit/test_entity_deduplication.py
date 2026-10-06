@@ -1010,6 +1010,56 @@ class TestCheckForDuplicatesAdapter:
         assert alias_writes, "the merged-away surface form becomes an alias"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("embedder_present", [False, True])
+    async def test_add_entity_dedups_without_an_embedding(
+        self, mock_client, mock_embedder, embedder_present
+    ):
+        """The regression: no embedding meant no dedup, so ingestion and
+        ``add_entity`` disagreed. ``Acme`` resolved onto ``Acme Corp`` on
+        ingest (exact normalized key) but ``add_entity`` created a second node.
+        """
+        matched_id = str(uuid4())
+        mock_client.execute_read = AsyncMock(
+            return_value=[
+                {
+                    "e": {
+                        "id": matched_id,
+                        "name": "Acme Corp",
+                        "type": "ORGANIZATION",
+                        "confidence": 1.0,
+                    }
+                }
+            ]
+        )
+        resolver = self._resolver(
+            mock_client,
+            EntityResolution(
+                action="merged",
+                entity_id=matched_id,
+                canonical_name="Acme Corp",
+                score=1.0,
+                match_type="exact",
+                matched_entity_id=matched_id,
+                matched_entity_name="Acme Corp",
+            ),
+        )
+        memory = LongTermMemory(
+            client=mock_client,
+            embedder=mock_embedder if embedder_present else None,
+            resolver=resolver,
+        )
+
+        entity, dedup_result = await memory.add_entity(
+            name="Acme", entity_type="ORGANIZATION", generate_embedding=False, resolve=False
+        )
+
+        assert dedup_result.action == "merged"
+        assert entity.name == "Acme Corp"
+        _, kwargs = resolver.resolve_one.await_args
+        assert kwargs["embedding"] is None and kwargs["embed"] is False
+        mock_embedder.embed.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_a_non_ontology_resolver_keeps_the_embedding_path(
         self, mock_client, mock_embedder
     ):

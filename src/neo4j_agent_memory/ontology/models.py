@@ -603,6 +603,9 @@ def _parse_document(raw: Any) -> OntologyDocument | None:
     ``SchemaError``. Letting a raw ``ValidationError`` escape would make one
     corrupt row fail ``connect()`` outright — including the
     ``client.ontology.delete()`` call needed to recover from it.
+
+    A caller that has to tell "no document" from "a broken one" uses
+    :func:`_parse_document_strict` instead.
     """
     if raw is None:
         return None
@@ -619,11 +622,42 @@ def _parse_document(raw: Any) -> OntologyDocument | None:
     return None
 
 
+def _parse_document_strict(raw: Any) -> OntologyDocument | None:
+    """Parse a schema body, keeping "absent" apart from "malformed".
+
+    ``None``, a JSON ``null`` and an empty body mean there is no document.
+    Anything else that is not a valid document raises: the hosted backend's
+    responses go through here, where reporting a corrupt active ontology as
+    "nothing bound" would hide the fault.
+
+    Raises:
+        ValueError: The body is not JSON, not an object, or not a valid
+            :class:`OntologyDocument` (pydantic's ``ValidationError`` is a
+            ``ValueError``).
+    """
+    if raw is None or raw == "" or raw == {}:
+        return None
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (ValueError, TypeError) as exc:
+            raise ValueError(f"Ontology document is not valid JSON: {exc}") from exc
+        if raw is None:
+            return None
+    if not isinstance(raw, dict):
+        raise ValueError(f"Ontology document must be a JSON object, not {type(raw).__name__}.")
+    return OntologyDocument.model_validate(raw)
+
+
 def _parse_version(raw: dict[str, Any]) -> OntologyVersion:
-    """Parse a version row, unwrapping the double-encoded ``schema_json``."""
+    """Parse a hosted-backend version row, unwrapping the double-encoded ``schema_json``.
+
+    A malformed ``schema_json`` raises (see :func:`_parse_document_strict`)
+    instead of coming back as ``document=None``.
+    """
     data = dict(raw)
     schema_json = data.pop("schema_json", None)
-    doc = _parse_document(schema_json) if schema_json is not None else None
+    doc = _parse_document_strict(schema_json)
     return OntologyVersion.model_validate({**data, "document": doc})
 
 

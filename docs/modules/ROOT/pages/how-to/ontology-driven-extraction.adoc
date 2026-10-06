@@ -264,6 +264,11 @@ connection, before the extractor is built — is:
 . the built-in template named by `schema_config.ontology_template`
   (default `poleo`)
 
+One setting overrides the list: `extraction.gliner_schema`, when the client
+builds a `gliner` or `pipeline` extractor itself. The extractor decodes against
+that template, so the client resolves to it too; otherwise ingest-time
+validation would drop every relation the template declares.
+
 `client.ontology_document` reports what was resolved and
 `client.validation_mode` reports how strictly it is enforced. See
 xref:reference/configuration-providers.adoc#schema[Graph schema configuration]

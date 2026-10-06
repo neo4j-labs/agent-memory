@@ -48,7 +48,11 @@ from neo4j_agent_memory.core.exceptions import (
     SchemaError,
 )
 from neo4j_agent_memory.graph import queries
-from neo4j_agent_memory.graph.query_builder import ontology_node_label, validate_subtype
+from neo4j_agent_memory.graph.query_builder import (
+    ontology_node_label,
+    validate_entity_type,
+    validate_subtype,
+)
 from neo4j_agent_memory.ontology.builtin import get_template, list_templates
 from neo4j_agent_memory.ontology.convert import (
     from_arrows,
@@ -80,6 +84,27 @@ TEMPLATE_ID_PREFIX = "template:"
 
 #: Validation mode applied when a caller does not pick one.
 DEFAULT_VALIDATION_MODE = "permissive"
+
+#: The modes ``MemoryClient`` acts on; anything else would be stored and then
+#: silently ignored at connect time.
+VALIDATION_MODES = ("permissive", "strict")
+
+
+def _check_validation_mode(value: str | None) -> str | None:
+    """Normalise a caller's ``validation_mode`` (case-insensitive), or raise.
+
+    Raises:
+        ValueError: ``value`` is not ``"permissive"`` or ``"strict"``.
+    """
+    if value is None:
+        return None
+    mode = str(value).strip().lower()
+    if mode not in VALIDATION_MODES:
+        raise ValueError(
+            f"validation_mode must be one of {', '.join(VALIDATION_MODES)}; got {value!r}."
+        )
+    return mode
+
 
 #: Import formats the bolt store converts locally. Everything else — and any
 #: ``url=`` fetch — is a NAMS capability.
@@ -395,7 +420,8 @@ class BoltOntology:
         Args:
             name: Fallback ontology name.
             schema: An :class:`OntologyDocument` or an equivalent mapping.
-            validation_mode: ``"permissive"`` (default) or ``"strict"``.
+            validation_mode: ``"permissive"`` (default) or ``"strict"``, in
+                any casing.
 
         Returns:
             The created revision-1 :class:`OntologyVersion`.
@@ -403,14 +429,16 @@ class BoltOntology:
         Raises:
             ValueError: The document has structural problems — the message
                 lists every one of them (see
-                :meth:`OntologyDocument.validate_structure`).
+                :meth:`OntologyDocument.validate_structure`) — or
+                ``validation_mode`` is not one of the two modes.
         """
+        mode = _check_validation_mode(validation_mode)
         document = _as_document(schema)
         _require_sound(document)
         return await self._insert(
             name=document.domain.id or document.domain.name or name,
             document=document,
-            validation_mode=validation_mode or DEFAULT_VALIDATION_MODE,
+            validation_mode=mode or DEFAULT_VALIDATION_MODE,
             message=None,
         )
 
@@ -430,17 +458,20 @@ class BoltOntology:
         Args:
             ontology_id: The stored ontology to extend.
             schema: An :class:`OntologyDocument` or an equivalent mapping.
-            validation_mode: Override the inherited mode.
+            validation_mode: Override the inherited mode (``"permissive"`` or
+                ``"strict"``, in any casing).
 
         Returns:
             The newly created :class:`OntologyVersion`.
 
         Raises:
-            ValueError: The document has structural problems, or
+            ValueError: The document has structural problems,
+                ``validation_mode`` is not one of the two modes, or
                 ``ontology_id`` names a read-only built-in template.
             NotFoundError: No such ontology.
         """
         self._reject_template(ontology_id, "updated")
+        mode = _check_validation_mode(validation_mode)
         document = _as_document(schema)
         _require_sound(document)
 
@@ -456,7 +487,7 @@ class BoltOntology:
             ontology_id,
             document,
             revision=int(row.get("max_revision") or 0) + 1,
-            validation_mode=validation_mode or inherited or DEFAULT_VALIDATION_MODE,
+            validation_mode=mode or inherited or DEFAULT_VALIDATION_MODE,
             message=None,
         )
 
@@ -644,10 +675,12 @@ class BoltOntology:
         For each pair the ``from`` label is removed, the ``to`` label added,
         ``e.subtype`` is set from the target version's entity type, and
         ``e.type`` is rewritten when the target label maps onto a different
-        POLE+O ``pole_type``. When the target entity type declares no subtype
-        the subtype labels the *source* version could have written are removed
-        too, so a node does not keep a ``:Individual`` label while reporting
-        ``subtype = null``. Labels are matched and written in the form
+        POLE+O ``pole_type``. The node's old type label (when the type changes)
+        and old built-in subtype label are removed, each judged from the
+        node's own stored ``type``/``subtype``, and the target's type and
+        built-in subtype labels are added. So ``:Entity:Person:Individual:Customer``
+        mapped onto an ``ORGANIZATION:COMPANY`` label becomes
+        ``:Entity:Organization:Company:Vendor``. Labels are matched and written in the form
         :func:`~neo4j_agent_memory.graph.query_builder.ontology_node_label`
         gives them (``SupportCase`` stays ``SupportCase``, ``tv_show`` becomes
         ``TvShow``) — the same form the write paths give a node whose type the
@@ -673,10 +706,8 @@ class BoltOntology:
         Raises:
             NotFoundError: Either version id is unknown.
             ValueError: A mapping is malformed, a label is not a valid Neo4j
-                identifier, the target label is not declared by the target
-                version's document, or the target declares no subtype while
-                the source label it replaces is not declared by the source
-                version (the stale subtype labels cannot be derived).
+                identifier, or the target label is not declared by the target
+                version's document.
         """
         pairs = _normalize_mappings(type_mappings)
         source_document = await self._version_document(from_version_id)
@@ -705,7 +736,8 @@ class BoltOntology:
                             step.from_label,
                             step.to_label,
                             set_type=step.set_type,
-                            remove_subtype_labels=step.remove_subtype_labels,
+                            type_label=step.type_label,
+                            subtype_label=step.subtype_label,
                         ),
                         params,
                     )
@@ -903,10 +935,11 @@ class _MappingStep:
     __slots__ = (
         "from_label",
         "pole_type",
-        "remove_subtype_labels",
         "set_type",
         "subtype",
+        "subtype_label",
         "to_label",
+        "type_label",
     )
 
     def __init__(
@@ -917,14 +950,16 @@ class _MappingStep:
         subtype: str | None,
         pole_type: str,
         set_type: bool,
-        remove_subtype_labels: tuple[str, ...] = (),
+        type_label: str | None = None,
+        subtype_label: str | None = None,
     ) -> None:
         self.from_label = from_label
         self.to_label = to_label
         self.subtype = subtype
         self.pole_type = pole_type
         self.set_type = set_type
-        self.remove_subtype_labels = remove_subtype_labels
+        self.type_label = type_label
+        self.subtype_label = subtype_label
 
 
 def _plan_mapping(
@@ -959,58 +994,9 @@ def _plan_mapping(
         subtype=subtype,
         pole_type=pole_type,
         set_type=set_type,
-        remove_subtype_labels=(
-            () if subtype is not None else _stale_subtype_labels(source, raw_from, raw_to)
-        ),
+        type_label=validate_entity_type(pole_type),
+        subtype_label=validate_subtype(pole_type, subtype) if subtype else None,
     )
-
-
-def _stale_subtype_labels(source: OntologyDocument, raw_from: str, raw_to: str) -> tuple[str, ...]:
-    """The subtype labels to strip when the target declares no subtype.
-
-    ``relabel_entities_query`` sets ``e.subtype = null``, but Cypher cannot
-    remove a label without naming it, so a node written as
-    ``:Entity:Person:Individual`` would keep ``:Individual`` — still matching
-    every subtype-scoped query — while claiming no subtype. Besides
-    ``raw_from`` itself (the declared label, removed separately), a node can
-    carry the built-in POLE+O subtype label the write path adds for a subtype
-    such as ``INDIVIDUAL``; a custom subtype never becomes a label of its own.
-    The candidates are the built-in subtype labels of every subtype the
-    *source* version declares for that entity type's ``pole_type``. Removing
-    one a node does not carry is a no-op, so an over-broad set is safe.
-
-    Args:
-        source: The ontology version the graph was written against.
-        raw_from: The label being migrated away from.
-        raw_to: The target label (for the error message only).
-
-    Returns:
-        Built-in (PascalCase) subtype labels to remove, sorted.
-
-    Raises:
-        ValueError: ``raw_from`` is not declared by the source version and
-            that version declares subtypes, so the set cannot be derived.
-    """
-    source_type = source.entity_type(raw_from)
-    if source_type is None:
-        if any(et.subtype for et in source.entity_types):
-            raise ValueError(
-                f"Cannot map {raw_from!r} -> {raw_to!r}: the target entity type declares no "
-                f"subtype, so the migration has to strip the subtype label the old one left "
-                f"behind — but {raw_from!r} is not declared by the source ontology version "
-                f"(declared: {', '.join(source.labels()) or '(none)'}), so there is no way to "
-                f"tell which subtype labels its nodes carry. Declare {raw_from!r} in the "
-                f"source version, or map to a target entity type that declares a subtype."
-            )
-        return ()
-
-    pole_type = source_type.pole_type.upper()
-    labels = {
-        validate_subtype(pole_type, et.subtype)
-        for et in source.entity_types
-        if et.subtype and et.pole_type.upper() == pole_type
-    }
-    return tuple(sorted(label for label in labels if label is not None))
 
 
 def _document_at(ontology: Ontology, revision: int) -> OntologyDocument:

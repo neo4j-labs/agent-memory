@@ -270,6 +270,32 @@ RETURN session_id, title, created_at, updated_at, message_count, first_message_p
 # LONG-TERM MEMORY QUERIES
 # =============================================================================
 
+
+def entity_keys_set_clause(var: str = "e") -> str:
+    """``SET`` items that refresh an entity's stored lookup keys.
+
+    ``name_key`` is the lower-cased name; ``surface_keys`` is every surface
+    form (name, canonical name, aliases) lower-cased and wrapped in ``|``
+    delimiters, so an exact match is ``surface_keys CONTAINS '|' + key + '|'``.
+    The resolver's blocking queries find candidates through these two indexed
+    properties only, so append this to every write that creates an entity or
+    changes one of those three properties, after they are set.
+
+    Args:
+        var: The Cypher variable bound to the entity node.
+
+    Returns:
+        Comma-separated ``SET`` items, without the ``SET`` keyword.
+    """
+    return (
+        f"{var}.name_key = toLower(toString({var}.name)),\n"
+        f"    {var}.surface_keys = reduce(acc = '|', form IN "
+        f"[{var}.name, {var}.canonical_name] + coalesce({var}.aliases, []) | "
+        f"CASE WHEN form IS NULL THEN acc "
+        f"ELSE acc + replace(toLower(toString(form)), '|', ' ') + '|' END)"
+    )
+
+
 # NOTE: CREATE_ENTITY is now dynamically generated to support type/subtype as node labels.
 # Use build_create_entity_query(entity_type, subtype) from query_builder module instead.
 # This static query is kept for reference but should not be used directly.
@@ -278,8 +304,8 @@ RETURN session_id, title, created_at, updated_at, message_count, first_message_p
 # from neo4j_agent_memory.graph.query_builder import build_create_entity_query
 # query = build_create_entity_query("OBJECT", "VEHICLE")
 
-CREATE_ENTITY = """
-MERGE (e:Entity {name: $name, type: $type})
+CREATE_ENTITY = f"""
+MERGE (e:Entity {{name: $name, type: $type}})
 ON CREATE SET
     e.id = $id,
     e.subtype = $subtype,
@@ -295,6 +321,7 @@ ON MATCH SET
     e.description = COALESCE($description, e.description),
     e.embedding = COALESCE($embedding, e.embedding),
     e.updated_at = datetime()
+SET {entity_keys_set_clause()}
 RETURN e
 """
 
@@ -622,8 +649,18 @@ SET r.type = r.relation_type, r.support = coalesce(r.support, 1)
 RETURN count(r) AS updated
 """
 
+# Fill the resolver's lookup keys (see entity_keys_set_clause) on entities
+# written before v0.7 maintained them. Runs once per database, like the
+# relation-type backfill.
+BACKFILL_ENTITY_KEYS = f"""
+MATCH (e:Entity)
+WHERE e.surface_keys IS NULL
+SET {entity_keys_set_clause()}
+RETURN count(e) AS updated
+"""
+
 # One-shot-migration bookkeeping. ``name`` identifies the migration (only
-# ``relation_type_backfill`` so far); the marker node is what makes the scan
+# ``relation_type_backfill`` and ``entity_keys_backfill``); the marker node is what makes the scan
 # above once-per-database instead of once-per-connect.
 GET_SCHEMA_MIGRATION = """
 MATCH (m:SchemaMigration {name: $name})
@@ -859,21 +896,23 @@ ON CREATE SET r.recorded_at = datetime()
 RETURN s, e
 """
 
-RECORD_TOUCHED_EDGE_BY_NAME_TYPE = """
-MATCH (s:ReasoningStep {id: $step_id})
-MERGE (e:Entity {name: $name, type: $type})
+RECORD_TOUCHED_EDGE_BY_NAME_TYPE = f"""
+MATCH (s:ReasoningStep {{id: $step_id}})
+MERGE (e:Entity {{name: $name, type: $type}})
 ON CREATE SET e.id = coalesce(e.id, $name + ':' + $type),
-              e.created_at = datetime()
+              e.created_at = datetime(),
+              {entity_keys_set_clause()}
 MERGE (s)-[r:TOUCHED]->(e)
 ON CREATE SET r.recorded_at = datetime()
 RETURN s, e
 """
 
-RECORD_TOUCHED_EDGE_BY_NAME = """
-MATCH (s:ReasoningStep {id: $step_id})
-MERGE (e:Entity {name: $name})
+RECORD_TOUCHED_EDGE_BY_NAME = f"""
+MATCH (s:ReasoningStep {{id: $step_id}})
+MERGE (e:Entity {{name: $name}})
 ON CREATE SET e.id = coalesce(e.id, $name),
-              e.created_at = datetime()
+              e.created_at = datetime(),
+              {entity_keys_set_clause()}
 MERGE (s)-[r:TOUCHED]->(e)
 ON CREATE SET r.recorded_at = datetime()
 RETURN s, e
@@ -1187,6 +1226,7 @@ FIND_SIMILAR_ENTITIES_BY_EMBEDDING = """
 CALL db.index.vector.queryNodes('entity_embedding_idx', $limit, $embedding)
 YIELD node, score
 WHERE score >= $threshold AND ($type IS NULL OR node.type = $type)
+  AND node.merged_into IS NULL
 RETURN node AS e, score
 ORDER BY score DESC
 """
@@ -1235,9 +1275,15 @@ ORDER BY distance
 
 # Merge two entities (mark source as merged into target)
 # Note: This query uses CALL subqueries which require Neo4j 4.1+
-MERGE_ENTITIES = """
+MERGE_ENTITIES = (
+    """
 MATCH (source:Entity {id: $source_id})
 MATCH (target:Entity {id: $target_id})
+// A merge already recorded on the source has transferred everything. Every
+// transfer below is guarded edge by edge except the RELATED_TO folds, which
+// add the source edge's support to an existing target edge: a re-run (a
+// retried review_duplicate, say) would count those observations again.
+WITH source, target, coalesce(source.merged_into = target.id, false) AS already_merged
 // Transfer MENTIONS relationships from source to target using CALL subquery
 CALL (source, target) {
     MATCH (source)<-[:MENTIONS]-(m:Message)
@@ -1270,9 +1316,9 @@ CALL (source, target) {
 // edge auditable. When the surviving entity already has an edge of the same
 // type to the same neighbour, the two observations are folded together
 // (support summed, id lists unioned) instead of one being discarded.
-CALL (source, target) {
+CALL (source, target, already_merged) {
     MATCH (source)-[r:RELATED_TO]->(other:Entity)
-    WHERE other <> target
+    WHERE other <> target AND NOT already_merged
     WITH source, target, other, r,
          coalesce(r.type, r.relation_type, 'RELATED_TO') AS rel_type
     MERGE (target)-[nr:RELATED_TO {type: rel_type}]->(other)
@@ -1308,9 +1354,9 @@ CALL (source, target) {
 }
 // Transfer incoming RELATED_TO edges -- same null-safe merge key and
 // provenance folding as the outgoing transfer above.
-CALL (source, target) {
+CALL (source, target, already_merged) {
     MATCH (other:Entity)-[r:RELATED_TO]->(source)
-    WHERE other <> target
+    WHERE other <> target AND NOT already_merged
     WITH source, target, other, r,
          coalesce(r.type, r.relation_type, 'RELATED_TO') AS rel_type
     MERGE (other)-[nr:RELATED_TO {type: rel_type}]->(target)
@@ -1390,15 +1436,19 @@ CALL (source, target) {
 }
 // Mark source as merged
 SET source.merged_into = target.id,
-    source.merged_at = datetime()
+    source.merged_at = CASE WHEN already_merged THEN source.merged_at ELSE datetime() END
 // Add source name as alias on target
 SET target.aliases = CASE
     WHEN target.aliases IS NULL THEN [source.name]
     WHEN NOT source.name IN target.aliases THEN target.aliases + source.name
     ELSE target.aliases
 END
+SET """
+    + entity_keys_set_clause("target")
+    + """
 RETURN source, target
 """
+)
 
 # Get existing entities of a type with embeddings for deduplication
 GET_ENTITIES_WITH_EMBEDDINGS = """
@@ -1435,7 +1485,7 @@ RETURN total_entities, merged_entities, same_as_relationships, pending_reviews
 # Candidate generation for
 # ``neo4j_agent_memory.resolution.ontology.OntologyResolver``. Everything here
 # is *blocking*: cheap, recall-oriented candidate fetches that the resolver
-# then scores in Python. Three invariants:
+# then scores in Python. Four invariants:
 #
 # 1. Blocking is always type-constrained. "Apple" the company and "Apple" the
 #    product embed almost identically; restricting candidate generation to
@@ -1444,64 +1494,72 @@ RETURN total_entities, merged_entities, same_as_relationships, pending_reviews
 #    the 1000-row ``SEARCH_ENTITIES_BY_TYPE`` scan per mention.
 # 3. Whole nodes are returned (``RETURN e``) rather than a property
 #    projection, so the client reads optional properties (``aliases``,
-#    ``metadata``, ``description``) off the returned node in Python. Inside
-#    the query itself, every optional property referenced in a WHERE clause
-#    here — ``merged_into``, ``canonical_name``, ``aliases`` — is guarded
-#    with ``'prop' IN keys(e)`` rather than ``e.prop IS NULL`` or
-#    ``coalesce(e.prop, ...)``: the property only exists on nodes that have
-#    had it set, and naming it directly (``coalesce`` included) makes the
-#    server warn on every query against a database where nothing has set it
-#    yet.
+#    ``metadata``, ``description``) off the returned node in Python.
+# 4. Every bucket is index-backed, because it runs on every ``add_message``.
+#    The surface forms are compared through the stored lookup keys
+#    ``entity_keys_set_clause`` maintains: ``e.name_key`` (the lower-cased
+#    name, range + text indexed, for the prefix/suffix bucket) and
+#    ``e.surface_keys`` (``|name|canonical name|alias|...|`` lower-cased,
+#    text indexed, for the exact bucket). Matching ``toLower(e.name)`` instead
+#    scanned every entity of the type per message. There are no index
+#    hints: a hint errors while its index is still populating (the first
+#    connect after an upgrade), and the planner picks these indexes on its
+#    own once the graph holds any entities.
 #
 # The ``_FOR_USER`` variants implement ``resolution.scope="user"``: candidates
 # are restricted to entities this tenant has actually mentioned, reached
 # through ``(:Conversation)-[:HAS_MESSAGE]->(:Message)-[:MENTIONS]->(:Entity)``
 # (the edge ``LINK_MESSAGE_TO_ENTITY`` writes). ``:Entity`` nodes themselves
-# are global, so ``scope="global"`` is the pre-existing behaviour.
+# are global, so ``scope="global"`` is the pre-existing behaviour. They start
+# from the tenant's mentions and filter on the same stored keys.
 
-# Shared candidate filter: skip nodes already merged away, and match when any
-# of the entity's surface forms (name, canonical name, alias list) is one of
-# the normalized blocking keys the resolver computed for this episode.
-_NORMALIZED_KEY_PREDICATE = """NOT 'merged_into' IN keys(e)
-  AND (toLower(e.name) IN $keys
-       OR ('canonical_name' IN keys(e) AND toLower(e.canonical_name) IN $keys)
-       OR ('aliases' IN keys(e) AND any(alias IN e.aliases WHERE toLower(alias) IN $keys)))"""
-
-# Shared candidate filter: head-token prefix / tail-token suffix bucket.
-_TOKEN_PREFIX_PREDICATE = """NOT 'merged_into' IN keys(e)
-  AND (($head IS NOT NULL AND toLower(e.name) STARTS WITH $head)
-       OR ($tail IS NOT NULL AND toLower(e.name) ENDS WITH $tail))"""
-
-# Exact-key blocking, batched once per (episode, entity type).
-FIND_ENTITIES_BY_NORMALIZED_KEYS = f"""
-MATCH (e:Entity {{type: $type}})
-WHERE {_NORMALIZED_KEY_PREDICATE}
-RETURN e
-LIMIT $limit
-"""
-
-FIND_ENTITIES_BY_NORMALIZED_KEYS_FOR_USER = f"""
-MATCH (c:Conversation {{user_identifier: $user_identifier}})-[:HAS_MESSAGE]->(:Message)
-      -[:MENTIONS]->(e:Entity {{type: $type}})
-WHERE {_NORMALIZED_KEY_PREDICATE}
+# Exact-key blocking, batched once per (episode, entity type): any surface
+# form (name, canonical name, alias) equal to one of the normalized keys the
+# resolver computed for this episode. Keys never contain ``|``.
+FIND_ENTITIES_BY_NORMALIZED_KEYS = """
+UNWIND $keys AS key
+MATCH (e:Entity)
+WHERE e.surface_keys CONTAINS ('|' + key + '|')
+  AND e.type = $type AND e.merged_into IS NULL
 RETURN DISTINCT e
 LIMIT $limit
 """
 
-# Token-prefix blocking, per mention. Buckets larger than the resolver's cap
-# are discarded client-side (a huge bucket carries no signal), which is why
-# the caller asks for one row more than the cap.
-FIND_ENTITIES_BY_TOKEN_PREFIX = f"""
-MATCH (e:Entity {{type: $type}})
-WHERE {_TOKEN_PREFIX_PREDICATE}
+FIND_ENTITIES_BY_NORMALIZED_KEYS_FOR_USER = """
+MATCH (c:Conversation {user_identifier: $user_identifier})-[:HAS_MESSAGE]->(:Message)
+      -[:MENTIONS]->(e:Entity {type: $type})
+WHERE e.merged_into IS NULL
+  AND any(key IN $keys WHERE e.surface_keys CONTAINS ('|' + key + '|'))
+RETURN DISTINCT e
+LIMIT $limit
+"""
+
+# Token-prefix blocking, per mention: the name starts with the head token or
+# ends with the tail token. Buckets larger than the resolver's cap are
+# discarded client-side (a huge bucket carries no signal), which is why the
+# caller asks for one row more than the cap.
+FIND_ENTITIES_BY_TOKEN_PREFIX = """
+CALL () {
+    MATCH (e:Entity)
+    WHERE $head IS NOT NULL AND e.name_key STARTS WITH $head
+    RETURN e
+    UNION
+    MATCH (e:Entity)
+    WHERE $tail IS NOT NULL AND e.name_key ENDS WITH $tail
+    RETURN e
+}
+WITH e
+WHERE e.type = $type AND e.merged_into IS NULL
 RETURN e
 LIMIT $limit
 """
 
-FIND_ENTITIES_BY_TOKEN_PREFIX_FOR_USER = f"""
-MATCH (c:Conversation {{user_identifier: $user_identifier}})-[:HAS_MESSAGE]->(:Message)
-      -[:MENTIONS]->(e:Entity {{type: $type}})
-WHERE {_TOKEN_PREFIX_PREDICATE}
+FIND_ENTITIES_BY_TOKEN_PREFIX_FOR_USER = """
+MATCH (c:Conversation {user_identifier: $user_identifier})-[:HAS_MESSAGE]->(:Message)
+      -[:MENTIONS]->(e:Entity {type: $type})
+WHERE e.merged_into IS NULL
+  AND (($head IS NOT NULL AND e.name_key STARTS WITH $head)
+       OR ($tail IS NOT NULL AND e.name_key ENDS WITH $tail))
 RETURN DISTINCT e
 LIMIT $limit
 """
@@ -1520,6 +1578,7 @@ FIND_SIMILAR_ENTITIES_BY_EMBEDDING_FOR_USER = """
 CALL db.index.vector.queryNodes('entity_embedding_idx', $limit, $embedding)
 YIELD node, score
 WHERE score >= $threshold AND ($type IS NULL OR node.type = $type)
+  AND node.merged_into IS NULL
   AND EXISTS {
       MATCH (:Conversation {user_identifier: $user_identifier})-[:HAS_MESSAGE]->(:Message)
             -[:MENTIONS]->(node)
@@ -1528,32 +1587,36 @@ RETURN node AS e, score
 ORDER BY score DESC
 """
 
+# Explicit mentions (``add_message(extraction_mode="explicit")``): an
+# EntityRef with an id is looked up by it; a typed one goes through the
+# ingestion path's entity writes (query_builder.build_create_entity_query).
+GET_ENTITY_ID = """
+MATCH (e:Entity {id: $id}) RETURN e.id AS id LIMIT 1
+"""
+
+# An untyped explicit mention links an existing entity by any surface form,
+# through the indexed lookup keys (entity_keys_set_clause). Two rows back
+# lets the caller tell "exactly one" from "ambiguous".
+FIND_ENTITY_IDS_BY_SURFACE_FORM = """
+MATCH (e:Entity)
+WHERE e.surface_keys CONTAINS ('|' + $key + '|') AND e.merged_into IS NULL
+RETURN e.id AS id
+LIMIT 2
+"""
+
 # Append a surface form to an entity's top-level ``aliases`` list. Single
 # write, so two concurrent ingesters cannot drop each other's alias. Shared by
 # ``LongTermMemory._add_alias_to_entity`` and the short-term ingestion path,
 # which appends the merged-away surface form when a mention resolves onto an
 # existing node.
-# Explicit mentions (``add_message(extraction_mode="explicit")``): resolve an
-# EntityRef by id, or create it by name. A typed ref uses
-# query_builder.build_merge_entity_reference_query, which adds labels.
-GET_ENTITY_ID = """
-MATCH (e:Entity {id: $id}) RETURN e.id AS id LIMIT 1
-"""
-
-MERGE_ENTITY_REFERENCE_BY_NAME = """
-MERGE (e:Entity {name: $name})
-ON CREATE SET e.id = coalesce(e.id, $name),
-              e.created_at = datetime()
-RETURN e.id AS id
-"""
-
-ADD_ENTITY_ALIAS = """
-MATCH (e:Entity {id: $id})
+ADD_ENTITY_ALIAS = f"""
+MATCH (e:Entity {{id: $id}})
 SET e.aliases = CASE
     WHEN e.aliases IS NULL THEN [$alias]
     WHEN NOT $alias IN e.aliases THEN e.aliases + $alias
     ELSE e.aliases
 END
+SET {entity_keys_set_clause()}
 RETURN e
 """
 
@@ -1688,6 +1751,24 @@ def create_index_query(index_name: str, label: str, property_name: str) -> str:
     """
     return f"""
     CREATE INDEX {index_name} IF NOT EXISTS
+    FOR (n:{label})
+    ON (n.{property_name})
+    """
+
+
+def create_text_index_query(index_name: str, label: str, property_name: str) -> str:
+    """Generate CREATE TEXT INDEX query (``CONTAINS`` / ``ENDS WITH`` lookups).
+
+    Args:
+        index_name: Name of the index
+        label: Node label to index
+        property_name: String property to index
+
+    Returns:
+        Cypher query string
+    """
+    return f"""
+    CREATE TEXT INDEX {index_name} IF NOT EXISTS
     FOR (n:{label})
     ON (n.{property_name})
     """
@@ -1861,6 +1942,7 @@ def adopt_label_to_entity_query(
         n.type = $type,
         n.id = coalesce(n.id, computed_id),
         n.name = coalesce(n.name, n.`{name_property}`)
+    SET {entity_keys_set_clause("n")}
     RETURN count(n) AS migrated_count
     """
 
@@ -1962,34 +2044,19 @@ RETURN o.id AS ontology_id,
        head(versions).validation_mode AS latest_validation_mode
 """
 
-# Written to be silent against a database that has never stored an ontology.
-# ``connect()`` runs this query on every connection, and Neo4j raises a
-# WARNING notification for every token the query names that the store has never
-# seen. The previous spelling produced three on a fresh database —
-# ``is_active``, ``created_at`` and the ``HAS_VERSION`` relationship type — and
-# most databases never store an ontology, so they never went away.
-#
-# Two rules make it quiet, both verified against 5.26:
-#
-# * The parent is reached through the ``ontology_id`` the version node already
-#   stores, not through the ``[:HAS_VERSION]`` edge. ``Ontology.id`` is backed
-#   by a constraint, so that key is always known.
-# * Every remaining property is read through a *variable* subscript
-#   (``v[k]`` for ``k`` drawn from ``keys(v)``). A static ``v.is_active`` — and
-#   a literal subscript, ``v['is_active']`` — is resolved at planning time and
-#   still warns; a variable one is not resolvable, so nothing is reported.
-#
-# Same columns, same "newest active version wins" ordering. ORDER BY/LIMIT move
-# ahead of the parent lookup, which only narrows the work.
+# The newest active version and its parent. The parent is reached through the
+# ``ontology_id`` the version stores; ``Ontology.id`` is constraint-backed.
+# ``connect()`` runs this on every connection, against databases that mostly
+# never store an ontology: Neo4jClient.execute_read filters the server's
+# UNRECOGNIZED notifications for library queries, so naming ``is_active`` here
+# does not warn (CLAUDE.md item 23).
 GET_ACTIVE_ONTOLOGY_VERSION = """
 MATCH (v:OntologyVersion)
-WHERE any(k IN keys(v) WHERE k = 'is_active' AND v[k] = true)
-WITH v,
-     head([k IN keys(v) WHERE k = 'ontology_id' | v[k]]) AS ontology_id,
-     head([k IN keys(v) WHERE k = 'created_at' | v[k]]) AS created_at
-ORDER BY created_at DESC
+WHERE v.is_active = true
+WITH v
+ORDER BY v.created_at DESC
 LIMIT 1
-OPTIONAL MATCH (o:Ontology {id: ontology_id})
+OPTIONAL MATCH (o:Ontology {id: v.ontology_id})
 RETURN v, o AS ontology
 """
 
@@ -2077,38 +2144,62 @@ def relabel_entities_query(
     to_label: str,
     *,
     set_type: bool,
-    remove_subtype_labels: tuple[str, ...] = (),
+    type_label: str | None = None,
+    subtype_label: str | None = None,
 ) -> str:
     """Move :Entity nodes from ``from_label`` to ``to_label``.
+
+    A node carries up to three labels beside ``:Entity``: its POLE+O type
+    label, the built-in subtype label (custom subtypes get none) and the
+    ontology's declared label. Moving it means swapping all three, and Cypher
+    cannot remove a label without naming it. So the query names every
+    candidate and removes each one only from the nodes whose stored
+    ``type``/``subtype`` produced it. That is exact per node, whatever revision
+    wrote the node, and needs no knowledge of the source version.
 
     Args:
         from_label: Sanitised label to remove.
         to_label: Sanitised label to add.
         set_type: Whether to also rewrite ``e.type`` (needed when the target
             label maps onto a different POLE+O ``pole_type``). The query then
-            requires a ``$type`` parameter.
-        remove_subtype_labels: Sanitised subtype labels to strip as well.
-            ``$subtype`` going to ``null`` does not remove the label derived
-            from the old subtype — a label has to be named to be removed — so
-            ``:Entity:Person:Individual`` would keep ``:Individual`` and go on
-            matching subtype-scoped queries. The caller derives the candidate
-            set from the source ontology version.
+            requires a ``$type`` parameter, and the old type label is removed.
+        type_label: The target type's label (``Person``), added to every node.
+        subtype_label: The target's built-in subtype label, or ``None`` for a
+            custom subtype or none at all.
 
     Returns:
         Cypher query string returning ``migrated`` (the node count).
     """
-    type_clause = ",\n        e.type = $type" if set_type else ""
-    # ``from_label`` first, then the stale subtype labels, minus the label we
-    # are about to add and any duplicate. Removing a label a node does not
-    # carry is a no-op, so the set can be over-broad without harm.
-    doomed = dict.fromkeys(
-        [from_label, *(label for label in remove_subtype_labels if label != to_label)]
+    from neo4j_agent_memory.graph.query_builder import VALID_SUBTYPES, to_pascal_case
+
+    keep = {to_label, type_label, subtype_label}
+    removals: list[str] = []
+    if set_type:
+        for pole_type in sorted(VALID_SUBTYPES):
+            label = to_pascal_case(pole_type)
+            if label not in keep:
+                removals.append(
+                    f"FOREACH (_ IN CASE WHEN toUpper(e.type) = '{pole_type}' "
+                    f"THEN [1] ELSE [] END | REMOVE e:`{label}`)"
+                )
+    for pole_type in sorted(VALID_SUBTYPES):
+        for subtype in sorted(VALID_SUBTYPES[pole_type]):
+            label = to_pascal_case(subtype)
+            if label not in keep:
+                removals.append(
+                    f"FOREACH (_ IN CASE WHEN toUpper(e.type) = '{pole_type}' "
+                    f"AND toUpper(e.subtype) = '{subtype}' THEN [1] ELSE [] END "
+                    f"| REMOVE e:`{label}`)"
+                )
+    removal_clauses = "".join(f"\n    {clause}" for clause in removals)
+    added = ", ".join(
+        f"e:`{label}`" for label in dict.fromkeys([type_label, subtype_label, to_label]) if label
     )
-    remove_clause = "".join(f":`{label}`" for label in doomed)
+    type_clause = ",\n        e.type = $type" if set_type else ""
     return f"""
     MATCH (e:Entity:`{from_label}`)
-    REMOVE e{remove_clause}
-    SET e:`{to_label}`,
+    REMOVE e:`{from_label}`{removal_clauses}
+    SET {added},
         e.subtype = $subtype{type_clause}
     RETURN count(e) AS migrated
     """

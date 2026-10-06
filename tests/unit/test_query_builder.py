@@ -482,6 +482,21 @@ class TestOntologyLabel:
         assert ontology_node_label("tv_show") == "TvShow"
         assert ontology_node_label("financial_metric") == "FinancialMetric"
 
+    def test_an_all_caps_label_is_re_cased_like_a_type_label(self):
+        """The regression: ``INDIVIDUAL`` stayed ``:INDIVIDUAL`` beside ``:Individual``.
+
+        A legacy schema converts to upper-case labels, and an ad-hoc
+        ``SchemaModel.CUSTOM`` label ``MOVIE`` landed as ``:MOVIE`` on
+        extracted entities while ``add_entity("X", "MOVIE")`` gave ``:Movie``.
+        """
+        assert ontology_node_label("INDIVIDUAL") == "Individual"
+        assert ontology_node_label("MOVIE") == "Movie"
+        assert ontology_node_label("TV_SHOW") == "TvShow"
+        assert ontology_node_label("IBMCustomer") == "IBMCustomer"  # mixed case is kept
+        assert build_label_set_clause("PERSON", "INDIVIDUAL", ontology_label="INDIVIDUAL") == (
+            "SET e:Person, e:Individual"
+        )
+
     def test_what_cannot_be_a_label_is_rejected(self):
         assert ontology_node_label(None) is None
         assert ontology_node_label("") is None

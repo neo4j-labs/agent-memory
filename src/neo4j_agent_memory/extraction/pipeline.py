@@ -282,6 +282,53 @@ def _merge_entities_cascade(
     return list(result.values())
 
 
+def _carry_mention_ids(
+    all_entities: list[list[ExtractedEntity]],
+    merged_entities: list[ExtractedEntity],
+) -> tuple[list[ExtractedEntity], dict[str, str]]:
+    """Keep the mention ids of entities the merge replaced with another copy.
+
+    A stage's relations name their endpoints by that stage's mention ids
+    (only GLiNER2.5 assigns them). When the merge keeps another stage's copy
+    of the same entity, typically spaCy's or the LLM's with ``id=None``, those
+    ids would point at nothing. A survivor without an id adopts the first
+    replaced copy's id; every other replaced id is mapped onto the survivor's.
+
+    Args:
+        all_entities: The entities each stage returned.
+        merged_entities: The merge's survivors.
+
+    Returns:
+        The survivors (with adopted ids), and a map from each replaced mention
+        id to the id that now stands for it.
+    """
+    survivors = {_entity_key(e): i for i, e in enumerate(merged_entities)}
+    merged = list(merged_entities)
+    id_map: dict[str, str] = {}
+    for entities in all_entities:
+        for entity in entities:
+            index = survivors.get(_entity_key(entity))
+            if entity.id is None or index is None or merged[index] is entity:
+                continue
+            survivor = merged[index]
+            if survivor.id is None:
+                merged[index] = survivor.model_copy(update={"id": entity.id})
+            elif survivor.id != entity.id:
+                id_map[entity.id] = survivor.id
+    return merged, id_map
+
+
+def _remap_relation_ids(relation: ExtractedRelation, id_map: dict[str, str]) -> ExtractedRelation:
+    """Point a relation's endpoint mention ids at the merge's survivors."""
+    if not id_map:
+        return relation
+    source_id = id_map.get(relation.source_id, relation.source_id) if relation.source_id else None
+    target_id = id_map.get(relation.target_id, relation.target_id) if relation.target_id else None
+    if source_id == relation.source_id and target_id == relation.target_id:
+        return relation
+    return relation.model_copy(update={"source_id": source_id, "target_id": target_id})
+
+
 def merge_extraction_results(
     results: list[ExtractionResult],
     strategy: MergeStrategy,
@@ -320,6 +367,8 @@ def merge_extraction_results(
     else:  # MergeStrategy.CONFIDENCE (default)
         merged_entities = _merge_entities_confidence(all_entities)
 
+    merged_entities, id_map = _carry_mention_ids(all_entities, merged_entities)
+
     # Merge relations (deduplicate by triple)
     relation_keys: set[tuple[str, str, str]] = set()
     merged_relations: list[ExtractedRelation] = []
@@ -328,7 +377,7 @@ def merge_extraction_results(
             key = rel.as_triple
             if key not in relation_keys:
                 relation_keys.add(key)
-                merged_relations.append(rel)
+                merged_relations.append(_remap_relation_ids(rel, id_map))
 
     # Merge preferences (deduplicate by category + preference)
     pref_keys: set[str] = set()

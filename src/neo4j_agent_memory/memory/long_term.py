@@ -540,6 +540,20 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
             },
         )
 
+    def _canonical_relationship_type(self, relationship_type: str) -> str:
+        """The ontology's spelling of ``relationship_type``, matched case-insensitively.
+
+        Returns ``relationship_type`` unchanged when there is no ontology or it
+        declares no such type.
+        """
+        if self._ontology is None:
+            return relationship_type
+        wanted = relationship_type.lower()
+        for declared in self._ontology.relationship_types():
+            if declared.lower() == wanted:
+                return declared
+        return relationship_type
+
     async def _enforce_declared_relationship(
         self,
         source_id: UUID | str,
@@ -718,9 +732,11 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
         if generate_embedding and self._embedder is not None:
             embedding = await self._embedder.embed(name)
 
-        # Check for duplicates using embedding similarity
+        # Check for duplicates. The ontology resolver needs no embedding (exact,
+        # alias and prefix matches carry most merges), so it runs either way;
+        # the legacy similarity path skips itself without one.
         dedup_result = DeduplicationResult()
-        if deduplicate and self._deduplication.enabled and embedding is not None:
+        if deduplicate and self._deduplication.enabled:
             dedup_result = await self._check_for_duplicates(
                 name=name,
                 entity_type=parsed_type,
@@ -728,10 +744,13 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
                 subtype=final_subtype,
             )
 
-            # If auto-merged, return the existing entity
+            # If auto-merged onto another surface form, return the existing
+            # entity. Re-adding the stored name itself falls through to the
+            # MERGE below instead: it lands on the same node, and its ON MATCH
+            # applies the description, aliases and location passed here.
             if dedup_result.action == "merged" and dedup_result.matched_entity_id:
                 existing_entity = await self._get_entity_by_id(dedup_result.matched_entity_id)
-                if existing_entity:
+                if existing_entity and existing_entity.name != name:
                     # Add the new name as an alias if not already present
                     if name not in existing_entity.aliases and name != existing_entity.name:
                         await self._add_alias_to_entity(dedup_result.matched_entity_id, name)
@@ -1011,11 +1030,12 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
             )
         elif getattr(ref, "type", None):
             await self._client.execute_write(
-                """
-                MATCH (p:Preference {id: $preference_id})
-                MERGE (e:Entity {name: $name, type: $type})
+                f"""
+                MATCH (p:Preference {{id: $preference_id}})
+                MERGE (e:Entity {{name: $name, type: $type}})
                 ON CREATE SET e.id = coalesce(e.id, $name + ':' + $type),
-                              e.created_at = datetime()
+                              e.created_at = datetime(),
+                              {queries.entity_keys_set_clause()}
                 MERGE (p)-[:APPLIES_TO]->(e)
                 """,
                 {
@@ -1026,11 +1046,12 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
             )
         else:
             await self._client.execute_write(
-                """
-                MATCH (p:Preference {id: $preference_id})
-                MERGE (e:Entity {name: $name})
+                f"""
+                MATCH (p:Preference {{id: $preference_id}})
+                MERGE (e:Entity {{name: $name}})
                 ON CREATE SET e.id = coalesce(e.id, $name),
-                              e.created_at = datetime()
+                              e.created_at = datetime(),
+                              {queries.entity_keys_set_clause()}
                 MERGE (p)-[:APPLIES_TO]->(e)
                 """,
                 {"preference_id": preference_id, "name": ref.name},
@@ -1272,6 +1293,10 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
         """
         source_id = source.id if isinstance(source, Entity) else source
         target_id = target.id if isinstance(target, Entity) else target
+
+        # The type is part of the edge's MERGE key, so ``employed_by`` and
+        # ``EMPLOYED_BY`` would be two edges. Store the ontology's spelling.
+        relationship_type = self._canonical_relationship_type(relationship_type)
 
         # Strict mode: reject undeclared types and forbidden endpoint pairs
         # before writing anything.
@@ -1680,7 +1705,7 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
         self,
         name: str,
         entity_type: str,
-        embedding: list[float],
+        embedding: list[float] | None,
         *,
         subtype: str | None = None,
     ) -> DeduplicationResult:
@@ -1690,13 +1715,14 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
         :class:`~neo4j_agent_memory.resolution.ontology.OntologyResolver`, the
         decision is delegated to it, so ``add_entity`` and the message
         ingestion path agree on one set of thresholds, one normalization and
-        one blocking strategy. Any other resolver (or none) keeps the original
-        embedding-similarity path unchanged.
+        one blocking strategy, with or without an embedding. Any other
+        resolver (or none) keeps the original embedding-similarity path
+        unchanged, which finds nothing without an embedding.
 
         Args:
             name: Entity name
             entity_type: Entity type
-            embedding: Entity embedding vector
+            embedding: Entity embedding vector, or ``None`` when there is none
             subtype: Optional subtype, used for the ontology's per-type
                 threshold overrides.
 
@@ -1708,6 +1734,8 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
         )
         if delegated is not None:
             return delegated
+        if embedding is None:
+            return DeduplicationResult()
 
         config = self._deduplication
 
@@ -1796,7 +1824,7 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
         self,
         name: str,
         entity_type: str,
-        embedding: list[float],
+        embedding: list[float] | None,
         *,
         subtype: str | None = None,
     ) -> DeduplicationResult | None:
@@ -1806,6 +1834,9 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
             name: Entity name.
             entity_type: POLE+O type.
             embedding: Embedding of ``name``, reused rather than recomputed.
+                ``None`` (no embedder, or ``generate_embedding=False``)
+                resolves without the embedding component and never calls
+                the embedder.
             subtype: Optional subtype.
 
         Returns:
@@ -1824,6 +1855,7 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
             entity_type,
             subtype=subtype,
             embedding=embedding,
+            embed=False,
         )
         if resolution.action == "created" or resolution.matched_entity_id is None:
             return DeduplicationResult()

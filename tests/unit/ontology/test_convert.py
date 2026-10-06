@@ -119,6 +119,39 @@ class TestFromEntitySchema:
         doc = from_entity_schema(schema)
         assert [p.name for p in doc.entity_types[0].properties] == ["name", "dob"]
 
+    def test_custom_type_names_map_onto_poleo(self):
+        """The regression: ``pole_type = name.upper()`` made ``PATIENT`` a pole type.
+
+        ``validate_structure`` rejected the document, so every GLiNER2.5
+        extract against a legacy custom schema raised.
+        """
+        schema = EntitySchemaConfig(
+            name="medical",
+            entity_types=[
+                EntityTypeConfig(name="PATIENT", subtypes=["ADULT", "PEDIATRIC"]),
+                EntityTypeConfig(name="CONDITION"),
+                EntityTypeConfig(name="COMPANY"),
+            ],
+            relation_types=[
+                RelationTypeConfig(
+                    name="DIAGNOSED_WITH", source_types=["PATIENT"], target_types=["CONDITION"]
+                ),
+                RelationTypeConfig(name="RELATED_TO"),
+            ],
+        )
+        doc = from_entity_schema(schema)
+
+        assert doc.validate_structure() == []
+        assert doc.label_map()["patient"] == ("OBJECT", "PATIENT")
+        assert doc.label_map()["adult"] == ("OBJECT", "ADULT")
+        assert doc.label_map()["condition"] == ("OBJECT", "CONDITION")
+        # A name the label table knows lands on its POLE+O type.
+        assert doc.label_map()["company"] == ("ORGANIZATION", "COMPANY")
+        assert ("PATIENT", "DIAGNOSED_WITH", "CONDITION") in doc.patterns()
+        # A wildcard endpoint spans every base type, not one per POLE+O type.
+        assert ("PATIENT", "RELATED_TO", "COMPANY") in doc.patterns()
+        assert ("CONDITION", "RELATED_TO", "PATIENT") in doc.patterns()
+
     def test_the_default_poleo_schema_converts_soundly(self):
         doc = from_entity_schema(get_default_schema())
         assert doc.validate_structure() == []

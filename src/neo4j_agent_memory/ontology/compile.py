@@ -17,11 +17,14 @@ type here.
 from __future__ import annotations
 
 import importlib
-from collections.abc import Collection
-from typing import TYPE_CHECKING, Any, NamedTuple
+from collections.abc import Collection, Hashable, Iterable, Sequence
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, NamedTuple, TypeVar
 
 if TYPE_CHECKING:
     from neo4j_agent_memory.ontology.models import OntologyDocument, RelationshipDef
+
+_T = TypeVar("_T", bound=Hashable)
 
 # spaCy's NER label set, mapped onto POLE+O types. Mirrors
 # ``SpacyEntityExtractor.DEFAULT_TYPE_MAPPING`` (kept here so an ontology can
@@ -45,6 +48,23 @@ _SPACY_POLE_TYPES: dict[str, str] = {
     "ORDINAL": "OBJECT",
     "CARDINAL": "OBJECT",
     "PERCENT": "OBJECT",
+}
+
+# The subtype spaCy's own mapping gives each label (``SpacyEntityExtractor.
+# DEFAULT_SUBTYPE_MAPPING``), duplicated so this module stays extractor-free.
+_SPACY_SUBTYPES: dict[str, str] = {
+    "GPE": "GEOPOLITICAL",
+    "LOC": "GEOGRAPHIC",
+    "FAC": "FACILITY",
+    "PRODUCT": "PRODUCT",
+    "WORK_OF_ART": "CREATIVE_WORK",
+    "LAW": "LEGAL_DOCUMENT",
+    "LANGUAGE": "LANGUAGE",
+    "DATE": "DATE",
+    "TIME": "TIME",
+    "MONEY": "CURRENCY",
+    "QUANTITY": "QUANTITY",
+    "NORP": "GROUP",
 }
 
 
@@ -119,8 +139,11 @@ def compile_joint_schema(
         # ``source='person'`` against a ``Person`` label is a sound document —
         # but ``JointSchema.relation()`` matches the entity names verbatim and
         # raises "unknown entity types" on the mismatch.
-        heads = _ordered_unique(_canonical_label(doc, d.source) for d in defs)
-        tails = _ordered_unique(_canonical_label(doc, d.target) for d in defs)
+        pairs = _ordered_unique(
+            (_canonical_label(doc, d.source), _canonical_label(doc, d.target)) for d in defs
+        )
+        heads = _ordered_unique(head for head, _ in pairs)
+        tails = _ordered_unique(tail for _, tail in pairs)
         # ``symmetric`` is never passed: it compiles to a constraint set that
         # rejects every candidate edge in gliner2 2.0.0. Use ``inverse=``.
         schema.relation(
@@ -135,6 +158,11 @@ def compile_joint_schema(
             unique_tail=merged.unique_target,
             acyclic=merged.acyclic,
         )
+        # ``relation()`` permits every head x tail combination. When the
+        # declared pairs are fewer (WORKS_AT Person->Company plus Robot->Lab
+        # must not decode Person->Lab), constrain the decoder to the pairs.
+        if len(pairs) < len(heads) * len(tails):
+            schema.constraint(_declared_pairs_constraint(rel_type, pairs))
 
     if doc.no_self_loops:
         # A global no-self-loops constraint would override any relation that
@@ -257,10 +285,18 @@ def prompt_fragment(doc: OntologyDocument, *, include_relations: bool = True) ->
 def spacy_label_map(doc: OntologyDocument) -> dict[str, tuple[str, str | None]] | None:
     """Map spaCy NER labels onto this ontology's ``(pole_type, subtype)`` pairs.
 
-    Each spaCy label resolves to a POLE+O type (the extractor's own default
-    mapping) and then to the *first* ontology label declared for that type.
-    spaCy labels whose POLE+O type the ontology does not declare are dropped,
-    so the map only ever names types the graph knows about.
+    spaCy's label set is fixed and coarse, so a label is only mapped onto a
+    pair it actually decides. Each label resolves to its POLE+O type, then to
+    the first of these the ontology declares:
+
+    1. the subtype spaCy's own mapping gives it (``GPE`` -> ``GEOPOLITICAL``),
+    2. the spaCy label itself as the subtype (``LAW`` -> ``OBJECT:LAW``),
+    3. the bare POLE+O type (``PERSON``).
+
+    A label none of those match is left out. It is never mapped onto some other
+    declared subtype of the same type: an ontology whose only person label is
+    ``author``, or whose object labels are all diseases, would otherwise
+    receive every spaCy person as an author and every amount as a disease.
 
     Args:
         doc: The ontology to project.
@@ -272,25 +308,68 @@ def spacy_label_map(doc: OntologyDocument) -> dict[str, tuple[str, str | None]] 
     if not doc.entity_types:
         return None
 
-    first_for_pole: dict[str, tuple[str, str | None]] = {}
-    for entity_type in doc.entity_types:
-        pole = entity_type.pole_type.upper()
-        if pole not in first_for_pole:
-            first_for_pole[pole] = (
-                pole,
-                entity_type.subtype.upper() if entity_type.subtype else None,
-            )
-
-    return {
-        spacy_label: first_for_pole[pole]
-        for spacy_label, pole in _SPACY_POLE_TYPES.items()
-        if pole in first_for_pole
+    declared = {
+        (et.pole_type.upper(), et.subtype.upper() if et.subtype else None)
+        for et in doc.entity_types
     }
+    mapping: dict[str, tuple[str, str | None]] = {}
+    for spacy_label, pole in _SPACY_POLE_TYPES.items():
+        for subtype in (_SPACY_SUBTYPES.get(spacy_label), spacy_label, None):
+            if (pole, subtype) in declared:
+                mapping[spacy_label] = (pole, subtype)
+                break
+    return mapping
 
 
 # -----------------------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------------------
+
+
+_DECLARED_PAIRS_TYPE: Any = None
+
+
+def _declared_pairs_constraint(relation: str, pairs: list[tuple[str, str]]) -> Any:
+    """A gliner2 decoding constraint admitting only ``pairs`` for ``relation``.
+
+    gliner2's own ``TypedEndpoints`` checks the head and tail types
+    independently, so a relation compiled from several defs admits their cross
+    product. This one checks the ``(head, tail)`` pair, during beam search like
+    the built-in constraints. Built lazily because ``gliner2`` is optional.
+    """
+    global _DECLARED_PAIRS_TYPE
+    if _DECLARED_PAIRS_TYPE is None:
+        base = importlib.import_module("gliner2.joint_ie.constraints").Constraint
+
+        def endpoint_type(candidate: Any, side: str) -> Any:
+            node = getattr(candidate, side, None)
+            for attr in ("entity_type", "label", "type"):
+                value = getattr(node, attr, None)
+                if value is not None:
+                    return value
+            return None
+
+        @dataclass(frozen=True)
+        class DeclaredEndpointPairs(base):  # type: ignore[misc, valid-type]  # ty: ignore[unused-ignore-comment]  # gliner2 is untyped (Any): mypy needs these, ty disagrees
+            relation: str
+            pairs: frozenset[tuple[str, str]]
+
+            def allows(
+                self,
+                candidate: Any,
+                relations: Sequence[Any] = (),
+                entities: Sequence[Any] = (),
+            ) -> bool:
+                label = getattr(candidate, "relation_type", None) or getattr(
+                    candidate, "type", None
+                )
+                if label != self.relation:
+                    return True
+                pair = (endpoint_type(candidate, "head"), endpoint_type(candidate, "tail"))
+                return pair in self.pairs
+
+        _DECLARED_PAIRS_TYPE = DeclaredEndpointPairs
+    return _DECLARED_PAIRS_TYPE(relation, frozenset(pairs))
 
 
 def _group_relationships(doc: OntologyDocument) -> dict[str, list[RelationshipDef]]:
@@ -356,9 +435,9 @@ def _merge_defs(defs: list[RelationshipDef]) -> _MergedRelation:
     )
 
 
-def _ordered_unique(values: Any) -> list[str]:
-    """De-duplicate an iterable of strings, keeping first-seen order."""
-    seen: dict[str, None] = {}
+def _ordered_unique(values: Iterable[_T]) -> list[_T]:
+    """De-duplicate an iterable, keeping first-seen order."""
+    seen: dict[_T, None] = {}
     for value in values:
         seen.setdefault(value, None)
     return list(seen)

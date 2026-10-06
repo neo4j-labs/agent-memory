@@ -281,7 +281,9 @@ class TestRelationTypeBackfill:
     @staticmethod
     async def _marker_rows(client: Any) -> list[dict[str, Any]]:
         return await client._client.execute_read(
-            "MATCH (m:SchemaMigration) RETURN m.name AS name, m.completed_at AS completed_at"
+            "MATCH (m:SchemaMigration {name: $name}) "
+            "RETURN m.name AS name, m.completed_at AS completed_at",
+            {"name": RELATION_TYPE_BACKFILL},
         )
 
     @pytest.mark.asyncio

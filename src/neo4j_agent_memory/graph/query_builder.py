@@ -12,6 +12,8 @@ Labels are converted to PascalCase following Neo4j naming conventions.
 
 import re
 
+from neo4j_agent_memory.graph.queries import entity_keys_set_clause
+
 # Valid POLE+O entity types (stored uppercase internally, converted to PascalCase for labels)
 VALID_ENTITY_TYPES: set[str] = {"PERSON", "OBJECT", "LOCATION", "EVENT", "ORGANIZATION"}
 
@@ -140,6 +142,10 @@ def ontology_node_label(label: str | None) -> str | None:
     :func:`sanitize_label` would re-case it to ``Supportcase``), and the
     built-in templates' GLiNER2.5-style ``company`` / ``tv_show`` become
     ``Company`` / ``TvShow``, matching the type and subtype labels beside them.
+    A part written all in capitals is the one exception: it carries no case
+    information, so it is re-cased like a type label (``INDIVIDUAL`` ->
+    ``Individual``, ``TV_SHOW`` -> ``TvShow``), matching what
+    :func:`sanitize_label` gives the same name as an entity type.
     The input must be a valid label identifier, which keeps the value safe to
     interpolate into Cypher.
 
@@ -155,7 +161,11 @@ def ontology_node_label(label: str | None) -> str | None:
     stripped = label.strip()
     if not VALID_LABEL_PATTERN.match(stripped):
         return None
-    return "".join(part[0].upper() + part[1:] for part in stripped.split("_") if part)
+    return "".join(
+        part[0].upper() + (part[1:].lower() if part.isupper() else part[1:])
+        for part in stripped.split("_")
+        if part
+    )
 
 
 def is_poleo_type(entity_type: str) -> bool:
@@ -312,29 +322,6 @@ def build_add_ontology_label_query(
     return f"MATCH (e:Entity {{id: $id}})\nSET e:{declared}\nRETURN e.id AS id"
 
 
-def build_merge_entity_reference_query(entity_type: str, ontology_label: str | None) -> str:
-    """Query that resolves or creates a typed explicit entity reference.
-
-    Used by ``add_message(extraction_mode="explicit")`` for an ``EntityRef``
-    with a ``type`` and no ``id``: MERGE on ``(name, type)`` and give the node
-    the same labels as every other entity write — the type label and, when the
-    ontology declares the bare type, its label.
-
-    Args:
-        entity_type: The reference's entity type.
-        ontology_label: The ontology's declared label for ``(entity_type, None)``.
-
-    Returns:
-        A query taking ``$name`` and ``$type`` and returning ``id``.
-    """
-    label_clause = build_label_set_clause(entity_type, None, ontology_label=ontology_label)
-    return f"""MERGE (e:Entity {{name: $name, type: $type}})
-ON CREATE SET e.id = coalesce(e.id, $name + ':' + $type),
-              e.created_at = datetime()
-{label_clause}
-RETURN e.id AS id"""
-
-
 def build_create_entity_query(
     entity_type: str,
     subtype: str | None,
@@ -418,6 +405,9 @@ ON MATCH SET
     e.description = COALESCE($description, e.description),
     e.embedding = COALESCE($embedding, e.embedding),
     e.updated_at = datetime(){aliases_on_match}{location_on_match}"""
+
+    # The resolver's lookup keys follow name, canonical_name and aliases.
+    query += f"\nSET {entity_keys_set_clause()}"
 
     # Add label SET clause if we have valid labels
     if label_set_clause:

@@ -415,7 +415,7 @@ class TestOntologyMigrate:
         entity_id = f"test-{uuid4()}"
         await client._client.execute_write(
             """
-            CREATE (e:Entity:Client {
+            CREATE (e:Entity:Person:Individual:Client {
                 id: $id, name: 'Acme', type: 'PERSON', subtype: 'INDIVIDUAL'
             })
             """,
@@ -580,6 +580,10 @@ class TestOntologyMigrate:
         assert "Entity" in row["labels"]
         assert row["type"] == "ORGANIZATION"
         assert row["subtype"] == "COMPANY"
+        # The labels follow the type: a fresh ORGANIZATION:COMPANY write gives
+        # :Organization:Company, and the old :Person:Individual must not linger
+        # (it kept the node matching every :Person query).
+        assert sorted(row["labels"]) == ["Company", "Customer", "Entity", "Organization"]
 
         # A second run is a no-op (nothing carries the old label any more).
         repeat = await clean_memory_client.ontology.migrate(
@@ -634,8 +638,9 @@ class TestOntologyMigrate:
 
         row = await self._labels_and_type(client, entity_id)
         assert row["subtype"] is None
-        assert "Party" in row["labels"]
-        assert "Person" not in row["labels"]
+        # The mapping names the type label itself; it comes straight back,
+        # because a fresh PERSON write carries :Person.
+        assert sorted(row["labels"]) == ["Entity", "Party", "Person"]
         # The whole point: the stale subtype label is gone too.
         assert "Individual" not in row["labels"]
 

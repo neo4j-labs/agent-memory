@@ -115,7 +115,8 @@ class TestAliasesAreTopLevel:
         ``ParameterMissing``.
         """
         assert "$aliases" not in build_create_entity_query("PERSON", None)
-        assert "e.aliases" not in build_create_entity_query("PERSON", None)
+        # The lookup-key refresh reads e.aliases; only a write would need the parameter.
+        assert "e.aliases =" not in build_create_entity_query("PERSON", None)
 
     def test_alias_lookup_reads_the_same_property_the_writer_sets(self) -> None:
         """Guard against the write path and the lookup drifting apart again."""
@@ -635,6 +636,20 @@ class TestStrictAddRelationship:
         assert mock_client.execute_read.await_args[0][0] == queries.GET_ENTITY_TYPES_FOR_PAIR
 
     @pytest.mark.asyncio
+    async def test_the_type_is_stored_in_the_ontology_spelling(
+        self, strict_memory: LongTermMemory, mock_client: MagicMock
+    ) -> None:
+        """``buys_from`` and ``BUYS_FROM`` are one type, so they must be one edge."""
+        source_id, target_id = uuid4(), uuid4()
+        mock_client.execute_read.return_value = entity_type_rows(source_id, target_id)
+        mock_client.execute_write.return_value = [{"id": str(uuid4()), "confidence": 1.0}]
+
+        relationship = await strict_memory.add_relationship(source_id, target_id, "buys_from")
+
+        assert relationship.type == "BUYS_FROM"
+        assert mock_client.execute_write.await_args[0][1]["relation_type"] == "BUYS_FROM"
+
+    @pytest.mark.asyncio
     async def test_an_undeclared_relationship_type_raises(
         self, strict_memory: LongTermMemory, mock_client: MagicMock
     ) -> None:
@@ -837,7 +852,7 @@ class TestMergedEntityKeepsAUsableEmbedding:
             )
         )
 
-        entity, dedup = await memory.add_entity("Acme Corp", "ORGANIZATION")
+        entity, dedup = await memory.add_entity("ACME Corp", "ORGANIZATION")
 
         assert dedup.action == "merged"
         assert entity.id == existing_id
@@ -869,7 +884,7 @@ class TestMergedEntityKeepsAUsableEmbedding:
             )
         )
 
-        entity, _ = await memory.add_entity("Acme Corp", "ORGANIZATION")
+        entity, _ = await memory.add_entity("ACME Corp", "ORGANIZATION")
 
         assert entity.embedding == [0.9] * 384
         writes = [call[0][0] for call in mock_client.execute_write.call_args_list]
@@ -898,8 +913,50 @@ class TestMergedEntityKeepsAUsableEmbedding:
             )
         )
 
-        entity, _ = await memory.add_entity("Acme Corp", "ORGANIZATION")
+        entity, _ = await memory.add_entity("ACME Corp", "ORGANIZATION")
 
         assert entity.embedding == [0.1] * 384
         writes = [call[0][0] for call in mock_client.execute_write.call_args_list]
         assert queries.UPDATE_ENTITY_EMBEDDING in writes
+
+    @pytest.mark.asyncio
+    async def test_re_adding_the_stored_name_applies_the_new_fields(
+        self, mock_client: MagicMock, mock_embedder: MagicMock
+    ) -> None:
+        """An exact re-add lands on the same node through the MERGE, whose ON MATCH
+        applies the description and aliases; the early return would drop them.
+        """
+        from neo4j_agent_memory.memory.long_term import DeduplicationResult
+
+        existing_id = uuid4()
+        memory = self._merging_memory(mock_client, mock_embedder)
+        mock_client.execute_read.return_value = [
+            {"e": stored_node(id=str(existing_id), name="Acme Corp")}
+        ]
+        mock_client.execute_write.return_value = [
+            {"e": stored_node(id=str(existing_id), name="Acme Corp", description="Ships widgets")}
+        ]
+        memory._check_for_duplicates = AsyncMock(  # type: ignore[method-assign]
+            return_value=DeduplicationResult(
+                is_duplicate=True,
+                action="merged",
+                matched_entity_id=existing_id,
+                matched_entity_name="Acme Corp",
+                similarity_score=1.0,
+                match_type="exact",
+            )
+        )
+
+        entity, dedup = await memory.add_entity(
+            "Acme Corp", "ORGANIZATION", description="Ships widgets", aliases=["Acme"]
+        )
+
+        assert dedup.action == "merged"
+        assert entity.id == existing_id
+        merge_call = next(
+            call[0]
+            for call in mock_client.execute_write.call_args_list
+            if call[0][0].startswith("MERGE (e:Entity")
+        )
+        assert merge_call[1]["description"] == "Ships widgets"
+        assert merge_call[1]["aliases"] == ["Acme"]

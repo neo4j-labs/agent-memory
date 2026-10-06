@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Entity resolution blocking is index-backed.** Every entity write now
+  maintains two lookup keys: `name_key` (the lower-cased name) and
+  `surface_keys` (every surface form between `|` delimiters). The exact and
+  prefix buckets match those keys through three new indexes,
+  `entity_name_key_idx`, `entity_name_key_text_idx` and
+  `entity_surface_keys_idx`, instead of scanning every entity of the type on
+  each `add_message`. A one-time `entity_keys_backfill` fills the keys on
+  existing graphs; `schema_config.backfill_relation_types=False` skips it, as
+  it skips the relation-type backfill. Entities written by your own Cypher need
+  the keys too (`queries.entity_keys_set_clause()`).
+- **Explicit mentions take the ingestion path.** With
+  `add_message(extraction_mode="explicit")`, a typed `EntityRef` gets
+  strict-mode validation and ingest-time resolution, like an extracted mention.
+  A name-only `EntityRef` links the one existing entity with that surface form
+  and no longer creates a node without a type. When no entity, or more than
+  one, carries the name, it is skipped with a warning.
+- **spaCy under a subtyped ontology** maps a label only onto a pair it decides:
+  spaCy's own subtype, the label as the subtype, or the bare POLE+O type. A
+  label that matches none of these is not extracted (`drop_unmapped`). Before
+  this, every label went to the first ontology label of its type: amounts
+  became diseases under `medical`, and every person became an author under
+  `scientific`.
+- `core.metrics.normalize_name` now reuses the resolver's type-agnostic key,
+  which also folds punctuation, so scoring and resolution agree on when two
+  names are the same.
+- `ontology_node_label` re-cases an all-capitals label part (`INDIVIDUAL` ->
+  `:Individual`), matching the type label the same name gets.
+- `add_relationship` stores the ontology's spelling of a relationship type, so
+  `employed_by` and `EMPLOYED_BY` are one edge.
+
+### Fixed
+
+- `extraction.gliner_schema` is now the client's resolved ontology when the
+  client builds a `gliner` or `pipeline` extractor. Before, ingest-time
+  validation dropped every relation the template's extractor decoded.
+- The pipeline's confidence floor no longer drops GLiNER2.5 relations whose
+  endpoint was kept as another stage's copy. The surviving copy inherits the
+  mention id.
+- `EntitySchemaConfig` types outside POLE+O (`PATIENT`) convert onto a POLE+O
+  type instead of producing a document `validate_structure` rejects.
+- `BoltOntology.migrate` swaps the POLE+O type and built-in subtype labels with
+  the type, judged from each node's stored `type`/`subtype`. A node no longer
+  keeps `:Person` after becoming an organization, and an undeclared source
+  label no longer has to be refused.
+- Vector blocking skips merged-away entities.
+- Re-running a merge of the same pair no longer adds the source edges' support
+  again.
+- Relationship types declared for several endpoint pairs constrain JointIE to
+  exactly those pairs, not their cross product.
+- An intra-message merge links to the anchor of its own type, and a name-based
+  relation endpoint shared by two types is chosen by the ontology.
+- `add_entity` deduplicates through the ontology resolver without an
+  embedding (no embedder, or `generate_embedding=False`).
+- NAMS: a malformed active ontology, or a malformed version `schema_json`,
+  raises `ValueError` instead of reading as "nothing bound" / `document=None`.
+- `BoltOntology.create` / `update` reject a `validation_mode` other than
+  `permissive` / `strict` (any casing), which was stored and then ignored.
+
 ## [0.7.0] - 2026-09-17
 
 Release 0.7 replaces the local extraction stack. `gliner` v1 and the separate

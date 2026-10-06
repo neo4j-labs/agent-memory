@@ -120,6 +120,57 @@ class TestMergeStrategies:
         assert len(merged.entities) == 1
         assert merged.entities[0].confidence == 0.95
 
+    def test_a_replaced_copy_keeps_its_mention_id_for_relations(self):
+        """The regression: spaCy's id-less copy won the merge, and the confidence
+        floor then dropped every GLiNER2.5 relation pointing at the old id.
+        """
+        from neo4j_agent_memory.extraction.pipeline import _apply_min_confidence
+
+        spacy = ExtractionResult(
+            entities=[ExtractedEntity(name="John Smith", type="PERSON", confidence=0.85)]
+        )
+        gliner = ExtractionResult(
+            entities=[
+                ExtractedEntity(name="John Smith", type="PERSON", confidence=0.7, id="e0"),
+                ExtractedEntity(name="Acme", type="ORGANIZATION", confidence=0.8, id="e1"),
+            ],
+            relations=[
+                ExtractedRelation(
+                    source="John Smith",
+                    target="Acme",
+                    relation_type="EMPLOYED_BY",
+                    confidence=0.9,
+                    source_id="e0",
+                    target_id="e1",
+                )
+            ],
+        )
+
+        merged = merge_extraction_results([spacy, gliner], MergeStrategy.CONFIDENCE)
+
+        john = next(e for e in merged.entities if e.name == "John Smith")
+        assert john.confidence == 0.85  # spaCy's copy won...
+        assert john.id == "e0"  # ...and carries GLiNER2.5's mention id
+        assert len(_apply_min_confidence(merged, 0.5).relations) == 1
+
+    def test_a_replaced_id_is_remapped_onto_the_survivors_id(self):
+        low = ExtractionResult(
+            entities=[ExtractedEntity(name="Acme", type="ORGANIZATION", confidence=0.6, id="a")],
+            relations=[
+                ExtractedRelation(
+                    source="Acme", target="Acme", relation_type="X", source_id="a", target_id="a"
+                )
+            ],
+        )
+        high = ExtractionResult(
+            entities=[ExtractedEntity(name="Acme", type="ORGANIZATION", confidence=0.9, id="b")]
+        )
+
+        merged = merge_extraction_results([low, high], MergeStrategy.CONFIDENCE)
+
+        assert [e.id for e in merged.entities] == ["b"]
+        assert (merged.relations[0].source_id, merged.relations[0].target_id) == ("b", "b")
+
     def test_merge_cascade_fills_gaps(self):
         """Test that CASCADE strategy uses first result and fills gaps."""
         results = [

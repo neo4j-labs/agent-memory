@@ -279,11 +279,13 @@ class SchemaConfig(BaseModel):
     backfill_relation_types: bool = Field(
         default=True,
         description=(
-            "Whether connect() may run the one-shot v0.7 backfill that copies "
-            "the legacy RELATED_TO.relation_type onto r.type. It runs once per "
-            "database (recorded on a (:SchemaMigration) marker node); set False "
-            "to skip it entirely and run the equivalent query yourself in "
-            "batches, e.g. via apoc.periodic.iterate on a very large graph"
+            "Whether connect() may run the one-shot v0.7 backfills: copying "
+            "the legacy RELATED_TO.relation_type onto r.type, and filling the "
+            "entity lookup keys (name_key, surface_keys) resolution blocking "
+            "reads. Each runs once per database (recorded on a "
+            "(:SchemaMigration) marker node); set False to skip them and run "
+            "the equivalent queries yourself in batches, e.g. via "
+            "apoc.periodic.iterate on a very large graph"
         ),
     )
 

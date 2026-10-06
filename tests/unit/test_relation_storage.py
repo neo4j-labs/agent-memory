@@ -566,6 +566,48 @@ class TestStoreRelationsProvenance:
         assert params["target_id"] == "node-2"
 
     @pytest.mark.asyncio
+    async def test_a_name_shared_by_two_types_takes_the_pair_the_ontology_permits(
+        self, mock_client
+    ):
+        """ "Jordan" the person and "Jordan" the country, in one message.
+
+        The plain name map holds whichever was written last; the ontology knows
+        ``BORN_IN`` ends at a location.
+        """
+        from neo4j_agent_memory.ontology.models import (
+            DomainInfo,
+            EntityTypeDef,
+            OntologyDocument,
+            RelationshipDef,
+        )
+
+        ontology = OntologyDocument(
+            domain=DomainInfo(id="t", name="t"),
+            entity_types=[
+                EntityTypeDef(label="Person", pole_type="PERSON"),
+                EntityTypeDef(label="Location", pole_type="LOCATION"),
+            ],
+            relationships=[RelationshipDef(type="BORN_IN", source="Person", target="Location")],
+        )
+        memory = ShortTermMemory(mock_client, ontology=ontology)
+        relation = ExtractedRelation(source="Ada", target="Jordan", relation_type="BORN_IN")
+        typed_nodes: dict[str, list[tuple[str, str | None, str]]] = {
+            "ada": [("PERSON", None, "ada-node")],
+            "jordan": [("LOCATION", None, "country-node"), ("PERSON", None, "person-node")],
+        }
+
+        stored = await memory._store_relations(
+            [relation],
+            {"ada": "ada-node", "jordan": "person-node"},
+            typed_nodes=typed_nodes,
+        )
+
+        assert stored == 1
+        _, params = mock_client.execute_write.call_args[0]
+        assert params["source_id"] == "ada-node"
+        assert params["target_id"] == "country-node"
+
+    @pytest.mark.asyncio
     async def test_falls_back_to_names_when_mention_ids_unresolved(self, mock_client):
         """Unresolvable mention ids fall back to entity_name_to_id, not by-name lookup."""
         memory = ShortTermMemory(mock_client)

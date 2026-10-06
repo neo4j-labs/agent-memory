@@ -660,15 +660,13 @@ class TestScoringRules:
         assert resolution.canonical_name == "Acme"
 
 
-class TestNormalizedKeyQueryGuards:
-    """The blocking queries must not warn on a database with no aliases yet.
+class TestBlockingQueriesUseStoredKeys:
+    """Blocking runs on every ``add_message``, so it must be index-backed.
 
-    ``e.aliases`` and ``e.canonical_name`` are optional properties. Naming
-    either directly in a WHERE clause — even inside ``coalesce(e.prop, ...)``
-    — makes the Neo4j driver log a ``property key does not exist`` warning to
-    stderr on a database where no entity has ever had the property set (see
-    CLAUDE.md item 23). Both must instead be guarded with
-    ``'prop' IN keys(e)`` before being read.
+    ``toLower(e.name) IN $keys`` (and the alias/canonical-name variants) scanned
+    every entity of the type per message. The queries match the stored,
+    indexed ``surface_keys`` / ``name_key`` properties instead, and skip nodes
+    already merged away, including in the vector bucket.
     """
 
     @pytest.mark.parametrize(
@@ -678,13 +676,46 @@ class TestNormalizedKeyQueryGuards:
             queries.FIND_ENTITIES_BY_NORMALIZED_KEYS_FOR_USER,
         ],
     )
-    def test_aliases_and_canonical_name_are_guarded_by_keys(self, query: str) -> None:
-        assert "'aliases' IN keys(e)" in query
-        assert "'canonical_name' IN keys(e)" in query
-        # Neither may be referenced unguarded, including inside coalesce():
-        # that still triggers the warning on a fresh database.
-        assert "coalesce(e.aliases" not in query
-        assert "coalesce(e.canonical_name" not in query
+    def test_exact_bucket_matches_the_stored_surface_keys(self, query: str) -> None:
+        assert "e.surface_keys CONTAINS ('|' + key + '|')" in query
+        assert "toLower(" not in query
+        assert "e.merged_into IS NULL" in query
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            queries.FIND_ENTITIES_BY_TOKEN_PREFIX,
+            queries.FIND_ENTITIES_BY_TOKEN_PREFIX_FOR_USER,
+        ],
+    )
+    def test_prefix_bucket_matches_the_stored_name_key(self, query: str) -> None:
+        assert "e.name_key STARTS WITH $head" in query
+        assert "e.name_key ENDS WITH $tail" in query
+        assert "toLower(" not in query
+        assert "e.merged_into IS NULL" in query
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            queries.FIND_SIMILAR_ENTITIES_BY_EMBEDDING,
+            queries.FIND_SIMILAR_ENTITIES_BY_EMBEDDING_FOR_USER,
+        ],
+    )
+    def test_vector_bucket_skips_merged_away_nodes(self, query: str) -> None:
+        assert "node.merged_into IS NULL" in query
+
+    def test_every_entity_write_refreshes_the_keys(self) -> None:
+        from neo4j_agent_memory.graph.query_builder import build_create_entity_query
+
+        for query in (
+            build_create_entity_query("PERSON", None),
+            queries.ADD_ENTITY_ALIAS,
+            queries.RECORD_TOUCHED_EDGE_BY_NAME,
+            queries.RECORD_TOUCHED_EDGE_BY_NAME_TYPE,
+            queries.adopt_label_to_entity_query("Movie", "title"),
+        ):
+            assert ".surface_keys = " in query and ".name_key = " in query, query
+        assert "target.surface_keys = " in queries.MERGE_ENTITIES
 
 
 # =============================================================================
@@ -1164,6 +1195,33 @@ class TestIngestionWiring:
         aliases = client.writes_matching("SET e.aliases")
         assert aliases and aliases[0]["alias"] == "Acme Corp"
 
+    async def test_an_episode_merge_finds_its_anchor_under_its_own_type(self) -> None:
+        """The regression: the anchor was found by name alone.
+
+        "Jordan" the person, then "Jordan" the country, then "JORDAN" the
+        person (merged onto the first). The name map held the country by then,
+        so the third mention's MENTIONS edge went to the wrong-typed node.
+        """
+        client = RecordingClient()
+        memory = short_term_with(
+            client,
+            [
+                ExtractedEntity(name="Jordan", type="PERSON"),
+                ExtractedEntity(name="Jordan", type="LOCATION"),
+                ExtractedEntity(name="JORDAN", type="PERSON"),
+            ],
+            resolver=make_resolver(client),
+            config=ResolutionConfig(),
+        )
+
+        await memory._extract_and_link_entities(a_message("Jordan flew to Jordan. JORDAN!"))
+
+        created = client.writes_matching("MERGE (e:Entity")
+        assert [row["type"] for row in created] == ["PERSON", "LOCATION"]
+        person_id, location_id = created[0]["id"], created[1]["id"]
+        links = [row["entity_id"] for row in client.writes_matching("MERGE (m)-[r:MENTIONS]->(e)")]
+        assert links == [person_id, location_id, person_id]
+
     async def test_resolve_on_ingest_false_reproduces_the_old_path(self) -> None:
         entities = [
             ExtractedEntity(name="Acme", type="ORGANIZATION"),
@@ -1239,3 +1297,72 @@ class TestIngestionWiring:
 
         links = client.writes_matching("MERGE (m)-[r:MENTIONS]->(e)")
         assert links and links[0]["entity_id"] == "pre-existing"
+
+
+@pytest.mark.asyncio
+class TestExplicitMentions:
+    """``extraction_mode="explicit"`` writes entities the way ingestion does."""
+
+    async def test_a_typed_reference_resolves_onto_the_stored_entity(self) -> None:
+        from neo4j_agent_memory.schema.models import EntityRef
+
+        client = RecordingClient(
+            {queries.FIND_ENTITIES_BY_NORMALIZED_KEYS: [entity_row("Acme Corp", entity_id="e1")]}
+        )
+        memory = short_term_with(
+            client, [], resolver=make_resolver(client), config=ResolutionConfig()
+        )
+
+        await memory._link_explicit_mentions(
+            a_message(), [EntityRef(name="Acme Corp.", type="ORGANIZATION")]
+        )
+
+        assert client.writes_matching("MERGE (e:Entity") == [], "no node beside 'Acme Corp'"
+        links = client.writes_matching("MERGE (m)-[r:MENTIONS]->(e)")
+        assert [link["entity_id"] for link in links] == ["e1"]
+
+    async def test_strict_mode_drops_an_undeclared_typed_reference(self) -> None:
+        from neo4j_agent_memory.ontology.builtin import POLEO_ONTOLOGY
+        from neo4j_agent_memory.schema.models import EntityRef
+
+        client = RecordingClient()
+        memory = ShortTermMemory(
+            client,  # type: ignore[arg-type]
+            ontology=POLEO_ONTOLOGY,
+            validation_mode="strict",
+        )
+
+        await memory._link_explicit_mentions(
+            a_message(),
+            [EntityRef(name="X", type="UNDECLARED"), EntityRef(name="Ada", type="PERSON")],
+        )
+
+        created = client.writes_matching("MERGE (e:Entity")
+        assert [row["name"] for row in created] == ["Ada"]
+
+    async def test_an_untyped_reference_links_but_never_creates(self) -> None:
+        from neo4j_agent_memory.schema.models import EntityRef
+
+        client = RecordingClient({queries.FIND_ENTITY_IDS_BY_SURFACE_FORM: [{"id": "e7"}]})
+        memory = short_term_with(client, [])
+
+        await memory._link_explicit_mentions(a_message(), [EntityRef(name="ACME corp")])
+
+        assert client.writes_matching("MERGE (e:Entity") == []
+        links = client.writes_matching("MERGE (m)-[r:MENTIONS]->(e)")
+        assert [link["entity_id"] for link in links] == ["e7"]
+        ((_, params),) = [
+            r for r in client.reads if r[0] == queries.FIND_ENTITY_IDS_BY_SURFACE_FORM
+        ]
+        assert params == {"key": "acme corp"}
+
+    @pytest.mark.parametrize("rows", [[], [{"id": "a"}, {"id": "b"}]])
+    async def test_an_unknown_or_ambiguous_untyped_reference_is_skipped(self, rows) -> None:
+        from neo4j_agent_memory.schema.models import EntityRef
+
+        client = RecordingClient({queries.FIND_ENTITY_IDS_BY_SURFACE_FORM: rows})
+        memory = short_term_with(client, [])
+
+        await memory._link_explicit_mentions(a_message(), [EntityRef(name="Nobody")])
+
+        assert client.writes == []

@@ -20,7 +20,6 @@ from neo4j_agent_memory.graph import queries
 from neo4j_agent_memory.graph.query_builder import (
     build_add_ontology_label_query,
     build_create_entity_query,
-    build_merge_entity_reference_query,
 )
 
 logger = logging.getLogger(__name__)
@@ -929,7 +928,11 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
                 only for the entities supplied via ``explicit_mentions``.
             explicit_mentions: When ``extraction_mode='explicit'``, a list
                 of :class:`~neo4j_agent_memory.schema.models.EntityRef`
-                describing the entities to MERGE on and link.
+                describing the entities to link. An ``id`` links that entity;
+                a typed reference is stored the way an extracted mention is
+                (strict-mode check, ingest-time resolution, MERGE on name and
+                type); a name alone links the one existing entity with that
+                surface form and never creates one.
             user_identifier: When provided, scopes the conversation to a
                 :User node via ``(:User)-[:HAS_CONVERSATION]->(:Conversation)``.
                 Required when ``MemorySettings.memory.multi_tenant=True``.
@@ -981,7 +984,12 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         if extraction_mode == "skip":
             pass
         elif extraction_mode == "explicit":
-            await self._link_explicit_mentions(message, explicit_mentions or [])
+            await self._link_explicit_mentions(
+                message,
+                explicit_mentions or [],
+                user_identifier=user_identifier,
+                embed_entities=generate_embedding,
+            )
         else:
             # 'auto' — preserve historical behavior.
             if extract_entities and self._extractor is not None:
@@ -998,46 +1006,97 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         self,
         message: Message,
         mentions: list[Any],
+        *,
+        user_identifier: str | None = None,
+        embed_entities: bool = True,
     ) -> None:
         """Write a ``MENTIONS`` edge from ``message`` to each supplied EntityRef.
 
         Skips extraction entirely. Used by callers who already know which
         entities a message touches (e.g. a tool's output is a list of
         Client objects).
+
+        Identity precedence is ``id`` > ``name + type`` > ``name``:
+
+        * An ``id`` links that entity, or nothing when it does not exist.
+        * A typed reference goes through :meth:`_persist_entities`, the path
+          extracted mentions take: strict mode drops an undeclared type,
+          ingest-time resolution can land ``Acme`` on a stored ``Acme Corp``,
+          and the node otherwise MERGEs on ``(name, type)`` as before.
+        * A name alone links the one non-merged entity carrying that surface
+          form (any type). It never creates one: an entity without a type has
+          no labels, no ontology check and no resolution, so an unknown or
+          ambiguous name is skipped with a warning.
+
+        Args:
+            message: The stored message.
+            mentions: The caller's ``EntityRef`` objects.
+            user_identifier: Tenant, for ``resolution.scope="user"``.
+            embed_entities: Whether typed references' names may be embedded.
         """
         if not mentions:
             return
 
+        typed: list[ExtractedEntity] = []
         for ref in mentions:
-            # Resolve to or create the target entity. Identity precedence:
-            # id > name+type > name.
+            entity_id: str | None = None
             if getattr(ref, "id", None):
                 rows = await self._client.execute_read(queries.GET_ENTITY_ID, {"id": ref.id})
-                if not rows:
-                    continue
-                entity_id = rows[0]["id"]
+                entity_id = rows[0]["id"] if rows else None
             elif getattr(ref, "type", None):
-                rows = await self._client.execute_write(
-                    build_merge_entity_reference_query(ref.type, self._node_label(ref.type, None)),
-                    {"name": ref.name, "type": ref.type},
-                )
-                entity_id = rows[0]["id"]
+                # The type as given, like every other EntityRef path
+                # (``TOUCHED`` edges, preference ``APPLIES_TO``), so all of
+                # them MERGE onto one ``(name, type)`` node.
+                typed.append(ExtractedEntity(name=ref.name, type=ref.type, confidence=1.0))
+                continue
             else:
-                rows = await self._client.execute_write(
-                    queries.MERGE_ENTITY_REFERENCE_BY_NAME, {"name": ref.name}
+                rows = await self._client.execute_read(
+                    queries.FIND_ENTITY_IDS_BY_SURFACE_FORM,
+                    {"key": str(ref.name).strip().lower().replace("|", " ")},
                 )
-                entity_id = rows[0]["id"]
+                if len(rows) == 1:
+                    entity_id = rows[0]["id"]
+                else:
+                    logger.warning(
+                        "Skipping explicit mention %r: %s. Give the EntityRef a type to "
+                        "create it, or an id to pick one.",
+                        ref.name,
+                        "no entity carries that name"
+                        if not rows
+                        else "more than one entity carries that name",
+                    )
+            if entity_id is not None:
+                await self._link_message_to_entity(str(message.id), entity_id)
 
-            await self._client.execute_write(
-                queries.LINK_MESSAGE_TO_ENTITY,
-                {
-                    "message_id": str(message.id),
-                    "entity_id": entity_id,
-                    "confidence": 1.0,
-                    "start_pos": None,
-                    "end_pos": None,
-                },
+        if typed:
+            result = self._apply_ontology(ExtractionResult(entities=typed))
+            await self._persist_entities(
+                result,
+                str(message.id),
+                user_identifier=user_identifier,
+                embed_entities=embed_entities,
             )
+
+    async def _link_message_to_entity(
+        self,
+        message_id: str,
+        entity_id: str,
+        *,
+        confidence: float = 1.0,
+        start_pos: int | None = None,
+        end_pos: int | None = None,
+    ) -> None:
+        """Write the ``(:Message)-[:MENTIONS]->(:Entity)`` edge."""
+        await self._client.execute_write(
+            queries.LINK_MESSAGE_TO_ENTITY,
+            {
+                "message_id": message_id,
+                "entity_id": entity_id,
+                "confidence": confidence,
+                "start_pos": start_pos,
+                "end_pos": end_pos,
+            },
+        )
 
     async def get_conversation(
         self,
@@ -1419,7 +1478,11 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
 
                 # Same storage path as add_message: resolve (when enabled),
                 # MERGE, link MENTIONS.
-                entity_name_to_id, mention_id_to_node_id = await self._persist_entities(
+                (
+                    entity_name_to_id,
+                    mention_id_to_node_id,
+                    typed_nodes,
+                ) = await self._persist_entities(
                     extraction_result,
                     message_id,
                     user_identifier=user_identifier,
@@ -1436,6 +1499,7 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
                         evidence=content,
                         extractor=getattr(self._extractor, "name", None),
                         mention_id_to_node_id=mention_id_to_node_id,
+                        typed_nodes=typed_nodes,
                     )
                     relations_extracted += stored
 
@@ -1600,7 +1664,7 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         user_identifier: str | None = None,
         stats: dict[str, int] | None = None,
         embed_entities: bool = True,
-    ) -> tuple[dict[str, str], dict[str, str]]:
+    ) -> tuple[dict[str, str], dict[str, str], dict[str, list[tuple[str, str | None, str]]]]:
         """Resolve, store and link every entity extracted from one message.
 
         The single entity-writing path: ``add_message``, the batch loader and
@@ -1633,16 +1697,20 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
                 resolution runs without its embedding component.
 
         Returns:
-            ``(entity_name_to_id, mention_id_to_node_id)`` — the lowercased
-            surface form of each mention mapped onto the node it resolved to,
-            and the per-result mention id (``ExtractedEntity.id``) mapped onto
-            the same, so :meth:`_store_relations` can wire typed relations
-            precisely even when one name is mentioned twice.
+            ``(entity_name_to_id, mention_id_to_node_id, typed_nodes)`` — the
+            lowercased surface form of each mention mapped onto the node it
+            resolved to; the per-result mention id (``ExtractedEntity.id``)
+            mapped onto the same, so :meth:`_store_relations` can wire typed
+            relations precisely even when one name is mentioned twice; and
+            every ``(type, subtype, node id)`` written under each lowercased
+            surface form, so a name shared by two types ("Jordan" the person
+            and the country) can be told apart.
         """
         entity_name_to_id: dict[str, str] = {}
         mention_id_to_node_id: dict[str, str] = {}
+        typed_nodes: dict[str, list[tuple[str, str | None, str]]] = {}
         if not result.entities:
-            return entity_name_to_id, mention_id_to_node_id
+            return entity_name_to_id, mention_id_to_node_id, typed_nodes
 
         names = [entity.name for entity in result.entities]
         entity_embeddings: list[list[float] | None] = (
@@ -1676,36 +1744,37 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
             node_id = await self._persist_entity(
                 entity,
                 resolution,
-                entity_name_to_id=entity_name_to_id,
+                typed_nodes=typed_nodes,
                 stats=stats,
                 embedding=entity_embedding,
             )
             if node_id is None:
                 continue
-            entity_name_to_id[entity.name.lower().strip()] = node_id
+            name_key = entity.name.lower().strip()
+            entity_name_to_id[name_key] = node_id
+            typed = (entity.type.upper(), getattr(entity, "subtype", None), node_id)
+            if typed not in typed_nodes.setdefault(name_key, []):
+                typed_nodes[name_key].append(typed)
             mention_id = getattr(entity, "id", None)
             if mention_id is not None:
                 mention_id_to_node_id[mention_id] = node_id
 
-            await self._client.execute_write(
-                queries.LINK_MESSAGE_TO_ENTITY,
-                {
-                    "message_id": message_id,
-                    "entity_id": node_id,
-                    "confidence": entity.confidence,
-                    "start_pos": entity.start_pos,
-                    "end_pos": entity.end_pos,
-                },
+            await self._link_message_to_entity(
+                message_id,
+                node_id,
+                confidence=entity.confidence,
+                start_pos=entity.start_pos,
+                end_pos=entity.end_pos,
             )
 
-        return entity_name_to_id, mention_id_to_node_id
+        return entity_name_to_id, mention_id_to_node_id, typed_nodes
 
     async def _persist_entity(
         self,
         entity: ExtractedEntity,
         resolution: EntityResolution | None,
         *,
-        entity_name_to_id: dict[str, str],
+        typed_nodes: dict[str, list[tuple[str, str | None, str]]],
         stats: dict[str, int] | None = None,
         embedding: list[float] | None = None,
     ) -> str | None:
@@ -1715,8 +1784,11 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
             entity: The extracted mention.
             resolution: Its resolution decision, or ``None`` when resolution
                 did not run.
-            entity_name_to_id: Nodes already written for this message, which
-                is how an intra-episode merge finds the anchor mention's node.
+            typed_nodes: Nodes already written for this message, by
+                lowercased name, which is how an intra-episode merge finds the
+                anchor mention's node. Resolution never crosses a type, so the
+                anchor is looked up under this mention's type: a same-named
+                mention of another type written in between must not catch it.
             stats: Optional counter dict, incremented under
                 ``"entities_merged"`` or ``"entities_created"`` according to
                 what this mention actually did.
@@ -1730,10 +1802,20 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         """
         action = resolution.action if resolution is not None else "created"
 
+        def episode_anchor(name: str | None) -> str | None:
+            """The node this message already wrote for ``name`` with this type."""
+            if not name:
+                return None
+            wanted = entity.type.upper()
+            for node_type, _, node_id in typed_nodes.get(name.lower().strip(), []):
+                if node_type == wanted:
+                    return node_id
+            return None
+
         if action == "merged" and resolution is not None:
-            target_id = resolution.matched_entity_id
-            if target_id is None and resolution.matched_entity_name:
-                target_id = entity_name_to_id.get(resolution.matched_entity_name.lower().strip())
+            target_id = resolution.matched_entity_id or episode_anchor(
+                resolution.matched_entity_name
+            )
             if target_id is not None:
                 surface = entity.name.strip()
                 if surface and surface.lower() != (resolution.canonical_name or "").strip().lower():
@@ -1792,25 +1874,18 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         if stats is not None:
             stats["entities_created"] = stats.get("entities_created", 0) + 1
 
-        if action == "review" and resolution is not None and resolution.matched_entity_id:
-            await self._client.execute_write(
-                queries.CREATE_SAME_AS_RELATIONSHIP,
-                {
-                    "source_id": entity_id,
-                    "target_id": resolution.matched_entity_id,
-                    "confidence": resolution.score,
-                    "match_type": resolution.match_type or "hybrid",
-                    "status": "pending",
-                },
+        if action == "review" and resolution is not None:
+            # A stored candidate carries its id; an intra-episode one is the
+            # node this message wrote for the anchor mention.
+            review_target = resolution.matched_entity_id or episode_anchor(
+                resolution.matched_entity_name
             )
-        elif action == "review" and resolution is not None and resolution.matched_entity_name:
-            target_id = entity_name_to_id.get(resolution.matched_entity_name.lower().strip())
-            if target_id is not None and target_id != entity_id:
+            if review_target is not None and review_target != entity_id:
                 await self._client.execute_write(
                     queries.CREATE_SAME_AS_RELATIONSHIP,
                     {
                         "source_id": entity_id,
-                        "target_id": target_id,
+                        "target_id": review_target,
                         "confidence": resolution.score,
                         "match_type": resolution.match_type or "hybrid",
                         "status": "pending",
@@ -1854,7 +1929,7 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         # entities whose type the ontology does not declare).
         result = self._apply_ontology(result)
 
-        entity_name_to_id, mention_id_to_node_id = await self._persist_entities(
+        entity_name_to_id, mention_id_to_node_id, typed_nodes = await self._persist_entities(
             result,
             str(message.id),
             user_identifier=user_identifier,
@@ -1870,7 +1945,37 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
                 evidence=message.content,
                 extractor=getattr(self._extractor, "name", None),
                 mention_id_to_node_id=mention_id_to_node_id,
+                typed_nodes=typed_nodes,
             )
+
+    def _local_endpoints(
+        self,
+        source_name: str,
+        relation_type: str,
+        target_name: str,
+        entity_name_to_id: dict[str, str],
+        typed_nodes: dict[str, list[tuple[str, str | None, str]]],
+    ) -> tuple[str | None, str | None]:
+        """Pick the nodes this message wrote for a relation's two names.
+
+        A name normally maps onto one node. When it was written under several
+        types, the first typed pair the ontology permits for ``relation_type``
+        wins; with no ontology, or no permitted pair, the plain name map does.
+        """
+        sources = typed_nodes.get(source_name, [])
+        targets = typed_nodes.get(target_name, [])
+        if self._ontology is not None and (len(sources) > 1 or len(targets) > 1):
+            for source_type, source_subtype, source_id in sources:
+                source_label = self._ontology.label_for(source_type, source_subtype)
+                if source_label is None:
+                    continue
+                for target_type, target_subtype, target_id in targets:
+                    target_label = self._ontology.label_for(target_type, target_subtype)
+                    if target_label is not None and self._ontology.permits(
+                        source_label, relation_type, target_label
+                    ):
+                        return source_id, target_id
+        return entity_name_to_id.get(source_name), entity_name_to_id.get(target_name)
 
     async def _store_relations(
         self,
@@ -1881,6 +1986,7 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         evidence: str | None = None,
         extractor: str | None = None,
         mention_id_to_node_id: dict[str, str] | None = None,
+        typed_nodes: dict[str, list[tuple[str, str | None, str]]] | None = None,
     ) -> int:
         """Store extracted relations as typed RELATED_TO relationships.
 
@@ -1893,7 +1999,9 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
            decode entities and relations jointly, where two different
            mentions of the same name must not collide.
         2. Otherwise, fall back to the local ``entity_name_to_id`` mapping
-           (entities extracted from the same message).
+           (entities extracted from the same message). When a name was
+           written under more than one type, ``typed_nodes`` and the ontology
+           pick the pair the relation type permits.
         3. Otherwise, fall back to a name-based lookup in the database,
            which supports relations between entities mentioned in
            different messages.
@@ -1919,6 +2027,8 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
                 set on ``ExtractedEntity.id`` and referenced by
                 ``ExtractedRelation.source_id``/``target_id``) to the
                 Neo4j node id created for that mention.
+            typed_nodes: Every ``(type, subtype, node id)`` written under each
+                lowercased name in this message (see :meth:`_persist_entities`).
 
         Returns:
             Number of relations successfully stored.
@@ -1946,8 +2056,13 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
 
             # Fall back to the local per-message name mapping.
             if not (source_id and target_id):
-                source_id = entity_name_to_id.get(source_name)
-                target_id = entity_name_to_id.get(target_name)
+                source_id, target_id = self._local_endpoints(
+                    source_name,
+                    relation.relation_type,
+                    target_name,
+                    entity_name_to_id,
+                    typed_nodes or {},
+                )
 
             params = {
                 "id": str(uuid4()),

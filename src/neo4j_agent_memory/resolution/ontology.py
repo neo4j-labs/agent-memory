@@ -789,6 +789,7 @@ class OntologyResolver(BaseResolver):
         embedding: list[float] | None = None,
         context: str | None = None,
         user_identifier: str | None = None,
+        embed: bool = True,
     ) -> EntityResolution:
         """Resolve a single name against the stored entities.
 
@@ -802,6 +803,9 @@ class OntologyResolver(BaseResolver):
                 candidates' stored context/description.
             user_identifier: Tenant to scope candidates to when
                 ``config.scope == "user"``.
+            embed: Whether to generate a missing ``embedding``. False never
+                calls the embedder; resolution then runs without its
+                embedding component.
 
         Returns:
             The :class:`EntityResolution` for this name.
@@ -816,7 +820,7 @@ class OntologyResolver(BaseResolver):
             embedding=embedding,
         )
         self._prepare(mention)
-        if mention.embedding is None:
+        if mention.embedding is None and embed:
             await self._attach_embeddings([mention])
 
         pool = await self._fetch_key_candidates(
@@ -1003,7 +1007,9 @@ class OntologyResolver(BaseResolver):
         user_identifier: str | None,
     ) -> list[_Candidate]:
         """One exact-key blocking query for a whole (episode, type) bucket."""
-        keys = sorted({key for mention in mentions for key in mention.keys})
+        # ``|`` delimits the stored ``surface_keys``; the write side folds it
+        # to a space, so the lookup must too.
+        keys = sorted({key.replace("|", " ") for mention in mentions for key in mention.keys})
         if not keys:
             return []
         limit = min(

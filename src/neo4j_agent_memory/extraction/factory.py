@@ -41,8 +41,10 @@ def _spacy_label_mappings(
       own default mapping already produces exactly those types, so ``None`` is
       returned and the extractor keeps its defaults.
     * The ontology declares subtypes — each spaCy label is remapped onto the
-      first ontology label declared for its POLE+O type, so extracted entities
-      carry a ``(type, subtype)`` pair the graph knows about.
+      pair :func:`~neo4j_agent_memory.ontology.compile.spacy_label_map`
+      finds for it, and a label it leaves out is not extracted at all. So
+      extracted entities only carry a ``(type, subtype)`` pair the graph knows
+      about and spaCy actually decided.
 
     Args:
         ontology: The effective ontology, when one is configured.
@@ -61,7 +63,7 @@ def _spacy_label_mappings(
     from neo4j_agent_memory.ontology.compile import spacy_label_map
 
     mapping = spacy_label_map(ontology)
-    if not mapping:
+    if mapping is None:
         return None
 
     type_mapping = {label: pole for label, (pole, _) in mapping.items()}
@@ -167,6 +169,9 @@ def create_spacy_extractor(
         type_mapping=type_mapping,
         subtype_mapping=subtype_mapping,
         default_confidence=extraction_config.spacy_confidence,
+        # Under an ontology mapping, a label it leaves out has no declared
+        # type to land on; typing it OBJECT would invent one.
+        drop_unmapped=mappings is not None,
     )
 
 
@@ -695,6 +700,7 @@ class ExtractorBuilder:
                     model=self._spacy_model,
                     type_mapping=mappings[0] if mappings else None,
                     subtype_mapping=mappings[1] if mappings else None,
+                    drop_unmapped=mappings is not None,
                 )
             )
 

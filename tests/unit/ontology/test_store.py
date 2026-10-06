@@ -373,6 +373,25 @@ class TestCreate:
         assert len(version_params["schema_hash"]) == 64  # sha256 hexdigest
 
     @pytest.mark.asyncio
+    async def test_validation_mode_is_normalised(self, store, client):
+        client.on_write(queries.CREATE_ONTOLOGY, [{"o": ontology_node()}])
+        client.on_write(queries.CREATE_ONTOLOGY_VERSION, echo_version)
+
+        version = await store.create("x", make_document(), validation_mode=" Strict ")
+
+        assert version.validation_mode == "strict"
+        assert client.write_params(queries.CREATE_ONTOLOGY_VERSION)["validation_mode"] == "strict"
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_validation_mode_is_rejected(self, store, client):
+        """The regression: it was stored, then ignored on every connect."""
+        with pytest.raises(ValueError, match="validation_mode"):
+            await store.create("x", make_document(), validation_mode="stricter")
+        with pytest.raises(ValueError, match="validation_mode"):
+            await store.update("o1", make_document(), validation_mode="off")
+        assert client.write_queries == []
+
+    @pytest.mark.asyncio
     async def test_falls_back_to_the_name_argument(self, store, client):
         document = OntologyDocument(domain=DomainInfo(id="", name=""), entity_types=[PERSON])
         client.on_write(queries.CREATE_ONTOLOGY, [{"o": ontology_node()}])
@@ -915,7 +934,18 @@ class TestMigrate:
         relabel = next(q for q in client.write_queries if "REMOVE e:" in q)
         assert "MATCH (e:Entity:`Client`)" in relabel
         assert "REMOVE e:`Client`" in relabel
-        assert "SET e:`Customer`" in relabel
+        # The old type and subtype labels go, judged from each node's own
+        # stored type/subtype; the target's type and subtype labels arrive.
+        assert (
+            "WHEN toUpper(e.type) = 'PERSON' THEN [1] ELSE [] END | REMOVE e:`Person`)" in relabel
+        )
+        assert (
+            "WHEN toUpper(e.type) = 'PERSON' AND toUpper(e.subtype) = 'INDIVIDUAL' "
+            "THEN [1] ELSE [] END | REMOVE e:`Individual`)"
+        ) in relabel
+        assert "SET e:`Organization`, e:`Company`, e:`Customer`," in relabel
+        assert "REMOVE e:`Organization`" not in relabel
+        assert "REMOVE e:`Company`" not in relabel
         assert "e.type = $type" in relabel  # PERSON -> ORGANIZATION
         assert client.write_params("REMOVE e:") == {
             "subtype": "COMPANY",
@@ -1071,13 +1101,30 @@ class TestMigrate:
         )
 
         relabel = next(q for q in client.write_queries if "REMOVE e:" in q)
-        assert "REMOVE e:`Person`:`Alias`:`Individual`" in relabel
-        assert "Company" not in relabel  # other pole type
+        assert "REMOVE e:`Person`\n" in relabel
+        for subtype, label in (("INDIVIDUAL", "Individual"), ("ALIAS", "Alias")):
+            assert (
+                f"WHEN toUpper(e.type) = 'PERSON' AND toUpper(e.subtype) = '{subtype}' "
+                f"THEN [1] ELSE [] END | REMOVE e:`{label}`)"
+            ) in relabel
+        # Another pole type's subtype label is only removed from nodes of that type.
+        assert (
+            "WHEN toUpper(e.type) = 'ORGANIZATION' AND toUpper(e.subtype) = 'COMPANY' "
+            "THEN [1] ELSE [] END | REMOVE e:`Company`)"
+        ) in relabel
+        assert "SET e:`Person`, e:`Party`," in relabel
         assert client.write_params("REMOVE e:") == {"subtype": None}
 
     @pytest.mark.asyncio
-    async def test_a_subtyped_target_removes_only_the_source_label(self, store, client):
-        arm_migration(client)
+    async def test_a_subtyped_target_keeps_its_own_labels(self, store, client):
+        same_subtype = make_document(
+            name="v2",
+            entity_types=[
+                EntityTypeDef(label="Customer", pole_type="PERSON", subtype="INDIVIDUAL")
+            ],
+            relationships=[],
+        )
+        arm_migration(client, new=same_subtype)
         client.on_write("REMOVE e:", [{"migrated": 1}])
 
         await store.migrate(
@@ -1089,6 +1136,9 @@ class TestMigrate:
 
         relabel = next(q for q in client.write_queries if "REMOVE e:" in q)
         assert "REMOVE e:`Client`\n" in relabel
+        assert "REMOVE e:`Individual`" not in relabel
+        assert "REMOVE e:`Person`" not in relabel  # pole type unchanged
+        assert "SET e:`Person`, e:`Individual`, e:`Customer`," in relabel
 
     @pytest.mark.asyncio
     async def test_labels_are_matched_and_written_verbatim(self, store, client):
@@ -1120,7 +1170,7 @@ class TestMigrate:
 
         relabel = next(q for q in client.write_queries if "REMOVE e:" in q)
         assert "MATCH (e:Entity:`Ticket`)" in relabel
-        assert "SET e:`SupportCase`" in relabel
+        assert "SET e:`Object`, e:`SupportCase`," in relabel
         assert "Supportcase" not in relabel
         assert job.processed == 2
 
@@ -1151,7 +1201,12 @@ class TestMigrate:
         )
 
         relabel = next(q for q in client.write_queries if "REMOVE e:" in q)
-        assert "REMOVE e:`Ticket`:`Device`\n" in relabel
+        assert "REMOVE e:`Ticket`\n" in relabel
+        assert relabel.count("`Ticket`") == 2  # MATCH and REMOVE: TICKET is no built-in subtype
+        assert (
+            "WHEN toUpper(e.type) = 'OBJECT' AND toUpper(e.subtype) = 'DEVICE' "
+            "THEN [1] ELSE [] END | REMOVE e:`Device`)"
+        ) in relabel
 
     @pytest.mark.asyncio
     async def test_the_label_being_added_is_never_removed(self, store, client):
@@ -1181,25 +1236,35 @@ class TestMigrate:
 
         relabel = next(q for q in client.write_queries if "REMOVE e:" in q)
         assert "REMOVE e:`Person`\n" in relabel
-        assert "SET e:`Individual`" in relabel
+        assert "REMOVE e:`Individual`" not in relabel
+        assert "SET e:`Person`, e:`Individual`," in relabel
 
     @pytest.mark.asyncio
-    async def test_an_undeclared_source_label_is_refused_when_subtypes_exist(self, store, client):
-        """Nothing tells us which subtype labels those nodes carry."""
+    async def test_an_undeclared_source_label_still_migrates(self, store, client):
+        """The stale labels come from each node's own type/subtype, not the source version."""
         new = make_document(
             name="v2",
             entity_types=[EntityTypeDef(label="Party", pole_type="PERSON")],
             relationships=[],
         )
         arm_migration(client, new=new)
+        client.on_write("REMOVE e:", [{"migrated": 4}])
 
-        with pytest.raises(ValueError, match="not declared by the source ontology version"):
-            await store.migrate(
-                "o1",
-                from_version_id="from-v",
-                to_version_id="to-v",
-                type_mappings=[("Ghost", "Party")],
-            )
+        job = await store.migrate(
+            "o1",
+            from_version_id="from-v",
+            to_version_id="to-v",
+            type_mappings=[("Ghost", "Party")],
+        )
+
+        assert job.status == "completed"
+        relabel = next(q for q in client.write_queries if "REMOVE e:" in q)
+        assert "REMOVE e:`Ghost`\n" in relabel
+        assert "REMOVE e:`Individual`)" in relabel
+        # Undeclared source: the type is rewritten, so every other type label
+        # is a candidate for removal.
+        assert "e.type = $type" in relabel
+        assert "REMOVE e:`Organization`)" in relabel
 
     @pytest.mark.asyncio
     async def test_an_undeclared_source_label_is_fine_when_nothing_is_subtyped(self, store, client):

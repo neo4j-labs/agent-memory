@@ -429,6 +429,172 @@ class TestAddEntityThroughTheAdapter:
 
 
 @pytest.mark.integration
+class TestStoredLookupKeys:
+    """Blocking reads the indexed ``surface_keys`` / ``name_key`` properties."""
+
+    @pytest.mark.asyncio
+    async def test_every_write_path_maintains_the_keys(self, clean_memory_client):
+        client = await resolving_client(clean_memory_client, extractor=KeywordExtractor(ACME_FORMS))
+        try:
+            await client.short_term.add_message("s", "user", "Acme Corp shipped; Acme is late")
+            rows = await client.query.cypher(
+                "MATCH (e:Entity {type: 'ORGANIZATION'}) "
+                "RETURN e.name_key AS name_key, e.surface_keys AS surface_keys"
+            )
+            assert rows == [{"name_key": "acme corp", "surface_keys": "|acme corp|acme corp|acme|"}]
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_the_blocking_queries_use_the_indexes(self, clean_memory_client):
+        """No hints (one errors while its index populates): the planner picks the
+        indexes itself once it has statistics for a populated graph.
+        """
+        import asyncio
+
+        from neo4j_agent_memory.graph import queries
+
+        graph = clean_memory_client._client
+        await graph.execute_write(
+            "UNWIND range(1, 200) AS i "
+            "CREATE (:Entity {id: 'seed-' + i, name: 'Seed ' + i, name_key: 'seed ' + i, "
+            "surface_keys: '|seed ' + i + '|', "
+            "type: ['PERSON', 'ORGANIZATION', 'LOCATION', 'EVENT', 'OBJECT'][i % 5]})"
+        )
+        params = {
+            "keys": ["acme"],
+            "type": "ORGANIZATION",
+            "limit": 5,
+            "head": "acme",
+            "tail": "corp",
+        }
+
+        async def plan(query: str) -> str:
+            async with graph.session() as session:
+                result = await session.run("EXPLAIN " + query, params)
+                return str((await result.consume()).plan)
+
+        for query, index in (
+            (queries.FIND_ENTITIES_BY_NORMALIZED_KEYS, "surface_keys"),
+            (queries.FIND_ENTITIES_BY_TOKEN_PREFIX, "name_key"),
+        ):
+            # Index samples refresh in the background; nudge them, then replan.
+            for _ in range(50):
+                await graph.execute_write("CALL db.resampleOutdatedIndexes()")
+                await graph.execute_write("CALL db.clearQueryCaches()")
+                text = await plan(query)
+                if f"e:Entity({index})" in text:
+                    break
+                await asyncio.sleep(0.2)
+            assert f"e:Entity({index})" in text, text
+            assert "NodeByLabelScan" not in text, text
+
+    @pytest.mark.asyncio
+    async def test_the_backfill_makes_legacy_entities_resolvable(self, clean_memory_client):
+        """An entity written without keys (pre-0.7, or raw Cypher) is invisible until backfilled."""
+        await clean_memory_client._client.execute_write(
+            "CREATE (:Entity:Organization {id: 'legacy-acme', name: 'Acme Corp', "
+            "type: 'ORGANIZATION', aliases: ['ACME Inc']})"
+        )
+        await clean_memory_client._schema_manager._backfill_entity_keys(force=True)
+
+        client = await resolving_client(
+            clean_memory_client, extractor=KeywordExtractor({"ACME Inc": ("ORGANIZATION", None)})
+        )
+        try:
+            await client.short_term.add_message("s", "user", "ACME Inc called again")
+            nodes = await organization_nodes(client)
+            assert [node["name"] for node in nodes] == ["Acme Corp"], nodes
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_add_entity_dedups_without_an_embedding(self, clean_memory_client):
+        client = await resolving_client(clean_memory_client, extractor=KeywordExtractor(ACME_FORMS))
+        try:
+            first, _ = await client.long_term.add_entity(
+                "Acme Corp", "ORGANIZATION", enrich=False, generate_embedding=False
+            )
+            second, dedup = await client.long_term.add_entity(
+                "Acme Corp.", "ORGANIZATION", enrich=False, generate_embedding=False
+            )
+            assert dedup.action == "merged"
+            assert second.id == first.id
+            assert len(await organization_nodes(client)) == 1
+        finally:
+            await client.close()
+
+
+@pytest.mark.integration
+class TestLookupKeysEdgeCases:
+    @pytest.mark.asyncio
+    async def test_a_non_string_name_does_not_break_adoption(self, clean_memory_client):
+        """``toLower`` raises on a number; adopted names can be numbers."""
+        await clean_memory_client._client.execute_write("CREATE (:Account {number: 4210})")
+
+        report = await clean_memory_client.schema.adopt_existing_graph(
+            label_to_type={"Account": "ACCOUNT"},
+            name_property_per_label={"Account": "number"},
+        )
+
+        assert [label.migrated_count for label in report.by_label] == [1]
+        rows = await clean_memory_client.query.cypher(
+            "MATCH (e:Entity:Account) RETURN e.name_key AS name_key, e.surface_keys AS keys"
+        )
+        assert rows == [{"name_key": "4210", "keys": "|4210|"}]
+
+    @pytest.mark.asyncio
+    async def test_every_entity_ref_path_lands_on_one_node(self, clean_memory_client, session_id):
+        """Explicit mentions and TOUCHED edges store the type as given, so they agree."""
+        from neo4j_agent_memory.schema.models import EntityRef
+
+        client = clean_memory_client
+        ref = EntityRef(name="F-150", type="Vehicle")
+        await client.short_term.add_message(
+            session_id,
+            "user",
+            "The F-150 is in the shop.",
+            extraction_mode="explicit",
+            explicit_mentions=[ref],
+        )
+        trace = await client.reasoning.start_trace(session_id, "Check the truck")
+        step = await client.reasoning.add_step(trace.id, thought="look it up")
+        await client.reasoning.record_tool_call(
+            step.id, "lookup", {"q": "F-150"}, touched_entities=[ref]
+        )
+
+        rows = await client.query.cypher(
+            "MATCH (e:Entity {name: 'F-150'}) RETURN e.type AS type, e.subtype AS subtype"
+        )
+        assert rows == [{"type": "Vehicle", "subtype": None}]
+
+
+@pytest.mark.integration
+class TestMergeIsIdempotent:
+    @pytest.mark.asyncio
+    async def test_a_repeated_merge_does_not_recount_support(self, clean_memory_client):
+        """The regression: each re-run added the source edge's support again."""
+        long_term = clean_memory_client.long_term
+        source, _ = await long_term.add_entity("Acme Corp.", "ORGANIZATION", deduplicate=False)
+        target, _ = await long_term.add_entity(
+            "Acme Corporation", "ORGANIZATION", deduplicate=False
+        )
+        other, _ = await long_term.add_entity("Ada", "PERSON", deduplicate=False)
+        await long_term.add_relationship(other, source, "EMPLOYED_BY")
+        await long_term.add_relationship(other, target, "EMPLOYED_BY")
+
+        for _ in range(3):
+            await long_term.merge_duplicate_entities(source.id, target.id)
+
+        rows = await clean_memory_client.query.cypher(
+            "MATCH (:Entity {id: $other})-[r:RELATED_TO {type: 'EMPLOYED_BY'}]->"
+            "(:Entity {id: $target}) RETURN r.support AS support",
+            {"other": str(other.id), "target": str(target.id)},
+        )
+        assert [row["support"] for row in rows] == [2]
+
+
+@pytest.mark.integration
 class TestResolutionOverhead:
     """Measure, don't guess: how much does resolution add per message?"""
 

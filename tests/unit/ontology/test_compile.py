@@ -41,6 +41,11 @@ class FakeSchema:
         self.entities: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
         self.relations: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
         self.no_self_loops_calls: list[Any] = []
+        self.constraints: list[Any] = []
+
+    def constraint(self, constraint: Any) -> FakeSchema:
+        self.constraints.append(constraint)
+        return self
 
     def entity(self, *args: Any, **kwargs: Any) -> FakeSchema:
         self.entities.append((args, kwargs))
@@ -628,7 +633,12 @@ class TestSpacyLabelMap:
     def test_none_for_an_empty_document(self):
         assert spacy_label_map(_doc([])) is None
 
-    def test_spacy_labels_resolve_to_the_first_label_of_that_pole_type(self):
+    def test_a_spacy_label_never_lands_on_a_subtype_it_did_not_decide(self):
+        """The regression: every label went to the first label of its pole type.
+
+        Under ``scientific`` every person became an author; under ``medical``
+        every amount became a disease.
+        """
         doc = _doc(
             [
                 EntityTypeDef(label="Engineer", pole_type="PERSON", subtype="ENGINEER"),
@@ -637,10 +647,33 @@ class TestSpacyLabelMap:
             ]
         )
         mapping = spacy_label_map(doc)
+        assert mapping == {}
+
+    def test_the_medical_template_gets_no_spacy_labels(self):
+        from neo4j_agent_memory.ontology.builtin import get_template
+
+        assert spacy_label_map(get_template("medical")) == {}
+        assert "PERSON" not in (spacy_label_map(get_template("scientific")) or {})
+
+    def test_spacy_default_subtype_then_label_then_bare_type(self):
+        doc = _doc(
+            [
+                PERSON,
+                EntityTypeDef(label="City", pole_type="LOCATION", subtype="GEOPOLITICAL"),
+                EntityTypeDef(label="Statute", pole_type="OBJECT", subtype="LAW"),
+                EntityTypeDef(label="Happening", pole_type="EVENT"),
+                EntityTypeDef(label="Day", pole_type="EVENT", subtype="DATE"),
+            ]
+        )
+        mapping = spacy_label_map(doc)
         assert mapping is not None
-        assert mapping["PERSON"] == ("PERSON", "ENGINEER")
-        assert mapping["ORG"] == ("ORGANIZATION", "COMPANY")
-        assert mapping["NORP"] == ("ORGANIZATION", "COMPANY")
+        assert mapping["GPE"] == ("LOCATION", "GEOPOLITICAL")  # spaCy's own subtype
+        assert mapping["LAW"] == ("OBJECT", "LAW")  # the spaCy label as subtype
+        assert mapping["DATE"] == ("EVENT", "DATE")
+        assert mapping["TIME"] == ("EVENT", None)  # bare type
+        assert mapping["PERSON"] == ("PERSON", None)
+        for absent in ("LOC", "FAC", "ORG", "MONEY", "CARDINAL", "PRODUCT"):
+            assert absent not in mapping
 
     def test_pole_types_the_document_does_not_declare_are_dropped(self):
         mapping = spacy_label_map(_doc([PERSON]))
@@ -656,3 +689,64 @@ class TestSpacyLabelMap:
         assert mapping["GPE"] == ("LOCATION", None)
         assert mapping["DATE"] == ("EVENT", None)
         assert mapping["MONEY"] == ("OBJECT", None)
+
+
+class TestSharedRelationshipTypes:
+    """Defs that share a type compile to one relation, restricted to their pairs."""
+
+    def _doc(self) -> OntologyDocument:
+        return _doc(
+            [
+                PERSON,
+                COMPANY,
+                EntityTypeDef(label="Robot", pole_type="OBJECT", subtype="ROBOT"),
+                EntityTypeDef(label="Lab", pole_type="LOCATION", subtype="LAB"),
+            ],
+            [
+                RelationshipDef(type="WORKS_AT", source="Person", target="Company"),
+                RelationshipDef(type="WORKS_AT", source="Robot", target="Lab"),
+            ],
+        )
+
+    def test_the_cross_product_is_constrained_to_the_declared_pairs(self):
+        """The regression: heads x tails let JointIE decode Person->Lab."""
+        pytest.importorskip("gliner2")
+        from types import SimpleNamespace
+
+        joint = FakeJoint()
+        compile_joint_schema(self._doc(), joint)
+
+        (constraint,) = joint.schema.constraints
+
+        def edge(head: str, tail: str, relation: str = "WORKS_AT") -> SimpleNamespace:
+            return SimpleNamespace(
+                relation_type=relation,
+                head=SimpleNamespace(entity_type=head),
+                tail=SimpleNamespace(entity_type=tail),
+            )
+
+        assert constraint.allows(edge("Person", "Company"))
+        assert constraint.allows(edge("Robot", "Lab"))
+        assert not constraint.allows(edge("Person", "Lab"))
+        assert not constraint.allows(edge("Robot", "Company"))
+        assert constraint.allows(edge("Person", "Lab", relation="OTHER"))
+
+    def test_a_full_cross_product_needs_no_constraint(self):
+        doc = _doc(
+            [PERSON, COMPANY, CITY],
+            [
+                RelationshipDef(type="LINKED", source="Person", target="Company"),
+                RelationshipDef(type="LINKED", source="Person", target="City"),
+            ],
+        )
+        joint = FakeJoint()
+        compile_joint_schema(doc, joint)
+        assert joint.schema.constraints == []
+
+    def test_the_real_schema_accepts_the_constraint(self):
+        pytest.importorskip("gliner2")
+        from gliner2.joint_ie.compiler import compile_schema
+
+        compiled = compile_schema(compile_joint_schema(self._doc()))
+        names = {type(c).__name__ for c in compiled.constraints}
+        assert "DeclaredEndpointPairs" in names

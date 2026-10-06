@@ -692,6 +692,14 @@ class MemoryClient(Generic[_ST, _LT, _RT]):
            :func:`~neo4j_agent_memory.extraction.label_mapping.map_label_to_poleo`,
         6. the built-in template named by ``schema_config.ontology_template``.
 
+        ``extraction.gliner_schema`` overrides all six when this client builds
+        a ``gliner`` or ``pipeline`` extractor itself (no ``extractor=``
+        override) and the name is a known template. That is the rule
+        :func:`~neo4j_agent_memory.extraction.factory.resolve_ontology` applies
+        to every stage it builds, so ingest-time relation validation and the
+        resolver see the document the extractor decodes against. Otherwise
+        validation would drop every relation the template declares.
+
         Validation-mode precedence: ``schema_config.validation_mode``, then the
         stored active version's mode (only when that was the document source),
         then ``"strict"`` if ``schema_config.strict_types`` else
@@ -744,7 +752,13 @@ class MemoryClient(Generic[_ST, _LT, _RT]):
                 document = None
             else:
                 document = active.document
-                stored_mode = active.validation_mode
+                stored_mode = (active.validation_mode or "").strip().lower() or None
+                if stored_mode not in (None, "permissive", "strict"):
+                    logger.warning(
+                        "The active ontology version has an unknown validation_mode %r; "
+                        "deriving the mode from schema_config instead.",
+                        active.validation_mode,
+                    )
 
         # 5. ad-hoc document from SchemaModel.CUSTOM + entity_types
         if document is None and schema_config.model == SchemaModel.CUSTOM:
@@ -777,6 +791,30 @@ class MemoryClient(Generic[_ST, _LT, _RT]):
                     schema_config.ontology_template,
                 )
                 document = POLEO_ONTOLOGY
+
+        # The extractor factory gives gliner_schema precedence over the
+        # ontology it is handed; follow it so both sides hold one document.
+        extraction = self._settings.extraction
+        if (
+            extraction.gliner_schema
+            and self._extractor_override is None
+            and extraction.extractor_type in (ExtractorType.GLINER, ExtractorType.PIPELINE)
+        ):
+            try:
+                template = get_template(extraction.gliner_schema)
+            except ValueError:
+                # The factory warns about the unknown name and falls back to
+                # the document resolved above, so keep it.
+                pass
+            else:
+                if template is not document:
+                    logger.info(
+                        "extraction.gliner_schema=%r replaces the resolved ontology %r.",
+                        extraction.gliner_schema,
+                        document.domain.name,
+                    )
+                    document = template
+                    stored_mode = None
 
         # Validation mode
         mode: Literal["permissive", "strict"]

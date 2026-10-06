@@ -2,7 +2,7 @@
 :page-product: agent-memory
 :toclevels: 2
 
-Inventory of the constraints, regular indexes, vector indexes, and point indexes that the bolt backend attempts to create on connection. NAMS manages its schema on the service; `client.schema` is not supported there.
+Inventory of the constraints, regular indexes, text indexes, vector indexes, and point indexes that the bolt backend attempts to create on connection. NAMS manages its schema on the service; `client.schema` is not supported there.
 Use this page to answer "what schema changes will this library make to
 my Neo4j database?" before deploying.
 
@@ -11,6 +11,8 @@ runs as part of `MemoryClient.connect()`. Existing constraints/indexes
 with the same name are skipped; the operation is idempotent.
 
 `setup_all()` also runs a one-time data backfill that copies the legacy `relation_type` property of `RELATED_TO` relationships into `type`, the canonical relationship-name property since 0.7. It runs once per database: completion is recorded on a `(:SchemaMigration {name: "relation_type_backfill"})` node, and later connects skip it. A failure is logged rather than raised, and the backfill is retried on the next connect. Set `schema_config.backfill_relation_types=False` to skip it and run the equivalent query yourself in batches on a very large graph.
+
+A second one-time backfill, recorded as `(:SchemaMigration {name: "entity_keys_backfill"})` and gated by the same setting, fills the entity lookup keys that entity resolution reads: `name_key` (the lower-cased name) and `surface_keys` (every surface form — name, canonical name and aliases — lower-cased between `|` delimiters). Every library write keeps both up to date. An entity written by your own Cypher has neither until you set them, and resolution's exact-name and name-prefix lookups cannot find it.
 
 The authoritative source is
 `src/neo4j_agent_memory/graph/schema.py`. This page is a human-readable
@@ -55,6 +57,7 @@ Lookup indexes for common filter / equality queries.
 | `entity_type_idx`            | `Entity`            | `type`           | Filter entities by POLE+O (or custom) type.
 | `entity_name_idx`            | `Entity`            | `name`           | Look up entities by display name.
 | `entity_canonical_idx`       | `Entity`            | `canonical_name` | Look up entities by deduplicated canonical name.
+| `entity_name_key_idx`        | `Entity`            | `name_key`       | Entity resolution: names starting with a mention's first token.
 | `preference_category_idx`    | `Preference`        | `category`       | Filter preferences by category.
 | `trace_session_idx`          | `ReasoningTrace`    | `session_id`     | Reasoning traces for a session.
 | `trace_success_idx`          | `ReasoningTrace`    | `success`        | Successful vs. failed traces.
@@ -63,6 +66,18 @@ Lookup indexes for common filter / equality queries.
 | `memory_read_audit_kind_idx` | `MemoryReadAudit`   | `kind`           | Filter memory-read audit events by kind.
 | `tool_call_status_idx`       | `ToolCall`          | `status`         | Filter tool calls by status.
 | `ontology_name_idx`          | `Ontology`          | `name`           | Look up stored ontologies by name.
+|===
+
+== Text indexes
+
+Back the `CONTAINS` and `ENDS WITH` lookups of entity resolution, which runs on every ingested message.
+
+[cols="4,3,2,3"]
+|===
+| Name | Label | Property | Purpose
+
+| `entity_surface_keys_idx`   | `Entity` | `surface_keys` | Entity resolution: exact match on any surface form (name, canonical name, alias).
+| `entity_name_key_text_idx`  | `Entity` | `name_key`     | Entity resolution: names ending with a mention's last token.
 |===
 
 == Vector indexes

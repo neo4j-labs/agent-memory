@@ -46,7 +46,7 @@ async def add_message(
 | `generate_embedding` | Whether to generate embedding
 | `metadata` | Optional metadata
 | `extraction_mode` | How to populate `:MENTIONS` edges for this message. `'auto'` (default): run the configured extractor pipeline. `'skip'`: do not run extraction, do not write `:MENTIONS` edges. `'explicit'`: do not run extraction, write `:MENTIONS` edges only for the entities supplied via `explicit_mentions`.
-| `explicit_mentions` | When `extraction_mode='explicit'`, a list of xref:reference/api/reasoning-models.adoc#_entityref[EntityRef] (element type `~neo4j_agent_memory.schema.models.EntityRef`) describing the entities to MERGE on and link.
+| `explicit_mentions` | When `extraction_mode='explicit'`, a list of xref:reference/api/reasoning-models.adoc#_entityref[EntityRef] (element type `~neo4j_agent_memory.schema.models.EntityRef`) describing the entities to link. An `id` links that entity; a typed reference is stored the way an extracted mention is (strict-mode check, ingest-time resolution, then a MERGE on name and type); a name alone links the one existing entity with that surface form and never creates one.
 | `user_identifier` | When provided, scopes the conversation to a :User node via `(:User)-[:HAS_CONVERSATION]->(:Conversation)`. Required when `MemorySettings.memory.multi_tenant=True`.
 |===
 

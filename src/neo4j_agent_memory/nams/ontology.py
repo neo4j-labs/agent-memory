@@ -58,7 +58,7 @@ from neo4j_agent_memory.ontology.models import (
     PropertyDef,
     RelationshipDef,
     _as_document_dict,
-    _parse_document,
+    _parse_document_strict,
     _parse_version,
 )
 
@@ -192,13 +192,15 @@ class NamsOntology:
         """Return the bound document and the response's exact version metadata.
 
         Missing/null legacy version records leave the binding unknown. Supplied
-        malformed metadata or conflicting schema documents raise ``ValueError``.
+        malformed metadata, a malformed active document or conflicting schema
+        documents raise ``ValueError``; only an absent document means nothing
+        is bound.
         """
         self._guard_rest()
         payload = await self._transport.request(_SPEC_GET_ACTIVE)
         payload = payload or {}
-        body = payload.get("ontology") or payload
-        document = _parse_document(body)
+        body = payload.get("ontology") if "ontology" in payload else payload
+        document = _parse_document_strict(body)
         if document is None:
             raise NotSupportedError(
                 backend="nams",
@@ -308,7 +310,7 @@ class NamsOntology:
             body["url"] = url
         payload = await self._transport.request(_SPEC_IMPORT, json=body)
         payload = payload or {}
-        document = _parse_document(payload.get("ontology"))
+        document = _parse_document_strict(payload.get("ontology"))
         return OntologyImportResult(
             document=document,
             warnings=[

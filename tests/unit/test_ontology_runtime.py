@@ -272,7 +272,93 @@ class TestDocumentPrecedence:
 # -----------------------------------------------------------------------------
 
 
+class TestGlinerSchemaPrecedence:
+    """``extraction.gliner_schema`` wins, as it does inside the extractor factory.
+
+    The regression: the factory compiled the ``podcast`` template while the
+    client resolved POLE+O, so ingest-time validation dropped every relation
+    the GLiNER2.5 stage decoded.
+    """
+
+    @staticmethod
+    def _client(extractor_type: str, gliner_schema: str | None, **kwargs: object) -> MemoryClient:
+        from neo4j_agent_memory.config.settings import ExtractionConfig, ExtractorType
+
+        settings = MemorySettings(
+            neo4j=Neo4jConfig(password=SecretStr("test")),
+            extraction=ExtractionConfig(
+                extractor_type=ExtractorType(extractor_type), gliner_schema=gliner_schema
+            ),
+        )
+        return MemoryClient(settings, **kwargs)  # type: ignore[arg-type]
+
+    @pytest.mark.parametrize("extractor_type", ["pipeline", "gliner"])
+    @pytest.mark.asyncio
+    async def test_the_template_replaces_the_resolved_document(self, extractor_type):
+        client = self._client(extractor_type, "podcast")
+        bind_store(
+            client,
+            ActiveOntology(document=make_document("stored"), validation_mode="strict"),
+        )
+
+        document, mode = await client._resolve_ontology()
+
+        assert document is get_template("podcast")
+        # The stored version's mode went with its document.
+        assert mode == "permissive"
+
+    @pytest.mark.asyncio
+    async def test_the_extractor_sees_the_same_document(self):
+        from neo4j_agent_memory.extraction.factory import resolve_ontology
+
+        client = self._client("pipeline", "news")
+        bind_store(client, None)
+
+        document, _ = await client._resolve_ontology()
+
+        assert resolve_ontology(client._settings.extraction, document) is document
+
+    @pytest.mark.asyncio
+    async def test_an_llm_extractor_ignores_it(self):
+        client = self._client("llm", "podcast")
+        bind_store(client, None)
+
+        document, _ = await client._resolve_ontology()
+
+        assert document is POLEO_ONTOLOGY
+
+    @pytest.mark.asyncio
+    async def test_an_extractor_override_ignores_it(self):
+        client = self._client("pipeline", "podcast", extractor=MagicMock())
+        bind_store(client, None)
+
+        document, _ = await client._resolve_ontology()
+
+        assert document is POLEO_ONTOLOGY
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_template_name_is_ignored(self):
+        client = self._client("pipeline", "nope")
+        bind_store(client, None)
+
+        document, _ = await client._resolve_ontology()
+
+        assert document is POLEO_ONTOLOGY
+
+
 class TestValidationModePrecedence:
+    @pytest.mark.asyncio
+    async def test_a_stored_mode_is_read_case_insensitively(self):
+        client = make_client()
+        bind_store(
+            client,
+            ActiveOntology(document=make_document("stored"), validation_mode="Strict"),
+        )
+
+        _, mode = await client._resolve_ontology()
+
+        assert mode == "strict"
+
     @pytest.mark.asyncio
     async def test_the_setting_wins_over_the_stored_mode(self):
         client = make_client(SchemaConfig(validation_mode="permissive"))

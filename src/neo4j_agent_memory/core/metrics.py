@@ -30,23 +30,22 @@ reports the strict numbers, so the two can be read side by side.
 from __future__ import annotations
 
 import json
-import re
-import unicodedata
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-_WHITESPACE_RE = re.compile(r"\s+")
-_LEADING_DETERMINERS = ("the ", "a ", "an ")
-
 
 def normalize_name(name: str) -> str:
     """Normalise an entity name for comparison.
 
-    Applies NFC unicode normalisation, case folding, whitespace collapsing,
-    and strips a single leading determiner ("the", "a", "an"). This is the
-    one normalisation used for entity names and relation endpoints alike.
+    The resolver's type-agnostic key
+    (:func:`neo4j_agent_memory.resolution.ontology.normalize_name` with no
+    entity type): NFC unicode normalisation, case folding, punctuation folded
+    to spaces (``&`` kept), whitespace collapsed and leading determiners
+    ("the", "a", "an") dropped. Scoring and resolution therefore agree on when
+    two surface forms are the same name. This is the one normalisation used
+    for entity names and relation endpoints alike.
 
     Args:
         name: Raw surface form of an entity name
@@ -54,11 +53,9 @@ def normalize_name(name: str) -> str:
     Returns:
         The normalised name (may be an empty string)
     """
-    text = _WHITESPACE_RE.sub(" ", unicodedata.normalize("NFC", name).casefold().strip())
-    for determiner in _LEADING_DETERMINERS:
-        if text.startswith(determiner):
-            return text[len(determiner) :].strip()
-    return text
+    from neo4j_agent_memory.resolution.ontology import normalize_name as resolver_key
+
+    return resolver_key(name).key
 
 
 def _fuzzy_ratio(left: str, right: str) -> float:

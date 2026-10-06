@@ -23,6 +23,8 @@ def SpacyEntityExtractor(
     subtype_mapping: dict[str, str] | None=None,
     default_confidence: float=0.85,
     context_window: int=50,
+    *,
+    drop_unmapped: bool=False,
 ): ...
 ----
 
@@ -34,11 +36,12 @@ def SpacyEntityExtractor(
 | `subtype_mapping` | Custom mapping from spaCy labels to subtypes
 | `default_confidence` | Default confidence score (spaCy doesn't provide per-entity scores)
 | `context_window` | Number of characters of context to include around entities
+| `drop_unmapped` | Skip entities whose spaCy label `type_mapping` does not name, instead of typing them `OBJECT`
 |===
 
 The default mappings include PERSON → PERSON, ORG → ORGANIZATION, GPE/LOC → LOCATION, EVENT → EVENT, and PRODUCT/WORK_OF_ART → OBJECT. Subtype mappings are retained on results. Override the mapping explicitly for your domain. spaCy extracts no relations.
 
-When `ExtractorBuilder` or the configuration factory builds the spaCy stage against an ontology that declares subtypes, each spaCy label is remapped onto the first ontology label declared for its POLE+O type, so spaCy entities carry a `(type, subtype)` pair the ontology knows. An ontology with base POLE+O labels only keeps the defaults.
+When `ExtractorBuilder` or the configuration factory builds the spaCy stage against an ontology that declares subtypes, each spaCy label is remapped onto the first of these pairs the ontology declares: spaCy's own subtype for the label (`GPE` -> `LOCATION:GEOPOLITICAL`), the label itself as the subtype (`LAW` -> `OBJECT:LAW`), then the bare POLE+O type. A label none of them matches is not extracted (`drop_unmapped=True`). spaCy never lands on a subtype it did not decide, so under the `medical` template it extracts nothing and under `scientific` a person is not made an author. An ontology with base POLE+O labels only keeps the defaults.
 
 [source,python]
 ----

@@ -140,7 +140,7 @@ async def test_a_resolved_mention_labels_the_node_it_merged_onto(mock_client):
     node_id = await memory._persist_entity(
         ExtractedEntity(name="TK-2210", type="OBJECT", subtype="TICKET"),
         resolution,
-        entity_name_to_id={},
+        typed_nodes={},
     )
 
     assert node_id == "node-1"
@@ -158,7 +158,7 @@ async def test_a_merge_under_the_default_ontology_costs_no_label_write(mock_clie
     await memory._persist_entity(
         ExtractedEntity(name="Acme", type="ORGANIZATION"),
         EntityResolution(action="merged", canonical_name="Acme", matched_entity_id="node-2"),
-        entity_name_to_id={},
+        typed_nodes={},
     )
 
     assert _label_writes(mock_client) == []
@@ -182,7 +182,8 @@ async def test_add_entity_labels_the_entity_it_merged_onto(mock_client):
         return_value=Entity(id=existing_id, name="TK-2210", type="OBJECT", subtype="TICKET")
     )
 
-    entity, result = await memory.add_entity("TK-2210", "OBJECT", subtype="TICKET", enrich=False)
+    # A different surface form, so the merge returns early (no MERGE runs).
+    entity, result = await memory.add_entity("tk-2210", "OBJECT", subtype="TICKET", enrich=False)
 
     assert result.action == "merged"
     assert entity.id == existing_id
