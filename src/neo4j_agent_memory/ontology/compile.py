@@ -335,11 +335,19 @@ def _declared_pairs_constraint(relation: str, pairs: list[tuple[str, str]]) -> A
     gliner2's own ``TypedEndpoints`` checks the head and tail types
     independently, so a relation compiled from several defs admits their cross
     product. This one checks the ``(head, tail)`` pair, during beam search like
-    the built-in constraints. Built lazily because ``gliner2`` is optional.
+    the built-in constraints. Built lazily because ``gliner2`` is optional:
+    ``JointSchema.constraint()`` needs a subclass of gliner2's ``Constraint``,
+    but a caller that compiles through its own ``joint`` factory may not have
+    ``gliner2`` installed, and then a plain object with the same interface is
+    enough.
     """
     global _DECLARED_PAIRS_TYPE
     if _DECLARED_PAIRS_TYPE is None:
-        base = importlib.import_module("gliner2.joint_ie.constraints").Constraint
+        base: Any
+        try:
+            base = importlib.import_module("gliner2.joint_ie.constraints").Constraint
+        except ImportError:
+            base = object
 
         def endpoint_type(candidate: Any, side: str) -> Any:
             node = getattr(candidate, side, None)
@@ -350,7 +358,7 @@ def _declared_pairs_constraint(relation: str, pairs: list[tuple[str, str]]) -> A
             return None
 
         @dataclass(frozen=True)
-        class DeclaredEndpointPairs(base):  # type: ignore[misc, valid-type]  # ty: ignore[unused-ignore-comment]  # gliner2 is untyped (Any): mypy needs these, ty disagrees
+        class DeclaredEndpointPairs(base):  # type: ignore[misc]  # base is Any (gliner2 is untyped, or absent)
             relation: str
             pairs: frozenset[tuple[str, str]]
 

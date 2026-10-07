@@ -6,9 +6,17 @@ import asyncio
 import threading
 import time
 
-import numpy as np
-
 from neo4j_agent_memory.embeddings.sentence_transformers import SentenceTransformerEmbedder
+
+
+class _Vector(list[float]):
+    """The part of a numpy row the embedder uses (``tolist``), without numpy.
+
+    The unit-test job installs no embedding extras, so numpy is not there.
+    """
+
+    def tolist(self) -> list[float]:
+        return list(self)
 
 
 class _CountingModel:
@@ -19,7 +27,9 @@ class _CountingModel:
         self.active = 0
         self.max_active = 0
 
-    def encode(self, sentences: str | list[str], convert_to_numpy: bool = True) -> np.ndarray:
+    def encode(
+        self, sentences: str | list[str], convert_to_numpy: bool = True
+    ) -> _Vector | list[_Vector]:
         with self._guard:
             self.active += 1
             self.max_active = max(self.max_active, self.active)
@@ -27,8 +37,8 @@ class _CountingModel:
         with self._guard:
             self.active -= 1
         if isinstance(sentences, str):
-            return np.zeros(3)
-        return np.zeros((len(sentences), 3))
+            return _Vector([0.0] * 3)
+        return [_Vector([0.0] * 3) for _ in sentences]
 
 
 async def test_concurrent_embeds_never_overlap_encode() -> None:
