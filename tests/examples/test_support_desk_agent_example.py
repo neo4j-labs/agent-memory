@@ -521,6 +521,10 @@ async def _http(app: Any) -> AsyncIterator[Any]:
 
 
 @pytest.mark.requires_neo4j
+# The seed runs GLiNER2.5 over all 24 conversations on CPU: about 97 s on a
+# GitHub runner, too close to the job-wide --timeout=120 (a slower runner hit
+# it). The marker overrides that limit for this test only.
+@pytest.mark.timeout(600)
 def test_backend_runs_end_to_end(neo4j_env, monkeypatch):
     pytest.importorskip("gliner2")
     pytest.importorskip("sentence_transformers")
