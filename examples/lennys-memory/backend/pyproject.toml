@@ -13,10 +13,12 @@ dependencies = [
     "python-dotenv>=1.0,<2",
     # `fuzzy` powers DeduplicationConfig(use_fuzzy_matching=True) (rapidfuzz);
     # `cli` + `mcp` are what `make mcp-server` needs (fastmcp).
-    "neo4j-agent-memory[extraction,openai,fuzzy,cli,mcp]>=0.5.0,<0.7",
+    # `extraction` carries spaCy + GLiNER2.5 (gliner2[local] plus the
+    # sentencepiece/protobuf the DeBERTa-v3 SPM tokenizer needs), so no direct
+    # model dependency is declared here. GLiNER v1 and GLiREL were removed in
+    # the library's 0.7 release.
+    "neo4j-agent-memory[extraction,openai,fuzzy,cli,mcp]>=0.7.0,<0.8",
     "spacy>=3.8,<4",
-    "gliner>=0.2.28,<1",
-    "glirel>=1.2,<2",
     "en-core-web-sm",
 ]
 

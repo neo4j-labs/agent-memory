@@ -133,10 +133,11 @@ Writes go to one sink conversation per `userId`/`name` pair, found by a
 metadata tag so restarts reuse it rather than accumulating orphans. Two limits
 come from the hosted API rather than from this integration:
 
-* **The scan reads one page of 1000 conversations.** `listConversations` exposes
-  no cursor, so a `userId` with more than that many conversations can push its
-  own sink out of view, and the store creates a second one. Pass an explicit
-  `conversationId` to pin the sink if you expect that volume.
+* **The scan reads the newest 1000 conversations.** `listConversations` pages
+  through the service's 200-per-page cursor up to that limit, so a `userId` with
+  more conversations than that can push its own sink out of view, and the store
+  creates a second one. Pass an explicit `conversationId` to pin the sink if you
+  expect that volume.
 * **Scan-then-create is not atomic.** There is no create-if-absent endpoint, so
   two processes starting simultaneously against the same `userId`/`name` can each
   create a sink. Within one process concurrent writes are safe — resolution is

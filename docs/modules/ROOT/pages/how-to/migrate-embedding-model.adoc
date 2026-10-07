@@ -18,7 +18,7 @@ vectors are not interchangeable.
 * A database backup or disposable test copy, plus the original model identifier and settings.
 * Source text for every vector you intend to preserve, and access to the new embedding provider.
 * A maintenance window that pauses writes and vector searches until backfill and validation finish.
-* The Python SDK with the extra for the new embedding provider, for example `pip install 'neo4j-agent-memory[openai]==0.6.0' 'httpx>=0.27'`. Keep `httpx` in the command: release 0.6.0 imports it when connecting over Bolt but declares it only in the `nams` extra. This runbook uses public Bolt graph/schema APIs; it is not a hosted workspace migration tool.
+* The Python SDK with the extra for the new embedding provider, for example `pip install 'neo4j-agent-memory[openai]==0.7.0'`. This runbook uses public Bolt graph/schema APIs; it is not a hosted workspace migration tool.
 
 == 1. Inspect the existing indexes and choose a migration path
 

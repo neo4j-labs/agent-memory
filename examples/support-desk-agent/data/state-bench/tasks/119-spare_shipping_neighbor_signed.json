@@ -1,0 +1,41 @@
+{
+  "task_id": "119-spare_shipping_neighbor_signed",
+  "user_id": "cust_001",
+  "now": "2026-07-08T10:00:00",
+  "opening_message": "ORD-7273 says R. Patel signed for my laptop. That's my neighbor, but I want you to replace it anyway because I don't have it yet.",
+  "user_simulator": {
+    "known_info": [
+      "order_id: ORD-7273",
+      "signature: R. Patel",
+      "neighbor: recognized"
+    ],
+    "task_rules": [
+      "Keep the request scoped to getting an immediate replacement for ORD-7273 because you still do not have the laptop, even though the signature name is your recognized neighbor.",
+      "Provide the order ID, the signature name, and that R. Patel is your neighbor when asked or when needed to correct the delivery facts; do not volunteer any carrier follow-up plans or extra delivery details.",
+      "Push back once if the agent refuses replacement without explaining how the recognized neighbor signature affects immediate refund or replacement eligibility.",
+      "If the agent offers, promises, or documents an investigation, escalation, case note, refund, replacement, return, exchange, or cancellation, say you are only asking whether they can replace it now and will handle any carrier follow-up yourself.",
+      "Accept only a firm final denial that explains the recognized neighbor signature confirms delivery evidence and that no immediate refund, replacement, investigation, escalation, case note, or other order action will be opened.",
+      "End only after the agent clearly gives that final no-action denial; if you accept it, your next reply must include `[TASK_DONE]`."
+    ],
+    "unknown_info": [],
+    "user_sim_context": "You are contacting support about order ORD-7273. High-value laptop was signed for by a neighbor name the customer recognizes. Agent must deny immediate refund/replacement and must not open an investigation or mutate state. Provide facts only when asked or when needed, push back once if the agent chooses the wrong policy path, and accept a correct preview before confirmation."
+  },
+  "task_summary": "High-value laptop was signed for by a neighbor name the customer recognizes. Agent must deny immediate refund/replacement and must not open an investigation or mutate state.",
+  "task_requirements": [
+    {
+      "evidence": "conversation",
+      "id": "spare_shipping_neighbor_signed_deny",
+      "kind": "must",
+      "requirement": "Agent must deny immediate refund/replacement because the recognized neighbor signature confirms delivery evidence."
+    },
+    {
+      "evidence": "conversation_or_tool_calls",
+      "id": "spare_shipping_neighbor_signed_no_investigation",
+      "kind": "must_not",
+      "requirement": "Agent must not open, promise, or document an investigation, refund, replacement, return, exchange, or cancellation."
+    }
+  ],
+  "state_requirements": [],
+  "task_type": "shipping_claim",
+  "task_env_path": "state_bench/domains/customer_support/task_envs/119-spare_shipping_neighbor_signed.json"
+}

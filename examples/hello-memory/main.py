@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.10"
 # dependencies = [
-#     "neo4j-agent-memory[nams,openai]>=0.5.0,<0.7",
+#     "neo4j-agent-memory[nams,openai]>=0.7.0,<0.8",
 # ]
 # ///
 """hello-memory — the smallest complete round trip through agent memory.

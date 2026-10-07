@@ -52,6 +52,7 @@ def MemoryClient(
     resolver: EntityResolver | None=None,
     geocoder: Geocoder | None=None,
     enrichment_provider: _EnrichmentProviderProtocol | None=None,
+    ontology: OntologyDocument | str | Path | None=None,
 ) -> None: ...
 ----
 
@@ -61,10 +62,27 @@ def MemoryClient(
 | `settings` | Memory settings (uses defaults if not provided)
 | `embedder` | Optional embedder override (for testing)
 | `extractor` | Optional extractor override (for testing)
-| `resolver` | Optional resolver override (for testing)
+| `resolver` | Optional resolver override (for testing). Without it, bolt builds the resolver from `settings.resolution`; the default `composite` strategy builds `OntologyResolver`, after the Neo4j connection exists.
 | `geocoder` | Optional geocoder override (for testing)
 | `enrichment_provider` | Optional enrichment provider override (for testing)
+| `ontology` | The ontology this client extracts and validates against: an `OntologyDocument`, or a path to a `.json`/`.yaml` file loaded through `load_ontology` (an EntitySchemaConfig file is converted). Bolt only; the highest-priority source, see <<ontology-precedence>>.
 |===
+
+[#ontology-precedence]
+=== Ontology precedence
+
+On bolt, `connect()` resolves one ontology document before it builds the extractor, and hands it to the extractor factory, the resolver, and the short-term and long-term stores. The first source that yields a document wins:
+
+. `MemoryClient(ontology=...)`
+. `settings.schema_config.ontology_path`
+. `settings.schema_config.custom_schema_path`
+. the active stored ontology version, when `settings.schema_config.use_active_ontology` is True and a version is activated
+. `settings.schema_config.model` set to `custom` with `settings.schema_config.entity_types` (an ad-hoc document, one label per name)
+. the built-in template named by `settings.schema_config.ontology_template` (default `poleo`), falling back to the built-in POLE+O ontology when the name is unknown
+
+The validation mode is `settings.schema_config.validation_mode` when set, then the active stored version's mode when that version supplied the document, then `strict` if `strict_types` is True, otherwise `permissive`.
+
+Because resolution happens at connect time, activating a version affects the next connection, not the client that activated it. Read the result back with the `ontology_document` and `validation_mode` properties. See xref:reference/configuration-providers.adoc#schema[Graph schema configuration] for the settings.
 
 == Properties
 
@@ -84,7 +102,9 @@ def MemoryClient(
 | `buffered` | `BufferedWriter`, bolt only | Explicit buffered writes; see xref:how-to/buffered-writes.adoc[Buffered writes].
 | `consolidation` | `ConsolidationMemory`, bolt only | Conversation hygiene and audit operations; see xref:how-to/consolidation.adoc[Consolidation].
 | `eval` | `EvalMemory` | Retrieval evaluation; the operations evaluated must be supported by the selected backend.
-| `ontology` | `NamsOntology`, NAMS only | Versioned domain ontologies; see xref:reference/ontology-api.adoc[Ontology API].
+| `ontology` | `OntologyAPI` | Versioned domain ontologies on both backends: `NamsOntology` on NAMS, `BoltOntology` on bolt (stored as `:Ontology` and `:OntologyVersion` nodes). Operations a backend cannot honour raise `NotSupportedError`; see xref:reference/ontology-api.adoc[Ontology API].
+| `ontology_document` | `OntologyDocument \| None` | The effective ontology resolved at connect time, which drives extraction, relation validation, and the write paths. `None` before `connect()` and on NAMS, where these run server-side; use `ontology.get_active()` there. It can differ from `ontology.get_active()` when a file or the `ontology=` keyword outranked the stored version.
+| `validation_mode` | `Literal['permissive', 'strict']` | How strictly the write paths enforce `ontology_document`. `strict` makes `long_term.add_entity` and `add_relationship` raise `ValidationError` for undeclared types and patterns and makes message ingestion drop undeclared entities; `permissive` writes them and drops only the extracted relations the ontology forbids. `permissive` before `connect()`.
 | `auth` | `NamsAuth`, NAMS only | Key management; see xref:reference/authentication.adoc[Authentication].
 | `write_errors` | `list[BufferedWriteError]` | Errors collected by explicit buffered writes on bolt; always an empty list on NAMS.
 |===
@@ -326,4 +346,5 @@ Fields and defaults:
 * xref:reference/api/short-term.adoc[Short-term API]
 * xref:reference/api/long-term.adoc[Long-term API]
 * xref:reference/api/reasoning.adoc[Reasoning API]
+* xref:reference/ontology-api.adoc[Ontology API]
 * xref:reference/configuration.adoc[Configuration]

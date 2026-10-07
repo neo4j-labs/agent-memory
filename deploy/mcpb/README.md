@@ -14,7 +14,7 @@ MCP server extension for Claude Desktop that provides persistent graph memory ba
 ## Requirements
 
 - A dedicated [AuraDB instance and its connection credentials](../../examples/AURA_SETUP.md)
-- [uv](https://docs.astral.sh/uv/) on the `PATH` that Claude Desktop sees. The extension starts the server with `uvx`, which installs `neo4j-agent-memory[mcp,openai]==0.6.0` from PyPI (Python 3.10+).
+- [uv](https://docs.astral.sh/uv/) on the `PATH` that Claude Desktop sees. The extension starts the server with `uvx`, which installs `neo4j-agent-memory[mcp,openai]==0.7.0` from PyPI (Python 3.10+).
 - An OpenAI API key for the default embedding provider
 - Node.js, to pack the bundle with the [MCPB CLI](https://github.com/anthropics/mcpb)
 
@@ -41,7 +41,7 @@ Add to your Claude Desktop configuration (`claude_desktop_config.json`). Replace
     "neo4j-agent-memory": {
       "command": "uvx",
       "args": [
-        "neo4j-agent-memory[mcp,openai]==0.6.0",
+        "neo4j-agent-memory[mcp,openai]==0.7.0",
         "mcp",
         "serve",
         "--backend", "bolt"

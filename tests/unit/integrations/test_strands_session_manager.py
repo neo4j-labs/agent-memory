@@ -814,11 +814,13 @@ class TestInitializeExtended:
         try:
             agent = _fake_agent()
             manager.initialize(agent)
-            # _aresolve_conversation calls list_conversations with scoping kwargs,
-            # which NAMS receives as the camelCase query string ?userId=&limit=.
+            # _aresolve_conversation lists up to 1000 conversations for this
+            # user. NAMS caps a page at 200 (a larger limit is a 400
+            # invalid_limit), so the first page asks for 200; no next_cursor
+            # came back, so there is no second request.
             calls = client.wire.calls_for("list_conversations")
             assert len(calls) == 1
-            assert calls[0].params == {"userId": "alice", "limit": 1000}
+            assert calls[0].params == {"userId": "alice", "limit": 200}
         finally:
             manager.close()
 

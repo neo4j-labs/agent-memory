@@ -24,8 +24,6 @@ async def main():
     )
     session_id = f"anthropic-tutorial-{uuid4().hex[:8]}"
     async with MemoryClient(settings) as client:
-        # Database time before the write: extraction creates or updates entities after it.
-        [started] = await client.query.cypher("RETURN datetime() AS now")
         message = await client.short_term.add_message(
             session_id=session_id,
             role="user",
@@ -36,13 +34,13 @@ async def main():
         if not any(stored.id == message.id for stored in history):
             raise RuntimeError("The saved message was missing from readback")
         print(f"Verified message readback; session={session_id}")
-        # Read back the entities extraction wrote. In 0.6.0 extracted entities are
-        # stored without vectors, so an exact graph read checks them, not search_entities.
+        # Read back the entities extraction linked to this message. Ingest-time
+        # resolution can merge a mention onto an entity an earlier run stored, so
+        # follow the message's MENTIONS edges rather than a vector search.
         entities = await client.query.cypher(
-            "MATCH (entity:Entity) "
-            "WHERE coalesce(entity.updated_at, entity.created_at) >= $since "
-            "RETURN entity.name AS name, entity.type AS type ORDER BY name",
-            {"since": started["now"]},
+            "MATCH (:Message {id: $message_id})-[:MENTIONS]->(entity:Entity) "
+            "RETURN DISTINCT entity.name AS name, entity.type AS type ORDER BY name",
+            {"message_id": str(message.id)},
         )
         if not entities:
             raise RuntimeError(

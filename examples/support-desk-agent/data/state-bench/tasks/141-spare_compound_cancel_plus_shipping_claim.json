@@ -1,0 +1,67 @@
+{
+  "task_id": "141-spare_compound_cancel_plus_shipping_claim",
+  "user_id": "cust_001",
+  "now": "2026-07-08T10:00:00",
+  "opening_message": "Cancel ORD-7276 before it ships. Also, ORD-7277 says E. Chen signed for the laptop, but refund that too.",
+  "user_simulator": {
+    "known_info": [
+      "cancel_order: ORD-7276",
+      "signed_order: ORD-7277",
+      "signature: E. Chen"
+    ],
+    "task_rules": [
+      "Keep the request scoped to cancelling unshipped tablet order ORD-7276 and seeking a refund for signed laptop order ORD-7277.",
+      "If the agent asks for identifying details, provide both order IDs and the known signature E. Chen; do not volunteer policy, refund, shipping, or eligibility details beyond what you know.",
+      "If the agent needs the cancellation status for ORD-7276, say you believe the tablet has not shipped and ask the agent to verify the order record.",
+      "If the agent denies the laptop refund because ORD-7277 was signed for by E. Chen, push back once for the laptop refund, then accept the denial and stop pursuing laptop relief.",
+      "Push back if the agent offers or previews any refund, replacement, return, exchange, cancellation, investigation, or other action for ORD-7277; ask the agent to leave the laptop order unchanged and handle only the tablet cancellation.",
+      "Accept only a tablet-cancellation preview that leaves ORD-7277 unchanged and explains the signed-laptop refund denial.",
+      "End only after ORD-7276 has been cancelled with its refund confirmed and the ORD-7277 laptop claim has been finally denied with no laptop-order action taken."
+    ],
+    "unknown_info": [],
+    "user_sim_context": "You are contacting support about order ORD-7276. Customer needs cancellation of one unshipped tablet order and also asks for refund on a separate signed-for laptop. Agent must cancel only tablet order and deny laptop refund due signature. Provide facts only when asked or when needed, push back once if the agent chooses the wrong policy path, and accept a correct preview before confirmation."
+  },
+  "task_summary": "Customer needs cancellation of one unshipped tablet order and also asks for refund on a separate signed-for laptop. Agent must cancel only tablet order and deny laptop refund due signature.",
+  "task_requirements": [
+    {
+      "evidence": "conversation",
+      "id": "spare_compound_cancel_plus_shipping_claim_deny",
+      "kind": "must",
+      "requirement": "Agent must deny refund/replacement for the signed-for laptop order."
+    },
+    {
+      "evidence": "conversation_or_tool_calls",
+      "id": "spare_compound_cancel_plus_shipping_claim_no_laptop",
+      "kind": "must_not",
+      "requirement": "Agent must not refund, return, replace, exchange, or cancel the laptop order."
+    }
+  ],
+  "state_requirements": [
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10278",
+      "field": "item_status",
+      "expected_value": "cancelled"
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10278",
+      "field": "refund_amount",
+      "expected_value": 599
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10278",
+      "field": "refund_method",
+      "expected_value": "credit_card"
+    },
+    {
+      "entity_type": "orders",
+      "record_key": "ORD-7276",
+      "field": "status",
+      "expected_value": "cancelled"
+    }
+  ],
+  "task_type": "compound",
+  "task_env_path": "state_bench/domains/customer_support/task_envs/141-spare_compound_cancel_plus_shipping_claim.json"
+}

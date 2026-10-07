@@ -129,8 +129,8 @@
         "type": 3
       },
       "boundElements": [],
-      "text": "Configured extractors: spaCy, GLiNER, relationship or LLM stages",
-      "originalText": "Configured extractors: spaCy, GLiNER, relationship or LLM stages",
+      "text": "Configured extractors: spaCy, GLiNER2.5 or LLM stages",
+      "originalText": "Configured extractors: spaCy, GLiNER2.5 or LLM stages",
       "fontSize": 20,
       "fontFamily": 2,
       "textAlign": "left",
@@ -444,8 +444,8 @@
         "type": 3
       },
       "boundElements": [],
-      "text": "Bolt configures the client pipeline.\nNAMS manages service-side extraction.\nEnabled stages run in a fixed order: spaCy, then GLiNER, then the LLM fallback.",
-      "originalText": "Bolt configures the client pipeline.\nNAMS manages service-side extraction.\nEnabled stages run in a fixed order: spaCy, then GLiNER, then the LLM fallback.",
+      "text": "Bolt configures the client pipeline.\nNAMS manages service-side extraction.\nEnabled stages run in a fixed order: spaCy, then GLiNER2.5, then the LLM fallback.",
+      "originalText": "Bolt configures the client pipeline.\nNAMS manages service-side extraction.\nEnabled stages run in a fixed order: spaCy, then GLiNER2.5, then the LLM fallback.",
       "fontSize": 18,
       "fontFamily": 2,
       "textAlign": "left",

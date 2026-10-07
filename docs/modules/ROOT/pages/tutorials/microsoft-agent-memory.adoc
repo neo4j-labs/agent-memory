@@ -12,7 +12,7 @@ We will store an explicit shopping preference in AuraDB, attach a Neo4j context 
 icon:flask[] *Preview.* This adapter is a preview integration. It targets the Microsoft Agent Framework 1.x GA line (`agent-framework-core>=1.13,<2`); adapter and framework APIs can change between releases. Pin the versions you tested and re-check the integration guide before upgrading a deployment.
 ====
 
-This lesson uses `neo4j-agent-memory` 0.6.0 from PyPI and the complete programs on this page in a POSIX shell. Create the local files shown below; the checks below verify the results in your environment.
+This lesson uses `neo4j-agent-memory` 0.7.0 from PyPI and the complete programs on this page in a POSIX shell. Create the local files shown below; the checks below verify the results in your environment.
 
 [[_what_youll_build]]
 == Before you begin
@@ -30,18 +30,16 @@ This path uses the OpenAI client. The SDK’s Microsoft integration targets `age
 
 include::partial$python-tutorial-setup.adoc[]
 
-We also install `httpx`, which release 0.6.0 imports when connecting over Bolt but declares only in the `nams` extra.
-
 [source,bash]
 ----
-python -m pip install 'neo4j-agent-memory[microsoft-agent,openai]==0.6.0' 'httpx>=0.27'
+python -m pip install 'neo4j-agent-memory[microsoft-agent,openai]==0.7.0'
 python -c "from importlib.metadata import version; \
 import neo4j_agent_memory; \
-assert version('neo4j-agent-memory') == '0.6.0'; \
-print('SDK 0.6.0 import verified')"
+assert version('neo4j-agent-memory') == '0.7.0'; \
+print('SDK 0.7.0 import verified')"
 ----
 
-Expected: `SDK 0.6.0 import verified`. Keep `agent-memory-tutorials` as your working directory for every command below.
+Expected: `SDK 0.7.0 import verified`. Keep `agent-memory-tutorials` as your working directory for every command below.
 
 [source,bash]
 ----

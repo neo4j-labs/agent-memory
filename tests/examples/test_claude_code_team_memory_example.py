@@ -243,7 +243,7 @@ class TestStructure:
         assert args[0] == "--from"
         requirement = _parse_requirement(args[1], path, "neo4j-agent-memory")
         assert requirement is not None, "uvx must install neo4j-agent-memory"
-        assert requirement.specifiers == (("==", "0.6.0"),), "match the documentation release"
+        assert requirement.specifiers == (("==", "0.7.0"),), "match the documentation release"
         assert {"mcp", "openai"} <= set(requirement.extras), (
             "the selected server requires both its MCP runtime and OpenAI embedding adapter"
         )

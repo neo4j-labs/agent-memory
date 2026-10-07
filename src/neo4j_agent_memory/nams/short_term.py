@@ -22,6 +22,14 @@ NAMS conventions to remember
   ``POST /v1/conversations/{id}/search``, not a global ``/messages/search``.
 * **Bulk add** uses path ``/messages/bulk`` (slash, not the
   ``:bulk`` verb suffix some SPECs use).
+* **Lists are newest first and capped.** ``GET /conversations/{id}/messages``
+  returns at most the newest 200 messages (default 50, no offset);
+  ``GET /conversations`` returns at most 200 per page (default 50) and pages
+  with ``cursor`` / ``next_cursor``. A ``limit`` outside 1..200 is a 400
+  ``invalid_limit``. Over REST, :meth:`NamsShortTermMemory.get_conversation`
+  asks for the cap and reverses the page into insertion order (the Protocol's
+  order), and :meth:`NamsShortTermMemory.list_conversations` follows
+  ``next_cursor`` until ``limit`` conversations are collected.
 
 Methods that don't exist on NAMS raise :class:`NotSupportedError`:
 ``list_sessions``, ``delete_message``, ``get_conversation_summary``.
@@ -29,6 +37,7 @@ Methods that don't exist on NAMS raise :class:`NotSupportedError`:
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -56,6 +65,15 @@ if TYPE_CHECKING:
 _SPEC_CREATE_CONVERSATION = EndpointSpec(
     rest_method="POST", rest_path="/conversations", bridge_method="create_conversation"
 )
+
+logger = logging.getLogger(__name__)
+
+#: The REST service's page cap for ``GET /conversations`` and
+#: ``GET /conversations/{id}/messages`` (``limit`` must be 1..200).
+REST_PAGE_LIMIT = 200
+
+#: ``list_conversations``' default, matching the bolt implementation.
+DEFAULT_CONVERSATION_LIMIT = 100
 
 _SPEC_LIST_CONVERSATIONS = EndpointSpec(
     rest_method="GET", rest_path="/conversations", bridge_method="list_conversations"
@@ -309,9 +327,27 @@ class NamsShortTermMemory:
         returns the message list (envelope ``{"messages": [...]}``).
         We assemble them client-side so the user-facing contract matches
         the Protocol (single call → full :class:`Conversation`).
+
+        Over REST the message list comes newest first and holds at most the
+        newest 200 messages, so this asks for that cap (the service default
+        is 50) unless ``limit`` is smaller, and returns the page in insertion
+        order like the bolt backend. A larger ``limit`` is clamped, with a
+        warning; there is no way to reach older messages.
         """
         conv = _resolve_conversation_id(session_id, conversation_id, method="get_conversation")
         limit = kwargs.get("limit")
+        rest = self._transport.protocol == "rest"
+        if rest:
+            if limit is None:
+                limit = REST_PAGE_LIMIT
+            elif limit > REST_PAGE_LIMIT:
+                logger.warning(
+                    "get_conversation(limit=%d): NAMS returns at most the newest %d messages "
+                    "of a conversation; returning those.",
+                    limit,
+                    REST_PAGE_LIMIT,
+                )
+                limit = REST_PAGE_LIMIT
         header = await self._transport.request(
             _SPEC_GET_CONVERSATION,
             path_params={"conversation_id": conv},
@@ -329,6 +365,9 @@ class NamsShortTermMemory:
             messages = msgs_payload
         else:
             messages = []
+        if rest:
+            # The service lists newest first; the Protocol returns insertion order.
+            messages = list(reversed(messages))
 
         return payload_to_model(
             _normalize_conversation(header, session_id=conv, messages=messages),
@@ -481,21 +520,40 @@ class NamsShortTermMemory:
         )
 
     async def list_conversations(self, **kwargs: Any) -> list[Conversation]:
-        """List conversations (NAMS workspace-scoped via API key)."""
-        params = _drop_none(
-            {
-                "userId": kwargs.get("user_identifier"),
-                "limit": kwargs.get("limit"),
-            }
-        )
-        payload = await self._transport.request(_SPEC_LIST_CONVERSATIONS, params=params or None)
-        items: list[Any]
-        if isinstance(payload, dict) and "conversations" in payload:
-            items = payload["conversations"]
-        elif isinstance(payload, list):
-            items = payload
-        else:
-            items = []
+        """List conversations, most recently updated first.
+
+        NAMS scopes them to the API key's workspace; ``user_identifier``
+        narrows them to one user. ``limit`` (default 100, as on bolt) bounds
+        the result. Over REST a page holds at most 200, so this follows
+        ``next_cursor`` until ``limit`` conversations are collected or the
+        service has no more.
+        """
+        limit = kwargs.get("limit")
+        limit = DEFAULT_CONVERSATION_LIMIT if limit is None else limit
+        user_identifier = kwargs.get("user_identifier")
+        rest = self._transport.protocol == "rest"
+
+        items: list[Any] = []
+        cursor: str | None = None
+        while len(items) < limit:
+            page_limit = limit - len(items)
+            if rest:
+                page_limit = min(page_limit, REST_PAGE_LIMIT)
+            params = _drop_none({"userId": user_identifier, "limit": page_limit, "cursor": cursor})
+            payload = await self._transport.request(_SPEC_LIST_CONVERSATIONS, params=params or None)
+            page: list[Any]
+            if isinstance(payload, dict) and "conversations" in payload:
+                page = payload["conversations"] or []
+                cursor = payload.get("next_cursor") or None
+            elif isinstance(payload, list):
+                page = payload
+                cursor = None
+            else:
+                page, cursor = [], None
+            items.extend(page)
+            if not rest or not cursor or not page:
+                break
+        items = items[:limit]
         return [
             payload_to_model(
                 _normalize_conversation(item, session_id=(item or {}).get("id")),

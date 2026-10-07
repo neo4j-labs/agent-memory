@@ -7,7 +7,7 @@
 
 We will store a shopper's first conversation, stop the process, and answer a new question in a second process using the earlier conversation, an explicit budget preference, and a fictional product. The program passes that retrieved context to a chat model and records the product lookup as a trace.
 
-This lesson uses `neo4j-agent-memory` 0.6.0 from PyPI, the complete programs on this page, and a dedicated Neo4j AuraDB instance over Bolt. Offline contract tests exercise their assembly and control flow; provider and database success still need to be observed in your environment.
+This lesson uses `neo4j-agent-memory` 0.7.0 from PyPI, the complete programs on this page, and a dedicated Neo4j AuraDB instance over Bolt. Offline contract tests exercise their assembly and control flow; provider and database success still need to be observed in your environment.
 
 anchor:_prerequisites[]anchor:_what_youll_learn[]anchor:_time_required[]anchor:_what_were_building[]
 
@@ -28,18 +28,16 @@ anchor:_step_1_install_dependencies[]
 
 include::partial$python-tutorial-setup.adoc[]
 
-We also install `httpx`, which release 0.6.0 imports when connecting over Bolt but declares only in the `nams` extra.
-
 [source,bash]
 ----
-python -m pip install 'neo4j-agent-memory[openai]==0.6.0' 'httpx>=0.27'
+python -m pip install 'neo4j-agent-memory[openai]==0.7.0'
 python -c "from importlib.metadata import version; \
 import neo4j_agent_memory; \
-assert version('neo4j-agent-memory') == '0.6.0'; \
-print('SDK 0.6.0 import verified')"
+assert version('neo4j-agent-memory') == '0.7.0'; \
+print('SDK 0.7.0 import verified')"
 ----
 
-Expected: `SDK 0.6.0 import verified`. Keep `agent-memory-tutorials` as your working directory for every command below.
+Expected: `SDK 0.7.0 import verified`. Keep `agent-memory-tutorials` as your working directory for every command below.
 
 === Create and check the local files
 

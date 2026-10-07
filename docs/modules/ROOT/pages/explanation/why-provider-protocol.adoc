@@ -8,7 +8,7 @@
 
 The Python provider interfaces separate model access from memory storage. They let client-side extraction and embeddings use a selected adapter while keeping a common interface for the caller.
 
-NOTE: These are Bolt-side provider choices. NAMS manages extraction and embeddings server-side. See xref:explanation/backends.adoc[Bolt and NAMS]. This page describes `neo4j-agent-memory` 0.6.0; check the version you have installed with `pip show neo4j-agent-memory`.
+NOTE: These are Bolt-side provider choices. NAMS manages extraction and embeddings server-side. See xref:explanation/backends.adoc[Bolt and NAMS]. This page describes `neo4j-agent-memory` 0.7.0; check the version you have installed with `pip show neo4j-agent-memory`.
 
 [[_the_problem_v0_2_had]]
 == Why separate model access from extraction?

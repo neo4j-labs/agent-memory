@@ -21,11 +21,11 @@ Follow xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the Aura conn
 
 include::partial$python-tutorial-setup.adoc[]
 
-Configure an AWS profile, role or environment credentials before running the block below; its final command checks them. The identity must be allowed to invoke `amazon.titan-embed-text-v2:0` in the selected region; successful STS identity lookup alone does not establish model access. The chosen model emits 1024-dimensional vectors in this adapter configuration. The install command adds `httpx`, which release 0.6.0 imports when connecting over Bolt but declares only in the `nams` extra.
+Configure an AWS profile, role or environment credentials before running the block below; its final command checks them. The identity must be allowed to invoke `amazon.titan-embed-text-v2:0` in the selected region; successful STS identity lookup alone does not establish model access. The chosen model emits 1024-dimensional vectors in this adapter configuration.
 
 [source,bash]
 ----
-python -m pip install 'neo4j-agent-memory[bedrock]==0.6.0' 'httpx>=0.27'
+python -m pip install 'neo4j-agent-memory[bedrock]==0.7.0'
 export AWS_REGION='us-east-1'
 export NEO4J_URI='neo4j+s://<instance-id>.databases.neo4j.io'
 export NEO4J_USERNAME='neo4j'
@@ -92,7 +92,7 @@ anchor:_using_with_environment_variables[]
 anchor:_configuration_options[]
 anchor:_see_also[]
 
-`BedrockEmbeddingProvider` accepts the model string, `aws_region`, optional `aws_profile` or explicit keys, `dimensions`, `batch_size` and `normalize`, and delegates to `BedrockEmbedder`. In 0.6.0, `dimensions` only declares the vector size used to create the index; it is not sent to Bedrock, so leave it unset (Titan V2 returns 1024) unless it matches the model's actual output. The provider's `embed()` call coordinates individual Titan requests in bounded groups; it is not a promise that Titan accepts a 25-document payload. Embedding execution is a remote API operation, not a CPU-bound Lambda workload by definition.
+`BedrockEmbeddingProvider` accepts the model string, `aws_region`, optional `aws_profile` or explicit keys, `dimensions`, `batch_size` and `normalize`, and delegates to `BedrockEmbedder`. In 0.7.0, `dimensions` only declares the vector size used to create the index; it is not sent to Bedrock, so leave it unset (Titan V2 returns 1024) unless it matches the model's actual output. The provider's `embed()` call coordinates individual Titan requests in bounded groups; it is not a promise that Titan accepts a 25-document payload. Embedding execution is a remote API operation, not a CPU-bound Lambda workload by definition.
 
 The adapter contains mappings for Titan V1/V2 and Cohere embedding models. Mapping a model ID is not proof that it is available in every AWS region or account. Check access for the selected model instead of relying on a static region list. Provider error codes distinguish authentication, access, throttling and invalid configuration; changing regions blindly can make the mismatch worse.
 

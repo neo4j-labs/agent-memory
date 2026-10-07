@@ -75,7 +75,11 @@ class BoltCypherQuery:
                 "Detected write keywords (CREATE/MERGE/DELETE/SET/...). "
                 "Use the appropriate memory-layer method for writes."
             )
-        return await self._client.execute_read(query, parameters=params or {})
+        # User-written Cypher keeps the server's "label / property does not
+        # exist" hints; the library's own queries turn them off.
+        return await self._client.execute_read(
+            query, parameters=params or {}, report_unrecognized=True
+        )
 
 
 __all__ = [

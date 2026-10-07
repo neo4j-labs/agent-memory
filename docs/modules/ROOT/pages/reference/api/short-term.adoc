@@ -29,10 +29,58 @@ The example uses bolt, where a session name can create a conversation implicitly
 * anchor:_search_operations_bolt[]anchor:_search_messages[]anchor:_get_context[]anchor:_search_operations[]anchor:_parameters_2[]anchor:_returns_2[]xref:reference/api/short-term-search.adoc[Message search and context] — `search_messages` and `get_context`.
 * anchor:_session_operations_bolt[]anchor:_list_sessions[]anchor:_clear_session[]anchor:_conversation_summaries_bolt[]anchor:_get_conversation_summary[]anchor:_message_linking_and_deferred_processing_bolt[]anchor:_migrate_message_links[]anchor:_generate_embeddings_batch[]anchor:_extract_entities_from_session[]anchor:_sessioninfo[]anchor:_conversationsummary[]anchor:_session_operations[]anchor:_returns_3[]anchor:_delete_session[]anchor:_conversation_summaries[]anchor:_returns_4[]anchor:_generate_summary[]anchor:_get_summary[]anchor:_message_linking[]xref:reference/api/short-term-sessions.adoc[Sessions, summaries, and maintenance] — `list_sessions`, `clear_session`, `get_conversation_summary`, `migrate_message_links`, `generate_embeddings_batch`, `extract_entities_from_session`, and the `SessionInfo`/`ConversationSummary` models.
 
+== Constructor
+
+Bolt only. `MemoryClient` builds this store for you and passes its resolved ontology, validation mode, resolver, and `settings.resolution`; the signature matters when you construct the store directly.
+
+// contract: memory/short_term.py:ShortTermMemory.__init__
+[source,python]
+----
+def ShortTermMemory(
+    client: Neo4jClient,
+    embedder: Embedder | None=None,
+    extractor: EntityExtractor | None=None,
+    *,
+    multi_tenant: bool=False,
+    default_llm_provider: LLMProvider | None=None,
+    ontology: OntologyDocument | None=None,
+    validation_mode: Literal['permissive', 'strict']='permissive',
+    resolver: EntityResolver | None=None,
+    resolution_config: ResolutionConfig | None=None,
+): ...
+----
+
+[cols="1,4",options="header"]
+|===
+| Parameter | Description
+| `client` | Connected Neo4j client.
+| `embedder` | Optional embedder for message embeddings and extracted entity names.
+| `extractor` | Optional entity extractor.
+| `multi_tenant` | When True, writes require `user_identifier=`.
+| `default_llm_provider` | Optional LLM provider used by `get_conversation_summary` when no summarizer is passed.
+| `ontology` | The effective ontology. Extracted relations the ontology does not permit are dropped before storage, in either validation mode.
+| `validation_mode` | `strict` also drops extracted entities whose type and subtype the ontology does not declare, with a warning, along with any relation that referenced them. `permissive` stores them.
+| `resolver` | Resolver for the ingestion path. Only an `OntologyResolver` resolves during ingestion; any other resolver, or `None`, stores one node per distinct surface form.
+| `resolution_config` | Resolution settings. `resolve_on_ingest=False` turns ingest-time resolution off.
+|===
+
+== Entity extraction on ingest
+
+When an extractor is configured, `add_message`, `add_messages_batch`, and `extract_entities_from_session` persist entities through one path. Since 0.7 it:
+
+. filters invalid entity names (stopwords, bare numbers, single characters),
+. enforces the ontology: it always drops forbidden relations, and in `strict` mode also drops undeclared entities,
+. embeds the mention names in one batch when an embedder is configured, so new entities are searchable and resolution reuses the vectors,
+. resolves the message's mentions as one episode, when `resolution.resolve_on_ingest` is True and the resolver is an `OntologyResolver`, and
+. writes each mention by its band: `merged` reuses the matched node and appends the surface form to its `aliases`; `review` creates the node plus a pending `SAME_AS` edge to the match, which `long_term.find_potential_duplicates` returns; `created` creates the node.
+
+Each `MENTIONS` edge points at the entity id the database holds, including when the entity `MERGE` matched a pre-existing node. A resolution failure is logged and the mentions are stored unresolved; resolution never blocks the write. See xref:how-to/tune-entity-resolution.adoc[Tune entity resolution] and xref:reference/configuration-providers.adoc#resolution[Resolution configuration].
+
 anchor:_example[]
 
 == See also
 
 * xref:reference/api/memory-client.adoc[MemoryClient]
+* xref:how-to/tune-entity-resolution.adoc[Tune entity resolution]
 * xref:how-to/messages.adoc[Store and search messages]
 * xref:reference/nams-limits.adoc[NAMS behavior]

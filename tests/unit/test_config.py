@@ -15,6 +15,8 @@ from neo4j_agent_memory.config.settings import (
     Neo4jConfig,
     ResolutionConfig,
     ResolverStrategy,
+    SchemaConfig,
+    SchemaModel,
 )
 
 
@@ -85,16 +87,62 @@ class TestExtractionConfig:
         assert config.enable_gliner is True
         assert config.enable_llm_fallback is True
 
+    def test_gliner_defaults_are_gliner2_5(self):
+        """The default checkpoint is GLiNER2.5, with the new windowing knobs."""
+        from neo4j_agent_memory.extraction.gliner2_extractor import DEFAULT_GLINER2_5_MODEL
+
+        config = ExtractionConfig()
+
+        # The literal in settings must track the extractor's constant.
+        assert config.gliner_model == DEFAULT_GLINER2_5_MODEL == "fastino/gliner2.5-base-v1"
+        assert config.gliner_threshold == 0.5
+        assert config.gliner_relation_threshold is None
+        assert config.gliner_max_words == 384
+        assert config.gliner_chunk_overlap == 64
+        assert config.gliner_overlap_policy is None
+        assert config.gliner_extract_attributes is False
+        assert config.gliner_quantize is False
+        assert config.gliner_compile is False
+
     def test_gliner_config(self):
         """Test GLiNER extraction config."""
         config = ExtractionConfig(
             extractor_type=ExtractorType.GLINER,
-            gliner_model="urchade/gliner_base",
+            gliner_model="fastino/gliner2.5-small-v1",
             gliner_threshold=0.6,
+            gliner_relation_threshold=0.35,
         )
 
         assert config.extractor_type == ExtractorType.GLINER
+        assert config.gliner_model == "fastino/gliner2.5-small-v1"
         assert config.gliner_threshold == 0.6
+        assert config.gliner_relation_threshold == 0.35
+
+    def test_gliner_windowing_and_performance_knobs(self):
+        """Windowing, overlap policy and the fp16/compile switches are settable."""
+        config = ExtractionConfig(
+            gliner_max_words=256,
+            gliner_chunk_overlap=32,
+            gliner_overlap_policy="nested",
+            gliner_extract_attributes=True,
+            gliner_quantize=True,
+            gliner_compile=True,
+        )
+
+        assert (config.gliner_max_words, config.gliner_chunk_overlap) == (256, 32)
+        assert config.gliner_overlap_policy == "nested"
+        assert config.gliner_extract_attributes is True
+        assert config.gliner_quantize is True
+        assert config.gliner_compile is True
+
+    def test_legacy_model_ids_are_not_rejected_by_settings(self):
+        """Settings construction stays permissive; the extractor is the gate."""
+        config = ExtractionConfig(gliner_model="urchade/gliner_base")
+        assert config.gliner_model == "urchade/gliner_base"
+
+    def test_gliner_max_words_must_be_positive(self):
+        with pytest.raises(ValidationError):
+            ExtractionConfig(gliner_max_words=0)
 
 
 class TestResolutionConfig:
@@ -117,6 +165,109 @@ class TestResolutionConfig:
 
         assert config.strategy == ResolverStrategy.FUZZY
         assert config.fuzzy_threshold == 0.9
+
+    def test_ingest_resolution_defaults(self):
+        """The v0.7 ingest-resolution block and its documented defaults."""
+        config = ResolutionConfig()
+
+        assert config.resolve_on_ingest is True
+        assert config.auto_merge_threshold == 0.90
+        assert config.review_threshold == 0.85
+        assert config.candidate_limit == 12
+        assert config.use_alias_gazetteer is True
+        assert config.use_embedding_blocking is True
+        assert config.context_window_chars == 90
+        assert config.scope == "global"
+
+    def test_custom_ingest_resolution_values(self):
+        config = ResolutionConfig(
+            resolve_on_ingest=False,
+            auto_merge_threshold=0.95,
+            review_threshold=0.75,
+            candidate_limit=4,
+            use_alias_gazetteer=False,
+            use_embedding_blocking=False,
+            context_window_chars=0,
+            scope="user",
+        )
+
+        assert config.resolve_on_ingest is False
+        assert config.auto_merge_threshold == 0.95
+        assert config.review_threshold == 0.75
+        assert config.candidate_limit == 4
+        assert config.use_alias_gazetteer is False
+        assert config.use_embedding_blocking is False
+        assert config.context_window_chars == 0
+        assert config.scope == "user"
+
+    def test_review_band_must_sit_below_the_auto_merge_line(self):
+        with pytest.raises(ValidationError, match="review_threshold"):
+            ResolutionConfig(auto_merge_threshold=0.80, review_threshold=0.90)
+
+    def test_equal_thresholds_are_allowed(self):
+        """A zero-width review band is legitimate: merge or create, nothing else."""
+        config = ResolutionConfig(auto_merge_threshold=0.9, review_threshold=0.9)
+
+        assert config.review_threshold == config.auto_merge_threshold
+
+    def test_unknown_scope_is_rejected(self):
+        with pytest.raises(ValidationError):
+            ResolutionConfig(scope="per-session")
+
+
+class TestSchemaConfigOntologyFields:
+    """Tests for the v0.7 ontology fields on ``SchemaConfig``."""
+
+    def test_default_values(self):
+        config = SchemaConfig()
+
+        assert config.model == SchemaModel.POLEO
+        assert config.ontology_path is None
+        assert config.custom_schema_path is None
+        assert config.use_active_ontology is True
+        assert config.ontology_template == "poleo"
+        assert config.validation_mode is None
+        assert config.strict_types is False
+
+    def test_custom_values(self):
+        config = SchemaConfig(
+            ontology_path="/etc/ontology.yaml",
+            custom_schema_path="/etc/schema.json",
+            use_active_ontology=False,
+            ontology_template="podcast",
+            validation_mode="strict",
+        )
+
+        assert config.ontology_path == "/etc/ontology.yaml"
+        assert config.custom_schema_path == "/etc/schema.json"
+        assert config.use_active_ontology is False
+        assert config.ontology_template == "podcast"
+        assert config.validation_mode == "strict"
+
+    @pytest.mark.parametrize("mode", ["permissive", "strict"])
+    def test_validation_mode_accepts_both_modes(self, mode):
+        assert SchemaConfig(validation_mode=mode).validation_mode == mode
+
+    def test_validation_mode_rejects_anything_else(self):
+        with pytest.raises(ValidationError):
+            SchemaConfig(validation_mode="lenient")
+
+    def test_unknown_field_still_rejected(self):
+        with pytest.raises(ValidationError):
+            SchemaConfig(ontology="poleo")  # type: ignore[call-arg]
+
+    def test_nested_env_vars(self, monkeypatch):
+        monkeypatch.setenv("NAM_SCHEMA_CONFIG__ONTOLOGY_PATH", "/tmp/onto.yaml")
+        monkeypatch.setenv("NAM_SCHEMA_CONFIG__USE_ACTIVE_ONTOLOGY", "false")
+        monkeypatch.setenv("NAM_SCHEMA_CONFIG__ONTOLOGY_TEMPLATE", "news")
+        monkeypatch.setenv("NAM_SCHEMA_CONFIG__VALIDATION_MODE", "strict")
+
+        settings = MemorySettings(neo4j=Neo4jConfig(password=SecretStr("test")))
+
+        assert settings.schema_config.ontology_path == "/tmp/onto.yaml"
+        assert settings.schema_config.use_active_ontology is False
+        assert settings.schema_config.ontology_template == "news"
+        assert settings.schema_config.validation_mode == "strict"
 
 
 class TestGeocodingConfig:

@@ -1,0 +1,78 @@
+{
+  "task_id": "66-challenge_seasonal_electronics",
+  "user_id": "cust_002",
+  "now": "2026-01-10T10:00:00",
+  "opening_message": "I bought a USB hub from order ORD-7093 around Thanksgiving and I'd like to return it. Is it too late?",
+  "user_simulator": {
+    "known_info": [
+      "order_id: ORD-7093",
+      "item: USB hub",
+      "purchase: November (Thanksgiving)"
+    ],
+    "task_rules": [
+      "Keep the request scoped to returning the USB hub from ORD-7093 and finding out whether the November holiday timing still allows a normal return.",
+      "Provide the order ID, item, and November/Thanksgiving purchase timing when asked; do not volunteer policy, eligibility, refund amount, or fee facts the agent should verify.",
+      "If the agent relies only on the normal electronics deadline, denies the return, or offers only store credit because the normal window passed, ask whether the seasonal return extension through January 31 applies to this November purchase.",
+      "Push back on wrong-item handling, non-return alternatives, or any explanation that does not address the seasonal extension before deciding.",
+      "Accept only after the agent says the USB hub return is eligible under the seasonal extension and previews the changed-mind return with the refund amount, original-payment method, and any electronics restocking fee.",
+      "End only after the return has been processed and the agent confirms the final refund, restocking fee, refund method, and returned status for the USB hub."
+    ],
+    "unknown_info": [],
+    "user_sim_context": "You bought a USB hub around the holiday period and want to know whether it can still be returned now. You realize electronics often have tighter windows, which is why you are asking before assuming anything. You want the agent to look at the seasonal timing carefully instead of giving a generic answer."
+  },
+  "task_summary": "**Task:** The customer wants to return a USB hub in early January after the normal electronics window has closed, but the order qualifies for the seasonal extension through January 31. The correct handling is to recognize that the seasonal rule revives eligibility and process the changed-mind return with the normal restocking logic.\n\n**Challenge:** This case breaks agents that treat the electronics deadline as absolute. Weak agents stop at the fifteen-day rule, deny the return outright, or offer store credit when a full valid return is still available under the seasonal policy.",
+  "task_requirements": [
+    {
+      "evidence": "conversation_or_tool_calls",
+      "id": "66_challenge_seasonal_electronics_agent_must_check_seasonal_policy",
+      "kind": "must",
+      "requirement": "Agent must either review the return policy that contains the seasonal extension or explicitly tell the customer the November order remains eligible under the seasonal return extension through January 31."
+    },
+    {
+      "evidence": "conversation",
+      "id": "66_challenge_seasonal_electronics_agent_must_not_deny_the_request",
+      "kind": "must_not",
+      "requirement": "Agent must not deny the request for ignoring the seasonal extension."
+    }
+  ],
+  "state_requirements": [
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10097",
+      "field": "item_status",
+      "expected_value": "returned"
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10097",
+      "field": "refund_amount",
+      "expected_value": 31
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10097",
+      "field": "refund_method",
+      "expected_value": "original_payment"
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10097",
+      "field": "restocking_fee",
+      "expected_value": 6
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10097",
+      "field": "return_reason",
+      "expected_value": "changed_mind"
+    },
+    {
+      "entity_type": "orders",
+      "record_key": "ORD-7093",
+      "field": "status",
+      "expected_value": "fully_returned"
+    }
+  ],
+  "task_type": "return_item",
+  "task_env_path": "state_bench/domains/customer_support/task_envs/66-challenge_seasonal_electronics.json"
+}

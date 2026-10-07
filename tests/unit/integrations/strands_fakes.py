@@ -314,6 +314,12 @@ class FakeLongTerm:
         self.added_facts: list[tuple[str, str, str]] = []
         self.added_entities: list[tuple[str, str]] = []
         self.related: list[Any] = []
+        #: Optional per-entity relationship type override, keyed by
+        #: ``other.name``, for tests that care what ``get_related_entities``
+        #: reports for a given hit. Entities not listed here default to
+        #: ``"RELATED_TO"`` -- a plain placeholder, not a claim about what
+        #: production returns.
+        self.related_types: dict[str, str] = {}
         self.related_kwargs: list[dict[str, Any]] = []
         self.preferences_for: list[Any] = []
         self.preferences_for_calls: list[dict[str, Any]] = []
@@ -386,14 +392,15 @@ class FakeLongTerm:
     async def get_related_entities(self, entity: Any, **kwargs: Any) -> list[tuple[Any, Any]]:
         """Real ``Relationship`` objects, shaped as the bolt path really shapes them.
 
-        The bolt implementation cannot report a relationship's own type or
-        direction: ``Neo4jClient.execute_read`` returns ``result.data()``,
-        which renders a relationship as ``(start_props, type, end_props)`` and
-        drops its properties, so ``memory/long_term.py``'s parse falls through
-        to ``type="RELATED_TO"`` for every hit, with ``source_id`` hardcoded to
-        the centre. ``tests/integration/test_strands_memory_store_integration.py``
-        asserts this against a live Neo4j; the fake reproduces it rather than
-        inventing a richer relationship the production stack never returns.
+        ``GET_ENTITY_RELATIONSHIPS`` matches undirected and
+        ``LongTermMemory.get_related_entities`` hardcodes ``source_id`` to the
+        centre for every hit regardless of the edge's real direction in the
+        graph -- that part of the shape is reproduced here too. The relation
+        *type* is no longer hardcoded to ``"RELATED_TO"``: since v0.7 the bolt
+        query projects ``r.type`` as an explicit scalar column, so it survives
+        ``execute_read``'s ``result.data()`` round trip. ``related_types``
+        lets a test supply the type a given hit should report; entities not
+        listed there default to the ``"RELATED_TO"`` placeholder.
         """
         self.related_kwargs.append(kwargs)
         from neo4j_agent_memory.memory.long_term import Relationship
@@ -402,7 +409,11 @@ class FakeLongTerm:
         return [
             (
                 other,
-                Relationship(source_id=centre_id, target_id=other.id, type="RELATED_TO"),
+                Relationship(
+                    source_id=centre_id,
+                    target_id=other.id,
+                    type=self.related_types.get(other.name, "RELATED_TO"),
+                ),
             )
             for other in self.related
         ]

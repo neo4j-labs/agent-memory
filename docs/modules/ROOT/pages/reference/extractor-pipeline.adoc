@@ -22,6 +22,9 @@ def ExtractionPipeline(
     stop_on_success: bool=False,
     min_entities_for_success: int=1,
     fallback_on_error: bool=True,
+    *,
+    ontology: 'OntologyDocument | None'=None,
+    min_confidence: float | None=None,
 ): ...
 ----
 
@@ -33,6 +36,8 @@ def ExtractionPipeline(
 | `stop_on_success` | Stop after first stage that returns entities
 | `min_entities_for_success` | Minimum entities to consider a stage successful
 | `fallback_on_error` | Continue to next stage if current stage errors
+| `ontology` | Optional `OntologyDocument`. When set, the merged result runs through `validate_relations(ontology, mode="drop")` as the final step.
+| `min_confidence` | Optional confidence floor for the merged result. Entities and relations below it are dropped, as are relations left without an endpoint.
 |===
 
 [cols="1,3",options="header"]
@@ -49,15 +54,27 @@ def ExtractionPipeline(
 
 [source,python]
 ----
-from neo4j_agent_memory.extraction import ExtractionPipeline, SpacyEntityExtractor, GLiNEREntityExtractor
+from neo4j_agent_memory.extraction import ExtractionPipeline, GLiNER2Extractor, SpacyEntityExtractor
 from neo4j_agent_memory.extraction.pipeline import MergeStrategy
+from neo4j_agent_memory.ontology import get_template
 
+podcast = get_template("podcast")
 pipeline = ExtractionPipeline(
-    stages=[SpacyEntityExtractor(), GLiNEREntityExtractor.for_schema("podcast")],
+    stages=[SpacyEntityExtractor(), GLiNER2Extractor(ontology=podcast)],
     merge_strategy=MergeStrategy.CONFIDENCE,
+    ontology=podcast,
 )
 result = await pipeline.extract("John discussed Acme in the podcast")
 ----
+
+=== Final stage
+
+After the stages are merged, the pipeline applies two optional steps to the merged result, for every merge strategy:
+
+. With `min_confidence` set, entities and relations scoring below it are dropped, and so are relations whose source or target entity was dropped. This holds stages that take no threshold of their own (spaCy, the LLM extractor) to the same floor.
+. With `ontology` set, relations the ontology does not permit are dropped with `ExtractionResult.validate_relations(ontology, mode="drop")`, and the number dropped is logged at debug level. Merging can only add relations the ontology does not permit: the GLiNER2.5 stage constrains endpoints while decoding, but the LLM stage does not. See xref:reference/extractor-relations.adoc[Relation extractors].
+
+Give the GLiNER2.5 stage and the pipeline the same ontology. Validating against a different document drops relations the stage decoded legitimately. The configuration factory resolves one ontology (POLE+O when nothing else is configured) and hands it to every stage and to the pipeline. xref:reference/extractor-builder.adoc[`ExtractorBuilder`] does the same with the ontology you name and validates nothing when you name none. A pipeline you construct yourself does no validation unless you pass `ontology`.
 
 === extract
 

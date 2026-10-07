@@ -179,9 +179,8 @@ class Neo4jSessionManager(SessionManager):
         if not self._is_nams:
             return self.session_id
         short_term = self._client.short_term
-        # Narrow server-side where possible; explicit limit extends coverage
-        # beyond the server's default page (full pagination isn't exposed by
-        # the API).
+        # Narrow server-side to this user; the NAMS client pages past the
+        # service's 200-per-page cap with next_cursor up to this limit.
         conversations = await short_term.list_conversations(
             user_identifier=self._user_id, limit=1000
         )

@@ -88,7 +88,22 @@ interface RestCall {
   snakeBody?: boolean;
   /** Optional response shaper for endpoints whose payload doesn't match bridge wire. */
   shape?: (raw: unknown, camelParams: Record<string, unknown>) => unknown;
+  /**
+   * The service's bounds for the `limit` query param: an absent `limit` is
+   * sent as `default`, a larger one is clamped to `max` (the service answers
+   * a `limit` above it with 400 `invalid_limit`).
+   */
+  pageLimit?: { default: number; max: number };
+  /**
+   * Collect up to `limit` (default `defaultTotal`) items by following the
+   * service's `next_cursor`, at most `pageSize` per request. `items` names the
+   * array in each page's envelope; the shaper sees `{ [items]: allItems }`.
+   */
+  paginate?: { items: string; pageSize: number; defaultTotal: number };
 }
+
+/** `GET /conversations` and `GET /conversations/{id}/messages` accept `limit` 1..200. */
+const REST_PAGE_LIMIT = 200;
 
 /**
  * Bridge-method-name → REST-call mapping.
@@ -116,8 +131,12 @@ const ROUTES: Record<string, RestCall | "noop" | "unsupported"> = {
     path: "/conversations/{sessionId}/messages",
     pathParams: ["sessionId"],
     queryParams: ["limit"],
+    // The service returns at most the newest 200 messages (default 50).
+    pageLimit: { default: REST_PAGE_LIMIT, max: REST_PAGE_LIMIT },
     shape: (raw, p) => {
-      const messages = (raw as { messages?: unknown[] })?.messages ?? raw ?? [];
+      const listed = (raw as { messages?: unknown[] })?.messages ?? raw ?? [];
+      // The service lists newest first; conversations are returned oldest first.
+      const messages = Array.isArray(listed) ? [...listed].reverse() : listed;
       return {
         id: p["sessionId"],
         session_id: p["sessionId"],
@@ -129,7 +148,8 @@ const ROUTES: Record<string, RestCall | "noop" | "unsupported"> = {
   list_sessions: {
     method: "GET",
     path: "/conversations",
-    queryParams: ["limit"],
+    queryParams: ["limit", "cursor"],
+    paginate: { items: "conversations", pageSize: REST_PAGE_LIMIT, defaultTotal: 100 },
     shape: (raw) => {
       const conversations = (raw as { conversations?: unknown[] })?.conversations ?? [];
       return conversations.map((c) => {
@@ -200,7 +220,9 @@ const ROUTES: Record<string, RestCall | "noop" | "unsupported"> = {
   list_conversations: {
     method: "GET",
     path: "/conversations",
-    queryParams: ["limit", "user_id"],
+    // The service's filter param is `userId`; it ignores `user_id`.
+    queryParams: ["limit", "userId", "cursor"],
+    paginate: { items: "conversations", pageSize: REST_PAGE_LIMIT, defaultTotal: 100 },
     shape: (raw) => (raw as { conversations?: unknown[] })?.conversations ?? raw,
   },
   get_conversation_metadata: {
@@ -515,7 +537,66 @@ export class RestTransport implements Transport {
       );
     }
 
-    const original = params ?? {};
+    let callParams: Record<string, unknown> = params ?? {};
+    if (route.pageLimit) {
+      const requested = callParams["limit"];
+      const limit =
+        requested === undefined || requested === null
+          ? route.pageLimit.default
+          : Math.min(Number(requested), route.pageLimit.max);
+      callParams = { ...callParams, limit };
+    }
+    if (route.paginate) return this.collectPages<T>(method, route, route.paginate, callParams);
+    return this.dispatch<T>(method, route, callParams);
+  }
+
+  /**
+   * Follow `next_cursor` until `limit` items are collected or the service has
+   * no more (an empty `next_cursor`, or an empty page).
+   */
+  private async collectPages<T>(
+    method: string,
+    route: RestCall,
+    paginate: NonNullable<RestCall["paginate"]>,
+    params: Record<string, unknown>,
+  ): Promise<T> {
+    const { items: key, pageSize, defaultTotal } = paginate;
+    const requested = params["limit"];
+    const total =
+      requested === undefined || requested === null ? defaultTotal : Number(requested);
+    const collected: unknown[] = [];
+    let cursor: string | undefined;
+    while (collected.length < total) {
+      // Raw pages: the shaper and the key conversion run once, on the merge.
+      const page = await this.dispatch<Record<string, unknown> | unknown[] | undefined>(
+        method,
+        route,
+        { ...params, limit: Math.min(total - collected.length, pageSize), cursor },
+        { raw: true },
+      );
+      if (Array.isArray(page)) {
+        collected.push(...page);
+        break;
+      }
+      const pageItems = (page?.[key] as unknown[] | undefined) ?? [];
+      collected.push(...pageItems);
+      const next = page?.["next_cursor"];
+      cursor = typeof next === "string" && next ? next : undefined;
+      if (!cursor || pageItems.length === 0) break;
+    }
+    const merged: unknown = { [key]: collected.slice(0, total) };
+    const shaped = route.shape ? route.shape(merged, snakeToCamel(params)) : merged;
+    return camelToSnake<T>(shaped);
+  }
+
+  /** One HTTP call. `raw` returns the parsed body without shaping or key conversion. */
+  private async dispatch<T>(
+    method: string,
+    route: RestCall,
+    params: Record<string, unknown>,
+    options: { raw?: boolean } = {},
+  ): Promise<T> {
+    const original = params;
     const camelParams = snakeToCamel<Record<string, unknown>>(original);
 
     // Substitute path params (placeholders match camelCase route literals).
@@ -656,6 +737,7 @@ export class RestTransport implements Transport {
 
     if (!text) return undefined as T;
     let parsed: unknown = JSON.parse(text);
+    if (options.raw) return parsed as T;
     if (route.shape) parsed = route.shape(parsed, camelParams);
     return camelToSnake<T>(parsed);
   }

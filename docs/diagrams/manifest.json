@@ -130,8 +130,8 @@
       ],
       "owner": "documentation maintainers",
       "status": "exported-and-visually-reviewed",
-      "source_sha256": "c7c64e54cda813709fa046c251cffe99d776ee3a053250e6f28d0a7414721c4c",
-      "output_sha256": "ecd84f6dd97719c2780f4116f95dbd56f98f4558a293c036a59dd937a39e8ed1",
+      "source_sha256": "694789a95939c8b18bcc85e435227027a986862287639bc54a020ecba75b1a58",
+      "output_sha256": "24bdc6e06b4dc9f031bbd7bd3934e780b63e9ad00092c27e711a98cb167b44a7",
       "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
       "reviewed_on": "2026-09-18",
       "referring_documents": []
@@ -379,8 +379,8 @@
       "referring_pages": [],
       "owner": "documentation maintainers",
       "status": "pending-placement",
-      "source_sha256": "c7c64e54cda813709fa046c251cffe99d776ee3a053250e6f28d0a7414721c4c",
-      "output_sha256": "5b45c2f03dde2ebbdde3c91eb3204b9e3068608c5e89bd27ea5bef552a9ea1e2",
+      "source_sha256": "694789a95939c8b18bcc85e435227027a986862287639bc54a020ecba75b1a58",
+      "output_sha256": "a6b7660e774a2300c90be88a1d669318bde96db6dc6cd177f29e1a28d8c6628a",
       "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
       "reviewed_on": "2026-09-18",
       "referring_documents": [

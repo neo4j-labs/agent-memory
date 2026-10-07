@@ -3,15 +3,15 @@
 :page-pagination:
 :toclevels: 2
 
-A custom `DomainSchema` example, the Bolt-only schema persistence overview, GLiNER-to-POLE+O entity type mapping, and the schema models, from xref:reference/schemas.adoc[Domain schemas reference].
+Custom `DomainSchema` and `OntologyDocument` examples, the Bolt-only schema persistence overview, the label-to-POLE+O entity type mapping, and the schema models, from xref:reference/schemas.adoc[Domain schemas reference].
 
 == Custom DomainSchema example
 
-A `DomainSchema` maps GLiNER label names to the descriptions the model scores against. Pass it to `GLiNEREntityExtractor` as `schema`. The step-by-step procedure is in xref:how-to/entity-extraction-schemas.adoc[Apply a custom entity extraction schema].
+A `DomainSchema` maps GLiNER2.5 label names to the descriptions the model reads as annotation guidelines. Pass it to `GLiNER2Extractor` as `ontology`; the extractor converts it with `to_ontology()`. The step-by-step procedure is in xref:how-to/entity-extraction-schemas.adoc[Apply a custom entity extraction schema].
 
 [source,python]
 ----
-from neo4j_agent_memory.extraction import DomainSchema, GLiNEREntityExtractor
+from neo4j_agent_memory.extraction import DomainSchema, GLiNER2Extractor
 
 real_estate_schema = DomainSchema(
     name="real_estate",
@@ -25,17 +25,61 @@ real_estate_schema = DomainSchema(
     },
 )
 
-extractor = GLiNEREntityExtractor(schema=real_estate_schema, threshold=0.5)
+extractor = GLiNER2Extractor(ontology=real_estate_schema, threshold=0.5)
 ----
+
+The converted catalog declares no relationships, so this extractor decodes entities only. Each label is typed through the <<_entity_type_mapping,entity type mapping>>: `location` becomes `LOCATION`, while `agent`, `buyer` and `seller` are not in the default table and land on `OBJECT` with the label as subtype.
 
 anchor:_schema_description_guidance[]
 anchor:_schema_best_practices[]
 
 See xref:how-to/entity-extraction-schemas.adoc#_write_effective_schema_descriptions[writing effective schema descriptions] for guidance on wording `DomainSchema` entity-type descriptions.
 
+== Custom ontology example
+
+To choose each label's POLE+O type and subtype and to declare typed relationships, build an `OntologyDocument` and pass it to `GLiNER2Extractor.for_ontology` or `ExtractorBuilder.with_ontology`. The document fields are listed in xref:reference/ontology-api.adoc[Ontology API reference].
+
+[source,python]
+----
+from neo4j_agent_memory.extraction import GLiNER2Extractor
+from neo4j_agent_memory.ontology import DomainInfo, EntityTypeDef, OntologyDocument, RelationshipDef
+
+real_estate = OntologyDocument(
+    domain=DomainInfo(id="real_estate", name="real_estate"),
+    entity_types=[
+        EntityTypeDef(
+            label="agent",
+            pole_type="PERSON",
+            subtype="AGENT",
+            description="A real estate agent or broker",
+        ),
+        EntityTypeDef(
+            label="property",
+            pole_type="OBJECT",
+            subtype="PROPERTY",
+            description="A real estate property, building, or land parcel",
+        ),
+    ],
+    relationships=[
+        RelationshipDef(
+            type="LISTS",
+            source="agent",
+            target="property",
+            description="An agent lists a property for sale or rent",
+        ),
+    ],
+)
+print(real_estate.validate_structure())  # [] when the document is sound
+extractor = GLiNER2Extractor.for_ontology(real_estate)
+----
+
+`validate_structure()` returns the document's structural problems as a list; an empty list means the document can be compiled.
+
 == Schema persistence
 
-Bolt only. Store EntitySchemaConfig documents in Neo4j using `neo4j_agent_memory.schema.SchemaManager`. This is a different class from the graph index/constraint manager at `client.schema`. Saving a schema does not automatically activate it on a MemoryClient or make it a named DomainSchema: load it and pass it explicitly to a supported builder/validator.
+Bolt only. Store EntitySchemaConfig documents in Neo4j using `neo4j_agent_memory.schema.SchemaManager`. This is a different class from the graph index/constraint manager at `client.schema`. Saving a schema does not automatically activate it on a MemoryClient or make it a named DomainSchema: load it and pass it explicitly to a supported builder/validator, for example `ExtractorBuilder().with_schema(schema)`.
+
+`SchemaManager` and the `(:Schema)` nodes it writes are separate from the ontology store, and a bolt `MemoryClient` never reads them. The ontology it extracts against comes from, in order: the `MemoryClient(ontology=...)` argument, `SchemaConfig.ontology_path` or `custom_schema_path`, the version activated in `client.ontology` (`BoltOntology`, backed by `(:Ontology)` and `(:OntologyVersion)` nodes), `SchemaModel.CUSTOM` with `entity_types`, and finally the `ontology_template` (POLE+O by default). To make a stored schema drive extraction, convert it with `EntitySchemaConfig.to_ontology()` and create and activate it through `client.ontology`; activation takes effect on the next connect. See xref:reference/ontology-api.adoc[Ontology API reference].
 
 [source,python]
 ----
@@ -78,38 +122,60 @@ The full CRUD surface — `save_schema`, `load_schema`, `list_schemas`, `set_act
 
 == Entity type mapping
 
-Common default GLiNER mappings to POLE+O graph labels (other subtype labels may also be added):
+An extracted label is mapped onto a POLE+O `(type, subtype)` pair. An ontology's own labels win (`EntityTypeDef.pole_type` and `subtype`); a label the ontology does not declare falls back to `DEFAULT_LABEL_MAPPING` in `neo4j_agent_memory.extraction.label_mapping`. Common entries:
 
-[cols="1,1,1", options="header"]
+[cols="2,1,1,2", options="header"]
 |===
-| Schema Type | POLE+O Type | Neo4j Labels
+| Extraction label | POLE+O type | Subtype | Neo4j labels
 
-| `PERSON`, `ACTOR`, `AUTHOR`
+| `person`
 | `PERSON`
+| —
 | `:Entity:Person`
 
-| `COMPANY`, `ORGANIZATION`, `INSTITUTION`
+| `actor`, `author`, `director`
+| `PERSON`
+| `ACTOR`, `AUTHOR`, `DIRECTOR`
+| `:Entity:Person`
+
+| `organization`
 | `ORGANIZATION`
+| —
 | `:Entity:Organization`
 
-| `LOCATION`, `CITY`, `COUNTRY`
+| `company`, `institution`
+| `ORGANIZATION`
+| `COMPANY`, `INSTITUTION`
+| `:Entity:Organization:Company`, `:Entity:Organization`
+
+| `location`
 | `LOCATION`
+| —
 | `:Entity:Location`
 
-| `EVENT`, `MEETING`, `INCIDENT`
-| `EVENT`
-| `:Entity:Event`
+| `city`, `country`
+| `LOCATION`
+| `CITY`, `COUNTRY`
+| `:Entity:Location:City`, `:Entity:Location:Country`
 
-| `PRODUCT`, `OBJECT`, `VEHICLE`
+| `event`, `meeting`, `incident`
+| `EVENT`
+| —, `MEETING`, `INCIDENT`
+| `:Entity:Event`, `:Entity:Event:Meeting`, `:Entity:Event:Incident`
+
+| `object`, `product`, `vehicle`
 | `OBJECT`
-| `:Entity:Object`
+| —, `PRODUCT`, `VEHICLE`
+| `:Entity:Object`, `:Entity:Object:Product`, `:Entity:Object:Vehicle`
 |===
 
-For GLiNER, unmapped labels default to type `OBJECT` with the uppercased label as subtype; they are not automatically stored as a custom top-level entity type. Supply `label_mapping` or use `add_label_mapping` to control this mapping. Direct bolt `add_entity` can store validated custom type/subtype labels; this separate path uses the graph query builder to convert labels to UpperCamelCase.
+The subtype is stored on the entity's `subtype` property. For a POLE+O type it also becomes a node label only when it is one of the known POLE+O subtypes for that type, so `COMPANY` and `CITY` add a label while `ACTOR` and `INSTITUTION` do not. Separately, on Bolt, the label the client's ontology declares for the entity's exact type/subtype pair is added in PascalCase that keeps its own capitals: with the `scientific` template active, an `institution` entity is written as `:Entity:Organization:Institution`.
+
+For GLiNER2.5, labels that neither the ontology nor the default table declares map to type `OBJECT` with the uppercased label as subtype; they are not automatically stored as a custom top-level entity type. Declare the label in an ontology with an explicit `pole_type` and `subtype`, or pass `label_mapping` to `GLiNER2Extractor` to replace the table. Direct bolt `add_entity` can store validated custom type/subtype labels; this separate path uses the graph query builder to convert labels to UpperCamelCase.
 
 == Schema models
 
-`DomainSchema` belongs to local GLiNER extraction. `EntitySchemaConfig` describes reusable entity/relation type metadata. NAMS ontologies have their own document/API contract at xref:reference/ontology-api.adoc[Ontology API]. These schemas are not interchangeable.
+`DomainSchema` is a catalog for local GLiNER2.5 extraction. `EntitySchemaConfig` describes reusable entity/relation type metadata. Both convert to `OntologyDocument`, the document the extractors, relation validation and resolution use on bolt and that NAMS ontologies store (xref:reference/ontology-api.adoc[Ontology API]): `DomainSchema.to_ontology(relationships=...)`, `EntitySchemaConfig.to_ontology()` and `EntitySchemaConfig.from_ontology(doc)`. The conversions are not lossless: a catalog has no relationships of its own, and `from_ontology` collapses fine-grained ontology labels onto their POLE+O type as subtypes.
 
 === DomainSchema
 
@@ -122,6 +188,8 @@ Fields and defaults:
 | `entity_types` | `dict[str, str]` | `required` | Mapping of entity type names to descriptions
 | `relation_types` | `dict[str, str]` | `{}` | Mapping of relation type names to descriptions
 |===
+
+`to_ontology(*, relationships=None)` returns an `OntologyDocument` with one entity type per label. The `relation_types` descriptions are used only to describe `relationships` entries that name the same type and have no description of their own.
 
 === EntityTypeConfig
 
@@ -168,7 +236,7 @@ Fields and defaults:
 | `strict_types` | `bool` | `False` | Whether to reject unknown entity types
 |===
 
-EntitySchemaConfig provides `get_entity_type_names()`, `get_subtypes(type)`, `get_relation_types()`, `is_valid_type(type)`, and `normalize_type(type)`. In non-strict mode, is_valid_type accepts unknown types. In strict mode, normalize_type maps an unknown type to default_entity_type; these helpers do not automatically instrument graph writes.
+EntitySchemaConfig provides `get_entity_type_names()`, `get_subtypes(type)`, `get_relation_types()`, `is_valid_type(type)`, `normalize_type(type)`, `to_ontology()`, and the class method `from_ontology(doc)`. In non-strict mode, is_valid_type accepts unknown types. In strict mode, normalize_type maps an unknown type to default_entity_type; these helpers do not automatically instrument graph writes.
 
 == See also
 

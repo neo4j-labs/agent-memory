@@ -54,7 +54,7 @@ echo "built    : ${out_file}"
 echo
 echo "The bundle starts the same server as the 'team-memory-self-hosted' entry in"
 echo "claude_desktop_config.json.example — the manifest uses the short uvx spec"
-echo "form ('uvx neo4j-agent-memory[mcp,openai]==0.6.0 mcp serve --backend bolt')"
+echo "form ('uvx neo4j-agent-memory[mcp,openai]==0.7.0 mcp serve --backend bolt')"
 echo "and takes the default profile, where the config file spells out --from,"
 echo "--profile and --session-strategy. The bundle is bolt-only: Claude Desktop"
 echo "prompts for the manifest's user_config fields (Neo4j URI, username,"

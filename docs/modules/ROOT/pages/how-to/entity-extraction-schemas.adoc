@@ -20,10 +20,10 @@ include::partial$python-tutorial-setup.adoc[]
 
 [source,bash]
 ----
-python -m pip install 'neo4j-agent-memory[gliner]==0.6.0'
+python -m pip install 'neo4j-agent-memory[gliner2]==0.7.0'
 ----
 
-The maintained program `extraction_recipes.py` supplies its own imports, source texts, and event-loop entry point. It downloads the GLiNER model on first inference; allow disk space and network access for the download. These commands do not connect to a database or require an LLM API key.
+The maintained program `extraction_recipes.py` supplies its own imports, source texts, and event-loop entry point. It downloads the GLiNER2.5 checkpoint `fastino/gliner2.5-base-v1` (about 407 MB) on first inference; allow disk space and network access for the download. These commands do not connect to a database or require an LLM API key.
 
 include::partial$python-extraction-recipe-file.adoc[]
 
@@ -31,7 +31,7 @@ include::partial$python-extraction-recipe-file.adoc[]
 
 anchor:_custom_schema_financial_services[]anchor:_custom_schema_ecommerce_retail[]anchor:_custom_domain_schemas[]anchor:_define_entity_types[]
 
-The custom schema names `customer` and `product`. Its mapping uses `(TYPE, SUBTYPE)` tuples: a customer maps to PERSON and a product to OBJECT/PRODUCT. `for_schema` is reserved for registry names; a custom `DomainSchema` is passed to the constructor.
+The custom schema names `customer` and `product`. Its mapping uses `(TYPE, SUBTYPE)` tuples: a customer maps to PERSON and a product to OBJECT/PRODUCT. Without `label_mapping`, each label goes through the default mapping table, where `product` already maps to OBJECT/PRODUCT but the unlisted `customer` falls back to OBJECT/CUSTOMER. `for_schema` is reserved for registered template names; a custom `DomainSchema` is passed to the constructor's `ontology=` argument, which also accepts an `OntologyDocument`.
 
 The following function is included from the complete program. Run the maintained file with the command below it.
 
@@ -55,38 +55,44 @@ The command raises on the documented failure conditions. Inspect candidate names
 
 anchor:_available_built_in_schemas[]anchor:_extend_built_in_schemas[]
 
-Registered names are `poleo`, `podcast`, `news`, `scientific`, `business`, `entertainment`, `medical`, and `legal`. The exact label inventories and descriptions are in xref:reference/schemas.adoc[built-in schemas]. There are no registered `financial` or `ecommerce` names. Use a custom schema for those domains.
+Registered names are `poleo`, `podcast`, `news`, `scientific`, `business`, `entertainment`, `medical`, and `legal`. The exact label inventories and descriptions are in xref:reference/schemas.adoc[built-in schemas]. There are no registered `financial` or `ecommerce` names. Use a custom schema for those domains. `GLiNER2Extractor.for_schema(name)` loads the ontology template of that name, so `poleo`, `podcast`, and `news` also bring typed relationships; `get_schema(name)` returns the label catalog alone.
 
-`DomainSchema` configures GLiNER label descriptions and optional relation descriptions. `EntitySchemaConfig` is the separate SDK schema configuration model; do not interchange the two or pass unsupported `examples` fields. `ExtractorBuilder.with_schema` forwards type names, not every constraint and relation in a schema configuration. See xref:reference/schemas.adoc[schema models and persistence] before relying on validation.
+`DomainSchema` is a GLiNER2.5 label catalog: label descriptions and optional relation descriptions, with no endpoint typing. `EntitySchemaConfig` is the separate SDK schema configuration model, keyed on POLE+O type names; do not interchange their fields or pass unsupported `examples` fields. Both convert to an `OntologyDocument` through `to_ontology()`, which is what `GLiNER2Extractor(ontology=...)` and `ExtractorBuilder.with_schema` compile. A converted `EntitySchemaConfig` keeps its subtypes as labels and expands its relation types over the declared endpoint types, but a type name outside POLE+O fails the ontology's structural validation, and the extractor raises `ValueError` on its first extraction. See xref:reference/schemas.adoc[schema models and persistence] before relying on validation.
 
 == Extract relationships and persist schema configuration
 
 anchor:_relationship_extraction[]anchor:_persist_schemas_to_neo4j[]anchor:_glirel_no_llm_required[]anchor:_custom_relationship_types[]
 
-For GLiREL, install `glirel` and `loguru` explicitly — the SDK does not define a `glirel` extra, and GLiREL's current package requires `loguru` at import time without declaring that dependency — plus spaCy and the `en_core_web_sm` tokenizer model. GLiREL 1.2.1 also needs `protobuf` and `huggingface-hub` below 1.0, because it cannot load its model with 1.x:
+GLiNER2.5 decodes relations in the same pass as the entities; there is no separate relation model to install. A `DomainSchema` declares no endpoint typing, so the custom extractor above returns entities only. To decode relations, attach typed relationships when you convert the catalog to an ontology. Each `RelationshipDef` names a `source` and a `target` label that the catalog declares, and GLiNER2.5 enforces those endpoint types while decoding:
+
+[source,python]
+----
+include::example$extraction_recipes.py[tag=relations]
+----
 
 [source,bash]
 ----
-python -m pip install 'neo4j-agent-memory[gliner,spacy]==0.6.0' glirel 'loguru>=0.7,<1' 'huggingface-hub<1' protobuf
-python -m spacy download en_core_web_sm
+python extraction_recipes.py relations
 ----
 
-Then construct `GLiRELExtractor(relation_types=...)` and compose it with the entity extractor. A custom domain object's existence does not automatically wire a relation extractor. With `neo4j-agent-memory` 0.6.0 the GLiREL stage runs but returns no relations, because that release passes character offsets where GLiREL expects token positions; for relations on 0.6.0 use the LLM extractor stage (`LLMEntityExtractor`). The xref:tutorials/knowledge-graph.adoc[knowledge-graph tutorial] shows a complete storage path that takes relations from a chat model instead.
+Expected: candidate relations such as `Maya Chen EMPLOYED_BY Northstar Robotics` with confidence values, then `Verified: ... candidate relations returned; inspect them`. No relations causes an explicit error. Relations are decoded only when the call and the extractor both keep `extract_relations=True` (the default) and the ontology declares at least one relationship type. Zero-shot relation recall is weaker than entity recall; tune each relationship's `threshold` on representative text. The ontology's constraint flags (`unique_source`, `unique_target`, `acyclic`, `allow_self`, and `inverse`) are covered in xref:how-to/ontology-driven-extraction.adoc[Drive extraction from an ontology].
 
-Persisting an `EntitySchemaConfig` through the Bolt schema manager stores configuration; it does not automatically validate every existing graph node or deploy a hosted ontology. Select/load the intended configuration explicitly when constructing extraction. See xref:reference/schemas.adoc[the persistence API] and xref:how-to/use-ontologies.adoc[hosted ontology tasks] for the separate contracts.
+Persisting an `EntitySchemaConfig` through the Bolt schema manager stores configuration; it does not automatically validate every existing graph node or deploy a hosted ontology. Select/load the intended configuration explicitly when constructing extraction. To share one typed schema with every Bolt client of a database, store and activate an ontology with `client.ontology` instead; clients adopt the active version when they next connect, as described in xref:how-to/ontology-driven-extraction.adoc#_4_store_it_in_the_database_instead[store the ontology in the database]. See xref:reference/schemas.adoc[the persistence API] and xref:how-to/use-ontologies.adoc[hosted ontology tasks] for the separate contracts.
 
 == Write effective schema descriptions
 
-Improve GLiNER's zero-shot accuracy by tuning the description text passed to `DomainSchema`:
+GLiNER2.5 reads each description as an annotation guideline. Improve its zero-shot accuracy by tuning the description text passed to `DomainSchema`:
 
 1. Use descriptive names — `"A real estate property"` scores better than `"property"`.
 2. Include synonyms in the description — `"A company, startup, or business organization"` catches more of the mentions a plain `"company"` label misses.
 3. Be domain-specific — tailor descriptions to your corpus's vocabulary rather than reusing a generic label.
-4. Test thresholds on a sample document before committing to one — a lower `threshold` catches more entities but can reduce precision.
+4. Rule out near misses — a clause such as `"Not the support engineer who answers"` stops a label from absorbing nearby mentions.
+5. Test thresholds on a sample document before committing to one — a lower `threshold` catches more entities but can reduce precision.
 
 == See also
 
 * xref:explanation/extraction-pipeline.adoc[Understanding the extraction pipeline]
 * xref:reference/schemas.adoc[Schema models and persistence]
+* xref:how-to/ontology-driven-extraction.adoc[Drive extraction from an ontology]
 * xref:tutorials/knowledge-graph.adoc[Knowledge-graph tutorial]
 * xref:how-to/use-ontologies.adoc[Hosted ontology tasks]

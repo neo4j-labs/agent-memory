@@ -3,7 +3,7 @@
 :page-pagination:
 :toclevels: 2
 
-Settings and constructs that sit outside `MemorySettings` for xref:reference/configuration.adoc[Configuration reference]: the ingest-time `DeduplicationConfig` dataclass, the observability factory, and CLI configuration — plus how invalid values are validated.
+Settings and constructs that sit outside `MemorySettings` for xref:reference/configuration.adoc[Configuration reference]: the `DeduplicationConfig` dataclass and how it follows `ResolutionConfig`, the observability factory, and CLI configuration — plus how invalid values are validated.
 
 anchor:deduplication[]
 
@@ -13,18 +13,28 @@ anchor:_deduplication_strategies[]
 
 == Deduplication configuration
 
-`DeduplicationConfig` is a dataclass from `neo4j_agent_memory.memory.long_term`. It belongs to the bolt LongTermMemory constructor; it is not a MemorySettings group or a MemoryClient constructor argument. There is no `DeduplicationStrategy` enum and no `NAM_DEDUPLICATION__...` environment family.
+`DeduplicationConfig` is a dataclass from `neo4j_agent_memory.memory.long_term`. It belongs to the bolt LongTermMemory constructor; it is not a MemorySettings group or a MemoryClient constructor argument. There is no `DeduplicationStrategy` enum and no `NAM_DEDUPLICATION__...` environment family; variables with that prefix are ignored.
+
+Since 0.7 the thresholds live on `ResolutionConfig` (xref:reference/configuration-providers.adoc#resolution[Resolution configuration]), and both write paths use them:
+
+* Message ingestion resolves extracted mentions with `OntologyResolver`, the resolver `strategy="composite"` builds on bolt, and bands them with `auto_merge_threshold` and `review_threshold`.
+* MemoryClient builds its long-term store with `DeduplicationConfig.from_resolution_config(settings.resolution)`, which copies `auto_merge_threshold`, `review_threshold` (as `flag_threshold`), `fuzzy_threshold`, and `candidate_limit` (as `max_candidates`). When the configured resolver is an `OntologyResolver`, `add_entity` delegates its duplicate check to that resolver, so it bands exactly like ingestion. The dataclass thresholds drive the embedding-similarity check only with any other resolver.
+
+Construct the dataclass yourself only when you build a `LongTermMemory` directly. Derive it from resolution settings so the two paths cannot drift:
 
 [source,python]
 ----
+from neo4j_agent_memory.config.settings import ResolutionConfig
 from neo4j_agent_memory.memory.long_term import DeduplicationConfig, LongTermMemory
 
-config = DeduplicationConfig(auto_merge_threshold=0.97, flag_threshold=0.88)
+config = DeduplicationConfig.from_resolution_config(
+    ResolutionConfig(auto_merge_threshold=0.95, review_threshold=0.88)
+)
 # Use only when constructing a store explicitly with your connected graph client.
 store = LongTermMemory(graph_client, embedder=embedder, deduplication=config)
 ----
 
-MemoryClient constructs its long-term store with the dataclass defaults. `add_entity(..., deduplicate=False)` disables checking for that call. See xref:reference/api/long-term.adoc[Long-term API] for all fields and review/merge operations.
+`add_entity` checks only when an embedder is configured; `add_entity(..., deduplicate=False)` disables checking for that call. Per-entity-type thresholds belong on the ontology: `EntityTypeDef.resolution_threshold` and `EntityTypeDef.review_threshold`. See xref:reference/api/long-term-deduplication.adoc[Deduplication and provenance] for all fields and review/merge operations.
 
 anchor:observability[]
 
@@ -42,8 +52,8 @@ Install the extra for the provider you use: `opentelemetry` adds the OpenTelemet
 
 [source,bash]
 ----
-pip install 'neo4j-agent-memory[opentelemetry]==0.6.0'
-# Or: pip install 'neo4j-agent-memory[opik]==0.6.0'
+pip install 'neo4j-agent-memory[opentelemetry]==0.7.0'
+# Or: pip install 'neo4j-agent-memory[opik]==0.7.0'
 ----
 
 This fragment assumes a connected MemoryClient named `client` and a `query` string, inside an async function:
@@ -73,11 +83,11 @@ anchor:_cli_commands[]
 
 == CLI configuration
 
-The CLI exposes command-specific Click options and environment aliases; see xref:reference/cli.adoc[CLI reference]. It does not automatically read `.neo4j-memory.yaml`, nor does it implement `NAM_CLI__...`. An extraction `--schema` argument is a YAML schema file path, not a CLI settings file or named built-in schema.
+The CLI exposes command-specific Click options and environment aliases; see xref:reference/cli.adoc[CLI reference]. It does not automatically read `.neo4j-memory.yaml`, nor does it implement `NAM_CLI__...`. An extraction `--schema` argument is a YAML EntitySchemaConfig file path, not a CLI settings file or named built-in schema; use `--gliner-schema` for a built-in template name and `--ontology` for an ontology document.
 
 == Validation
 
-Numeric constraints appear in each field table. Invalid enum values or unknown constructor/nested fields raise Pydantic ValidationError. Missing optional provider packages may instead fail during provider construction; connection and model requests have their own errors.
+Numeric constraints appear in each field table. Invalid enum values or unknown constructor/nested fields raise Pydantic ValidationError, and so does a `ResolutionConfig` whose `review_threshold` exceeds its `auto_merge_threshold`. Missing optional provider packages may instead fail during provider construction; connection and model requests have their own errors.
 
 [source,python]
 ----

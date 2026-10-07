@@ -66,7 +66,7 @@ We deliberately do not ship a scraper. If you want the full corpus:
 
    ```bash
    make load-full                    # ingest + entity extraction
-   make backfill-relationships       # GLiREL relationships (no LLM)
+   make backfill-relationships       # typed relationships via GLiNER2.5 (no LLM)
    make enrich-entities              # Wikipedia/Diffbot enrichment
    make geocode-locations            # coordinates for LOCATION entities
    ```

@@ -9,7 +9,7 @@ We will connect Claude Desktop on macOS to a local stdio MCP server backed by Au
 
 This lesson selects the core tool profile, a local embedding model, and disabled entity/preference extraction. The MCP process and embedding computation run on your Mac; the database runs in Aura. Hosting the MCP process remotely and selecting other profiles are separate how-to tasks.
 
-This lesson uses `neo4j-agent-memory` 0.6.0 from PyPI and the complete programs on this page in a POSIX shell. Create the local files shown below; the checks below verify the results in your environment.
+This lesson uses `neo4j-agent-memory` 0.7.0 from PyPI and the complete programs on this page in a POSIX shell. Create the local files shown below; the checks below verify the results in your environment.
 
 [[_what_youll_learn]]
 == Before you begin
@@ -32,14 +32,14 @@ include::partial$python-tutorial-setup.adoc[]
 
 [source,bash]
 ----
-python -m pip install 'neo4j-agent-memory[mcp,sentence-transformers]==0.6.0'
+python -m pip install 'neo4j-agent-memory[mcp,sentence-transformers]==0.7.0'
 python -c "from importlib.metadata import version; \
 import neo4j_agent_memory; \
-assert version('neo4j-agent-memory') == '0.6.0'; \
-print('SDK 0.6.0 import verified')"
+assert version('neo4j-agent-memory') == '0.7.0'; \
+print('SDK 0.7.0 import verified')"
 ----
 
-Expected: `SDK 0.6.0 import verified`. Keep `agent-memory-tutorials` as your working directory for every command below.
+Expected: `SDK 0.7.0 import verified`. Keep `agent-memory-tutorials` as your working directory for every command below.
 
 === Create and check the local files
 

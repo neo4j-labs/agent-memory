@@ -1,0 +1,93 @@
+{
+  "task_id": "58-challenge_store_credit_only_pushback",
+  "user_id": "cust_001",
+  "now": "2026-07-08T10:00:00",
+  "opening_message": "I want to return headphones from order ORD-7044. I know it's been a while but as a Platinum member I should still be able to return. I want my money back on my card.",
+  "user_simulator": {
+    "known_info": [
+      "order_id: ORD-7044",
+      "item: headphones",
+      "preference: card refund"
+    ],
+    "task_rules": [
+      "Try to return only the headphones from ORD-7044, and keep asking for the refund on your card until the agent clearly explains the policy limit.",
+      "If the agent asks for identifying details, provide the order ID and item; if asked for the return reason, say you no longer want the headphones and do not claim a defect or shipping issue.",
+      "Do not volunteer policy deadlines, refund amounts, fees, or eligibility facts; ask the agent to check the order and current policy records.",
+      "If the agent says the eligible return is store credit only, push back because you are Platinum and ask whether an exception is possible; if they hold firm, ask once whether a manager or override can change the refund method.",
+      "If the agent continues to explain that store credit is the only allowed refund method, stop pushing for a card refund and accept the store-credit return path.",
+      "If the agent denies the return entirely, push back once and ask whether you are at least eligible for a store-credit return because of your Platinum status or the extended window.",
+      "Push back if the agent offers or promises a card refund, extra goodwill credit, different item handling, or any workaround that bypasses the store-credit-only policy after checking eligibility.",
+      "Accept only after the preview confirms a headphones return refunded as store credit with no card refund or extra credit, and ask for the return to be processed.",
+      "End only after the agent confirms the return has been processed for the headphones and the refund is store credit."
+    ],
+    "unknown_info": [],
+    "user_sim_context": "You want to return headphones well after delivery and strongly prefer money back to your card. You also believe your top-tier status should buy more flexibility than an ordinary customer gets. If the agent says the resolution is more limited than you hoped, you expect a clear explanation rather than a vague denial."
+  },
+  "task_summary": "**Task:** A Platinum customer is outside the full-refund window but still inside the store-credit window for a headphones return. The correct handling is to allow the return, keep the refund as store credit only, and hold that line even when the customer pushes for the original payment method instead.\n\n**Challenge:** This is a policy-discipline case under social pressure. Weak agents over-index on the Platinum tier, deny the return entirely, or cave and invent a card refund that the timing rules no longer allow.",
+  "task_requirements": [
+    {
+      "id": "58_challenge_store_credit_only_pushback_agent_must_complete_store_credit_return",
+      "kind": "must",
+      "requirement": "Agent must confirm a process_return action for ITEM-10044; a preview without confirmation is insufficient.",
+      "evidence": "tool_calls"
+    },
+    {
+      "id": "58_challenge_store_credit_only_pushback_agent_must_explain_store_credit_only",
+      "kind": "must",
+      "requirement": "Agent must tell the customer that the eligible return can only be refunded as store credit despite Platinum-status pushback.",
+      "evidence": "conversation"
+    },
+    {
+      "id": "58_challenge_store_credit_only_pushback_agent_must_not_deny_or_card_refund",
+      "kind": "must_not",
+      "requirement": "Agent must not deny the return entirely, issue or promise an original-payment/card refund, or add any extra goodwill credit to bypass the store-credit-only policy.",
+      "evidence": "conversation_or_tool_calls"
+    }
+  ],
+  "state_requirements": [
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10044",
+      "field": "item_status",
+      "expected_value": "returned"
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10044",
+      "field": "refund_amount",
+      "expected_value": 241
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10044",
+      "field": "refund_method",
+      "expected_value": "store_credit"
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10044",
+      "field": "restocking_fee",
+      "expected_value": 0
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10044",
+      "field": "return_reason",
+      "expected_value": "changed_mind"
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10044",
+      "field": "store_credit_only",
+      "expected_value": true
+    },
+    {
+      "entity_type": "orders",
+      "record_key": "ORD-7044",
+      "field": "status",
+      "expected_value": "fully_returned"
+    }
+  ],
+  "task_type": "return_item",
+  "task_env_path": "state_bench/domains/customer_support/task_envs/58-challenge_store_credit_only_pushback.json"
+}

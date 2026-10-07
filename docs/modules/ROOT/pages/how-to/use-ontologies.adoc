@@ -1,7 +1,10 @@
 = Activate and verify a workspace ontology
 :description: Clone a NAMS ontology template, select strict validation and verify the active version.
 
-include::partial$backend-nams-only.adoc[]
+[IMPORTANT]
+====
+icon:cloud[] *Available on NAMS: Yes. This procedure targets a NAMS workspace.* Since 0.7.0 a Bolt client has the same `client.ontology` methods, backed by `:Ontology` / `:OntologyVersion` nodes in your own database. On Bolt the templates are the eight built-in domain templates, and an activated version shapes local extraction from the client's next connection. For that workflow, see xref:how-to/ontology-driven-extraction.adoc[drive extraction from an ontology], and to rename a type and migrate a Bolt graph, xref:how-to/migrate-a-bolt-ontology.adoc[rename an ontology type and migrate a Bolt graph]; the per-method differences are in xref:reference/ontology-api.adoc[the ontology reference].
+====
 
 To apply a domain schema to future NAMS writes, clone a template, choose the validation mode and activate its version ID.
 
@@ -18,13 +21,13 @@ include::partial$python-tutorial-setup.adoc[]
 
 [source,bash]
 ----
-python -m pip install 'neo4j-agent-memory[nams]==0.6.0'
+python -m pip install 'neo4j-agent-memory[nams]==0.7.0'
 ----
 
 [#get-active-note]
 [NOTE]
 ====
-Python 0.6.0's `get_active()` can report the latest revision when an older one is active — do not use its `version_id` or `validation_mode` as a rollback target. The program below reads the authoritative binding through a `read_active_binding` helper instead. See xref:reference/ontology-api.adoc#python-0-6-active-binding[the release limitation].
+In 0.7.0, `get_active()` takes `version_id`, `revision` and `validation_mode` from the bound version that `GET /ontologies/active` returns. When a response carries no version record, those fields are `None` rather than an error. The program below reads the binding through a `read_active_binding` helper, which validates the raw response and stops before any change when the version record is missing or inconsistent, so a rollback target is never guessed. Python 0.6.0's `get_active()` could report the latest revision when an older one was active; see xref:reference/ontology-api.adoc#python-0-6-active-binding[active binding in the released SDKs].
 ====
 
 [#_list_the_catalog]
@@ -109,16 +112,19 @@ anchor:_await_asynchronous_extraction[]
 
 Use a bounded wait tied to its returned conversation ID or exact expected names. Ontology activation, direct entity writes and asynchronous message extraction have different success criteria.
 
+On Bolt, extraction completes within the write, so there is nothing to wait for; `long_term.wait_for_extraction()` returns `True` immediately there.
+
 == Limits and gotchas
 
 * Activating an ontology changes the workspace's active ontology; it does not rewrite existing entities.
+* On Bolt, `get_active()` reports the version activated in the database, while `client.ontology_document` reports the ontology the client resolved when it connected, which is the one driving its extraction and validation. They can differ: a file passed through `schema_config.ontology_path` or `MemoryClient(ontology=...)` outranks the stored version, and a version activated after the client connected applies only from its next connection.
 * Offline tests do not certify the deployed service. Python and TypeScript currently expose different transport exception mappings; inspect xref:reference/rest-api.adoc[the REST reference] before handling errors.
 * A completed message write is not proof of extraction readiness, and a generic nonempty nearest-neighbor search can match older workspace entities rather than the ones just written.
 
 [#_appendix_helper_files]
 == Appendix: helper files
 
-`activate_ontology.py` above imports these two modules. `hosted_tutorial_state.py` provides the shared HTTP client and the on-disk run ledger; `hosted_tutorial_helpers.py` provides `read_active_binding`, which reads the authoritative `GET /ontologies/active` binding directly rather than trusting the SDK's `get_active()` metadata (see <<get-active-note,the `get_active()` note under Prerequisites>>). Save both files in `agent-memory-tutorials/` before running the activation program. For a guided walkthrough of what this code does and why, see xref:tutorials/ontology-quickstart.adoc[the ontology tutorial].
+`activate_ontology.py` above imports these two modules. `hosted_tutorial_state.py` provides the shared HTTP client and the on-disk run ledger; `hosted_tutorial_helpers.py` provides `read_active_binding`, which reads and validates the authoritative `GET /ontologies/active` binding directly and fails closed when it is incomplete (see <<get-active-note,the `get_active()` note under Prerequisites>>). Save both files in `agent-memory-tutorials/` before running the activation program. For a guided walkthrough of what this code does and why, see xref:tutorials/ontology-quickstart.adoc[the ontology tutorial].
 
 include::partial$python-hosted-state-file.adoc[]
 
@@ -129,3 +135,4 @@ include::partial$python-hosted-helpers-file.adoc[]
 * xref:explanation/ontologies.adoc[Why use an ontology]
 * xref:reference/ontology-api.adoc[Ontology operations, IDs and models]
 * xref:how-to/use-nams.adoc[Connect to NAMS]
+* xref:how-to/ontology-driven-extraction.adoc[Drive extraction from an ontology on Bolt]

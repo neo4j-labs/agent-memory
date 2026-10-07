@@ -223,7 +223,7 @@ class TestEndToEnd:
         """Run main() against Neo4j with the scripted model and assert recall."""
         pytest.importorskip("sentence_transformers")
         spacy = pytest.importorskip("spacy")
-        pytest.importorskip("gliner")
+        pytest.importorskip("gliner2")
         if not spacy.util.is_package("en_core_web_sm"):
             pytest.skip("en_core_web_sm not installed")
 

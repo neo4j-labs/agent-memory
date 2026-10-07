@@ -123,7 +123,7 @@ def test_custom_extractor_uses_domain_schema_and_tuple_label_mapping(lessons, mo
     lesson = lessons["knowledge_graph"]
     pipeline = lesson.extractor("docs-test-model")
     ner = pipeline.entity_extractor
-    assert ner.entity_labels == lesson.SCHEMA.entity_types
+    assert ner.ontology.labels() == list(lesson.SCHEMA.entity_types)
     assert ner.label_mapping["company"] == ("ORGANIZATION", None)
     assert ner._model is None  # Constructor does not download the model.
     relations = pipeline.relation_extractor
@@ -413,7 +413,7 @@ def test_pages_include_the_complete_maintained_programs():
     [
         ("first-agent-memory", {"openai"}, "first_agent_memory.py"),
         ("conversation-memory", {"openai"}, "conversation_memory.py"),
-        ("knowledge-graph", {"openai", "gliner"}, "knowledge_graph.py"),
+        ("knowledge-graph", {"openai", "gliner2"}, "knowledge_graph.py"),
         (
             "anthropic-and-local-embeddings",
             {"anthropic", "sentence-transformers"},
@@ -453,7 +453,7 @@ def test_python_tutorials_install_published_sdk_and_run_local_files(page, extras
     sdk = [requirement for requirement in installed if requirement.name == "neo4j-agent-memory"]
     assert len(sdk) == 1
     assert sdk[0].extras == extras
-    assert str(sdk[0].specifier) == "==0.6.0"
+    assert str(sdk[0].specifier) == "==0.7.0"
     assert sdk[0].url is None
     scripts = {command[1] for command in commands if command[1].endswith(".py")}
     # The Skills seed spans lines; later standalone phases still identify the program.

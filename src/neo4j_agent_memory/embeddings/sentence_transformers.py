@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, cast
+import threading
+from typing import TYPE_CHECKING, Any, cast
 
 from neo4j_agent_memory.core.exceptions import EmbeddingError
 from neo4j_agent_memory.embeddings.base import BaseEmbedder
@@ -21,6 +22,19 @@ MODEL_DIMENSIONS = {
     "multi-qa-MiniLM-L6-cos-v1": 384,
     "all-distilroberta-v1": 768,
 }
+
+# ``encode`` runs on the default executor, so concurrent ``embed`` calls would
+# run it on several threads at once. PyTorch's MPS backend (what
+# ``SentenceTransformersProvider`` picks on Apple Silicon) is not thread-safe:
+# two threads compiling a Metal kernel race on its kernel cache and the process
+# segfaults. One lock per process serializes inference on every device; on CPU
+# a single ``encode`` already uses every core, so little is lost.
+_ENCODE_LOCK = threading.Lock()
+
+
+def _encode(model: SentenceTransformer, sentences: str | list[str]) -> Any:
+    with _ENCODE_LOCK:
+        return model.encode(sentences, convert_to_numpy=True)
 
 
 def _embedding_dimension(model: object) -> int | None:
@@ -90,9 +104,7 @@ class SentenceTransformerEmbedder(BaseEmbedder):
         try:
             # Run in thread pool since sentence-transformers is sync
             loop = asyncio.get_event_loop()
-            embedding = await loop.run_in_executor(
-                None, lambda: model.encode(text, convert_to_numpy=True)
-            )
+            embedding = await loop.run_in_executor(None, _encode, model, text)
             return cast(list[float], embedding.tolist())  # numpy tolist() is Any in stubs
         except Exception as e:
             raise EmbeddingError(f"Failed to generate embedding: {e}") from e
@@ -107,9 +119,7 @@ class SentenceTransformerEmbedder(BaseEmbedder):
         try:
             # Run in thread pool since sentence-transformers is sync
             loop = asyncio.get_event_loop()
-            embeddings = await loop.run_in_executor(
-                None, lambda: model.encode(texts, convert_to_numpy=True)
-            )
+            embeddings = await loop.run_in_executor(None, _encode, model, texts)
             return [e.tolist() for e in embeddings]
         except Exception as e:
             raise EmbeddingError(f"Failed to generate embeddings: {e}") from e

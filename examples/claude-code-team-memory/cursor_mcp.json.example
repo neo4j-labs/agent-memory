@@ -10,7 +10,7 @@
       "command": "uvx",
       "args": [
         "--from",
-        "neo4j-agent-memory[mcp,openai]==0.6.0",
+        "neo4j-agent-memory[mcp,openai]==0.7.0",
         "neo4j-agent-memory",
         "mcp",
         "serve",

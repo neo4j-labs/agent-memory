@@ -1,0 +1,54 @@
+{
+  "task_id": "17-cancel_price_match",
+  "user_id": "cust_002",
+  "now": "2026-06-12T10:00:00",
+  "opening_message": "I bought headphones in order ORD-6020 for $249 but now they're $199. I want the price difference back.",
+  "user_simulator": {
+    "known_info": [
+      "order_id: ORD-6020",
+      "paid: $249",
+      "current_price: $199"
+    ],
+    "task_rules": [
+      "Stay focused on getting the $50 price difference for the headphones while keeping order ORD-6020 active.",
+      "Give the order ID when asked, and provide the paid price or current $199 price only when those details are relevant.",
+      "If the agent suggests a return, cancellation, cancel-and-reorder, or denies the request without checking the price-match policy, push back once and ask them to check the price-match rule.",
+      "If the agent does not mention verifying the current product price, ask them to confirm the system price is $199 before issuing the adjustment.",
+      "Accept only after the agent previews a $50 refund to the original payment method and confirms the order will remain active.",
+      "End only after the agent confirms the $50 original-payment refund has been processed and no cancellation or return was created."
+    ],
+    "unknown_info": [],
+    "user_sim_context": "You noticed a price drop shortly after buying the headphones and want the difference back. From your perspective, this is about correcting the price rather than undoing the order. You expect the agent to help with the lower price without turning it into a cancellation if that is not necessary."
+  },
+  "task_summary": "**Task:** The customer notices that recently delivered headphones dropped by $50 and wants help. This is a price-match case, not a cancellation case, so the agent should verify the new product price, apply the price-match rule, and refund the $50 difference while leaving the order active.\n\n**Challenge:** The agent has to choose the right policy surface before acting. Weak agents turn the request into a cancellation or return, skip the product-price verification, or deny the adjustment without checking the price-match rule.",
+  "task_requirements": [
+    {
+      "evidence": "conversation_or_tool_calls",
+      "id": "17_cancel_price_match_agent_must_check_refund_policy_price",
+      "kind": "must",
+      "requirement": "Agent must treat the request as a price-match adjustment rather than a cancellation or return."
+    },
+    {
+      "evidence": "conversation_or_tool_calls",
+      "id": "17_cancel_price_match_agent_must_check_refund_policy_for",
+      "kind": "must",
+      "requirement": "Agent must check the refund policy for the price-match rule before issuing the refund."
+    }
+  ],
+  "state_requirements": [
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-9125",
+      "field": "refund_amount",
+      "expected_value": 50
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-9125",
+      "field": "refund_method",
+      "expected_value": "original_payment"
+    }
+  ],
+  "task_type": "price_match_refund",
+  "task_env_path": "state_bench/domains/customer_support/task_envs/17-cancel_price_match.json"
+}

@@ -448,6 +448,19 @@ jobs:
           restore-keys: |
             hf-cache-${{ runner.os }}-
 
+      # Warm the GLiNER2.5 checkpoint outside the per-test timeout: on a cold
+      # cache the ~407 MB download alone can exceed --timeout=120.
+      - name: Warm up the GLiNER2.5 model
+        run: |
+          uv run python -c "
+          from neo4j_agent_memory.extraction import DEFAULT_GLINER2_5_MODEL as model
+          from gliner2 import AutoExtractor
+          AutoExtractor.from_pretrained(model)
+          print(f'GLiNER2.5 checkpoint cached: {model}')
+          "
+        env:
+          HF_HUB_DISABLE_PROGRESS_BARS: "1"
+
       - name: Run example smoke tests
         run: |
           uv run pytest tests/examples \
@@ -599,6 +612,8 @@ jobs:
             dir: examples/full-stack-chat-agent/frontend
           - name: lennys-memory
             dir: examples/lennys-memory/frontend
+          - name: support-desk-agent
+            dir: examples/support-desk-agent/frontend
           - name: aws-financial-services-advisor
             dir: examples/financial-services-advisor/aws-financial-services-advisor/frontend
           - name: google-cloud-financial-advisor

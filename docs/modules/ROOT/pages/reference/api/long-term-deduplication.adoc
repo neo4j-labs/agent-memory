@@ -9,7 +9,9 @@ anchor:_deduplication_operations[]
 
 == Deduplication (bolt only)
 
-Ingestion deduplication uses `DeduplicationConfig` from `neo4j_agent_memory.memory.long_term`. There is no top-level `DeduplicationStrategy` or `NAM_DEDUPLICATION` settings group. See xref:reference/configuration-advanced.adoc#deduplication[Deduplication configuration].
+Since 0.7 the duplicate bands come from `ResolutionConfig`: at or above `auto_merge_threshold` (default 0.90) a new name merges onto the matched entity as an alias, and at or above `review_threshold` (default 0.85) the entity is created with a pending `SAME_AS` edge for review. Per-type overrides come from the ontology (`EntityTypeDef.resolution_threshold`, `EntityTypeDef.review_threshold`).
+
+Two write paths fill the same review queue. Message ingestion resolves extracted mentions with `OntologyResolver` by default (`resolution.resolve_on_ingest=True`). `add_entity` delegates its check to that resolver whenever it is the configured one, the bolt default, so both paths band identically; with any other resolver, `add_entity` falls back to the embedding-similarity check configured by `DeduplicationConfig` from `neo4j_agent_memory.memory.long_term`. `add_entity` checks only when an embedder is configured. There is no top-level `DeduplicationStrategy` or `NAM_DEDUPLICATION` settings group. See xref:reference/configuration-advanced.adoc#deduplication[Deduplication configuration].
 
 === find_potential_duplicates
 
@@ -27,7 +29,7 @@ async def find_potential_duplicates(*, limit: int=100) -> list[tuple[Entity, Ent
 | `limit` | Maximum number of duplicate pairs to return
 |===
 
-In 0.6.0 on Bolt the returned confidence is always `0.0` and each pending pair is returned twice, once per direction; read the `SAME_AS` relationship's `confidence` property with Cypher if you need it.
+Each pending `SAME_AS` pair is returned once, as the flagged (newly added) entity, then its existing match, then the edge's `confidence`, highest confidence first. Pairs flagged during message ingestion are included.
 
 === merge_duplicate_entities
 
@@ -95,21 +97,23 @@ Get statistics about entity deduplication.
 async def get_deduplication_stats() -> DeduplicationStats: ...
 ----
 
-`DeduplicationResult.action` is `none`, `merged`, or `flagged`; an ordinary new entity uses `none`. Thresholds are inclusive. The flag, auto-merge, and fuzzy thresholds must be between 0 and 1, and auto-merge must be at least the flag threshold.
+`DeduplicationResult.action` is `none`, `merged`, or `flagged`; an ordinary new entity uses `none`. When `add_entity` delegates to `OntologyResolver`, the resolver's `review` band maps onto `flagged`. Thresholds are inclusive. The flag, auto-merge, and fuzzy thresholds must be between 0 and 1, and auto-merge must be at least the flag threshold.
 
 === DeduplicationConfig
+
+The thresholds apply to the embedding-similarity check, which runs when the store's resolver is not an `OntologyResolver`. `DeduplicationConfig.from_resolution_config(config)` builds one from a `ResolutionConfig`, copying `auto_merge_threshold`, `review_threshold` (as `flag_threshold`), `fuzzy_threshold`, and `candidate_limit` (as `max_candidates`); MemoryClient builds its store's config this way from `settings.resolution`.
 
 Fields and defaults:
 
 [cols="2,3,2,4",options="header"]
 |===
 | Field | Type | Default | Description
-| `enabled` | `bool` | `True` | Whether `add_entity` runs the duplicate check. It also turns the near-duplicate checks in `add_preference` and `add_fact` on or off.
-| `auto_merge_threshold` | `float` | `0.95` | Similarity at or above which the new name is merged into the existing entity as an alias.
-| `flag_threshold` | `float` | `0.85` | Similarity at or above which a pending `SAME_AS` relationship is created for review.
+| `enabled` | `bool` | `True` | Whether `add_entity` runs the duplicate check, including a delegated one. It also turns the near-duplicate checks in `add_preference` and `add_fact` on or off.
+| `auto_merge_threshold` | `float` | `0.90` | Similarity at or above which the new name is merged into the existing entity as an alias. Matches `ResolutionConfig.auto_merge_threshold`.
+| `flag_threshold` | `float` | `0.85` | Similarity at or above which a pending `SAME_AS` relationship is created for review. Matches `ResolutionConfig.review_threshold`.
 | `use_fuzzy_matching` | `bool` | `True` | Also compare names with RapidFuzz; needs the `[fuzzy]` extra and is skipped without it.
-| `fuzzy_threshold` | `float` | `0.9` | Fuzzy name ratio at or above which the embedding and fuzzy scores are averaged.
-| `max_candidates` | `int` | `10` | Maximum number of vector-search candidates checked.
+| `fuzzy_threshold` | `float` | `0.85` | Fuzzy name ratio at or above which the embedding and fuzzy scores are averaged. Matches `ResolutionConfig.fuzzy_threshold`.
+| `max_candidates` | `int` | `12` | Maximum number of vector-search candidates checked. Matches `ResolutionConfig.candidate_limit`.
 | `match_same_type_only` | `bool` | `True` | Only compare against entities of the same type.
 |===
 
@@ -120,12 +124,12 @@ Fields and defaults:
 [cols="2,3,2,4",options="header"]
 |===
 | Field | Type | Default | Description
-| `is_duplicate` | `bool` | `False` | Whether a match reached `flag_threshold`.
+| `is_duplicate` | `bool` | `False` | Whether a match reached the review band: `flag_threshold`, or the resolver's review threshold when delegated.
 | `action` | `str` | `'none'` | `none`, `merged`, or `flagged`.
 | `matched_entity_id` | `UUID \| None` | `None` | ID of the matched entity, if any.
 | `matched_entity_name` | `str \| None` | `None` | Name of the matched entity, if any.
-| `similarity_score` | `float` | `0.0` | Score of the best match; the average of both scores when the match type is `both`.
-| `match_type` | `str \| None` | `None` | `embedding`, or `both` when the fuzzy ratio also reached `fuzzy_threshold`; `None` when there is no match. The docstring also lists `fuzzy`, but the matcher does not produce it.
+| `similarity_score` | `float` | `0.0` | Score of the best match; on the embedding-similarity path, the average of both scores when the match type is `both`.
+| `match_type` | `str \| None` | `None` | `None` when there is no match. On the embedding-similarity path, `embedding`, or `both` when the fuzzy ratio also reached `fuzzy_threshold`. When delegated to `OntologyResolver`, how the winning evidence was obtained: `exact`, `alias`, `acronym`, `prefix`, `fuzzy`, `embedding`, or `both`.
 |===
 
 === DuplicateCandidate
@@ -180,7 +184,7 @@ async def register_extractor(
 [cols="1,4",options="header"]
 |===
 | Parameter | Description
-| `name` | Unique extractor name (e.g., "GLiNEREntityExtractor", "SpacyNER")
+| `name` | Unique extractor name (e.g., "gliner2", "SpacyNER")
 | `version` | Optional version string
 | `config` | Optional configuration dict (will be JSON serialized)
 |===

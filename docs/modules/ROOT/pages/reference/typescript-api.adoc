@@ -142,7 +142,7 @@ a substitute for a conversation id or an authorization policy.
 |Append a message to a conversation. Returns the persisted `Message`.
 
 |`getConversation(sessionId, options?)`
-|Fetch a conversation by id, with its messages.
+|Fetch a conversation by id, with its messages oldest first. On REST these are at most the newest 200 messages; the service lists them newest first and the client reverses them.
 
 |`searchMessages(query, options?)`
 |Semantic + filter search within the required `sessionId` (alias `conversationId`) on REST; `sessionId` wins if both are supplied.
@@ -160,7 +160,7 @@ a substitute for a conversation id or an authorization policy.
 |Create a conversation with required `userId` and optional `metadata`. Workspace selection comes from credentials/headers, not this options object.
 
 |`listConversations(options?)` _(hosted)_
-|Enumerate full conversation objects.
+|Enumerate full conversation objects, most recently updated first. The service serves at most 200 per page; the client follows its `next_cursor` until `limit` are collected.
 
 |`getConversationMetadata(conversationId)` _(hosted)_
 |Conversation header without the message list.
@@ -182,13 +182,13 @@ a substitute for a conversation id or an authorization policy.
 |===
 
 **Options and scope**: `addMessage` accepts `metadata`; `getConversation` accepts
-`limit` (omitted by default). Both, and `clearSession`, accept an options
+`limit`, which REST sends as 200 when omitted and clamps to 200 (the service's maximum). Both, and `clearSession`, accept an options
 `conversationId` alias when the positional `sessionId` is `undefined`; the
 positional id wins if both exist. Missing both raises `ValidationError`.
 `searchMessages` accepts `sessionId` / `conversationId`, `limit` (10) and
 `threshold` (0.7). On REST, missing both ids raises a pre-request `TransportError`
 for the required path parameter. `listSessions` defaults its limit to 100.
-`listConversations` accepts `userId` and `limit`; `getObservations` accepts
+`listConversations` accepts `userId` and `limit` (default 100; REST pages past 200); `getObservations` accepts
 `limit`, with an omitted value left to the server.
 
 **Returned types**: `Message`, `Conversation`, `ConversationContext`, `SessionInfo`, `Observation`, `Reflection`.

@@ -24,10 +24,10 @@ This example wires `MemorySettings` for environments where you can't (or don't w
 - **`llm=None`** — explicit opt-out. Validated at construction time.
 - **`backend="bolt"`** — pinned. Without it, a `MEMORY_API_KEY` in your environment resolves to the hosted service, where extraction and embeddings run server-side — the opposite of what this example is showing.
 - **Provider-string shorthand for local embeddings** — `"sentence-transformers/all-MiniLM-L6-v2"` resolves to a local `SentenceTransformersProvider` via `from_provider`. No embeddings API call.
-- **`ExtractorType.PIPELINE` with `enable_llm_fallback=False`** — multi-stage spaCy + GLiNER pipeline, no LLM rescue.
+- **`ExtractorType.PIPELINE` with `enable_llm_fallback=False`** — multi-stage spaCy + GLiNER2.5 pipeline, no LLM rescue.
 - **Configuration-time validation** — pair `llm=None` with an extractor that needs an LLM and `MemorySettings` raises a `ValidationError` naming both fields, rather than failing later at runtime.
 - **All three memory layers, with local inference and Aura storage** — short-term messages with local NER, long-term preferences/facts/entities with local embeddings, a reasoning trace with a structured `TraceOutcome`, and a `consolidation.dedupe_entities(dry_run=True)` hygiene pass (pure Cypher).
-- **Fail-fast on a broken local stack** — the script checks for spaCy, the spaCy model, GLiNER and sentence-transformers up front, then asserts the pipeline actually extracted something. A missing model otherwise degrades silently to zero entities.
+- **Fail-fast on a broken local stack** — the script checks for spaCy, the spaCy model, GLiNER2.5 and sentence-transformers up front, then asserts the pipeline actually extracted something. A missing model otherwise degrades silently to zero entities.
 
 ```python
 settings = MemorySettings(
@@ -52,23 +52,23 @@ This example is **bolt-only by design**. On the hosted backend (NAMS) extraction
 |---|---|
 | Messages, conversations, sequential linking | ✅ works |
 | Embeddings + vector search (messages, entities, preferences, facts, traces) | ✅ local sentence-transformers embeddings; vector search in Aura |
-| Entity extraction and POLE+O typing | ✅ spaCy + GLiNER |
+| Entity extraction and POLE+O typing | ✅ spaCy + GLiNER2.5 |
 | Preferences, facts, curated entities, entity resolution/dedup | ✅ works (embedding + fuzzy matching) |
 | Reasoning traces, steps, tool calls, similar-trace retrieval | ✅ works |
 | Consolidation (`dedupe_entities`, preference supersedence, archival) | ✅ pure Cypher + stored embeddings |
 | Conversation summaries | ✅ extractive fallback (pass `summarizer=` for an LLM summary) |
-| Relation extraction inside `ExtractorType.PIPELINE` | ❌ needs the LLM stage — for a local option use `GLiNERWithRelationsExtractor` (GLiREL) |
+| Relation extraction inside `ExtractorType.PIPELINE` | ✅ the GLiNER2.5 stage decodes typed relations from the ontology in the same pass |
 | Schema-guided extraction of attributes the local NER misses | ❌ needs `enable_llm_fallback=True` |
 | Generating answers for your user | ❌ that's your agent's job — the library never calls an LLM on your behalf |
 
 ## Prerequisites
 
 ```bash
-pip install "neo4j-agent-memory[extraction,sentence-transformers]==0.6.0"
+pip install "neo4j-agent-memory[extraction,sentence-transformers]==0.7.0"
 python -m spacy download en_core_web_sm
 ```
 
-First run downloads model weights once: sentence-transformers `all-MiniLM-L6-v2` (~90 MB) and the GLiNER model (~500 MB). Both are cached under `~/.cache/huggingface` afterwards.
+First run downloads model weights once: sentence-transformers `all-MiniLM-L6-v2` (~90 MB) and the GLiNER2.5 model (~407 MB). Both are cached under `~/.cache/huggingface` afterwards.
 
 A dedicated empty AuraDB instance with its connection variables exported; follow [Aura setup and cleanup](../AURA_SETUP.md).
 
@@ -129,7 +129,7 @@ Inference runs locally, but the first run downloads model weights from Hugging F
 ```bash
 python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
 python -m spacy download en_core_web_sm
-python -c "from gliner import GLiNER; GLiNER.from_pretrained('gliner-community/gliner_medium-v2.5')"
+python -c "from gliner2 import AutoExtractor; AutoExtractor.from_pretrained('fastino/gliner2.5-base-v1')"
 ```
 
 Copy `~/.cache/huggingface` (and the installed `en_core_web_sm` package) to the target machine, then run with the offline switches set:
@@ -145,7 +145,7 @@ These switches disable model-download access. The example still connects to Aura
 ## Going further
 
 - **How-to guide:** [Run without an LLM](https://neo4j.com/labs/agent-memory/how-to/running-without-an-llm) — the same configuration, explained.
-- **Reference:** [Extractors](https://neo4j.com/labs/agent-memory/reference/extractors) — the extractor menu, when to add LLM rescue, GLiNER schema choices.
+- **Reference:** [Extractors](https://neo4j.com/labs/agent-memory/reference/extractors) — the extractor menu, when to add LLM rescue, GLiNER2.5 ontology choices.
 - **Bring your own model:** [Bring Your Own Model](https://neo4j.com/labs/agent-memory/how-to/bring-your-own-model) — provider strings for when you do want an LLM.
 
 ## Support
@@ -156,6 +156,4 @@ These switches disable model-download access. The example still connects to Aura
 
 ---
 
-**Historical verification report — 2026-09-10.** The following records a prior checkout/test report. Its development-version labels, passing counts, and release-availability statements are historical, not evidence of current package compatibility.
-
-> _Verified against `neo4j-agent-memory` v0.5.0 with sentence-transformers 6.0.1, gliner 0.2.24, spacy 3.8.11 (`en_core_web_sm`), and Neo4j 5.26 on 2026-09-10._
+_Verified against `neo4j-agent-memory` v0.7.0 with sentence-transformers 5.7.0, gliner2 2.0.0, spacy 3.8.11 (`en_core_web_sm`), and Neo4j 5.26 on 2026-09-17._

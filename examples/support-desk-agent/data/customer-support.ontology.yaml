@@ -1,0 +1,95 @@
+# The ontology the support-desk demo extracts against, shaped after the
+# STATE-Bench customer-support environment (data/state-bench/): the records its
+# tools read and change are customers, orders, order lines, products and
+# warranties.
+#
+# Each `description` is an annotation guideline for GLiNER2.5, which reads it as
+# part of the encoder input, so each one names its identifier pattern and ends
+# with the confusion the model would otherwise make. The identifiers matter:
+# the seed loads the dataset's records under those names (ORD-6014, ITEM-9090,
+# PROD-2092 as an alias of "UltraShield Phone Case", cust_005 as an alias of
+# "Priya Patel"), so an extracted mention resolves onto the record exactly.
+#
+# Two choices were measured on the 129 seed messages:
+#
+# - The order line is "OrderLine", not STATE-Bench's "item": with the label
+#   "Item", GLiNER2.5 tagged 107 product mentions ("phone case", "SoundMax Basic
+#   Headphones") as order lines; with "OrderLine" they extract as Product.
+# - Policies are not declared. As an entity type, "Policy" caught every
+#   "return" and "refund" in the text (over 100 mentions). The six store
+#   policies are still in the graph, as records the agent's get_policies calls
+#   touch (OBJECT:POLICY, labelled :Policy), but nothing is extracted as one.
+#
+# Validate and compile it without a database:
+#
+#   uv run neo4j-agent-memory ontology validate examples/support-desk-agent/data/customer-support.ontology.yaml
+#   uv run neo4j-agent-memory ontology compile  examples/support-desk-agent/data/customer-support.ontology.yaml
+
+domain:
+  id: customer-support
+  name: Customer Support (STATE-Bench)
+  description: >-
+    E-commerce customer support: customers, their orders and order lines, the
+    products on them and their warranties.
+  tagline: Returns, refunds, exchanges, cancellations, shipping and warranty claims.
+
+entity_types:
+  - label: Customer
+    pole_type: PERSON
+    subtype: CUSTOMER
+    description: >-
+      A shopper the agent is helping, named in full (Priya Patel) or by a
+      customer ID that starts with cust_ (cust_005). Never an order, a product
+      or a delivery person.
+
+  - label: Order
+    pole_type: EVENT
+    subtype: ORDER
+    description: >-
+      A purchase, identified by an order ID that starts with ORD- (ORD-6014).
+      Never the product it contains and never one of its order lines.
+
+  - label: OrderLine
+    pole_type: OBJECT
+    subtype: ORDER_LINE
+    description: >-
+      One line of an order, identified by an item ID that starts with ITEM-
+      (ITEM-9090). Never a product name and never an order ID.
+
+  - label: Product
+    pole_type: OBJECT
+    subtype: PRODUCT
+    description: >-
+      Something the store sells, named by its product name (UltraShield Phone
+      Case, SoundMax Wireless Headphones) or a product ID that starts with
+      PROD- (PROD-2092). Never an order, an order line or a product category.
+
+  - label: Warranty
+    pole_type: EVENT
+    subtype: WARRANTY
+    description: >-
+      A warranty on a purchased item, identified by a warranty ID that starts
+      with WRT- (WRT-3001). Never the product it covers.
+
+
+relationships:
+  - type: PLACED
+    source: Customer
+    target: Order
+    description: The customer placed the order.
+  - type: CONTAINS
+    source: Order
+    target: OrderLine
+    description: The order line belongs to the order.
+  - type: OF_PRODUCT
+    source: OrderLine
+    target: Product
+    description: The order line is for the product.
+  - type: COVERS
+    source: Warranty
+    target: OrderLine
+    description: The warranty covers the purchased item.
+  - type: REPLACED_BY
+    source: OrderLine
+    target: OrderLine
+    description: An exchanged or replaced order line and the line that replaced it.

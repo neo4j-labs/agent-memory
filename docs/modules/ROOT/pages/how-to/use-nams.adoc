@@ -11,7 +11,7 @@ To store and retrieve messages through NAMS, configure the Python client with a 
 * A data-plane workspace key and the intended NAMS endpoint. Obtain these from your workspace administrator or the https://memory.neo4jlabs.com[dashboard]. A key's permissions and workspace association determine access; two keys can belong to the same workspace.
 * Review xref:reference/backend-capabilities.adoc[backend capabilities] before moving existing Bolt code.
 
-This procedure uses the published Python 0.6.0 package. It performs a message write and leaves the test conversation available for inspection.
+This procedure uses the published Python 0.7.0 package. It performs a message write and leaves the test conversation available for inspection.
 
 [#_install]
 == 1. Install the client
@@ -24,7 +24,7 @@ mkdir nams-connection-check
 cd nams-connection-check
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install 'neo4j-agent-memory[nams]==0.6.0'
+python -m pip install 'neo4j-agent-memory[nams]==0.7.0'
 export MEMORY_API_KEY='nams_replace_with_workspace_key'
 export MEMORY_ENDPOINT='https://memory.neo4jlabs.com/v1'
 ----
@@ -112,7 +112,7 @@ anchor:_whats_not_available_on_nams[]
 
 The NAMS transport can wrap each HTTP request in a span named `nams.http.request`. Its attributes are `http.method`, `http.url`, `nams.method` (the SDK operation, for example `list_conversations`), `nams.protocol`, `http.status_code` and, when the request was retried, `nams.retry_count`.
 
-In Python 0.6.0, `connect()` and `MemoryClient` create the transport without a tracer, so requests made through the client emit no spans. To trace requests, build the lower-level `NamsBackend` yourself and pass a tracer from `get_tracer()` (see xref:reference/configuration-advanced.adoc#_observability_configuration[observability configuration]). The backend exposes the same `short_term`, `long_term`, `reasoning`, `query` and `ontology` accessors that `MemoryClient` binds on NAMS:
+In Python 0.7.0, `connect()` and `MemoryClient` create the transport without a tracer, so requests made through the client emit no spans. To trace requests, build the lower-level `NamsBackend` yourself and pass a tracer from `get_tracer()` (see xref:reference/configuration-advanced.adoc#_observability_configuration[observability configuration]). The backend exposes the same `short_term`, `long_term`, `reasoning`, `query` and `ontology` accessors that `MemoryClient` binds on NAMS:
 
 [source,python]
 ----

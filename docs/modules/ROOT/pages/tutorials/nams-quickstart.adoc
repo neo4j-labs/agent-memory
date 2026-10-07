@@ -11,7 +11,7 @@ extraction, and verify the same messages from a fresh process. We will retain
 the IDs returned by NAMS and use them for scoped cleanup. This path needs no
 model API key and creates no reasoning records.
 
-This lesson uses `neo4j-agent-memory` 0.6.0 from PyPI and the complete programs on this page in a POSIX shell. Create the local files shown below; the checks below verify the results in your environment.
+This lesson uses `neo4j-agent-memory` 0.7.0 from PyPI and the complete programs on this page in a POSIX shell. Create the local files shown below; the checks below verify the results in your environment.
 
 [[_what_youll_need]]
 == Before you begin
@@ -29,14 +29,14 @@ include::partial$python-tutorial-setup.adoc[]
 
 [source,bash]
 ----
-python -m pip install 'neo4j-agent-memory[nams]==0.6.0'
+python -m pip install 'neo4j-agent-memory[nams]==0.7.0'
 python -c "from importlib.metadata import version; \
 import neo4j_agent_memory; \
-assert version('neo4j-agent-memory') == '0.6.0'; \
-print('SDK 0.6.0 import verified')"
+assert version('neo4j-agent-memory') == '0.7.0'; \
+print('SDK 0.7.0 import verified')"
 ----
 
-Expected: `SDK 0.6.0 import verified`. Keep `agent-memory-tutorials` as your working directory for every command below.
+Expected: `SDK 0.7.0 import verified`. Keep `agent-memory-tutorials` as your working directory for every command below.
 
 [[_2_configure]]
 == Step 2: Configure the hosted workspace
@@ -322,6 +322,6 @@ Context assembly, graph expansion, ontology management, and read-only Cypher are
 * Graph expansion: xref:reference/api/long-term-geospatial.adoc#_expand_graph[`expand_graph`].
 * Read-only Cypher: `client.query.cypher` in the xref:reference/api/memory-client.adoc#_properties[MemoryClient properties].
 * Endpoint paths for all of these: xref:reference/rest-api.adoc[REST API].
-* Ontology management: xref:how-to/use-ontologies.adoc[Activate and verify a workspace ontology].
+* Ontology management: xref:how-to/use-ontologies.adoc[Activate and verify a workspace ontology]. `client.ontology` also exists on a Bolt client, where the ontology is stored in your own Neo4j database and drives local extraction; see xref:how-to/ontology-driven-extraction.adoc[ontology-driven extraction].
 
 Continue with xref:tutorials/ontology-quickstart.adoc[the ontology lesson] after this conversation path succeeds.

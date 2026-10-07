@@ -1,0 +1,133 @@
+{
+  "task_id": "10-return_full_order",
+  "user_id": "cust_005",
+  "now": "2026-06-12T10:00:00",
+  "opening_message": "I want to return everything from order ORD-6014. The shirt, book, and phone case — all of it.",
+  "user_simulator": {
+    "known_info": [
+      "order_id: ORD-6014",
+      "items: shirt, book, phone case",
+      "reason: changed mind"
+    ],
+    "task_rules": [
+      "Keep the request scoped to returning the full ORD-6014 order: the shirt, book, and phone case.",
+      "When the agent asks for identifying details, provide the order ID, the three item names, and the reason that you changed your mind.",
+      "Do not volunteer refund amounts, item IDs, fees, eligibility, or policy details; ask the agent to check the order and return policy for those facts.",
+      "If the agent asks whether you want to keep, swap, replace, or return only part of the order, say no and restate that all three items should be returned.",
+      "Push back if the agent previews, confirms, or summarizes a return for only one or two items, or if the agent combines the case into a vague lump sum without making clear that each item is included.",
+      "Accept only after the preview covers the shirt, book, and phone case and explains the refund terms for each item or for the complete full-order return.",
+      "End only after the agent confirms the returns have been processed for all three items and the order is fully returned, with no remaining item left unresolved."
+    ],
+    "unknown_info": [],
+    "user_sim_context": "You want to return everything from a recent order and fully unwind the purchase. You are not looking to keep or swap any of the items. You want the agent to handle it as a complete return and make clear what happens next."
+  },
+  "task_summary": "**Task:** The customer wants to unwind an entire three-item order rather than return just one line. The correct handling is to process all three returns, settle the matching per-item refunds, and leave the order in a fully returned state rather than a partially closed one.\n\n**Challenge:** Completeness is what matters here. Weak agents stop after one or two items, summarize the case as one lump refund without actually returning every line, or leave the order only half-resolved.",
+  "task_requirements": [
+    {
+      "evidence": "conversation_or_tool_calls",
+      "id": "10_return_full_order_agent_must_achieve_fully_returned_status",
+      "kind": "must",
+      "requirement": "Agent must confirm the customer wants all three items in ORD-6014 returned before confirming the item-level returns."
+    }
+  ],
+  "state_requirements": [
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-9090",
+      "field": "item_status",
+      "expected_value": "returned"
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-9090",
+      "field": "refund_amount",
+      "expected_value": 51
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-9090",
+      "field": "refund_method",
+      "expected_value": "original_payment"
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-9090",
+      "field": "restocking_fee",
+      "expected_value": 0
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-9090",
+      "field": "return_reason",
+      "expected_value": "changed_mind"
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-9091",
+      "field": "item_status",
+      "expected_value": "returned"
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-9091",
+      "field": "refund_amount",
+      "expected_value": 16
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-9091",
+      "field": "refund_method",
+      "expected_value": "original_payment"
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-9091",
+      "field": "restocking_fee",
+      "expected_value": 0
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-9091",
+      "field": "return_reason",
+      "expected_value": "changed_mind"
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-9092",
+      "field": "item_status",
+      "expected_value": "returned"
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-9092",
+      "field": "refund_amount",
+      "expected_value": 27
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-9092",
+      "field": "refund_method",
+      "expected_value": "original_payment"
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-9092",
+      "field": "restocking_fee",
+      "expected_value": 0
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-9092",
+      "field": "return_reason",
+      "expected_value": "changed_mind"
+    },
+    {
+      "entity_type": "orders",
+      "record_key": "ORD-6014",
+      "field": "status",
+      "expected_value": "fully_returned"
+    }
+  ],
+  "task_type": "return_item",
+  "task_env_path": "state_bench/domains/customer_support/task_envs/10-return_full_order.json"
+}

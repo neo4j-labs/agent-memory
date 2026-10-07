@@ -149,60 +149,80 @@ See xref:reference/configuration-providers.adoc#llm[LLM configuration] for the f
 
 == Graph schema configuration
 
-`+NAM_SCHEMA_CONFIG__+` prefix. `+NAM_SCHEMA_CONFIG__ENTITY_TYPES+` is a JSON array, for example `+NAM_SCHEMA_CONFIG__ENTITY_TYPES='["PERSON", "ORGANIZATION"]'+`.
+`+NAM_SCHEMA_CONFIG__+` prefix. `+NAM_SCHEMA_CONFIG__ENTITY_TYPES+` is a JSON array, for example `+NAM_SCHEMA_CONFIG__ENTITY_TYPES='["PERSON", "ORGANIZATION"]'+`. On bolt these fields select the ontology the client extracts and validates against, resolved once per connection.
 
 [cols="4,2,4",options="header"]
 |===
 | Variable | Default | Meaning
-| pass:[<code>NAM_<wbr>SCHEMA_<wbr>CONFIG__<wbr>MODEL</code>] | `poleo` | Schema model to use (`poleo`, `legacy`, `custom`) — not automatically applied by MemoryClient
+| pass:[<code>NAM_<wbr>SCHEMA_<wbr>CONFIG__<wbr>MODEL</code>] | `poleo` | Schema model (`poleo`, `legacy`, `custom`); `custom` with `ENTITY_TYPES` builds an ad-hoc ontology
 | pass:[<code>NAM_<wbr>SCHEMA_<wbr>CONFIG__<wbr>ENTITY_<wbr>TYPES</code>] | unset | Custom entity types (overrides model default when model=custom)
 | pass:[<code>NAM_<wbr>SCHEMA_<wbr>CONFIG__<wbr>ENABLE_<wbr>SUBTYPES</code>] | `true` | Whether to track entity subtypes — not automatically applied by MemoryClient
-| pass:[<code>NAM_<wbr>SCHEMA_<wbr>CONFIG__<wbr>STRICT_<wbr>TYPES</code>] | `false` | Whether to reject unknown entity types — not automatically applied by MemoryClient
-| pass:[<code>NAM_<wbr>SCHEMA_<wbr>CONFIG__<wbr>CUSTOM_<wbr>SCHEMA_<wbr>PATH</code>] | unset | Accepted path field; not automatically loaded by MemoryClient
+| pass:[<code>NAM_<wbr>SCHEMA_<wbr>CONFIG__<wbr>STRICT_<wbr>TYPES</code>] | `false` | Selects `strict` validation when no validation mode is set or stored
+| pass:[<code>NAM_<wbr>SCHEMA_<wbr>CONFIG__<wbr>CUSTOM_<wbr>SCHEMA_<wbr>PATH</code>] | unset | Schema file (`.json`/`.yaml`) holding an EntitySchemaConfig or an ontology document; consulted after `ONTOLOGY_PATH`
+| pass:[<code>NAM_<wbr>SCHEMA_<wbr>CONFIG__<wbr>ONTOLOGY_<wbr>PATH</code>] | unset | Ontology document (`.json`/`.yaml`), for example `/etc/ontology.yaml`
+| pass:[<code>NAM_<wbr>SCHEMA_<wbr>CONFIG__<wbr>USE_<wbr>ACTIVE_<wbr>ONTOLOGY</code>] | `true` | Adopt the ontology version activated in the database
+| pass:[<code>NAM_<wbr>SCHEMA_<wbr>CONFIG__<wbr>ONTOLOGY_<wbr>TEMPLATE</code>] | `poleo` | Built-in template used as the final fallback
+| pass:[<code>NAM_<wbr>SCHEMA_<wbr>CONFIG__<wbr>VALIDATION_<wbr>MODE</code>] | unset | `permissive` or `strict` enforcement on the write paths
+| pass:[<code>NAM_<wbr>SCHEMA_<wbr>CONFIG__<wbr>BACKFILL_<wbr>RELATION_<wbr>TYPES</code>] | `true` | Allow the one-time `RELATED_TO` type backfill on connect
 |===
 
-See xref:reference/configuration-providers.adoc#schema[Graph schema configuration] for the full field table and its integration limits.
+See xref:reference/configuration-providers.adoc#schema[Graph schema configuration] for the full field table, the ontology precedence, and the remaining integration limit.
 
 == Extraction configuration
 
-`+NAM_EXTRACTION__+` prefix. `+NAM_EXTRACTION__ENTITY_TYPES+` is a JSON array. There are no batch, streaming, or chunk-size fields in this settings group — those are method arguments, not environment variables.
+`+NAM_EXTRACTION__+` prefix. `+NAM_EXTRACTION__ENTITY_TYPES+` is a JSON array. The `GLINER_*` names keep their spelling but configure GLiNER2.5 (the `gliner2` extra). There are no batch or streaming fields in this settings group — those are method arguments, not environment variables; `GLINER_MAX_WORDS` and `GLINER_CHUNK_OVERLAP` only window long input inside the GLiNER2.5 stage.
 
 [cols="4,2,4",options="header"]
 |===
 | Variable | Default | Meaning
 | pass:[<code>NAM_<wbr>EXTRACTION__<wbr>EXTRACTOR_<wbr>TYPE</code>] | `pipeline` | Type of entity extractor (`llm`/`gliner`/`spacy`/`pipeline`/`none`)
 | pass:[<code>NAM_<wbr>EXTRACTION__<wbr>ENABLE_<wbr>SPACY</code>] | `true` | Enable spaCy in extraction pipeline
-| pass:[<code>NAM_<wbr>EXTRACTION__<wbr>ENABLE_<wbr>GLINER</code>] | `true` | Enable GLiNER in extraction pipeline
+| pass:[<code>NAM_<wbr>EXTRACTION__<wbr>ENABLE_<wbr>GLINER</code>] | `true` | Enable the GLiNER2.5 stage in the extraction pipeline
 | pass:[<code>NAM_<wbr>EXTRACTION__<wbr>ENABLE_<wbr>LLM_<wbr>FALLBACK</code>] | `true` | Enable LLM as fallback in pipeline
 | pass:[<code>NAM_<wbr>EXTRACTION__<wbr>MERGE_<wbr>STRATEGY</code>] | `confidence` | Strategy for merging results from multiple extractors
 | pass:[<code>NAM_<wbr>EXTRACTION__<wbr>FALLBACK_<wbr>ON_<wbr>EMPTY</code>] | `true` | Continue to next stage if current stage returns no results
 | pass:[<code>NAM_<wbr>EXTRACTION__<wbr>SPACY_<wbr>MODEL</code>] | `en_core_web_sm` | spaCy model name
 | pass:[<code>NAM_<wbr>EXTRACTION__<wbr>SPACY_<wbr>CONFIDENCE</code>] | `0.85` | Default confidence score for spaCy extractions
-| pass:[<code>NAM_<wbr>EXTRACTION__<wbr>GLINER_<wbr>MODEL</code>] | `gliner-community/gliner_medium-v2.5` | GLiNER model name
-| pass:[<code>NAM_<wbr>EXTRACTION__<wbr>GLINER_<wbr>THRESHOLD</code>] | `0.5` | GLiNER confidence threshold
-| pass:[<code>NAM_<wbr>EXTRACTION__<wbr>GLINER_<wbr>DEVICE</code>] | `cpu` | Device for GLiNER model (cpu/cuda/mps)
-| pass:[<code>NAM_<wbr>EXTRACTION__<wbr>GLINER_<wbr>SCHEMA</code>] | unset | Domain schema for GLiNER extraction (poleo, podcast, news, scientific, business, entertainment, medical, legal)
+| pass:[<code>NAM_<wbr>EXTRACTION__<wbr>GLINER_<wbr>MODEL</code>] | `fastino/gliner2.5-base-v1` | GLiNER2.5 checkpoint (`small-v1`, `base-v1`, or `multi-v1`); GLiNER v1 ids are rejected when the extractor is built
+| pass:[<code>NAM_<wbr>EXTRACTION__<wbr>GLINER_<wbr>THRESHOLD</code>] | `0.5` | GLiNER2.5 entity confidence threshold
+| pass:[<code>NAM_<wbr>EXTRACTION__<wbr>GLINER_<wbr>RELATION_<wbr>THRESHOLD</code>] | unset | Confidence floor for decoded relations
+| pass:[<code>NAM_<wbr>EXTRACTION__<wbr>GLINER_<wbr>DEVICE</code>] | `cpu` | Device for the GLiNER2.5 model (cpu/cuda/mps)
+| pass:[<code>NAM_<wbr>EXTRACTION__<wbr>GLINER_<wbr>SCHEMA</code>] | unset | Built-in domain template (poleo, podcast, news, scientific, business, entertainment, medical, legal); replaces the resolved ontology for GLiNER2.5
+| pass:[<code>NAM_<wbr>EXTRACTION__<wbr>GLINER_<wbr>MAX_<wbr>WORDS</code>] | `384` | Longest input decoded in one pass; longer text is windowed
+| pass:[<code>NAM_<wbr>EXTRACTION__<wbr>GLINER_<wbr>CHUNK_<wbr>OVERLAP</code>] | `64` | Word overlap between windows
+| pass:[<code>NAM_<wbr>EXTRACTION__<wbr>GLINER_<wbr>OVERLAP_<wbr>POLICY</code>] | unset | Span-overlap policy for the attribute pass (`flat`/`nested`/`allow`/`longest`)
+| pass:[<code>NAM_<wbr>EXTRACTION__<wbr>GLINER_<wbr>EXTRACT_<wbr>ATTRIBUTES</code>] | `false` | Run the opt-in attribute pass for the ontology's enum properties
+| pass:[<code>NAM_<wbr>EXTRACTION__<wbr>GLINER_<wbr>QUANTIZE</code>] | `false` | Load the GLiNER2.5 weights in fp16
+| pass:[<code>NAM_<wbr>EXTRACTION__<wbr>GLINER_<wbr>COMPILE</code>] | `false` | Run the GLiNER2.5 weights through `torch.compile`
 | pass:[<code>NAM_<wbr>EXTRACTION__<wbr>LLM_<wbr>MODEL</code>] | `gpt-4o-mini` | LLM model for extraction
-| pass:[<code>NAM_<wbr>EXTRACTION__<wbr>ENTITY_<wbr>TYPES</code>] | `["PERSON", "ORGANIZATION", "LOCATION", "EVENT", "OBJECT"]` | Entity types to extract (POLE+O by default)
+| pass:[<code>NAM_<wbr>EXTRACTION__<wbr>ENTITY_<wbr>TYPES</code>] | `["PERSON", "ORGANIZATION", "LOCATION", "EVENT", "OBJECT"]` | Entity types for the LLM extractor (POLE+O by default)
 | pass:[<code>NAM_<wbr>EXTRACTION__<wbr>EXTRACT_<wbr>RELATIONS</code>] | `true` | Whether to extract relations
 | pass:[<code>NAM_<wbr>EXTRACTION__<wbr>EXTRACT_<wbr>PREFERENCES</code>] | `true` | Whether to extract preferences
-| pass:[<code>NAM_<wbr>EXTRACTION__<wbr>CONFIDENCE_<wbr>THRESHOLD</code>] | `0.5` | Minimum confidence threshold for extracted entities — not automatically applied by MemoryClient
+| pass:[<code>NAM_<wbr>EXTRACTION__<wbr>CONFIDENCE_<wbr>THRESHOLD</code>] | `0.5` | Floor applied to the merged result of `EXTRACTOR_TYPE=pipeline`
 |===
 
 See xref:reference/configuration-providers.adoc#extraction[Extraction configuration] for the full field table.
 
 == Resolution configuration
 
-`+NAM_RESOLUTION__+` prefix. All scalar-valued. `+NAM_RESOLUTION__EMBEDDING_THRESHOLD+` and `+NAM_RESOLUTION__MATCH_SAME_TYPE_ONLY+` are not valid fields; the semantic threshold field is `+NAM_RESOLUTION__SEMANTIC_THRESHOLD+`.
+`+NAM_RESOLUTION__+` prefix. All scalar-valued. `+NAM_RESOLUTION__EMBEDDING_THRESHOLD+` and `+NAM_RESOLUTION__MATCH_SAME_TYPE_ONLY+` are not valid fields; the semantic threshold field is `+NAM_RESOLUTION__SEMANTIC_THRESHOLD+`. Deduplication thresholds live here too: `AUTO_MERGE_THRESHOLD` and `REVIEW_THRESHOLD` band both message ingestion and `long_term.add_entity`.
 
 [cols="4,2,4",options="header"]
 |===
 | Variable | Default | Meaning
-| pass:[<code>NAM_<wbr>RESOLUTION__<wbr>STRATEGY</code>] | `composite` | Resolution strategy (`exact`/`fuzzy`/`semantic`/`composite`/`none`)
+| pass:[<code>NAM_<wbr>RESOLUTION__<wbr>STRATEGY</code>] | `composite` | Resolution strategy (`exact`/`fuzzy`/`semantic`/`composite`/`none`); `composite` builds `OntologyResolver` on bolt
 | pass:[<code>NAM_<wbr>RESOLUTION__<wbr>EXACT_<wbr>THRESHOLD</code>] | `1.0` | Exact match threshold
 | pass:[<code>NAM_<wbr>RESOLUTION__<wbr>FUZZY_<wbr>THRESHOLD</code>] | `0.85` | Fuzzy match threshold
 | pass:[<code>NAM_<wbr>RESOLUTION__<wbr>SEMANTIC_<wbr>THRESHOLD</code>] | `0.8` | Semantic match threshold
 | pass:[<code>NAM_<wbr>RESOLUTION__<wbr>FUZZY_<wbr>SCORER</code>] | `token_sort_ratio` | Fuzzy matching scorer — not forwarded by MemoryClient
+| pass:[<code>NAM_<wbr>RESOLUTION__<wbr>RESOLVE_<wbr>ON_<wbr>INGEST</code>] | `true` | Resolve extracted mentions while storing a message; the single opt-out for ingest-time resolution
+| pass:[<code>NAM_<wbr>RESOLUTION__<wbr>AUTO_<wbr>MERGE_<wbr>THRESHOLD</code>] | `0.90` | Merge a mention onto the match at or above this score
+| pass:[<code>NAM_<wbr>RESOLUTION__<wbr>REVIEW_<wbr>THRESHOLD</code>] | `0.85` | Store the mention plus a pending `SAME_AS` edge at or above this score; must not exceed `AUTO_MERGE_THRESHOLD`
+| pass:[<code>NAM_<wbr>RESOLUTION__<wbr>CANDIDATE_<wbr>LIMIT</code>] | `12` | Blocking candidates per mention and per bucket
+| pass:[<code>NAM_<wbr>RESOLUTION__<wbr>USE_<wbr>ALIAS_<wbr>GAZETTEER</code>] | `true` | Use the ontology's `aliases` as blocking keys and as a 1.0 match rule
+| pass:[<code>NAM_<wbr>RESOLUTION__<wbr>USE_<wbr>EMBEDDING_<wbr>BLOCKING</code>] | `true` | Also block via the entity vector index (needs an embedder)
+| pass:[<code>NAM_<wbr>RESOLUTION__<wbr>CONTEXT_<wbr>WINDOW_<wbr>CHARS</code>] | `90` | Half-width of the mention context window used in scoring
+| `NAM_RESOLUTION__SCOPE` | `global` | `global` or `user`; `user` restricts candidates to entities the tenant has mentioned
 |===
 
 See xref:reference/configuration-providers.adoc#resolution[Resolution configuration] for the full field table.
@@ -296,7 +316,7 @@ anchor:_observability[]
 
 The declared field inventory above is not an assertion of runtime wiring. See xref:reference/configuration-operations.adoc#integration-limits[Configuration integration limits] for provider, method-default, schema, TTL, and auditing behavior. The settings family is `+NAM_RESOLUTION__SEMANTIC_THRESHOLD+`; `+NAM_RESOLUTION__EMBEDDING_THRESHOLD+` and `+NAM_RESOLUTION__MATCH_SAME_TYPE_ONLY+` are invalid fields.
 
-There are no `+NAM_DEDUPLICATION__...+`, `+NAM_OBSERVABILITY__...+`, or `+NAM_CLI__...+` settings groups. Batch sizes/concurrency/chunk sizes for extraction belong to method arguments, not ExtractionConfig environment fields.
+There are no `+NAM_DEDUPLICATION__...+`, `+NAM_OBSERVABILITY__...+`, or `+NAM_CLI__...+` settings groups; variables with those prefixes are ignored. Set deduplication thresholds with `+NAM_RESOLUTION__AUTO_MERGE_THRESHOLD+` and `+NAM_RESOLUTION__REVIEW_THRESHOLD+`. Batch sizes/concurrency/chunk sizes for extraction belong to method arguments, not ExtractionConfig environment fields.
 
 anchor:_aws_configuration[]
 
@@ -341,7 +361,9 @@ NAM_EXTRACTION__EXTRACTOR_TYPE=pipeline
 NAM_EXTRACTION__ENABLE_SPACY=true
 NAM_EXTRACTION__ENABLE_GLINER=true
 NAM_EXTRACTION__ENABLE_LLM_FALLBACK=false
+NAM_EXTRACTION__GLINER_MODEL=fastino/gliner2.5-base-v1
 NAM_EXTRACTION__GLINER_SCHEMA=podcast
+NAM_RESOLUTION__RESOLVE_ON_INGEST=true
 NAM_ENRICHMENT__ENABLED=false
 NAM_GEOCODING__ENABLED=false
 ----

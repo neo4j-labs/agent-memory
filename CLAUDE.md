@@ -2,6 +2,23 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Naming glossary
+
+Use these spellings consistently; they are load-bearing because two similarly
+named packages exist.
+
+| Term | Means |
+|---|---|
+| **GLiNER** | The `gliner` v1 package and its community checkpoints (`urchade/*`, `gliner-community/*`, `numind/*`). **Removed in 0.7.** |
+| **GLiREL** | The separate `glirel` relation model. **Removed in 0.7.** |
+| **GLiNER2.5** | The `fastino/gliner2.5-{small,base,multi}-v1` checkpoints on the `gliner2` package (Apache-2.0). The current extractor. |
+| **`GLiNER2Extractor`** | The class in `extraction/gliner2_extractor.py`. |
+| **JointIE** | GLiNER2.5's joint entity + relation decoder, which enforces endpoint types during beam search. |
+| ~~"GLiNER2"~~ | Never use this for the old setup — it collides with the `gliner2` package name. |
+
+The `gliner_*` configuration field names and the `with_gliner*` builder methods
+keep their spelling for compatibility; in those names "gliner" means GLiNER2.5.
+
 ## Polyglot Layout
 
 This repository ships **two SDKs** with the same memory model and the
@@ -39,7 +56,7 @@ Plain `v*` tags do not trigger any publish.
   `tests/**`, `benchmarks/**`, `examples/**`, `docs/**`, `scripts/**`,
   and Python config files. **TypeScript-only PRs do not trigger Python
   CI.** It also owns the `frontend-build` job, which installs, type-checks,
-  lints, tests and builds the five example frontends plus the AWS CDK app. A
+  lints, tests and builds the six example frontends plus the AWS CDK app. A
   `changed-paths` job narrows that matrix with plain `git diff`, so a
   Python-only PR skips it.
 - `.github/workflows/ci-typescript.yml` fires on changes under
@@ -168,20 +185,31 @@ src/neo4j_agent_memory/
 │   ├── short_term.py          # Conversations, messages
 │   ├── long_term.py          # Entities, preferences, facts (POLE+O)
 │   └── reasoning.py        # Reasoning traces, tool calls
+├── ontology/                # Backend-neutral ontology package (v0.7)
+│   ├── models.py            # OntologyDocument, EntityTypeDef, RelationshipDef, PropertyDef
+│   ├── builtin.py           # POLEO_ONTOLOGY, eight domain templates, get_template/list_templates
+│   ├── compile.py           # -> JointSchema / attribute Schema / label map / LLM prompt fragment
+│   ├── convert.py           # EntitySchemaConfig / DomainSchema / arrows <-> OntologyDocument, load_ontology
+│   ├── diff.py              # diff_documents() -> OntologyDiff
+│   ├── protocol.py          # OntologyAPI Protocol (NamsOntology + BoltOntology)
+│   └── store.py             # BoltOntology: client.ontology on bolt
 ├── extraction/
-│   ├── base.py              # EntityExtractor protocol, ExtractedEntity
-│   ├── llm_extractor.py     # LLM-based extraction (OpenAI)
+│   ├── base.py              # EntityExtractor protocol, ExtractedEntity, validate_relations()
+│   ├── llm_extractor.py     # LLM-based extraction (ontology-aware prompt)
 │   ├── spacy_extractor.py   # spaCy NER extraction
-│   ├── gliner_extractor.py  # GLiNER zero-shot NER, GLiREL relations
+│   ├── gliner2_extractor.py # GLiNER2.5 joint entity + relation decoding (JointIE)
+│   ├── domain_schemas.py    # DomainSchema, DOMAIN_SCHEMAS, get_schema, list_schemas, to_ontology()
+│   ├── label_mapping.py     # DEFAULT_LABEL_MAPPING, map_label_to_poleo()
 │   ├── pipeline.py          # Multi-stage extraction pipeline
 │   ├── streaming.py         # Streaming extraction for long documents
 │   └── factory.py           # Extractor factory and builder
 ├── resolution/
-│   ├── base.py              # EntityResolver protocol
+│   ├── base.py              # EntityResolver protocol, ResolvedEntity, ResolutionMatch
 │   ├── exact.py             # Exact string matching
 │   ├── fuzzy.py             # RapidFuzz-based matching
-│   ├── long_term.py          # Embedding similarity
-│   └── composite.py         # Chained strategy resolver (type-aware)
+│   ├── semantic.py          # Embedding similarity
+│   ├── composite.py         # Chained strategy resolver (type-aware)
+│   └── ontology.py          # OntologyResolver (v0.7): normalize -> block -> score -> band -> cluster
 ├── embeddings/
 │   ├── base.py              # Embedder protocol
 │   ├── openai.py            # OpenAI embeddings
@@ -249,10 +277,13 @@ benchmarks/                   # Extraction quality benchmarks (separate module)
 - **`UserMemory`** _(v0.2)_: First-class `:User` identity for multi-tenant deployments
 - **`BufferedWriter`** _(v0.2)_: Fire-and-forget Cypher writer with bounded queue and background drain
 - **`ConsolidationMemory`** _(v0.2)_: Dry-runnable hygiene jobs (entity dedupe, trace summarization, preference supersedence, conversation archival)
-- **`EvalMemory`** _(v0.2)_: Labelled-suite evaluation harness for retrieval, audit, and preference quality
+- **`EvalMemory`** _(v0.2)_: Labelled-suite evaluation harness for retrieval, audit and preference quality, plus _(v0.7)_ `extraction` (`ExtractionCase`, relation F1) and `resolution` (`ResolutionCase`, B-cubed F1) — both skipped cleanly into `EvalReport.skipped` when the client has no extractor/resolver. Scoring lives in `core/metrics.py` so it ships with the wheel (`benchmarks/` does not)
 - **`Neo4jClient`**: Async wrapper around neo4j Python driver
-- **`ExtractionPipeline`**: Multi-stage entity extraction (spaCy → GLiNER → LLM)
-- **`CompositeResolver`**: Type-aware entity resolution
+- **`ExtractionPipeline`**: Multi-stage entity extraction (spaCy → GLiNER2.5 → LLM → relation validation)
+- **`OntologyDocument`** _(v0.7)_: The one typed schema the runtime agrees on — drives the JointIE schema, the LLM prompt, relation validation and resolution
+- **`BoltOntology`** _(v0.7)_: `client.ontology` on bolt, backed by `:Ontology` / `:OntologyVersion` nodes
+- **`OntologyResolver`** _(v0.7)_: Ontology-aware, type-constrained entity resolution; what `strategy=COMPOSITE` builds on bolt, and what runs on the ingestion path by default
+- **`CompositeResolver`**: Type-aware entity resolution (the pre-v0.7 chained resolver; still selectable)
 - **`MemoryObserver`**: Observational memory - tracks context per session and generates reflections when token thresholds are exceeded
 - **`PreferenceDetector`**: Pattern-based preference detection from user messages
 
@@ -276,6 +307,144 @@ The v0.2 feature drop adds production-readiness primitives. Each is opt-in and l
 (ReasoningStep)-[:TOUCHED]->(:Entity)                    # audit edges (NEW relationship type)
 ```
 
+### v0.7 surface — ontology and resolution
+
+Two features, one document. Both are bolt-side (NAMS runs the equivalents
+server-side) and both are wired in `_connect_bolt`.
+
+- **`neo4j_agent_memory.ontology`** — backend-neutral package. `OntologyDocument`
+  + `EntityTypeDef` / `RelationshipDef` / `PropertyDef` / `DomainInfo` (promoted
+  out of `nams/ontology.py`, which keeps re-exports). Lookups:
+  `labels()`, `label_map()`, `label_for(pole_type, subtype)` (with base-type
+  fallback), `declares()`, `relationship_types()`, `patterns()`,
+  `permits(source_label, rel_type, target_label)`. `validate_structure()` is the
+  *only* validator (parsing is lenient, `extra="ignore"`); it returns a list of
+  problems and is called — raising `ValueError` — by `BoltOntology.create/update`
+  and `compile_joint_schema`. `content_key()` is the content-addressed cache key.
+  Extension fields (all defaulted): `description` on types/relationships/
+  properties, `aliases`, `threshold`, `resolution_threshold`, `review_threshold`,
+  `inverse`, `unique_source`, `unique_target`, `acyclic`, `allow_self`, and
+  document-level `no_self_loops` (applied *per relation*, never as a global
+  flag). **Never pass `symmetric=True`** to a compiled relation — it is broken in
+  `gliner2` 2.0.0; use `inverse=`.
+- **`client.ontology` on bolt** (`BoltOntology`, `ontology/store.py`) — same
+  `OntologyAPI` surface as `NamsOntology`. Differences that matter: built-in
+  templates are synthesised rows with `template:<name>` ids (read-only,
+  `is_system=True`); `import_` converts `json`/`yaml`/`native`/`arrows`/`auto`
+  locally and raises `NotSupportedError` for `url=` and the extraction-backed
+  formats; `migrate` runs **synchronously** (one transaction per label pair,
+  `batch_size` ignored) and returns a terminal `MigrationJob` persisted as
+  `(:OntologyMigration)`; `get_active()` raises `NotSupportedError` when nothing
+  is bound and never falls back to POLE+O (the runtime resolution does that);
+  exactly one active version per database, swapped in a single write.
+- **Runtime precedence** (`MemoryClient._resolve_ontology`, once per connect,
+  before `_create_extractor`): `MemoryClient(ontology=...)` (document or path) →
+  `schema_config.ontology_path` → `schema_config.custom_schema_path` → active
+  stored `:OntologyVersion` (when `use_active_ontology`) → `SchemaModel.CUSTOM` +
+  `entity_types` (ad-hoc document) → `get_template(schema_config.ontology_template)`
+  → `POLEO_ONTOLOGY`. `extraction.gliner_schema` overrides the whole list when
+  the client builds a `gliner`/`pipeline` extractor itself (the factory gives it
+  precedence, and the two must agree). Read it back with
+  `client.ontology_document` / `client.validation_mode`. Activation therefore
+  affects the *next* connect.
+- **Validation modes.** Relations the ontology forbids are dropped in **both**
+  modes (`ExtractionResult.validate_relations(ontology, mode="warn"|"drop"|"raise")`;
+  the pipeline uses `mode="drop"`). `strict` adds entity enforcement:
+  `ShortTermMemory._apply_ontology` drops undeclared entities on ingest, and
+  `LongTermMemory.add_entity` / `add_relationship` raise `ValidationError`.
+- **`OntologyResolver`** (`resolution/ontology.py`) — `normalize_name()` (module
+  level, reused by `core/metrics.py`) → type-constrained blocking in Cypher
+  (`FIND_ENTITIES_BY_NORMALIZED_KEYS`, `FIND_ENTITIES_BY_TOKEN_PREFIX`,
+  `FIND_SIMILAR_ENTITIES_BY_EMBEDDING`, each with a `_FOR_USER` variant; the
+  first two match the stored, indexed `e.surface_keys` / `e.name_key`, so
+  **every Cypher write that creates an entity or changes its `name`,
+  `canonical_name` or `aliases` must append `queries.entity_keys_set_clause()`**,
+  and the `entity_keys_backfill` marker fills them on older graphs) → score
+  (exact 1.0, alias 1.0, acronym 0.97 (organizations only), whole-token prefix for
+  every type 0.92 when independent context corroborates it / 0.88 otherwise — name
+  embeddings never corroborate a prefix — else `0.45·fuzzy + 0.40·embed + 0.15·context` renormalized, −0.25
+  below 2.5 bits of entropy) → bands (`merged` / `review` / `created`) →
+  two-pass episode (`resolve_episode`, pass 2 clusters the unmatched among
+  themselves, anchored on first-seen). `resolve_one()` is the single-name entry.
+- **Resolution on ingest is ON by default.** `ShortTermMemory._persist_entities`
+  is the single entity-writing path for `add_message`, the batch loader and
+  `extract_entities_from_session`. `merged` → reuse the node and
+  `ADD_ENTITY_ALIAS`; `review` → create + pending `SAME_AS`; `created` → as
+  before. Only an `OntologyResolver` resolves on ingest, and
+  `resolution.resolve_on_ingest=False` is the single opt-out. A resolution
+  failure is logged and the mentions are stored unresolved — it never gates the
+  write. Cost measured at ~+1.7 ms for a two-mention message (~8%).
+- **One dedup mechanism.** `LongTermMemory._check_for_duplicates` delegates to
+  `OntologyResolver.resolve_one` when that is the configured resolver (mapping
+  the decision back onto `DeduplicationResult`), so `add_entity` and ingestion
+  band identically. `DeduplicationConfig.from_resolution_config()` projects
+  `ResolutionConfig` onto the old dataclass; `MemoryClient` passes
+  `DeduplicationConfig.from_resolution_config(settings.resolution)` to
+  `LongTermMemory`, so the non-delegated path bands the same way too.
+- **`_persist_entity` adopts the id the database returns** after the entity
+  `MERGE` (which keys on `(name, type)`). Before v0.7 a freshly generated uuid
+  was used even when `ON MATCH` kept the pre-existing id, so `MENTIONS` links and
+  every later write keyed on that id silently did nothing for pre-existing nodes.
+
+**Schema additions in v0.7:**
+
+```
+(:Ontology {id, name, description, is_system, created_at})
+(:Ontology)-[:HAS_VERSION]->(:OntologyVersion {id, ontology_id, revision,
+    validation_mode, document, schema_hash, is_active, created_at, message})
+(:OntologyMigration {id, ontology_id, status, total, processed, errored,
+    spec, error_message, created_at})                    # bolt migrate() record
+(:SchemaMigration {name, completed_at})                  # one-time backfill marker
+(Entity)-[:RELATED_TO {type, relation_type, confidence, support, derived,
+    extractor, source_message_ids, evidence,
+    created_at, updated_at}]->(Entity)                   # typed + provenance
+(Entity)-[:SAME_AS {status: "pending", confidence, match_type}]->(Entity)
+                                                         # now also written on ingest
+```
+
+Constraints on `Ontology.id` and `OntologyVersion.id`, plus an index on
+`Ontology.name`, are created by `graph/schema.py` (`setup_constraints` /
+`setup_indexes`, and dropped by `drop_all`). `setup_all()` also runs the
+`queries.BACKFILL_RELATION_TYPE` backfill once per database: success is recorded
+on a `(:SchemaMigration {name: "relation_type_backfill"})` marker that later
+connects check first, and `schema_config.backfill_relation_types=False` skips it.
+The same switch gates `queries.BACKFILL_ENTITY_KEYS` (marker
+`entity_keys_backfill`), which fills the resolver's lookup keys.
+
+**Configuration (v0.7):**
+
+```python
+# SchemaConfig — which ontology, and how strictly
+SchemaConfig(
+    ontology_path=None,          # NAM_SCHEMA_CONFIG__ONTOLOGY_PATH
+    custom_schema_path=None,     # EntitySchemaConfig *or* OntologyDocument file
+    use_active_ontology=True,    # adopt the activated stored version
+    ontology_template="poleo",   # final fallback template
+    validation_mode=None,        # "permissive" | "strict" | None (derive)
+)
+
+# ResolutionConfig — ingest-time resolution
+ResolutionConfig(
+    resolve_on_ingest=True,      # the single opt-out
+    auto_merge_threshold=0.90,   # per-type: EntityTypeDef.resolution_threshold
+    review_threshold=0.85,       # per-type: EntityTypeDef.review_threshold
+    candidate_limit=12,
+    use_alias_gazetteer=True,    # EntityTypeDef.aliases
+    use_embedding_blocking=True, # entity vector index (needs an embedder)
+    context_window_chars=90,
+    scope="global",              # or "user" (candidates the tenant mentioned)
+)
+```
+
+`review_threshold <= auto_merge_threshold` is enforced by a model validator.
+There is **no** `deduplication` settings section and `NAM_DEDUPLICATION__*` is
+ignored; the bands live on `ResolutionConfig`.
+
+**Docs:** `docs/.../how-to/ontology-driven-extraction.adoc`,
+`docs/.../how-to/tune-entity-resolution.adoc`,
+`docs/.../explanation/ontologies.adoc`, `docs/.../reference/ontology-api.adoc`.
+**Example:** `examples/ontology-extraction/` (keyless, bolt).
+
 **Smoke-testing the v0.2 surface:** see the four small examples — `examples/{existing-graph,buffered-writes,audit-trail,eval-harness}/` — all run with `llm=None` and a local sentence-transformers embedder, no API keys required. Each pairs with a `tests/examples/test_*_example.py` smoke test wired into `example-tests` CI.
 
 **Phantom-method guard:** `tests/examples/test_no_phantom_methods.py` cross-references every `client.<layer>.<method>(` call in `examples/` against the actual class API. Catches silent breakage when an example calls a renamed/removed method (this guard caught five real cases during the v0.2 examples-review pass — see `CHANGELOG.md`).
@@ -285,8 +454,11 @@ The v0.2 feature drop adds production-readiness primitives. Each is opt-in and l
 The package creates these node types:
 - `Conversation`, `Message` (short-term)
 - `Entity` (with `type`, `subtype` for POLE+O), `Preference`, `Fact` (long-term)
-  - Entity nodes have dynamic PascalCase labels for type/subtype (e.g., `:Entity:Person:Individual`, `:Entity:Object:Vehicle`)
+  - Entity nodes have dynamic PascalCase labels for type/subtype (e.g., `:Entity:Person:Individual`, `:Entity:Object:Vehicle`). On bolt the write paths also add the label the client's ontology declares for the entity's *exact* `(pole_type, subtype)` pair (`OntologyDocument.node_label`, no fallbacks; a pair two labels declare adds nothing), in PascalCase that keeps the label's own capitals (`graph/query_builder.ontology_node_label`: `SupportCase` stays, `tv_show` -> `TvShow`). So `EntityTypeDef(label="Customer", pole_type="PERSON", subtype="CUSTOMER")` becomes `:Entity:Person:Customer`; omit `subtype` on two labels of one `pole_type` and neither reaches the graph. `BoltOntology.migrate` relabels in the same form
 - `ReasoningTrace`, `ReasoningStep`, `ToolCall`, `Tool` (reasoning)
+- `Ontology`, `OntologyVersion`, `OntologyMigration` (v0.7, bolt ontology store)
+- `Schema` (stored `EntitySchemaConfig` documents, `SchemaManager`), `Extractor` (provenance)
+- `SchemaMigration` (markers for one-time data migrations, e.g. the `relation_type_backfill`)
 
 #### Short-Term Memory Relationships
 
@@ -304,9 +476,27 @@ Messages in conversations are linked sequentially for efficient traversal:
 Entities can be linked to each other via extracted relationships:
 
 ```
-(Entity) -[:RELATED_TO {relation_type, confidence}]-> (Entity)  # Extracted relationships
+(Entity) -[:RELATED_TO {type, confidence, support, derived,       # Extracted relationships
+                        extractor, source_message_ids, evidence}]-> (Entity)
 (Entity) -[:SAME_AS]-> (Entity)                                  # Entity deduplication
 ```
+
+**Relation-storage invariants (v0.7):**
+
+- The merge key is `{type: $relation_type}`, so one pair of entities can carry
+  several differently-typed edges. Before 0.7 a second type overwrote the first.
+- `r.type` is the **canonical** relationship-name property and every reader uses
+  it. `r.relation_type` is written as a mirror for one release only.
+- `r.support` counts observations; `r.derived` is folded with `AND` across
+  observations, so one asserted (`derived=False`) sighting clears it permanently.
+- `r.source_message_ids` is capped at 25 entries, `r.evidence` at 3.
+- Writes prefer `ExtractedRelation.source_id`/`target_id` (mention ids from the
+  same extraction call) over a name lookup.
+- `graph/schema.py setup_all()` runs the `BACKFILL_RELATION_TYPE` query, copying
+  `relation_type` into `type`, once per database: completion is recorded on a
+  `(:SchemaMigration {name: "relation_type_backfill"})` marker, and a failed run
+  retries on the next connect. On very large graphs set
+  `schema_config.backfill_relation_types=False` and run the equivalent in batches.
 
 #### Cross-Memory Relationships
 
@@ -485,9 +675,17 @@ neo4j-agent-memory extract "..." --format jsonl   # JSON Lines (streaming)
 neo4j-agent-memory extract "..." --format table   # Rich table (default)
 
 # Use different extractors
-neo4j-agent-memory extract "..." --extractor gliner  # GLiNER (default)
+neo4j-agent-memory extract "..." --extractor gliner  # GLiNER2.5 (default)
 neo4j-agent-memory extract "..." --extractor llm     # LLM-based
-neo4j-agent-memory extract "..." --extractor hybrid  # GLiNER + LLM
+neo4j-agent-memory extract "..." --extractor hybrid  # GLiNER2.5 + LLM
+
+# Extract against a built-in domain schema or your own ontology
+neo4j-agent-memory extract "..." --gliner-schema podcast
+neo4j-agent-memory extract "..." --ontology my-ontology.yaml
+
+# Validate and compile ontology documents
+neo4j-agent-memory ontology validate ontology.yaml
+neo4j-agent-memory ontology compile ontology.yaml
 
 # Pipe from stdin
 echo "John works at Acme" | neo4j-agent-memory extract -
@@ -571,10 +769,10 @@ from benchmarks import (
     ExpectedEntity,
     create_sample_benchmark_suite,
 )
-from neo4j_agent_memory.extraction import GLiNEREntityExtractor
+from neo4j_agent_memory.extraction import GLiNER2Extractor
 
 # Create extractor
-extractor = GLiNEREntityExtractor.for_schema("poleo")
+extractor = GLiNER2Extractor.for_schema("poleo")
 
 # Load or create a benchmark suite
 suite = BenchmarkSuite.from_json_file("my_benchmark.json")
@@ -634,12 +832,12 @@ suite.to_json_file("my_benchmark.json")
 
 ```python
 from neo4j_agent_memory.extraction import (
-    GLiNEREntityExtractor,
+    GLiNER2Extractor,
     SpacyEntityExtractor,
 )
 
 extractors = [
-    GLiNEREntityExtractor.for_schema("poleo"),
+    GLiNER2Extractor.for_schema("poleo"),
     SpacyEntityExtractor("en_core_web_sm"),
 ]
 
@@ -748,7 +946,22 @@ await client.long_term.add_entity("Meeting Q1", "EVENT:MEETING")
 
 ### Entity Deduplication on Ingest
 
-Long-term memory supports automatic entity deduplication when adding entities. This uses embedding similarity and optional fuzzy string matching to identify potential duplicates:
+Two write paths deduplicate, and as of v0.7 they share one decision:
+
+- `long_term.add_entity()` — explicit, returns `(Entity, DeduplicationResult)`.
+- **Message ingestion** — `add_message` / batch / `extract_entities_from_session`
+  resolve the mentions they extract, **by default**
+  (`resolution.resolve_on_ingest=True`). Set it to `False` for the pre-v0.7
+  behaviour (one node per distinct surface form).
+
+Both go through `OntologyResolver` when `resolution.strategy=COMPOSITE` (the
+default on bolt), so the bands come from `ResolutionConfig`
+(`auto_merge_threshold=0.90`, `review_threshold=0.85`) with per-type overrides
+from the ontology. The `DeduplicationConfig` thresholds below apply to the
+pre-v0.7 embedding-similarity path, which is what runs when the configured
+resolver is something else — derive them with
+`DeduplicationConfig.from_resolution_config(settings.resolution)` to keep the
+two aligned.
 
 ```python
 from neo4j_agent_memory.memory import (
@@ -843,9 +1056,9 @@ Track where entities were extracted from and which extractor produced them:
 ```python
 # Register an extractor (auto-created on first link, but can be explicit)
 await client.long_term.register_extractor(
-    "GLiNEREntityExtractor",
-    version="1.0.0",
-    config={"threshold": 0.5, "schema": "podcast"},
+    "gliner2",
+    version="2.0.0",
+    config={"model": "fastino/gliner2.5-base-v1", "threshold": 0.5, "schema": "podcast"},
 )
 
 # Link entity to source message
@@ -862,7 +1075,7 @@ await client.long_term.link_entity_to_message(
 # Link entity to extractor
 await client.long_term.link_entity_to_extractor(
     entity,
-    "GLiNEREntityExtractor",
+    "gliner2",
     confidence=0.95,
     extraction_time_ms=150.5,
 )
@@ -880,7 +1093,7 @@ for entity, info in entities:
     print(f"{entity.name} at {info['start_pos']}-{info['end_pos']}")
 
 # Get entities by extractor
-entities = await client.long_term.get_entities_by_extractor("GLiNEREntityExtractor")
+entities = await client.long_term.get_entities_by_extractor("gliner2")
 
 # List all extractors with stats
 extractors = await client.long_term.list_extractors()
@@ -902,8 +1115,8 @@ deleted = await client.long_term.delete_entity_provenance(entity)
 // Extractor node
 (:Extractor {
     id: "uuid",
-    name: "GLiNEREntityExtractor",
-    version: "1.0.0",
+    name: "gliner2",
+    version: "2.0.0",
     config: "{...}",
     created_at: datetime()
 })
@@ -1133,15 +1346,17 @@ for item in result.results:
     print(f"Text {item.index}: {item.result.entity_count} entities, {item.duration_ms:.1f}ms")
 ```
 
-**GLiNER Batch Extraction (GPU-optimized):**
+**GLiNER2.5 Batch Extraction (GPU-optimized):**
 
 ```python
-from neo4j_agent_memory.extraction import GLiNEREntityExtractor
+from neo4j_agent_memory.extraction import GLiNER2Extractor
 
-# GLiNER supports native batch inference for better GPU utilization
-extractor = GLiNEREntityExtractor.for_schema("podcast", device="cuda")
+# GLiNER2.5 decodes a slice of texts in one forward pass
+extractor = GLiNER2Extractor.for_schema("podcast", device="cuda")
 
-# Batch extraction uses native GLiNER batch_predict_entities
+# Returns list[ExtractionResult] in input order (no BatchExtractionResult
+# wrapper, no max_concurrency — wrap in ExtractionPipeline for those).
+# Texts longer than max_words are windowed individually via extract_long.
 results = await extractor.extract_batch(
     texts,
     batch_size=32,  # Larger batches for GPU efficiency
@@ -1157,11 +1372,11 @@ For very long documents (>100K tokens), use streaming extraction to process chun
 from neo4j_agent_memory.extraction import (
     StreamingExtractor,
     create_streaming_extractor,
-    GLiNEREntityExtractor,
+    GLiNER2Extractor,
 )
 
 # Create base extractor
-extractor = GLiNEREntityExtractor.for_schema("podcast")
+extractor = GLiNER2Extractor.for_schema("podcast")
 
 # Wrap with streaming extractor
 streamer = StreamingExtractor(
@@ -1220,42 +1435,32 @@ for chunk in chunks:
     print(f"  Approx tokens: {chunk.approx_token_count}")
 ```
 
-### GLiREL Relationship Extraction (without LLM)
+### Joint Relationship Extraction (without LLM)
 
-GLiREL extracts relationships between entities without requiring LLM calls:
+GLiNER2.5 decodes entities *and* relations in one JointIE pass — no separate
+relation model:
 
 ```python
-from neo4j_agent_memory.extraction import (
-    is_glirel_available,
-    GLiRELExtractor,
-    GLiNERWithRelationsExtractor,
-    DEFAULT_RELATION_TYPES,
-)
+from neo4j_agent_memory.extraction import GLiNER2Extractor, is_gliner2_available
 
-# Check if GLiREL is available
-if is_glirel_available():
-    # Option 1: Separate entity and relationship extraction
-    from neo4j_agent_memory.extraction import GLiNEREntityExtractor
-
-    entity_extractor = GLiNEREntityExtractor.for_schema("poleo")
-    entity_result = await entity_extractor.extract(text)
-
-    relation_extractor = GLiRELExtractor()
-    relations = await relation_extractor.extract_relations(
-        text,
-        entities=entity_result.entities,
-    )
-
-    # Option 2: Combined extraction (recommended)
-    extractor = GLiNERWithRelationsExtractor.for_poleo()
+if is_gliner2_available():
+    extractor = GLiNER2Extractor.for_poleo()
     result = await extractor.extract("John works at Acme Corp in NYC.")
-    print(f"Entities: {result.entities}")   # John, Acme Corp, NYC
-    print(f"Relations: {result.relations}")  # John -[WORKS_AT]-> Acme Corp
+    print(result.entities)   # John, Acme Corp, NYC
+    print(result.relations)  # John -[EMPLOYED_BY]-> Acme Corp (with source_id/target_id)
 
-# Default relation types for POLE+O model
-print(DEFAULT_RELATION_TYPES.keys())
-# works_at, lives_in, member_of, knows, located_in, founded_by, owns, etc.
+# Relation types come from the ontology, not a module-level constant:
+from neo4j_agent_memory.ontology import POLEO_ONTOLOGY
+print(POLEO_ONTOLOGY.relationship_types())
+# KNOWS, ALIAS_OF, MEMBER_OF, EMPLOYED_BY, OWNS, USES, LOCATED_AT, RESIDES_AT,
+# HEADQUARTERS_AT, PARTICIPATED_IN, OCCURRED_AT, INVOLVED, SUBSIDIARY_OF,
+# PARTNER_WITH, RELATED_TO, MENTIONS
 ```
+
+Relations are only decoded when the ontology declares relationship types. The
+`poleo`, `podcast` and `news` templates do; the other five domain templates are
+entity-only until relationships are attached via
+`DomainSchema.to_ontology(relationships=[...])`.
 
 ### Automatic Relationship Storage
 
@@ -1274,7 +1479,7 @@ await memory.short_term.add_message(
 # This creates:
 # - Entity nodes: Brian Chesky (PERSON), Airbnb (ORGANIZATION), San Francisco (LOCATION)
 # - MENTIONS relationships: Message -> Entity
-# - RELATED_TO relationships: (Brian Chesky)-[:RELATED_TO {relation_type: "FOUNDED"}]->(Airbnb)
+# - RELATED_TO relationships: (Brian Chesky)-[:RELATED_TO {type: "FOUNDED"}]->(Airbnb)
 
 # Batch operations also support relationship extraction
 await memory.short_term.add_messages_batch(
@@ -1402,13 +1607,14 @@ Schemas are stored as `(:Schema)` nodes:
 })
 ```
 
-### GLiNER2 Domain Schemas
+### GLiNER2.5 Domain Schemas
 
-GLiNER2 supports domain-specific schemas that improve extraction accuracy:
+GLiNER2.5 reads entity-type descriptions as annotation guidelines, so a described
+label extracts noticeably better than a bare one:
 
 ```python
 from neo4j_agent_memory.extraction import (
-    GLiNEREntityExtractor,
+    GLiNER2Extractor,
     get_schema,
     list_schemas,
 )
@@ -1417,8 +1623,9 @@ from neo4j_agent_memory.extraction import (
 print(list_schemas())
 # ['poleo', 'podcast', 'news', 'scientific', 'business', 'entertainment', 'medical', 'legal']
 
-# Create extractor with domain schema
-extractor = GLiNEREntityExtractor.for_schema("podcast")
+# Create extractor with domain schema (resolved through ontology.get_template,
+# so the template's relationships come along)
+extractor = GLiNER2Extractor.for_schema("podcast")
 
 # Or use with ExtractorBuilder
 extractor = (
@@ -1429,10 +1636,13 @@ extractor = (
     .build()
 )
 
+# Or extract against an explicit ontology document
+extractor = ExtractorBuilder().with_ontology(doc).with_gliner().build()
+
 # Or via config
 config = ExtractionConfig(
-    gliner_schema="podcast",  # Use podcast domain schema
-    gliner_model="gliner-community/gliner_medium-v2.5",
+    gliner_schema="podcast",                     # Use podcast domain schema
+    gliner_model="fastino/gliner2.5-base-v1",    # small-v1 / base-v1 / multi-v1
 )
 ```
 
@@ -1446,15 +1656,15 @@ Available schemas:
 - `medical` - Healthcare (disease, drug, symptom, procedure, body_part, gene)
 - `legal` - Legal documents (case, person, organization, law, court, monetary_amount)
 
-**Checking GLiNER Availability:**
+**Checking GLiNER2.5 Availability:**
 
 ```python
-from neo4j_agent_memory.extraction import is_gliner_available
+from neo4j_agent_memory.extraction import GLiNER2Extractor, is_gliner2_available
 
-if not is_gliner_available():
-    print("GLiNER not installed. Install with: uv sync --all-extras")
+if not is_gliner2_available():
+    print('GLiNER2.5 not installed. Install with: pip install "neo4j-agent-memory[gliner2]"')
 else:
-    extractor = GLiNEREntityExtractor.for_schema("podcast")
+    extractor = GLiNER2Extractor.for_schema("podcast")
 ```
 
 **Creating Custom Schemas:**
@@ -1474,7 +1684,10 @@ real_estate_schema = DomainSchema(
     },
 )
 
-extractor = GLiNEREntityExtractor(schema=real_estate_schema, threshold=0.5)
+extractor = GLiNER2Extractor(ontology=real_estate_schema, threshold=0.5)
+
+# Or convert to an OntologyDocument to attach typed relationships
+doc = real_estate_schema.to_ontology()
 ```
 
 See `docs/modules/ROOT/pages/how-to/entity-extraction.adoc` and
@@ -1784,13 +1997,13 @@ agent = ChatAgent(
 
 6. **Async Context Manager**: `MemoryClient` is designed to be used as an async context manager (`async with`) for proper connection handling.
 
-7. **Optional Dependencies**: Framework integrations and extractors (LangChain, spaCy, GLiNER, etc.) are optional. They're wrapped in try/except ImportError blocks. `pyproject.toml`'s `[project.optional-dependencies]` is the source of truth; the current set is:
+7. **Optional Dependencies**: Framework integrations and extractors (LangChain, spaCy, GLiNER2.5, etc.) are optional. They're wrapped in try/except ImportError blocks. `pyproject.toml`'s `[project.optional-dependencies]` is the source of truth; the current set is:
 
     | Group | Extras |
     |---|---|
     | LLM providers | `openai`, `anthropic`, `litellm`, `instructor`, `vertex-ai`, `bedrock`, `google`, `aws` |
     | Embeddings | `sentence-transformers`, `vertex-ai`, `bedrock` |
-    | Extraction | `spacy`, `gliner`, `extraction` (both), `fuzzy` |
+    | Extraction | `spacy`, `gliner2`, `gliner` (deprecated alias of `gliner2`, removed in 0.8), `extraction` (spacy + gliner2), `fuzzy` |
     | Hosted backend | `nams` (httpx) |
     | Frameworks | `langchain` (core only), `langchain-agents` (core + `langchain`), `pydantic-ai`, `llamaindex`, `crewai`, `openai-agents`, `microsoft-agent`, `google-adk`, `strands` |
     | Tooling | `cli`, `mcp` (fastmcp 4), `opentelemetry`, `opik`, `observability` |
@@ -1798,17 +2011,17 @@ agent = ChatAgent(
 
     `langchain-agents` is the one to reach for in examples that build a real agent: the bare `langchain` extra installs `langchain-core` only and has no `create_agent`.
 
-8. **Type-Aware Resolution**: The `CompositeResolver` now supports type-aware resolution - entities of different types (e.g., PERSON vs LOCATION) are never merged even if they have similar names.
+8. **Type-Aware Resolution**: Resolution never crosses a POLE+O type — entities of different types (e.g. PERSON vs LOCATION) are never merged even with identical names. `CompositeResolver` filters by type; `OntologyResolver` (v0.7, what `strategy=COMPOSITE` builds on bolt) pushes the type constraint into the *blocking query*, so a cross-typed candidate is never even fetched. The consequence to remember: a cross-typed duplicate (the same company extracted once as ORGANIZATION and once as OBJECT) will not be found — fix the typing, usually with a sharper ontology description.
 
-9. **Entity Type Labels**: Entity `type` and `subtype` are added as PascalCase Neo4j node labels (e.g., `:Entity:Person:Individual`) for efficient querying. The `query_builder.py` module sanitizes types to ensure they are valid Neo4j label identifiers and converts them to PascalCase. Both POLE+O types and custom types become labels. For POLE+O types, subtypes are validated against known subtypes; for custom types, any valid identifier works as a subtype.
+9. **Entity Type Labels**: Entity `type` and `subtype` are added as PascalCase Neo4j node labels (e.g., `:Entity:Person:Individual`) for efficient querying. The `query_builder.py` module sanitizes types to ensure they are valid Neo4j label identifiers and converts them to PascalCase. Both POLE+O types and custom types become labels. For POLE+O types, subtypes are validated against known subtypes; for custom types, any valid identifier works as a subtype. On bolt a third label comes from the client's ontology: the label it declares for the entity's exact type/subtype pair (`OntologyDocument.node_label`), formatted by `ontology_node_label` (PascalCase that keeps existing capitals), so a custom ontology subtype such as `CUSTOMER` still reaches the graph as `:Customer`.
 
-10. **Entity Stopword Filtering**: Extracted entities are filtered to exclude common stopwords (pronouns like "they", "them", articles, common verbs), purely numeric values, and single-character names. The `ENTITY_STOPWORDS` frozenset in `extraction/base.py` contains ~200 filtered words. Use `is_valid_entity_name()` to check if a name is valid, or `ExtractionResult.filter_invalid_entities()` to filter a result.
+10. **Entity Stopword Filtering**: Extracted entities are filtered to exclude common stopwords (pronouns like "they", "them", articles, common verbs), purely numeric values, and single-character names. The `ENTITY_STOPWORDS` frozenset in `extraction/base.py` contains ~200 filtered words. Use `is_valid_entity_name()` to check if a name is valid, or `ExtractionResult.filter_invalid_entities(ontology=None)` to filter a result. The filter also drops *type-name mentions* (`is_type_name_mention()`): a mention whose whole name, ignoring case, a leading article/possessive and regular plurals, is its own POLE+O type, subtype, extractor label (`attributes["gliner2_label"]`) or ontology label — "tickets" typed Ticket. Ingestion passes the client's ontology.
 
 11. **Geocoding for Locations**: Location entities can have a `location` property containing Neo4j Point coordinates. Use `GeocodingConfig` to configure providers (Nominatim free, Google requires API key). The `geocoder.py` module provides `NominatimGeocoder`, `GoogleGeocoder`, and `CachedGeocoder` classes. A Point index is created on `Entity.location` for efficient spatial queries.
 
-12. **GLiNER Availability Check**: GLiNER is an optional dependency. Use `is_gliner_available()` from `neo4j_agent_memory.extraction` to check if GLiNER is installed before creating extractors. The GLiNER model is lazy-loaded on first `extract()` call, so ImportError may occur during extraction rather than at extractor creation time.
+12. **GLiNER2.5 Availability Check**: GLiNER2.5 is an optional dependency. Use `is_gliner2_available()` from `neo4j_agent_memory.extraction` to check before creating an extractor. The checkpoint is lazy-loaded on first use, so the `ImportError` (naming `pip install "neo4j-agent-memory[gliner2]"`) surfaces during extraction, not at construction. A GLiNER v1 model id raises `ValueError` from the constructor, before any download. `feasible=False` on a decode raises a `RuntimeWarning` (only on the single-pass path) and does not mean "no facts in this text"; input longer than `gliner_max_words` is windowed through `extract_long` silently.
 
-13. **Entity Deduplication**: `add_entity()` now returns a tuple `(Entity, DeduplicationResult)` instead of just `Entity`. Deduplication is enabled by default with `DeduplicationConfig()`. Use `deduplicate=False` parameter to skip deduplication for specific entities. Duplicates above `auto_merge_threshold` (default 0.95) are automatically merged; those between `flag_threshold` (0.85) and auto_merge are flagged with `SAME_AS` relationships for human review.
+13. **Entity Deduplication**: `add_entity()` returns a tuple `(Entity, DeduplicationResult)` instead of just `Entity`; `deduplicate=False` skips the check for one entity. As of v0.7 the bands come from `ResolutionConfig` (`auto_merge_threshold=0.90`, `review_threshold=0.85`) whenever the configured resolver is an `OntologyResolver`, because `_check_for_duplicates` delegates to `resolve_one()`; on the non-delegated path `MemoryClient` passes `DeduplicationConfig.from_resolution_config(settings.resolution)`, and the dataclass's own defaults match it (0.90 / 0.85, fuzzy 0.85, 12 candidates). Above the merge line the entity is merged and the new name kept as an alias; between the two lines a pending `SAME_AS` edge is written for human review (`find_potential_duplicates` / `review_duplicate`). **Message ingestion writes into the same review queue as of v0.7** — it resolves by default.
 
 14. **Schema Persistence**: Custom schemas can be stored in Neo4j using `SchemaManager`. Schemas are stored as `(:Schema)` nodes with JSON-serialized config. Multiple versions of the same schema can exist, with one marked as active. Use `save_schema()` to store, `load_schema()` to retrieve by name, and `load_schema_version()` for specific versions. Indexes are created on `Schema.name` and `Schema.id` for efficient lookups.
 
@@ -1875,15 +2088,7 @@ agent = ChatAgent(
     image_url = metadata.get("image_url")
     ```
 
-23. **Neo4j Property Key Warnings**: When querying optional properties in Cypher, avoid referencing properties that may not exist in the schema. Use `'property' IN keys(node)` to check existence before accessing:
-
-    ```cypher
-    // Wrong - warns if 'aliases' property doesn't exist on any node
-    WHERE e.name = $name OR $name IN e.aliases
-    
-    // Correct - check property exists first
-    WHERE e.name = $name OR ('aliases' IN keys(e) AND $name IN e.aliases)
-    ```
+23. **Neo4j Property Key Warnings**: Neo4j warns "label / relationship type / property key does not exist" (GQL 01N50/01N52, the UNRECOGNIZED classification) for any *static* reference to a name the database has never stored — including inside a `'aliases' IN keys(e) AND ...` guard and dynamic `e['aliases']` access, which the planner resolves the same way. A guard does not prevent the warning. Instead, `Neo4jClient.execute_read` / `execute_write` open their sessions with the UNRECOGNIZED classification disabled (`report_unrecognized=False`, the default), so library queries stay quiet on a fresh database. The read-only `client.query.cypher` accessor passes `report_unrecognized=True` and `Neo4jClient.session()` applies no filter, so user-written Cypher keeps the hint. Keep the `keys()` guards where they change semantics (absent vs. null), not for the warning.
 
 24. **Graph Visualization with Episode Session IDs**: The `/api/memory/graph` endpoint accepts an `episode_session_ids` parameter (comma-separated) to include full conversations and entities from podcast episodes in addition to the current thread. This is used when tool call results contain references to specific episodes.
 
@@ -1998,7 +2203,7 @@ make example-hello            # Smallest round trip (one PEP 723 file)
 make example-basic            # Guided tour of the whole API surface
 make example-resolution       # Entity resolution strategies (no Neo4j)
 make example-no-llm           # llm=None + local embedder, fully offline
-make example-domain-schemas   # GLiNER domain-schema runner
+make example-domain-schemas   # GLiNER2.5 domain-schema runner
 make example-existing-graph   # Adopt a pre-existing Neo4j graph
 make example-buffered-writes  # Non-blocking writes + back-pressure
 make example-audit-trail      # :TOUCHED reasoning audit edges
@@ -2009,6 +2214,9 @@ make example-langchain        # LangChain 1.x agent (keyless)
 make example-pydantic         # PydanticAI 2.x agent (keyless)
 make example-team-memory-doctor  # Validate the editor MCP configs offline
 make examples                 # Run every key-free example
+
+# Key-free, but leaves `support-desk` (strict) active in the database, so not in `make examples`
+make example-ontology-lifecycle-bolt  # Bolt ontology lifecycle: import, activate, migrate
 
 # Examples that need credentials
 make example-enrichment          # Wikipedia/Diffbot enrichment
@@ -2039,13 +2247,18 @@ no README footer, no index row, or no test module. The shape of the tree:
 | Standalone scripts | `hello-memory/` (PEP 723), `basic_usage.py`, `entity_resolution.py`, `enrichment_example.py`, `langchain_agent.py`, `pydantic_ai_agent.py` |
 | v0.2 features | `existing-graph/`, `buffered-writes/`, `audit-trail/`, `eval-harness/` |
 | Runtime + tooling | `no_llm/`, `domain-schemas/` |
+| Ontologies on bolt | `ontology-extraction/`, `ontology-lifecycle-bolt/` (bolt twin of `ontology-lifecycle/`) |
 | Framework integrations | `strands-session-manager/`, `strands-memory-store/`, `google_adk_demo/`, `google_cloud_integration/`, `microsoft_agent_retail_assistant/` |
-| Full-stack apps | `full-stack-chat-agent/`, `lennys-memory/`, `financial-services-advisor/` (AWS Strands + Google ADK twins) |
+| Full-stack apps | `full-stack-chat-agent/`, `lennys-memory/`, `financial-services-advisor/` (AWS Strands + Google ADK twins), `support-desk-agent/` (STATE-Bench customer support on bolt: ontology-typed records, seeded reasoning traces, actions written back, PydanticAI) |
 | TypeScript | `typescript/examples/` — ten examples, flagship `nextjs-memory-chat/` |
 
 `hello-memory/` is the only example allowed to use a PEP 723 header; every other
-one pins `neo4j-agent-memory[...]>=0.5.0,<0.7` in a `requirements.txt` or
-`pyproject.toml` so the pin is reviewable.
+one pins `neo4j-agent-memory[...]>=0.7.0,<0.8` in a `requirements.txt` or
+`pyproject.toml` so the pin is reviewable. The exceptions are the two financial
+advisor backends, which pin the latest *published* release because CI installs
+them from PyPI: the Google Cloud one exports its Docker requirements with
+`--no-sources`, and the AWS one is bundled by `cdk synth` with `pip install .`
+(raise both after each release: `CONTRIBUTING.md`, Publishing step 6).
 
 The example READMEs point readers at a dedicated AuraDB instance
 (`examples/AURA_SETUP.md`); the Docker Neo4j from `docker-compose.test.yml` is
@@ -2322,7 +2535,7 @@ After each streaming chat completes, reasoning traces are saved to Neo4j via the
 - `GET /api/traces/{session_id}` — Lists traces for a session (with steps and tool calls)
 - `GET /api/traces/detail/{trace_id}` — Single trace by ID
 
-Entity extraction is triggered via `memory_service.add_session()` which calls `adk_memory_service.add_session_to_memory(session)` with `extract_on_store=True`. Optional extractors (spaCy, GLiNER, LLM) warn but don't fail if not installed.
+Entity extraction is triggered via `memory_service.add_session()` which calls `adk_memory_service.add_session_to_memory(session)` with `extract_on_store=True`. Optional extractors (spaCy, GLiNER2.5, LLM) warn but don't fail if not installed.
 
 ### Neo4j Domain Data Integration
 

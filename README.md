@@ -30,7 +30,7 @@ A graph-native memory system for AI agents. Store conversations, build knowledge
 
 ![Configurable extraction stages and persistence](docs/modules/ROOT/images/diagrams/three-extraction-approaches.png)
 
-**Plus:** multi-stage entity extraction (spaCy / GLiNER / LLM), relationship extraction (GLiREL), background enrichment (Wikipedia / Diffbot), geospatial queries, [MCP server](#mcp-server) with 16 extended-profile tools on Bolt (20 registered on NAMS; backend limitations apply), and integrations with [LangChain, Pydantic AI, Google ADK, Strands, CrewAI, and more](#framework-integrations).
+**Plus:** multi-stage entity extraction (spaCy / GLiNER2.5 / LLM) with typed relations decoded in the same pass, background enrichment (Wikipedia / Diffbot), geospatial queries, [MCP server](#mcp-server) with 16 extended-profile tools on Bolt (20 registered on NAMS; backend limitations apply), and integrations with [LangChain, Pydantic AI, Google ADK, Strands, CrewAI, and more](#framework-integrations).
 
 **Bolt operational features:** adopt an existing Neo4j graph as long-term memory (`client.schema.adopt_existing_graph(...)`), user associations on supported writes and explicitly scoped reads, fire-and-forget [buffered writes](examples/buffered-writes/) (`client.buffered.submit(...)`), [consolidation primitives](examples/audit-trail/) (`client.consolidation.dedupe_entities(...)`), an [eval harness](examples/eval-harness/) (`client.eval.run(suite)`), and explicit `:TOUCHED` audit edges from reasoning steps to entities.
 
@@ -45,7 +45,7 @@ TypeScript agents read and write the same memory.
 
 | Language | Package | Install | Docs |
 |---|---|---|---|
-| Python | [`neo4j-agent-memory`](https://pypi.org/project/neo4j-agent-memory/) | `pip install 'neo4j-agent-memory==0.6.0'` | [Python SDK docs](https://neo4j.com/labs/agent-memory/sdks/python) |
+| Python | [`neo4j-agent-memory`](https://pypi.org/project/neo4j-agent-memory/) | `pip install 'neo4j-agent-memory==0.7.0'` | [Python SDK docs](https://neo4j.com/labs/agent-memory/sdks/python) |
 | TypeScript | [`@neo4j-labs/agent-memory`](https://www.npmjs.com/package/@neo4j-labs/agent-memory) | `npm install @neo4j-labs/agent-memory@0.5.0` | [TypeScript SDK docs](https://neo4j.com/labs/agent-memory/sdks/typescript) |
 
 Related package: [`@neo4j-labs/nams-ai-provider`](https://www.npmjs.com/package/@neo4j-labs/nams-ai-provider) (npm, `0.3.0`) wraps the TypeScript SDK for the Vercel AI SDK — a provider, middleware, tools and lifecycle hooks for NAMS-backed agents. Source: [`typescript/packages/vercel-ai-provider/`](typescript/packages/vercel-ai-provider/).
@@ -58,7 +58,7 @@ is enforced by the
 [`agent-memory-tck`](https://github.com/neo4j-labs/agent-memory-tck)
 spec suite, which consumes both SDKs as external dependencies.
 
-> **Package releases:** These Python instructions use the published `neo4j-agent-memory==0.6.0` package. The [Python tutorials](https://neo4j.com/labs/agent-memory/sdks/python) show the complete example programs and helpers to copy into local files, so running them does not require a repository clone or code download. Application code installs the TypeScript SDK the same way, from the published `@neo4j-labs/agent-memory@0.5.0` package on npm; the [TypeScript tutorials](https://neo4j.com/labs/agent-memory/sdks/typescript) instead run from the shared example-project checkout, which pins the SDK with `file:../..` so lessons always exercise current source.
+> **Package releases:** These Python instructions use the published `neo4j-agent-memory==0.7.0` package. The [Python tutorials](https://neo4j.com/labs/agent-memory/sdks/python) show the complete example programs and helpers to copy into local files, so running them does not require a repository clone or code download. Application code installs the TypeScript SDK the same way, from the published `@neo4j-labs/agent-memory@0.5.0` package on npm; the [TypeScript tutorials](https://neo4j.com/labs/agent-memory/sdks/typescript) instead run from the shared example-project checkout, which pins the SDK with `file:../..` so lessons always exercise current source.
 
 ## Quick start
 
@@ -70,7 +70,7 @@ The fastest path is the hosted **NAMS** service — sign up, set one API key, an
 2. Install the SDK and export the key:
 
 ```bash
-pip install 'neo4j-agent-memory[nams]==0.6.0'
+pip install 'neo4j-agent-memory[nams]==0.7.0'
 export MEMORY_API_KEY=nams_...
 ```
 
@@ -112,7 +112,7 @@ export OPENAI_API_KEY="replace-with-your-OpenAI-key"
 
 ```bash
 # Run directly with uvx (no install needed)
-uvx --from 'neo4j-agent-memory[mcp,openai]==0.6.0' --with 'httpx>=0.27' neo4j-agent-memory mcp serve --backend bolt --user "$NEO4J_USERNAME"
+uvx --from 'neo4j-agent-memory[mcp,openai]==0.7.0' neo4j-agent-memory mcp serve --backend bolt --user "$NEO4J_USERNAME"
 ```
 
 ![Self-hosted MCP profiles and backend-dependent support](docs/modules/ROOT/images/diagrams/mcp-server-architecture.png)
@@ -121,7 +121,7 @@ uvx --from 'neo4j-agent-memory[mcp,openai]==0.6.0' --with 'httpx>=0.27' neo4j-ag
 
 ```bash
 claude mcp add neo4j-agent-memory -- \
-  uvx --from 'neo4j-agent-memory[mcp,openai]==0.6.0' --with 'httpx>=0.27' neo4j-agent-memory mcp serve --backend bolt --user "$NEO4J_USERNAME"
+  uvx --from 'neo4j-agent-memory[mcp,openai]==0.7.0' neo4j-agent-memory mcp serve --backend bolt --user "$NEO4J_USERNAME"
 ```
 
 **Claude Desktop** (`claude_desktop_config.json`):
@@ -131,7 +131,7 @@ claude mcp add neo4j-agent-memory -- \
   "mcpServers": {
     "neo4j-agent-memory": {
       "command": "uvx",
-      "args": ["--from", "neo4j-agent-memory[mcp,openai]==0.6.0", "--with", "httpx>=0.27",
+      "args": ["--from", "neo4j-agent-memory[mcp,openai]==0.7.0",
                "neo4j-agent-memory", "mcp", "serve", "--backend", "bolt"],
       "env": {
         "NEO4J_URI": "neo4j+s://<instance-id>.databases.neo4j.io",
@@ -165,7 +165,7 @@ export ANTHROPIC_MODEL="claude-sonnet-4-6"  # or any Claude API model ID your wo
 export OPENAI_API_KEY="replace-with-your-OpenAI-key"
 ```
 
-Install both selected adapters with `pip install 'neo4j-agent-memory[anthropic,openai]==0.6.0' 'httpx>=0.27'`. Release 0.6.0 imports `httpx` when connecting over Bolt but declares it only in the `nams` extra, so every Bolt install without `[nams]` adds it.
+Install both selected adapters with `pip install 'neo4j-agent-memory[anthropic,openai]==0.7.0'`.
 
 ![Conversations, entities and application-recorded reasoning with backend-specific operations](docs/modules/ROOT/images/diagrams/the-three-layer-memory-architecture.png)
 
@@ -238,19 +238,20 @@ This generates a ready-to-run project with a FastAPI backend, Next.js frontend, 
 ## Installation
 
 ```bash
-pip install 'neo4j-agent-memory==0.6.0'                                 # Core
-pip install 'neo4j-agent-memory[openai]==0.6.0'                         # + OpenAI native adapter
-pip install 'neo4j-agent-memory[anthropic]==0.6.0'                      # + Anthropic native adapter
-pip install 'neo4j-agent-memory[bedrock]==0.6.0'                        # + AWS Bedrock native adapter
-pip install 'neo4j-agent-memory[sentence-transformers]==0.6.0'          # + local HF embeddings
-pip install 'neo4j-agent-memory[litellm]==0.6.0'                        # + LiteLLM universal fallback (100+ providers)
-pip install 'neo4j-agent-memory[mcp,openai]==0.6.0' 'httpx>=0.27'       # + MCP server
-pip install 'neo4j-agent-memory[langchain]==0.6.0'                      # + LangChain
-pip install 'neo4j-agent-memory[all]==0.6.0'                            # Everything except heavy local ML
-pip install 'neo4j-agent-memory[full]==0.6.0'                           # Everything including spaCy, GLiNER, sentence-transformers, instructor
+pip install 'neo4j-agent-memory==0.7.0'                                 # Core
+pip install 'neo4j-agent-memory[openai]==0.7.0'                         # + OpenAI native adapter
+pip install 'neo4j-agent-memory[anthropic]==0.7.0'                      # + Anthropic native adapter
+pip install 'neo4j-agent-memory[bedrock]==0.7.0'                        # + AWS Bedrock native adapter
+pip install 'neo4j-agent-memory[sentence-transformers]==0.7.0'          # + local HF embeddings
+pip install 'neo4j-agent-memory[litellm]==0.7.0'                        # + LiteLLM universal fallback (100+ providers)
+pip install 'neo4j-agent-memory[mcp,openai]==0.7.0'                     # + MCP server
+pip install 'neo4j-agent-memory[langchain]==0.7.0'                      # + LangChain
+pip install 'neo4j-agent-memory[all]==0.7.0'                            # Everything except heavy local ML
+pip install 'neo4j-agent-memory[gliner2]==0.7.0'                        # + GLiNER2.5 local entity + relation extraction
+pip install 'neo4j-agent-memory[full]==0.7.0'                           # Everything including spaCy, GLiNER2.5, sentence-transformers, instructor
 ```
 
-Release 0.6.0 imports `httpx` when connecting to Neo4j over Bolt but declares it only in the `[nams]` extra, so add `'httpx>=0.27'` to any Bolt install whose extras do not include `nams`.
+Release 0.7.0 connects over Bolt without `httpx`; only the `[nams]` extra installs it, for the hosted backend.
 
 Provider extras follow native-first resolution: with both `[openai]` and `[litellm]` installed, an `"openai/..."` model uses the native adapter; an unsupported provider like `"groq/..."` falls through to LiteLLM. See [Bring your own model](https://neo4j.com/labs/agent-memory/how-to/bring-your-own-model.html) for details.
 
@@ -323,8 +324,8 @@ See [`examples/README.md`](examples/README.md) for the full index. Highlights:
 
 | Example | Framework | Description |
 |---------|-----------|-------------|
-| [`no_llm/`](examples/no_llm/) | Standalone | Run with `llm=None` plus local sentence-transformers + spaCy/GLiNER (local inference after models and dependencies are cached) |
-| [Domain Schema Examples](examples/domain-schemas/) | Standalone | 8 GLiNER2 extraction scripts with factory pattern, batch extraction, streaming, and GLiREL relations |
+| [`no_llm/`](examples/no_llm/) | Standalone | Run with `llm=None` plus local sentence-transformers + spaCy/GLiNER2.5 (local inference after models and dependencies are cached) |
+| [Domain Schema Examples](examples/domain-schemas/) | Standalone | 8 GLiNER2.5 domain schemas through one runner: factory pattern, batch extraction, streaming, and joint entity + relation decoding |
 | [Google Cloud Integration](examples/google_cloud_integration/) | Google ADK | Progressive tutorial: Vertex AI, ADK, MCP server, and MemoryIntegration with session strategies |
 | [Google ADK Demo](examples/google_adk_demo/) | Google ADK | Standalone demo of Neo4jMemoryService with session storage, search, and preferences |
 

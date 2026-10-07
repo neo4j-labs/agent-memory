@@ -39,10 +39,10 @@ docker run --rm --user "$(id -u):$(id -g)" \
   -p 8080:8080 neo4j-memory-mcp:local
 ```
 
-In another terminal, run the `fastmcp` CLI from the same `[mcp]` dependency set on the host. `uvx` installs it into a temporary environment; `python -m pip install "neo4j-agent-memory[mcp]==0.6.0"` in a virtual environment works too:
+In another terminal, run the `fastmcp` CLI from the same `[mcp]` dependency set on the host. `uvx` installs it into a temporary environment; `python -m pip install "neo4j-agent-memory[mcp]==0.7.0"` in a virtual environment works too:
 
 ```bash
-uvx --from "neo4j-agent-memory[mcp]==0.6.0" fastmcp list http://127.0.0.1:8080/mcp --prompts --resources
+uvx --from "neo4j-agent-memory[mcp]==0.7.0" fastmcp list http://127.0.0.1:8080/mcp --prompts --resources
 ```
 
 Expect the extended profile's registered Bolt tools, prompts and resources. Then call `memory_store_message` with a synthetic message and use `memory_search` with that session ID; confirm the returned text and inspect the stored record in the test database. Registration or a TCP listener does not exercise embedding credentials. Automatic extraction/preference detection remains disabled even though generic tool descriptions mention those optional behaviors. Check supported operations, not just registration counts; the NAMS backend has different applicability. Keep the full build and protocol output with deployment evidence. A metadata check alone does not prove the complete image runs.
@@ -114,7 +114,7 @@ gcloud run services proxy neo4j-memory-mcp \
 In another terminal:
 
 ```bash
-uvx --from "neo4j-agent-memory[mcp]==0.6.0" fastmcp list http://127.0.0.1:8081/mcp --prompts --resources
+uvx --from "neo4j-agent-memory[mcp]==0.7.0" fastmcp list http://127.0.0.1:8081/mcp --prompts --resources
 ```
 
 Then use a synthetic conversation to verify one supported write/read round trip and confirm it reaches the intended database. A public unauthenticated request should be denied. Stop the local proxy when the check finishes. Google's [developer authentication guide](https://docs.cloud.google.com/run/docs/authenticating/developers) describes the proxy and its limitations; use the [service-to-service authentication guide](https://docs.cloud.google.com/run/docs/authenticating/service-to-service) for deployed callers.

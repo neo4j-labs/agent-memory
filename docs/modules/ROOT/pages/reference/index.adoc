@@ -40,21 +40,21 @@ anchor:_configuration[]anchor:_quick_links[]anchor:_minimal_example[]anchor:_ref
 ** xref:reference/configuration-connections.adoc[Neo4j and NAMS connection settings] -- `Neo4jConfig` and `NamsConfig`.
 ** xref:reference/configuration-providers.adoc[Embedding, LLM, schema, extraction, and resolution settings] -- `EmbeddingConfig`, `LLMConfig`, `SchemaConfig`, `ExtractionConfig`, `ResolutionConfig`.
 ** xref:reference/configuration-operations.adoc[Memory, search, geocoding, and enrichment settings] -- `MemoryConfig`, `SearchConfig`, `GeocodingConfig`, `EnrichmentConfig`, and the integration-limits summary.
-** xref:reference/configuration-advanced.adoc[Deduplication, observability, and CLI settings] -- The ingest-time `DeduplicationConfig`, the observability factory, and CLI configuration.
+** xref:reference/configuration-advanced.adoc[Deduplication, observability, and CLI settings] -- The `DeduplicationConfig` dataclass and how it follows `ResolutionConfig`, the observability factory, and CLI configuration.
 * xref:reference/environment-variables.adoc[Environment variables reference] -- Every `NAM_` environment variable `MemorySettings` and its integrations recognize.
 * xref:reference/cli.adoc[CLI reference] -- Commands for local extraction, bolt schema/statistics, and MCP serving.
 * xref:reference/mcp-tools.adoc[Self-hosted Python MCP reference] -- Tool parameters, resources, and prompts for the self-hosted MCP server.
 * xref:reference/deployment.adoc[Documentation publication] -- How this documentation site is built and published.
 * xref:reference/deploy-an-application.adoc[Deploy a memory application] -- Compares deployment paths for an application built on the SDKs.
 * xref:reference/extractors.adoc[Extractor classes reference] -- Local Python extraction classes and result models.
-** xref:reference/extractor-classes.adoc[Built-in extractor classes] -- `SpacyEntityExtractor`, `GLiNEREntityExtractor`, and `LLMEntityExtractor`.
-** xref:reference/extractor-relations.adoc[Relation extractors] -- `GLiRELExtractor` and `GLiNERWithRelationsExtractor`.
+** xref:reference/extractor-classes.adoc[Built-in extractor classes] -- `SpacyEntityExtractor`, `GLiNER2Extractor`, and `LLMEntityExtractor`.
+** xref:reference/extractor-relations.adoc[Relation extractors] -- How GLiNER2.5 and the LLM extractor produce typed relations, and how `validate_relations` checks them against an ontology.
 ** xref:reference/extractor-pipeline.adoc[Extraction pipeline] -- `ExtractionPipeline`, merge strategies, and the pipeline/batch result models.
 ** xref:reference/extractor-builder.adoc[Extractor builder] -- `ExtractorBuilder` fluent construction.
 ** xref:reference/extractor-streaming.adoc[Streaming extraction] -- `StreamingExtractor` for chunked long-document extraction.
 * xref:reference/schemas.adoc[Domain schemas reference] -- Built-in domain schemas and custom schema creation.
-** xref:reference/schemas-domains.adoc[Built-in domain schemas] -- The eight registered GLiNER schemas and how to select one.
-** xref:reference/schemas-custom.adoc[Custom schemas and persistence] -- `DomainSchema`, the Bolt-only `SchemaManager`, and the GLiNER-to-POLE+O type mapping.
+** xref:reference/schemas-domains.adoc[Built-in domain schemas] -- The eight registered GLiNER2.5 schemas, the relationships their ontology templates declare, and how to select one.
+** xref:reference/schemas-custom.adoc[Custom schemas and persistence] -- `DomainSchema` and `OntologyDocument`, the Bolt-only `SchemaManager`, and the label-to-POLE+O type mapping.
 ** xref:reference/schemas-api.adoc[SchemaManager persistence API] -- `save_schema`, `load_schema`, `list_schemas`, and the rest of the CRUD surface.
 * xref:reference/schema-objects.adoc[Schema objects reference] -- Constraints, regular, vector, and point indexes the bolt backend creates on connection.
 
@@ -64,7 +64,7 @@ anchor:_configuration[]anchor:_quick_links[]anchor:_minimal_example[]anchor:_ref
 * xref:reference/authentication.adoc[Authentication and API keys] -- How NAMS authenticates requests and where API keys come from.
 * xref:reference/rest-api.adoc[REST API reference] -- The NAMS REST API endpoints at `/v1`.
 * xref:reference/nams-limits.adoc[NAMS limits and behavior] -- Operational limits, quotas, and runtime behavior for the hosted backend.
-* xref:reference/ontology-api.adoc[Ontology API reference] -- NAMS-only ontology management; raises `NotSupportedError` on bolt.
+* xref:reference/ontology-api.adoc[Ontology API reference] -- `client.ontology` on both backends: `NamsOntology` on NAMS and `BoltOntology` on your own Neo4j, with the differences between them.
 * xref:reference/skills-api.adoc[Skills API (Preview)] -- The NAMS-hosted Agent Skills REST and MCP surface.
 
 === TypeScript

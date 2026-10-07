@@ -5,7 +5,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from neo4j_agent_memory.extraction.base import (
     EntityExtractor,
@@ -14,6 +14,9 @@ from neo4j_agent_memory.extraction.base import (
     ExtractedRelation,
     ExtractionResult,
 )
+
+if TYPE_CHECKING:
+    from neo4j_agent_memory.ontology.models import OntologyDocument
 
 logger = logging.getLogger(__name__)
 
@@ -279,6 +282,53 @@ def _merge_entities_cascade(
     return list(result.values())
 
 
+def _carry_mention_ids(
+    all_entities: list[list[ExtractedEntity]],
+    merged_entities: list[ExtractedEntity],
+) -> tuple[list[ExtractedEntity], dict[str, str]]:
+    """Keep the mention ids of entities the merge replaced with another copy.
+
+    A stage's relations name their endpoints by that stage's mention ids
+    (only GLiNER2.5 assigns them). When the merge keeps another stage's copy
+    of the same entity, typically spaCy's or the LLM's with ``id=None``, those
+    ids would point at nothing. A survivor without an id adopts the first
+    replaced copy's id; every other replaced id is mapped onto the survivor's.
+
+    Args:
+        all_entities: The entities each stage returned.
+        merged_entities: The merge's survivors.
+
+    Returns:
+        The survivors (with adopted ids), and a map from each replaced mention
+        id to the id that now stands for it.
+    """
+    survivors = {_entity_key(e): i for i, e in enumerate(merged_entities)}
+    merged = list(merged_entities)
+    id_map: dict[str, str] = {}
+    for entities in all_entities:
+        for entity in entities:
+            index = survivors.get(_entity_key(entity))
+            if entity.id is None or index is None or merged[index] is entity:
+                continue
+            survivor = merged[index]
+            if survivor.id is None:
+                merged[index] = survivor.model_copy(update={"id": entity.id})
+            elif survivor.id != entity.id:
+                id_map[entity.id] = survivor.id
+    return merged, id_map
+
+
+def _remap_relation_ids(relation: ExtractedRelation, id_map: dict[str, str]) -> ExtractedRelation:
+    """Point a relation's endpoint mention ids at the merge's survivors."""
+    if not id_map:
+        return relation
+    source_id = id_map.get(relation.source_id, relation.source_id) if relation.source_id else None
+    target_id = id_map.get(relation.target_id, relation.target_id) if relation.target_id else None
+    if source_id == relation.source_id and target_id == relation.target_id:
+        return relation
+    return relation.model_copy(update={"source_id": source_id, "target_id": target_id})
+
+
 def merge_extraction_results(
     results: list[ExtractionResult],
     strategy: MergeStrategy,
@@ -317,6 +367,8 @@ def merge_extraction_results(
     else:  # MergeStrategy.CONFIDENCE (default)
         merged_entities = _merge_entities_confidence(all_entities)
 
+    merged_entities, id_map = _carry_mention_ids(all_entities, merged_entities)
+
     # Merge relations (deduplicate by triple)
     relation_keys: set[tuple[str, str, str]] = set()
     merged_relations: list[ExtractedRelation] = []
@@ -325,7 +377,7 @@ def merge_extraction_results(
             key = rel.as_triple
             if key not in relation_keys:
                 relation_keys.add(key)
-                merged_relations.append(rel)
+                merged_relations.append(_remap_relation_ids(rel, id_map))
 
     # Merge preferences (deduplicate by category + preference)
     pref_keys: set[str] = set()
@@ -348,10 +400,58 @@ def merge_extraction_results(
     )
 
 
+def _apply_min_confidence(result: ExtractionResult, min_confidence: float) -> ExtractionResult:
+    """Drop everything below a confidence floor from a merged result.
+
+    A relation survives only if its own confidence clears the floor *and* both
+    endpoints are still present: dropping an entity but keeping an edge that
+    names it would leave storage to resolve a mention that extraction rejected.
+
+    Args:
+        result: The merged result.
+        min_confidence: The floor, as a probability.
+
+    Returns:
+        A new result, or ``result`` itself when nothing was dropped.
+    """
+    entities = [e for e in result.entities if e.confidence >= min_confidence]
+    kept_ids = {e.id for e in entities if e.id is not None}
+    kept_names = {e.normalized_name for e in entities}
+
+    def endpoint_survives(mention_id: str | None, name: str) -> bool:
+        if mention_id is not None:
+            return mention_id in kept_ids
+        return name.lower().strip() in kept_names
+
+    relations = [
+        r
+        for r in result.relations
+        if r.confidence >= min_confidence
+        and endpoint_survives(r.source_id, r.source)
+        and endpoint_survives(r.target_id, r.target)
+    ]
+
+    if len(entities) == len(result.entities) and len(relations) == len(result.relations):
+        return result
+
+    logger.debug(
+        "Confidence floor %.2f dropped %d entities and %d relations",
+        min_confidence,
+        len(result.entities) - len(entities),
+        len(result.relations) - len(relations),
+    )
+    return ExtractionResult(
+        entities=entities,
+        relations=relations,
+        preferences=result.preferences,
+        source_text=result.source_text,
+    )
+
+
 class ExtractionPipeline:
     """Multi-stage entity extraction pipeline.
 
-    The pipeline runs multiple extraction stages (spaCy, GLiNER, LLM) and
+    The pipeline runs multiple extraction stages (spaCy, GLiNER2.5, LLM) and
     merges their results according to a configurable strategy. This allows
     combining fast statistical NER with more accurate LLM-based extraction.
 
@@ -360,7 +460,7 @@ class ExtractionPipeline:
         pipeline = ExtractionPipeline(
             stages=[
                 SpacyEntityExtractor(),
-                GLiNEREntityExtractor(),
+                GLiNER2Extractor(),
                 LLMEntityExtractor(),
             ],
             merge_strategy=MergeStrategy.CONFIDENCE,
@@ -377,6 +477,9 @@ class ExtractionPipeline:
         stop_on_success: bool = False,
         min_entities_for_success: int = 1,
         fallback_on_error: bool = True,
+        *,
+        ontology: "OntologyDocument | None" = None,
+        min_confidence: float | None = None,
     ):
         """
         Initialize extraction pipeline.
@@ -387,6 +490,17 @@ class ExtractionPipeline:
             stop_on_success: Stop after first stage that returns entities
             min_entities_for_success: Minimum entities to consider a stage successful
             fallback_on_error: Continue to next stage if current stage errors
+            ontology: Optional ontology. When set, the merged result runs
+                through :meth:`ExtractionResult.validate_relations` as a final
+                step with ``mode="drop"``: merging results from several stages
+                can only ever *add* relations the ontology does not permit
+                (the JointIE stage constrains endpoints during decoding, the
+                LLM and spaCy stages do not).
+            min_confidence: Optional confidence floor for the merged result.
+                Entities and relations scoring below it are dropped, as are
+                relations left dangling by a dropped endpoint. This is where a
+                configured ``confidence_threshold`` is enforced for stages that
+                have no threshold of their own (spaCy, the LLM extractor).
         """
         # Wrap extractors in stages if needed
         self.stages: list[ExtractionStage] = []
@@ -400,6 +514,8 @@ class ExtractionPipeline:
         self.stop_on_success = stop_on_success
         self.min_entities_for_success = min_entities_for_success
         self.fallback_on_error = fallback_on_error
+        self.ontology = ontology
+        self.min_confidence = min_confidence
 
     async def extract(
         self,
@@ -508,6 +624,20 @@ class ExtractionPipeline:
             )
         else:
             final_result = merge_extraction_results(successful_results, self.merge_strategy)
+
+        # Final stage: hold the merged result to the configured confidence
+        # floor, then enforce the ontology's relationship endpoint typing.
+        if self.min_confidence is not None:
+            final_result = _apply_min_confidence(final_result, self.min_confidence)
+
+        if self.ontology is not None:
+            final_result, violations = final_result.validate_relations(self.ontology, mode="drop")
+            if violations:
+                logger.debug(
+                    "Pipeline dropped %d relation(s) not permitted by ontology %r",
+                    len(violations),
+                    self.ontology.domain.name,
+                )
 
         total_duration = (time.time() - start_time) * 1000
 
@@ -777,6 +907,10 @@ class ConditionalPipeline(ExtractionPipeline):
                     raise
 
         final_result = merge_extraction_results(successful_results, self.merge_strategy)
+        if self.min_confidence is not None:
+            final_result = _apply_min_confidence(final_result, self.min_confidence)
+        if self.ontology is not None:
+            final_result, _ = final_result.validate_relations(self.ontology, mode="drop")
         total_duration = (time.time() - start_time) * 1000
 
         return PipelineResult(

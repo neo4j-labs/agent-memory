@@ -2,7 +2,7 @@
 :page-product: agent-memory
 :toclevels: 2
 
-This reference describes the released SDKs, Python `neo4j-agent-memory` 0.6.0 and TypeScript `@neo4j-labs/agent-memory` 0.5.0. Check the installed SDK's API reference before using a method introduced after its release. NAMS is a continuously shipped service; `/v1` identifies its REST API, not an SDK release.
+This reference describes the released SDKs, Python `neo4j-agent-memory` 0.7.0 and TypeScript `@neo4j-labs/agent-memory` 0.5.0. Check the installed SDK's API reference before using a method introduced after its release. NAMS is a continuously shipped service; `/v1` identifies its REST API, not an SDK release.
 
 == Backend and language
 
@@ -20,14 +20,14 @@ TypeScript with NAMS REST:: Create a conversation and use its returned ID
 Entity writes/search::
 +
 [horizontal]
-Python with Bolt::: `add_entity` returns `(Entity, DeduplicationResult)`; client-side configuration
+Python with Bolt::: `add_entity` returns `(Entity, DeduplicationResult)`; client-side configuration. Message ingestion resolves extracted mentions against stored entities by default; see xref:how-to/tune-entity-resolution.adoc[Tune entity resolution]
 Python with NAMS::: `add_entity` returns `Entity`; server-managed extraction/deduplication
 TypeScript with NAMS REST::: `longTerm.addEntity` / `searchEntities`; server-managed processing
 
 Client-created relationships::
 +
 [horizontal]
-Python with Bolt::: Supported with `add_relationship(source, target, relationship_type, ...)`; `attributes` are returned on the model but not persisted in 0.6.0
+Python with Bolt::: Supported with `add_relationship(source, target, relationship_type, ...)`; `attributes` are returned on the model but not persisted in 0.7.0
 Python with NAMS::: Unsupported; inspect relationships produced by supported service processing
 TypeScript with NAMS REST::: Direct relationship-write methods are unsupported on REST
 
@@ -87,7 +87,7 @@ TypeScript with NAMS REST::: Not equivalent REST subclients
 === Ontologies and agent skills
 
 [horizontal]
-Python with Bolt:: Not hosted service features on Bolt; use Bolt schema configuration as appropriate
+Python with Bolt:: Ontologies through `client.ontology` (`BoltOntology`), stored in your database as `:Ontology` and `:OntologyVersion` nodes. `import_` converts only local formats, and `migrate` runs synchronously; see xref:reference/ontology-api.adoc[Ontology API]. Agent skills are a hosted service feature
 Python with NAMS:: Ontologies through the supported accessor; skills use REST/MCP, not invented SDK methods
 TypeScript with NAMS REST:: Ontology accessor where present in the selected artifact; skills use REST/MCP
 

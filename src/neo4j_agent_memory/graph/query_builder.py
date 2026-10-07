@@ -12,6 +12,8 @@ Labels are converted to PascalCase following Neo4j naming conventions.
 
 import re
 
+from neo4j_agent_memory.graph.queries import entity_keys_set_clause
+
 # Valid POLE+O entity types (stored uppercase internally, converted to PascalCase for labels)
 VALID_ENTITY_TYPES: set[str] = {"PERSON", "OBJECT", "LOCATION", "EVENT", "ORGANIZATION"}
 
@@ -131,6 +133,41 @@ def sanitize_label(label: str) -> str | None:
     return to_pascal_case(stripped)
 
 
+def ontology_node_label(label: str | None) -> str | None:
+    """The node label for an ontology's declared label, or ``None``.
+
+    PascalCase that keeps the capitals already there: the label is split on
+    underscores and each part's first letter is upper-cased, the rest left as
+    written. A user-authored ``SupportCase`` stays ``SupportCase`` (where
+    :func:`sanitize_label` would re-case it to ``Supportcase``), and the
+    built-in templates' GLiNER2.5-style ``company`` / ``tv_show`` become
+    ``Company`` / ``TvShow``, matching the type and subtype labels beside them.
+    A part written all in capitals is the one exception: it carries no case
+    information, so it is re-cased like a type label (``INDIVIDUAL`` ->
+    ``Individual``, ``TV_SHOW`` -> ``TvShow``), matching what
+    :func:`sanitize_label` gives the same name as an entity type.
+    The input must be a valid label identifier, which keeps the value safe to
+    interpolate into Cypher.
+
+    Args:
+        label: The declared label.
+
+    Returns:
+        The node label, or ``None`` when ``label`` is empty or not a valid
+        identifier.
+    """
+    if not label or not isinstance(label, str):
+        return None
+    stripped = label.strip()
+    if not VALID_LABEL_PATTERN.match(stripped):
+        return None
+    return "".join(
+        part[0].upper() + (part[1:].lower() if part.isupper() else part[1:])
+        for part in stripped.split("_")
+        if part
+    )
+
+
 def is_poleo_type(entity_type: str) -> bool:
     """Check if an entity type is a valid POLE+O type.
 
@@ -204,13 +241,25 @@ def validate_subtype(entity_type: str, subtype: str) -> str | None:
     return sanitize_label(subtype)
 
 
-def build_label_set_clause(entity_type: str, subtype: str | None, node_var: str = "e") -> str:
+def build_label_set_clause(
+    entity_type: str,
+    subtype: str | None,
+    node_var: str = "e",
+    *,
+    ontology_label: str | None = None,
+) -> str:
     """Build SET clause to add type/subtype labels to a node.
 
     Args:
         entity_type: The entity type (e.g., "PERSON", "OBJECT")
         subtype: Optional subtype (e.g., "VEHICLE", "ADDRESS")
         node_var: The Cypher node variable name (default: "e")
+        ontology_label: The label the client's ontology declares for this
+            exact type/subtype pair (see
+            :meth:`~neo4j_agent_memory.ontology.models.OntologyDocument.node_label`).
+            Added in the form :func:`ontology_node_label` gives it, after the
+            type and subtype labels, when it is a valid label and not one of
+            them already.
 
     Returns:
         SET clause string (e.g., "SET e:PERSON, e:INDIVIDUAL") or empty string if no valid labels
@@ -226,6 +275,10 @@ def build_label_set_clause(entity_type: str, subtype: str | None, node_var: str 
         if validated_subtype:
             labels_to_add.append(validated_subtype)
 
+    declared = ontology_node_label(ontology_label)
+    if declared and declared not in labels_to_add:
+        labels_to_add.append(declared)
+
     if not labels_to_add:
         return ""
 
@@ -234,12 +287,48 @@ def build_label_set_clause(entity_type: str, subtype: str | None, node_var: str 
     return f"SET {label_additions}"
 
 
+def build_add_ontology_label_query(
+    entity_type: str,
+    subtype: str | None,
+    ontology_label: str | None,
+) -> str | None:
+    """Query that adds a mention's ontology label to the node it resolved onto.
+
+    The create path's ``MERGE`` sets labels on match as well as on create. The
+    resolution paths that reuse an existing node instead (an ingest-time
+    merge, an ``add_entity`` dedup merge) write no ``MERGE``, so they run this
+    to give the node the label the current ontology declares — re-mentioning a
+    node written before a revision was activated labels it for that revision.
+
+    Args:
+        entity_type: The mention's entity type.
+        subtype: The mention's subtype.
+        ontology_label: The ontology's declared label for that exact pair.
+
+    Returns:
+        ``MATCH (e:Entity {id: $id}) SET e:<Label> RETURN e.id AS id``, or
+        ``None`` when the label is missing, invalid, or already one of the
+        type/subtype labels (the default POLE+O ontology always lands here, so
+        it costs no extra write).
+    """
+    declared = ontology_node_label(ontology_label)
+    if not declared:
+        return None
+    existing = {validate_entity_type(entity_type)}
+    if subtype:
+        existing.add(validate_subtype(entity_type, subtype))
+    if declared in existing:
+        return None
+    return f"MATCH (e:Entity {{id: $id}})\nSET e:{declared}\nRETURN e.id AS id"
+
+
 def build_create_entity_query(
     entity_type: str,
     subtype: str | None,
     *,
     include_location: bool = False,
     include_aliases: bool = False,
+    ontology_label: str | None = None,
 ) -> str:
     """Build the CREATE_ENTITY query with dynamic type/subtype labels.
 
@@ -256,6 +345,10 @@ def build_create_entity_query(
             parameter. Off by default so that queries built by hand with their
             own parameter dict keep working unchanged; ``LongTermMemory.add_entity``
             opts in.
+        ontology_label: The ontology's declared label for this exact
+            type/subtype pair, added as a node label (see
+            :func:`build_label_set_clause`). Like the type labels, it is set on
+            match as well as on create.
 
     Returns:
         Complete Cypher query string with dynamic labels
@@ -270,7 +363,7 @@ def build_create_entity_query(
         >>> query = build_create_entity_query("PERSON", None, include_aliases=True)
         >>> # Returns query that also sets e.aliases = $aliases
     """
-    label_set_clause = build_label_set_clause(entity_type, subtype)
+    label_set_clause = build_label_set_clause(entity_type, subtype, ontology_label=ontology_label)
 
     # Build location clause for LOCATION entities
     location_on_create = ""
@@ -312,6 +405,9 @@ ON MATCH SET
     e.description = COALESCE($description, e.description),
     e.embedding = COALESCE($embedding, e.embedding),
     e.updated_at = datetime(){aliases_on_match}{location_on_match}"""
+
+    # The resolver's lookup keys follow name, canonical_name and aliases.
+    query += f"\nSET {entity_keys_set_clause()}"
 
     # Add label SET clause if we have valid labels
     if label_set_clause:

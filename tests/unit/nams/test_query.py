@@ -60,8 +60,9 @@ class TestBoltCypherQuery:
     async def test_forwards_read_only_to_execute_read(self, mock_client):
         q = BoltCypherQuery(mock_client)
         result = await q.cypher("MATCH (n) RETURN n LIMIT 5")
+        # User-written Cypher keeps the server's "does not exist" hints.
         mock_client.execute_read.assert_awaited_once_with(
-            "MATCH (n) RETURN n LIMIT 5", parameters={}
+            "MATCH (n) RETURN n LIMIT 5", parameters={}, report_unrecognized=True
         )
         assert result == [{"n": 1}]
 
@@ -69,7 +70,7 @@ class TestBoltCypherQuery:
         q = BoltCypherQuery(mock_client)
         await q.cypher("MATCH (n {id: $id}) RETURN n", {"id": "abc"})
         mock_client.execute_read.assert_awaited_once_with(
-            "MATCH (n {id: $id}) RETURN n", parameters={"id": "abc"}
+            "MATCH (n {id: $id}) RETURN n", parameters={"id": "abc"}, report_unrecognized=True
         )
 
     async def test_rejects_write_query(self, mock_client):

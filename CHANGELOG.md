@@ -9,6 +9,307 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Entity resolution blocking is index-backed.** Every entity write now
+  maintains two lookup keys: `name_key` (the lower-cased name) and
+  `surface_keys` (every surface form between `|` delimiters). The exact and
+  prefix buckets match those keys through three new indexes,
+  `entity_name_key_idx`, `entity_name_key_text_idx` and
+  `entity_surface_keys_idx`, instead of scanning every entity of the type on
+  each `add_message`. A one-time `entity_keys_backfill` fills the keys on
+  existing graphs; `schema_config.backfill_relation_types=False` skips it, as
+  it skips the relation-type backfill. Entities written by your own Cypher need
+  the keys too (`queries.entity_keys_set_clause()`).
+- **Explicit mentions take the ingestion path.** With
+  `add_message(extraction_mode="explicit")`, a typed `EntityRef` gets
+  strict-mode validation and ingest-time resolution, like an extracted mention.
+  A name-only `EntityRef` links the one existing entity with that surface form
+  and no longer creates a node without a type. When no entity, or more than
+  one, carries the name, it is skipped with a warning.
+- **spaCy under a subtyped ontology** maps a label only onto a pair it decides:
+  spaCy's own subtype, the label as the subtype, or the bare POLE+O type. A
+  label that matches none of these is not extracted (`drop_unmapped`). Before
+  this, every label went to the first ontology label of its type: amounts
+  became diseases under `medical`, and every person became an author under
+  `scientific`.
+- `core.metrics.normalize_name` now reuses the resolver's type-agnostic key,
+  which also folds punctuation, so scoring and resolution agree on when two
+  names are the same.
+- `ontology_node_label` re-cases an all-capitals label part (`INDIVIDUAL` ->
+  `:Individual`), matching the type label the same name gets.
+- `add_relationship` stores the ontology's spelling of a relationship type, so
+  `employed_by` and `EMPLOYED_BY` are one edge.
+
+### Fixed
+
+- **NAMS: `get_conversation` returns messages oldest first again.** The hosted
+  service now lists a conversation's messages newest first, returning at most
+  the newest 200 (50 by default). Over REST the client asks for 200 when no
+  `limit` is given, clamps a larger `limit` to 200 with a warning, and reverses
+  the page into insertion order, as the bolt backend returns it.
+- **NAMS: `list_conversations` pages past 200.** The service caps a page at
+  200 conversations and answers a larger `limit` with 400 `invalid_limit`. That
+  broke the Strands `Neo4jMemoryStore` and `Neo4jSessionManager` on hosted
+  NAMS, which list 1000 conversations to find theirs. The client now follows
+  `next_cursor` until `limit` conversations are collected, and defaults `limit`
+  to 100 as bolt does.
+- `extraction.gliner_schema` is now the client's resolved ontology when the
+  client builds a `gliner` or `pipeline` extractor. Before, ingest-time
+  validation dropped every relation the template's extractor decoded.
+- The pipeline's confidence floor no longer drops GLiNER2.5 relations whose
+  endpoint was kept as another stage's copy. The surviving copy inherits the
+  mention id.
+- `EntitySchemaConfig` types outside POLE+O (`PATIENT`) convert onto a POLE+O
+  type instead of producing a document `validate_structure` rejects.
+- `BoltOntology.migrate` swaps the POLE+O type and built-in subtype labels with
+  the type, judged from each node's stored `type`/`subtype`. A node no longer
+  keeps `:Person` after becoming an organization, and an undeclared source
+  label no longer has to be refused.
+- Vector blocking skips merged-away entities.
+- Re-running a merge of the same pair no longer adds the source edges' support
+  again.
+- Relationship types declared for several endpoint pairs constrain JointIE to
+  exactly those pairs, not their cross product.
+- An intra-message merge links to the anchor of its own type, and a name-based
+  relation endpoint shared by two types is chosen by the ontology.
+- `add_entity` deduplicates through the ontology resolver without an
+  embedding (no embedder, or `generate_embedding=False`).
+- NAMS: a malformed active ontology, or a malformed version `schema_json`,
+  raises `ValueError` instead of reading as "nothing bound" / `document=None`.
+- `BoltOntology.create` / `update` reject a `validation_mode` other than
+  `permissive` / `strict` (any casing), which was stored and then ignored.
+
+## [0.7.0] - 2026-09-17
+
+Release 0.7 replaces the local extraction stack. `gliner` v1 and the separate
+GLiREL relation model are gone; GLiNER2.5 decodes entities and typed relations
+in one pass against an ontology, and the ontology is now a first-class object on
+both backends.
+
+**Naming**, applied throughout the docs and code: **GLiNER** = the removed v1
+package and its community checkpoints; **GLiNER2.5** = the
+`fastino/gliner2.5-{small,base,multi}-v1` checkpoints on the `gliner2` package.
+"GLiNER2" is never used for the old setup — it collides with the new package
+name.
+
+### Added
+
+- **`GLiNER2Extractor`** (`extraction/gliner2_extractor.py`) — joint entity and
+  relation extraction with a GLiNER2.5 checkpoint through its JointIE engine.
+  Endpoint types declared by the ontology are enforced *during* beam search
+  rather than filtered afterwards, so relations come back carrying mention ids
+  (`source_id`/`target_id`) and every endpoint is guaranteed to be an entity in
+  the same result. Constructors: `GLiNER2Extractor(...)`,
+  `.for_schema(name)`, `.for_poleo()`, `.for_ontology(doc)`. Identity surface:
+  `name == "gliner2"`, `version` (the installed `gliner2` version), `model_id`,
+  `ontology`. Input longer than `max_words` (384) is windowed through
+  `extract_long`; `extract_batch()` decodes a slice per forward pass and returns
+  `list[ExtractionResult]` in input order. Opt-in `extract_attributes=True` runs
+  a second pass that recovers the ontology's enum properties as span attributes,
+  joined back onto the entity spans by `(label, start)` within
+  `attribute_tolerance` characters. Two quiet failure modes are surfaced as
+  `RuntimeWarning`: `feasible=False` (the decoder could not satisfy the
+  ontology's hard constraints — *not* "no facts in this text") and long input
+  (relation recall collapses past roughly 400 words). `is_gliner2_available()`
+  and `DEFAULT_GLINER2_5_MODEL` are exported alongside it.
+- **`neo4j_agent_memory.ontology`** — a backend-neutral ontology package.
+  `OntologyDocument` + `EntityTypeDef` / `RelationshipDef` / `PropertyDef` /
+  `DomainInfo` (promoted out of `nams/ontology.py`, which keeps re-exports),
+  extended with descriptions used as annotation guidelines, gazetteer aliases,
+  per-label and per-relation thresholds, and the decoding constraints
+  `unique_source` / `unique_target` / `acyclic` / `allow_self` / `inverse`.
+  `builtin.py` ships `POLEO_ONTOLOGY` (5 labels, 16 relationship types) and the
+  eight domain templates (`get_template`, `list_templates`); `compile.py`
+  produces the JointIE schema, the attribute schema, the label map and the LLM
+  prompt fragment; `convert.py` converts `EntitySchemaConfig`, `DomainSchema`
+  and arrows.app JSON in both directions and provides `load_ontology(path)`;
+  `diff.py` provides `diff_documents`. Parsing stays lenient (`extra="ignore"`,
+  every extension field defaulted, so any payload that parsed before still
+  parses) and `validate_structure()` is the single validator — it returns every
+  structural problem at once (duplicate labels, a `pole_type` outside POLE+O, an
+  undeclared relationship endpoint, a duplicate triple, an `allow_self` on
+  differing endpoints, a non-mirroring `inverse`) and raises `ValueError`
+  through `BoltOntology.create` / `update` and `compile_joint_schema`. Lookups:
+  `labels()`, `label_map()`, `label_for(pole_type, subtype)` (with base-type
+  fallback), `declares()`, `relationship_types()`, `patterns()`, `permits()`,
+  and `content_key()` for content-addressed schema caching. `no_self_loops`
+  (default `True`) is applied per relation rather than as a global flag, so an
+  explicit `allow_self` still wins, and `symmetric=True` is never passed to a
+  compiled relation (it rejects every candidate edge in `gliner2` 2.0.0 — use
+  `inverse=`).
+- **`client.ontology` on bolt** (`ontology/store.py`, `BoltOntology`) — the same
+  method surface as the hosted `NamsOntology`, persisted as
+  `(:Ontology)-[:HAS_VERSION]->(:OntologyVersion)` with a single active version
+  per database. `SchemaConfig` gains `ontology_path`, `use_active_ontology`,
+  `ontology_template` and `validation_mode`, and `MemoryClient(ontology=...)`
+  takes a document, path or `None`; the effective ontology is resolved once per
+  connection and handed to the extractor factory, the resolver and both memory
+  layers, and read back through the new `MemoryClient.ontology_document` /
+  `MemoryClient.validation_mode` properties. Precedence: the `ontology=` keyword,
+  `ontology_path`, `custom_schema_path`, the active stored version (when
+  `use_active_ontology`), `SchemaModel.CUSTOM` + `entity_types`, then
+  `ontology_template` — resolved at connect time, so activating a version
+  affects the next connection rather than the client that activated it. Where
+  the backends differ, `BoltOntology` raises `NotSupportedError` naming NAMS:
+  `import_` converts `json` / `yaml` / `native` / `arrows` / `auto` locally and
+  refuses `url=` and the extraction-backed formats (`rdf`, `graphql`, `cypher`,
+  `linkml`, ...); `migrate` runs **synchronously**, one transaction per label
+  pair, returning an already-terminal `MigrationJob` persisted as
+  `(:OntologyMigration)` (`batch_size` is accepted and ignored); `get_active()`
+  raises when nothing is bound and never silently falls back to POLE+O; and the
+  eight built-in domain templates are read-only rows with `template:<name>`
+  ids, turned into editable ontologies by `clone()`. Constraints on
+  `Ontology.id` / `OntologyVersion.id` and an index on `Ontology.name` are
+  created by `graph/schema.py`.
+- **Bolt entity nodes carry their ontology label.** Message ingestion,
+  `LongTermMemory.add_entity` and explicit mentions add the label the client's
+  ontology declares for the entity's exact `(pole_type, subtype)` pair — a
+  `Ticket = OBJECT:TICKET` entity is written as `:Entity:Object:Ticket` — in
+  PascalCase that keeps the label's own capitals (`SupportCase` stays
+  `SupportCase`; the templates' `tv_show` becomes `TvShow`). A base declaration
+  applies only to an entity with no subtype, a pair two labels declare adds
+  nothing, and a label equal to the type or built-in subtype label is not
+  repeated, so the default POLE+O ontology writes exactly the labels it always
+  did. `OntologyDocument.node_label()` is the exact-match lookup;
+  `label_for()` keeps its fallbacks for validation. Labels are added on match
+  as well as on create, including when ingest-time resolution or an
+  `add_entity` dedup merge reuses an existing node, so re-mentioning a node
+  written under an earlier revision labels it for the active one. Explicit
+  mentions with a `type` now also get their type label, like every other
+  entity write.
+  `BoltOntology.migrate` matches and writes labels in the same form; it used
+  `sanitize_label`, which re-cased a rename to `SupportCase` into
+  `:Supportcase`.
+- **Extraction drops mentions that only name their own type.** Span
+  extractors type the class noun along with the instances: in "which tickets
+  does Grace have?" GLiNER2.5 returns `tickets` as a Ticket, and no type
+  description talks it out of that. `ExtractionResult.filter_invalid_entities()`
+  now also drops a mention whose whole name, ignoring case, a leading article
+  or possessive ("my ticket") and regular plurals, is its POLE+O type, its
+  subtype, the label the extractor produced it under, or (with the new optional
+  `ontology` argument) the label the ontology declares for its pair — so
+  `support cases` goes too under a `SupportCase` label. Relations to a dropped
+  mention go with it. Message ingestion passes the client's ontology. The check
+  is `extraction.base.is_type_name_mention()`.
+- **No more "does not exist" warnings from the library's own queries.** On a
+  fresh or lightly used database Neo4j logged a `label / relationship type /
+  property key does not exist` warning for correct library queries that
+  reference schema nothing has written yet — `e.aliases` in entity resolution
+  (once per ingested message), `:SchemaMigration`, `HAS_VERSION`. The bolt
+  client's `execute_read` / `execute_write` now ask the server not to report
+  the UNRECOGNIZED notification classification (`report_unrecognized=False`
+  by default); the read-only `client.query.cypher` accessor and
+  `Neo4jClient.session()` keep reporting it, so a typo in Cypher you write
+  still warns.
+- **`BoltOntology.diff` reports a validation-mode change.** `mode_change` is
+  `{"from": "permissive", "to": "strict"}` when the two revisions' modes
+  differ, the shape NAMS returns; it was always `None` on bolt, because the
+  mode lives on the version row that `diff_documents()` never sees.
+- **Ontology enforcement on the write paths** — `schema_config.validation_mode`
+  (`"permissive"` | `"strict"` | `None` to derive). Relations the ontology
+  forbids are dropped in *both* modes, because writing an edge the schema
+  forbids is never the intent. `strict` adds entity-level enforcement:
+  `LongTermMemory.add_entity` / `add_relationship` raise `ValidationError` for an
+  undeclared entity type, an undeclared relationship name, an endpoint whose
+  stored type maps onto no declared label, or an endpoint pair the ontology does
+  not permit; and message ingestion drops extracted entities whose
+  `(type, subtype)` the ontology does not declare, together with any relation
+  that referenced them.
+- **Relation validation** — `ExtractionResult.validate_relations(ontology, mode=)`
+  checks relationship names and endpoint labels against the ontology
+  (`"warn"` / `"drop"` / `"raise"`). `ExtractionPipeline` runs it as a final
+  stage with `mode="drop"` when an ontology is configured, because merging
+  several stages can only ever add relations the ontology forbids.
+- **Typed relation provenance** on `RELATED_TO`: `support`, `derived`,
+  `extractor`, `source_message_ids` (capped at 25) and `evidence` (capped at 3).
+- **`ExtractedEntity.id`** (per-result mention id) and
+  **`ExtractedRelation.source_id` / `target_id` / `derived`**.
+- **Extraction and resolution benchmarks** — `RelationMetrics`,
+  `ExpectedRelation`, `MatchPolicy` (with `DEFAULT_MATCH_POLICY` /
+  `STRICT_MATCH_POLICY`), `calculate_relation_metrics`, `bcubed` /
+  `BCubedScore`, `ResolutionGold` / `ResolutionMention` / `load_resolution_gold`
+  and `normalize_name`, living in the new shared
+  `neo4j_agent_memory/core/metrics.py` and re-exported from `benchmarks`. Gold
+  data lands in `benchmarks/data/` (`poleo_gold.json`,
+  `poleo_resolution_gold.json`). `benchmarks/compare_extractors.py` is the
+  comparison and threshold-sweep script: entity and relation P/R/F1, latency,
+  throughput and ontology endpoint-type violations across checkpoints, with
+  `--relation-thresholds` for the sweep, `--ontology` / `--gliner-schema` for
+  the schema, `--policy strict|lenient`, `--output` for JSON, and
+  `--legacy-model` for a before/after run through an in-script GLiNER v1 adapter
+  (needs `gliner` installed separately; the library no longer depends on it).
+- **Eval dimensions** — `EvalSuite` gains `extraction` (`ExtractionCase`, scored
+  on relation F1) and `resolution` (`ResolutionCase`, scored with B-cubed F1),
+  folded into `EvalReport.overall_score`. Both are skipped cleanly (and noted in
+  `report.skipped`) when no extractor or resolver is configured.
+- **CLI** — `neo4j-agent-memory ontology validate <file>` and
+  `ontology compile <file>`; `extract` gains `--ontology`, `--gliner-schema` and
+  `--model`.
+- **`examples/ontology-extraction/`** — a keyless, bolt end-to-end demo of the
+  whole path: author an ontology, `create`/`activate` it, ingest messages with
+  alias variation across two sessions, read the typed edges back with their
+  `support` counts, inspect the review band, then `update` and `diff`.
+- **`examples/ontology-lifecycle-bolt/`** — the keyless bolt twin of
+  `examples/ontology-lifecycle/` (NAMS), on the same Arrows diagram and
+  transcript: import the diagram locally, repair the POLE+O types the
+  conversion guesses, activate revision 1 (and see that a connected client keeps
+  its old ontology until it reconnects), ingest with GLiNER2.5 so tickets land as
+  `:Entity:Event:Ticket`, rename `Ticket` -> `SupportCase` in a strict revision
+  2, diff, and migrate the extracted entities inline. It keeps everything it
+  writes and leaves revision 2 active, so it runs only through
+  `make example-ontology-lifecycle-bolt`, never `make examples`.
+- **`examples/support-desk-agent/`** — a full-stack app (FastAPI + PydanticAI
+  2.x, Next.js 16 + Chakra UI v3) seeded with 24 customer-support conversations
+  from Microsoft's STATE-Bench (MIT; data and the benchmark's environment copied
+  unchanged). The tasks' records are entities typed by a `customer-support`
+  ontology, and every recorded tool call is a seeded reasoning trace with
+  `TOUCHED` edges. The agent has the benchmark's eleven tools; they run the
+  benchmark's environment against the graph and write confirmed returns,
+  refunds, exchanges and cancellations back. It recalls similar past traces
+  before acting. Memory, Graph, Ontology (revisions, diff, a one-click rename +
+  migration) and Reasoning panels.
+- **How-to "Rename an ontology type and migrate a Bolt graph"**
+  (`how-to/migrate-a-bolt-ontology.adoc`), which runs the
+  `ontology-lifecycle-bolt` program.
+
+### Changed
+
+- `extraction.gliner_model` now defaults to `fastino/gliner2.5-base-v1`. The
+  `gliner_*` field names and `NAM_EXTRACTION__GLINER_*` environment variables
+  keep their spelling — in those names "gliner" means GLiNER2.5.
+- `ExtractionPipeline` built by `create_extraction_pipeline()` without an
+  explicit ontology now validates relations against the built-in POLE+O
+  ontology (previously no validation ran); pass `ontology=` to use your own.
+- New `ExtractionConfig` fields: `gliner_relation_threshold` (`None`),
+  `gliner_max_words` (384), `gliner_chunk_overlap` (64),
+  `gliner_overlap_policy` (`None`), `gliner_extract_attributes` (`False`),
+  `gliner_quantize` (`False`), `gliner_compile` (`False`).
+- The `extraction` and `full` extras now carry `gliner2` instead of `gliner`,
+  plus `sentencepiece` and `protobuf` — the GLiNER2.5 checkpoints use a
+  DeBERTa-v3 SPM tokenizer and fail confusingly without them. `gliner2[local]`
+  caps `transformers<5`, so a relock downgrades `transformers` to 4.x.
+- **`RELATED_TO` merge key now includes the relationship name**
+  (`MERGE (a)-[r:RELATED_TO {type: $relation_type}]->(b)`), so one pair of
+  entities can carry several differently-typed edges where a second type
+  previously overwrote the first. `r.type` is the canonical property that every
+  reader uses; `r.relation_type` is kept as a mirror for one release.
+- `ExtractedEntity.extractor` is `"gliner2"` (was `"gliner"`), and the
+  `attributes` keys are `gliner2_label` / `gliner2_score` / `rescued` /
+  `sentence_id`. Provenance filters on the old strings stop matching.
+- `ExtractorBuilder` keeps its spelling. `with_gliner()` builds the GLiNER2.5
+  stage and accepts `relation_threshold=` and `model_name=`; `with_schema()`
+  stores the whole `EntitySchemaConfig` (converted to an ontology) instead of
+  only its type names; new `with_ontology(doc)`.
+- `create_extractor()` / `create_extraction_pipeline()` / `create_*_extractor()`
+  take an `ontology=` keyword and thread it to every stage.
+- `LLMEntityExtractor` takes `ontology=`; when set, the prompt's type guidance
+  is generated from the ontology (annotation guidelines plus the legal
+  `SOURCE -[REL]-> TARGET` catalogue) instead of the hardcoded POLE+O block.
+- `BenchmarkConfig.extract_relations` defaults to `True`, and
+  `BenchmarkRunner.run_test_case` no longer discards `result.relations`.
+- `DomainSchema` moved to `extraction/domain_schemas.py` and gained
+  `to_ontology(relationships=None)`; `DEFAULT_LABEL_MAPPING` and
+  `map_label_to_poleo()` moved to `extraction/label_mapping.py`. All are still
+  re-exported from `neo4j_agent_memory.extraction`.
 - **BREAKING (behavioural): `client.ontology.get_active()` reports the bound
   revision.** It now reads `version_id`, `ontology_id`, `revision` and
   `validation_mode` from the `version` object in the `GET /ontologies/active`
@@ -30,8 +331,243 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   earlier than the tail, or an implicit one that follows a future explicit one,
   can still sort out of `NEXT_MESSAGE` order.
 
+### Removed
+
+- `gliner` v1 and GLiREL support, and `extraction/gliner_extractor.py`.
+  `GLiNEREntityExtractor`, `GLiNERConfig`, `GLiNERWithRelationsExtractor`,
+  `GLiRELExtractor`, `GLiRELConfig`, `DEFAULT_RELATION_TYPES`,
+  `is_gliner_available` and `is_glirel_available` now raise an `ImportError`
+  from `extraction.__getattr__` naming their replacement.
+- `ExtractorBuilder.with_gliner_relations()` — relations come from the same pass
+  as the entities, so it has no job left to do.
+- `factory._get_entity_labels_for_schema()` — labels come from the ontology.
+- The `GET_LAST_MESSAGE` and `CREATE_MESSAGE_LINKS` constants are gone from
+  `neo4j_agent_memory.graph.queries`. `CREATE_MESSAGES_BATCH` now reads the tail
+  and links the batch itself.
+- The `docs` dependency group no longer installs MkDocs. The documentation is an
+  Antora site built from `docs/package.json`.
+
+### Deprecated
+
+- The **`gliner` extra** is now an alias of `gliner2`, kept for one release so
+  existing install commands keep working. It is removed in 0.8; switch to
+  `pip install "neo4j-agent-memory[gliner2]"`.
+- **`r.relation_type`** on `RELATED_TO` edges is a mirror of `r.type` for one
+  release. Read `r.type`.
+
+### Migration
+
+- **Install:** `pip install "neo4j-agent-memory[gliner2]"`. `gliner` and
+  `glirel` can be uninstalled — nothing imports them any more.
+- **Model ids:** legacy checkpoints (`urchade/*`, `gliner-community/*`,
+  `numind/*`) raise a `ValueError` from the `GLiNER2Extractor` constructor,
+  before any download, naming the GLiNER2.5 replacements. Settings validation
+  does *not* reject them, so a stale `NAM_EXTRACTION__GLINER_MODEL` surfaces at
+  first extraction rather than at startup.
+- **Code:** `GLiNEREntityExtractor.for_schema(x)` →
+  `GLiNER2Extractor.for_schema(x)`; `schema=` → `ontology=` (which also accepts
+  an `OntologyDocument`, an `EntitySchemaConfig`, or anything with
+  `to_ontology()`); `GLiNERWithRelationsExtractor` / `GLiRELExtractor` → one
+  `GLiNER2Extractor`.
+- **Relations need a relationship-declaring ontology.** A bare `DomainSchema` is
+  a label catalog with no endpoint typing, so an extractor built from one
+  returns entities only. The `poleo`, `podcast` and `news` templates declare
+  relationships; the other five do not until you attach some with
+  `to_ontology(relationships=[...])`.
+- **Stored data:** `graph/schema.py setup_all()` runs a **one-shot** backfill on
+  connect — `MATCH ()-[r:RELATED_TO]->() WHERE r.type IS NULL AND
+  r.relation_type IS NOT NULL SET r.type = r.relation_type, r.support =
+  coalesce(r.support, 1)`. The query is idempotent but it is still a write
+  transaction over every `RELATED_TO` edge, so completion is recorded on a
+  `(:SchemaMigration {name: "relation_type_backfill", completed_at})` marker
+  node and later connections skip the scan entirely. Set
+  `schema_config.backfill_relation_types=False`
+  (`NAM_SCHEMA_CONFIG__BACKFILL_RELATION_TYPES=false`) to skip it altogether
+  and run the equivalent in batches (`apoc.periodic.iterate`) on a very large
+  graph. Delete the marker node to make a later `connect()` re-run it, e.g.
+  after bulk-loading pre-0.7 data. Expect the `RELATED_TO` edge count to grow
+  on re-ingestion, because the merge key now includes the type.
+- **Ingest-time resolution is on.** If you already deduplicate downstream, or
+  you are bulk-loading a source you trust, opt out with
+  `MemorySettings(resolution=ResolutionConfig(resolve_on_ingest=False))`. Leave
+  it on and expect fewer entity nodes than mentions, growing `aliases` lists,
+  and a review queue: work it with `find_potential_duplicates()` /
+  `review_duplicate()`. Thresholds moved to `ResolutionConfig`
+  (`auto_merge_threshold` / `review_threshold`) — a `DeduplicationConfig` you
+  pass to `LongTermMemory` yourself is now best derived with
+  `DeduplicationConfig.from_resolution_config(settings.resolution)`. There has
+  never been a `deduplication` settings section; `NAM_DEDUPLICATION__*` is
+  ignored.
+- **Quality expectations:** entity F1 is roughly flat against the previous
+  stack (0.80 for `base-v1` on `benchmarks/data/poleo_gold.json`, CPU; 0.75 for
+  `small-v1`); relation F1 is 0.37 lenient / 0.27 strict at ~1.6 docs/s, with
+  zero endpoint-type violations. What 2.5 buys is typed joint decoding, long
+  context and the boundary architecture — not an accuracy jump. Per-relation
+  thresholds are unswept for POLE+O; `benchmarks/compare_extractors.py` is the
+  sweep tool.
+- **Docs:** see the new
+  [Migrate to GLiNER2.5](https://neo4j.com/labs/agent-memory/how-to/migrate-to-gliner2.html),
+  [Drive Extraction From an Ontology](https://neo4j.com/labs/agent-memory/how-to/ontology-driven-extraction.html)
+  and [Tune Entity Resolution](https://neo4j.com/labs/agent-memory/how-to/tune-entity-resolution.html)
+  guides.
+
+### Added (resolution)
+
+- **`OntologyResolver`** (`resolution/ontology.py`) — ontology-aware,
+  type-constrained entity resolution in five separable stages: **normalize**
+  (`normalize_name()`, module-level and model-free, shared with
+  `core/metrics.py` so benchmarks compare names exactly the way the resolver
+  does — NFC, casefold, punctuation and determiners stripped, legal suffixes off
+  organizations, titles and generational suffixes off people, plus head/tail
+  token, initials, an acronym flag and Shannon entropy); **block** in Cypher and
+  never across a POLE+O type (one exact-key query per episode and type, with the
+  token-prefix and vector-index buckets fetched only when no exact match turned
+  up, oversized prefix buckets discarded); **score** (exact normalized match
+  1.0, declared ontology alias 1.0, acronym expansion 0.97 — organizations
+  only, and at least three letters, since "IT" is not Isabel Turner —
+  whole-token-prefix 0.92 for *any* type when independent context corroborates
+  it and 0.88 — the review band — when it does not (name embeddings do not
+  corroborate a prefix: a name and its extension embed alike whether or not
+  they are one entity), else `0.45·fuzzy +
+  0.40·embedding + 0.15·context` renormalized over the available components,
+  minus 0.25 when the *lower*-entropy side of the pair is below 2.5 bits, and
+  capped at `review_threshold` when fuzzy similarity is the only component and
+  the two names are a substring pair); **band**; and **cluster**. It composes the
+  existing fuzzy and semantic resolvers rather than replacing them, and
+  `ExactMatchResolver` / `FuzzyMatchResolver` / `SemanticMatchResolver` remain
+  selectable. `resolve_episode()` resolves a whole message in two passes —
+  without the second pass, a message that mentions "Acme" and "Acme Corp" for
+  the first time creates two nodes, since neither had a stored entity to anchor
+  to. `resolve_one()` is the single-name entry point, and `EntityResolution`
+  reports the decision (`action`, `score`, `match_type`, `matched_entity_id`).
+- **Three bands, not two.** At or above `auto_merge_threshold` a mention merges
+  onto the matched entity (no new node; the surface form is appended to its
+  `aliases`). At or above `review_threshold` the node is created *plus* a
+  pending `SAME_AS` edge to the match, so `find_potential_duplicates()` /
+  `review_duplicate()` surface the pair without blocking ingestion. Below that
+  it is created as before. The decision is recorded in the created node's
+  `metadata` as `resolution.action` / `.score` / `.match_type`, alongside the
+  character offsets and the context window — which is what lets a *later*
+  mention be compared on context rather than on name alone.
+- **Per-type thresholds** — `EntityTypeDef.resolution_threshold` and
+  `review_threshold` override the global bands for mentions that map onto that
+  label, and `EntityTypeDef.aliases` is the resolver's gazetteer (a blocking key
+  *and* a 1.0 match rule that works with embeddings switched off). The gazetteer
+  is indexed **per canonical**: a surface form two canonicals share
+  (`{"Apple Inc": ["Apple"], "Apple Records": ["Apple"]}`) identifies neither
+  and falls through to the blend, rather than making the two canonicals aliases
+  of each other.
+- **Same-episode contexts do not corroborate.** Two mentions extracted from one
+  message share a context window, so their contexts agree at 1.0 whatever the
+  sentence says. The context component is dropped for such a comparison —
+  otherwise "Apple Bank has no relationship with Apple, the phone maker" merged
+  Apple into Apple Bank. Independent contexts still corroborate as before.
+- **`ResolutionConfig`**: `resolve_on_ingest` (`True`),
+  `auto_merge_threshold` (`0.90`), `review_threshold` (`0.85`),
+  `candidate_limit` (`12`), `use_alias_gazetteer` (`True`),
+  `use_embedding_blocking` (`True`), `context_window_chars` (`90`) and
+  `scope` (`"global"` | `"user"`). `review_threshold > auto_merge_threshold` is
+  rejected at settings construction rather than silently reordered.
+  `scope="user"` blocks through
+  `(:Conversation {user_identifier})-[:HAS_MESSAGE]->(:Message)-[:MENTIONS]->(:Entity)`;
+  it narrows candidate generation, not storage — `:Entity` nodes stay global and
+  the create path merges on `(name, type)`, so two tenants using the *identical*
+  surface form still share a node.
+- **Blocking queries** — `FIND_ENTITIES_BY_NORMALIZED_KEYS`,
+  `FIND_ENTITIES_BY_TOKEN_PREFIX`, `FIND_SIMILAR_ENTITIES_BY_EMBEDDING` and a
+  `_FOR_USER` variant of each, plus `ADD_ENTITY_ALIAS` (a single write, so two
+  concurrent ingesters cannot drop each other's alias). All three buckets honour
+  `scope="user"`; the vector index is global, so without its `_FOR_USER` variant
+  one tenant's "Alice Chen" could merge onto another's node. Blocking keys
+  include the mention's raw surface form with and without trailing punctuation,
+  so a mention of "Acme Corp." reaches the exact bucket for a stored
+  "Acme Corp".
+- **`DeduplicationConfig.from_resolution_config(config)`** — projects the
+  resolution bands onto the older deduplication shape, so code that constructs
+  `LongTermMemory` directly bands identically to the client. The
+  `DeduplicationConfig` *defaults* now mirror `ResolutionConfig` too
+  (`auto_merge_threshold` 0.90, `flag_threshold` 0.85, `fuzzy_threshold` 0.85,
+  `max_candidates` 12, previously 0.95 / 0.85 / 0.9 / 10), so `add_entity`
+  without an ontology resolver bands the way ingestion does.
+- **No self-loop `RELATED_TO` edges.** When both endpoints of an extracted
+  relation resolve to the same node — the normal outcome for
+  "X is not affiliated with Y" once the two names merge — the relation is
+  skipped with a debug log instead of writing an edge from an entity to itself.
+  Guarded in Python on the by-id path and in Cypher on both.
+- **`extract_entities_from_session()` reports node counts.** `entities_created`
+  and `entities_merged` join the existing `entities_extracted`, which has always
+  been (and remains) the *mention* count — with resolution on, several mentions
+  routinely land on one node.
+
+### Changed (resolution)
+
+- **Behaviour change: message ingestion resolves entities by default.**
+  `resolution.resolve_on_ingest=True`, so `add_message`,
+  `add_messages_batch` and `extract_entities_from_session` now resolve the
+  mentions they extract against the entities already in the graph. Expect fewer
+  entity nodes than mentions, aliases accumulating on the survivors, and pending
+  `SAME_AS` edges appearing without anyone calling `add_entity`. One line
+  restores the pre-0.7 behaviour (one node per distinct surface form):
+
+  ```python
+  MemorySettings(resolution=ResolutionConfig(resolve_on_ingest=False))
+  ```
+
+  Only an `OntologyResolver` resolves on ingest — every other strategy, and
+  `None`, leaves the path exactly as it was. Resolution never gates a write: a
+  failed blocking query is logged and the mentions are stored unresolved.
+  Measured overhead is about +1.7 ms for a two-mention message (~8% of that
+  write path), because blocking is one round trip per message and type rather
+  than per mention.
+- `ShortTermMemory.__init__` takes `resolver=`, `resolution_config=`,
+  `ontology=` and `validation_mode=`, and one private `_persist_entities()`
+  helper replaced the three duplicated entity-writing loops
+  (`add_message`, the batch path, `extract_entities_from_session`).
+- One dedup mechanism: `LongTermMemory._check_for_duplicates` is an adapter over
+  `OntologyResolver.resolve_one()` when that is the configured resolver — same
+  normalization, same blocking, same thresholds as ingestion — still returning a
+  `DeduplicationResult`. Any other resolver keeps the original
+  embedding-similarity path unchanged.
+- `MemoryClient._create_resolver()` returns `OntologyResolver` for
+  `ResolverStrategy.COMPOSITE` on bolt (it needs the connected client, so it is
+  constructed after `_connect_bolt` has one) and falls back to
+  `CompositeResolver` when there is none.
+
 ### Fixed
 
+- **Concurrent sentence-transformers embeds no longer crash on Apple Silicon.**
+  `SentenceTransformerEmbedder` ran `encode` on the default executor with no
+  serialization, and the provider string (`sentence-transformers/...`) picks the
+  `mps` device on Apple Silicon. Two concurrent embeds there could compile a
+  Metal kernel on two threads at once and segfault the process. `encode` now
+  runs under one process-wide lock.
+- **`MENTIONS` links for pre-existing entity nodes.** The entity `MERGE` keys on
+  `(name, type)`, so `ON CREATE` does not run when the node already exists and
+  the freshly generated uuid is discarded. The ingestion path now adopts the id
+  the database returns; previously it kept the generated one, and every
+  subsequent write keyed on it — the `MENTIONS` edge and the typed relations —
+  silently did nothing whenever a message mentioned an entity that was already
+  in the graph.
+- **Entity merge no longer fails on un-backfilled relations.** `MERGE_ENTITIES`
+  keyed its `RELATED_TO` transfer on `{type: r.type}`, which Neo4j rejects when
+  `r.type` is null (an edge written before the v0.7 provenance rework, or one
+  `BACKFILL_RELATION_TYPE` has not reached) — taking the whole merge down with
+  it. The key is now `coalesce(r.type, r.relation_type, 'RELATED_TO')`, and the
+  transfer carries the edge's provenance (`support`, `derived`, `extractor`,
+  `source_message_ids`, `evidence`) instead of dropping it, folding `support`
+  and the id lists together when the surviving entity already has an edge of
+  that type.
+- **`r.evidence` no longer stacks duplicates.** The append on the three relation
+  `MERGE` queries lacked the `NOT x IN` guard that `source_message_ids` has, so
+  re-observing a relation filled all three evidence slots with the same snippet.
+- **`EvalMemory`'s `resolution` dimension actually measures resolution.** It
+  called `resolve_batch()`, which for `OntologyResolver` resolves each mention
+  against the live graph one at a time and never clusters the batch, making
+  B-cubed independent of resolver quality. When the resolver exposes
+  `resolve_episode` the whole case now goes through it in one call and the
+  predicted clusters come from what each mention merged onto; other resolvers
+  keep the `resolve_batch` path. `DimensionReport.details` records which was
+  used under `clustered_by`.
 - **`add_messages_batch` reads back in input order.** The batch query stamped
   every message without an explicit `timestamp` with the same `datetime()`, and
   `get_conversation` orders by timestamp, so batched messages came back in
@@ -73,36 +609,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   entities with no embedding, so `long_term.search_entities()`, a vector search,
   never returned them. When an embedder is configured, the entity names from each
   extraction are now embedded in one `embed_batch` call, as `add_entity` embeds a
-  name. `add_message(generate_embedding=False)` and
+  name, and ingest-time resolution reuses those vectors instead of embedding the
+  names again. `add_message(generate_embedding=False)` and
   `add_messages_batch(generate_embeddings=False)` never call the embedder: their
   extracted entities are stored without an embedding (an entity that already has
-  one keeps it), and a later `extract_entities_from_session(skip_existing=False)`
-  embeds them. Extraction runs after the message is written, so with embeddings
+  one keeps it), resolution runs without its embedding component, and a later
+  `extract_entities_from_session(skip_existing=False)` embeds them. Extraction runs after the message is written, so with embeddings
   on, an embedder error raises after the message is stored, as an extractor error
   already did in 0.6.0. A caller that retries `add_message` on that error writes
   the message again under a new id; retry `extract_entities_from_session()`
   instead.
-- **`GLiRELExtractor` finds relations.** It passed entity character offsets to
-  GLiREL, which indexes entity spans by token (inclusive end), so the spans
-  pointed at the wrong tokens and relations were rarely found. At low thresholds
-  it crashed with a pydantic `ValidationError`, because GLiREL returns
-  `head_text`/`tail_text` as token lists. Character offsets are now mapped onto
-  the spaCy tokens passed to GLiREL, entities without offsets are located by name
-  (and skipped if absent), and relation endpoints use the supplied entity names.
 - **A Bolt client no longer needs `httpx`.** `MemoryClient.connect()` on Bolt
   imported `neo4j_agent_memory.nams` for its unsupported-accessor sentinel, and
   that package imports `httpx`, which only the `nams` extra installs. With no
   extra providing `httpx`, connecting failed with `ModuleNotFoundError: No module
   named 'httpx'`. The sentinel now lives in `core`, and Bolt never imports the
   `nams` package.
-- **Auto-extraction links every message to an entity that already exists.**
-  The extracted-entity write MERGEs on name and type and sets `id` only when it
-  creates the node, but `add_message(..., extract_entities=True)`,
-  `add_messages_batch(..., extract_entities=True)` and
-  `extract_entities_from_session()` linked the message with the id they had just
-  generated. When the entity already existed, that id named no node, so the
-  message got no `MENTIONS` edge and relations between such entities were not
-  stored by id. Links and relations now use the id the write returned.
 - **`long_term.find_potential_duplicates()` returns each flagged pair once, with
   its score.** It matched the `SAME_AS` edge in both directions, so every pair
   came back twice, and it read `confidence` off a relationship that the driver
@@ -110,14 +632,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   once, as the flagged entity then its match, with the edge's `confidence`.
 - The `mcp serve --port` help now names the endpoint `/mcp`, the path FastMCP
   serves. It said `/mcp/`, which FastMCP redirects.
-
-### Removed
-
-- The `GET_LAST_MESSAGE` and `CREATE_MESSAGE_LINKS` constants are gone from
-  `neo4j_agent_memory.graph.queries`. `CREATE_MESSAGES_BATCH` now reads the tail
-  and links the batch itself.
-- The `docs` dependency group no longer installs MkDocs. The documentation is an
-  Antora site built from `docs/package.json`.
 
 ## [0.6.0] - 2026-09-14
 
@@ -1110,6 +1624,7 @@ The v0.2 feature drop. Headline feature is **adopting an existing Neo4j graph** 
 - **CLI Tool**: Command-line interface for entity extraction and schema management
 - **Schema Persistence**: Store and version custom entity schemas in Neo4j
 
+[0.7.0]: https://github.com/neo4j-labs/agent-memory/releases/tag/python-v0.7.0
 [0.6.0]: https://github.com/neo4j-labs/agent-memory/releases/tag/python-v0.6.0
 [0.5.0]: https://github.com/neo4j-labs/agent-memory/releases/tag/python-v0.5.0
 [0.4.0]: https://github.com/neo4j-labs/agent-memory/releases/tag/v0.4.0

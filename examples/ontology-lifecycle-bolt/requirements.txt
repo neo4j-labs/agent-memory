@@ -1,0 +1,11 @@
+# Ontology lifecycle on bolt — the twin of ../ontology-lifecycle/ (NAMS).
+#
+#   pip install -r examples/ontology-lifecycle-bolt/requirements.txt
+#
+# `gliner2` brings GLiNER2.5, which extracts against the active ontology;
+# `sentence-transformers` brings the local embedder. No LLM extra: the example
+# runs with llm=None and needs no API key.
+neo4j-agent-memory[gliner2,sentence-transformers]>=0.7.0,<0.8
+# Optional: loads this directory's .env (the script falls back to a tiny
+# built-in parser when python-dotenv is absent).
+python-dotenv>=1.0,<2

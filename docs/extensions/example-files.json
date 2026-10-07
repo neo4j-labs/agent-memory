@@ -7,5 +7,7 @@
   "team-memory/doctor.py": "examples/claude-code-team-memory/doctor.py",
   "team-memory/.mcp.json.example": "examples/claude-code-team-memory/.mcp.json.example",
   "team-memory/claude_desktop_config.json.example": "examples/claude-code-team-memory/claude_desktop_config.json.example",
-  "team-memory/cursor_mcp.json.example": "examples/claude-code-team-memory/cursor_mcp.json.example"
+  "team-memory/cursor_mcp.json.example": "examples/claude-code-team-memory/cursor_mcp.json.example",
+  "ontology-lifecycle-bolt/main.py": "examples/ontology-lifecycle-bolt/main.py",
+  "ontology-lifecycle-bolt/schemas/support-desk.arrows.json": "examples/ontology-lifecycle-bolt/schemas/support-desk.arrows.json"
 }

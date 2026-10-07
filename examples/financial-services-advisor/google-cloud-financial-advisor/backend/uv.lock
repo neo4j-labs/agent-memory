@@ -1616,7 +1616,7 @@ wheels = [
 
 [[package]]
 name = "neo4j-agent-memory"
-version = "0.6.0"
+version = "0.7.0"
 source = { editable = "../../../../" }
 dependencies = [
     { name = "neo4j" },
@@ -1648,8 +1648,9 @@ requires-dist = [
     { name = "click", marker = "extra == 'cli'", specifier = ">=8.0.0" },
     { name = "crewai", marker = "extra == 'crewai'", specifier = ">=1.0,<2" },
     { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=4.0,<5" },
-    { name = "gliner", marker = "extra == 'extraction'", specifier = ">=0.2.0" },
-    { name = "gliner", marker = "extra == 'gliner'", specifier = ">=0.2.0" },
+    { name = "gliner2", extras = ["local"], marker = "extra == 'extraction'", specifier = ">=2.0,<3" },
+    { name = "gliner2", extras = ["local"], marker = "extra == 'gliner'", specifier = ">=2.0,<3" },
+    { name = "gliner2", extras = ["local"], marker = "extra == 'gliner2'", specifier = ">=2.0,<3" },
     { name = "google-adk", marker = "extra == 'google-adk'", specifier = ">=2.0,<3" },
     { name = "google-cloud-aiplatform", marker = "extra == 'google'", specifier = ">=2.0,<3" },
     { name = "google-cloud-aiplatform", marker = "extra == 'vertex-ai'", specifier = ">=2.0,<3" },
@@ -1664,7 +1665,7 @@ requires-dist = [
     { name = "litellm", marker = "extra == 'litellm'", specifier = ">=1.50,<2" },
     { name = "llama-index-core", marker = "extra == 'llamaindex'", specifier = ">=0.14,<1" },
     { name = "neo4j", specifier = ">=5.20,<7" },
-    { name = "neo4j-agent-memory", extras = ["all", "sentence-transformers", "spacy", "gliner", "instructor"], marker = "extra == 'full'" },
+    { name = "neo4j-agent-memory", extras = ["all", "sentence-transformers", "spacy", "gliner2", "instructor"], marker = "extra == 'full'" },
     { name = "neo4j-agent-memory", extras = ["openai", "anthropic", "litellm", "fuzzy", "langchain", "llamaindex", "pydantic-ai", "crewai", "openai-agents", "microsoft-agent"], marker = "extra == 'all'" },
     { name = "openai", marker = "extra == 'openai'", specifier = ">=2.0,<4" },
     { name = "openai", marker = "extra == 'openai-agents'", specifier = ">=2.0,<4" },
@@ -1674,18 +1675,24 @@ requires-dist = [
     { name = "opentelemetry-sdk", marker = "extra == 'observability'", specifier = ">=1.20.0" },
     { name = "opentelemetry-sdk", marker = "extra == 'opentelemetry'", specifier = ">=1.20.0" },
     { name = "opik", marker = "extra == 'opik'", specifier = ">=1.0.0" },
+    { name = "protobuf", marker = "extra == 'extraction'", specifier = ">=5" },
+    { name = "protobuf", marker = "extra == 'gliner'", specifier = ">=5" },
+    { name = "protobuf", marker = "extra == 'gliner2'", specifier = ">=5" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "pydantic-ai-slim", extras = ["openai"], marker = "extra == 'pydantic-ai'", specifier = ">=2.0,<3" },
     { name = "pydantic-settings", specifier = ">=2.0.0" },
     { name = "rapidfuzz", marker = "extra == 'fuzzy'", specifier = ">=3.0.0" },
     { name = "rich", marker = "extra == 'cli'", specifier = ">=13.0.0" },
     { name = "sentence-transformers", marker = "extra == 'sentence-transformers'", specifier = ">=3.0,<7" },
+    { name = "sentencepiece", marker = "extra == 'extraction'", specifier = ">=0.2" },
+    { name = "sentencepiece", marker = "extra == 'gliner'", specifier = ">=0.2" },
+    { name = "sentencepiece", marker = "extra == 'gliner2'", specifier = ">=0.2" },
     { name = "spacy", marker = "extra == 'extraction'", specifier = ">=3.7.0" },
     { name = "spacy", marker = "extra == 'spacy'", specifier = ">=3.7.0" },
     { name = "strands-agents", marker = "extra == 'strands'", specifier = ">=1.52,<2" },
     { name = "typing-extensions", specifier = ">=4.4" },
 ]
-provides-extras = ["openai", "anthropic", "sentence-transformers", "vertex-ai", "bedrock", "litellm", "instructor", "google", "aws", "strands", "spacy", "gliner", "extraction", "fuzzy", "cli", "opentelemetry", "opik", "observability", "langchain", "langchain-agents", "llamaindex", "pydantic-ai", "crewai", "openai-agents", "microsoft-agent", "mcp", "google-adk", "nams", "all", "full"]
+provides-extras = ["openai", "anthropic", "sentence-transformers", "vertex-ai", "bedrock", "litellm", "instructor", "google", "aws", "strands", "spacy", "gliner2", "gliner", "extraction", "fuzzy", "cli", "opentelemetry", "opik", "observability", "langchain", "langchain-agents", "llamaindex", "pydantic-ai", "crewai", "openai-agents", "microsoft-agent", "mcp", "google-adk", "nams", "all", "full"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1703,7 +1710,7 @@ dev = [
     { name = "ruff", specifier = ">=0.3.0" },
     { name = "testcontainers", extras = ["neo4j"], specifier = ">=4.0.0" },
     { name = "ty", specifier = "==0.0.13" },
-    { name = "types-pyyaml", specifier = "==6.0.12.20260518" },
+    { name = "types-pyyaml", specifier = "==6.0.12.20260906" },
 ]
 docs = []
 

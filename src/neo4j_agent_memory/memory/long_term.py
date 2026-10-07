@@ -7,16 +7,23 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID, uuid4
 
 from pydantic import Field
 
-from neo4j_agent_memory.core.exceptions import NotFoundError, NotSupportedError
+from neo4j_agent_memory.core.exceptions import (
+    NotFoundError,
+    NotSupportedError,
+    ValidationError,
+)
 from neo4j_agent_memory.core.memory import BaseMemory, MemoryEntry
 from neo4j_agent_memory.core.protocols import LongTermProtocol
 from neo4j_agent_memory.graph import queries
-from neo4j_agent_memory.graph.query_builder import build_create_entity_query
+from neo4j_agent_memory.graph.query_builder import (
+    build_add_ontology_label_query,
+    build_create_entity_query,
+)
 
 # =============================================================================
 # DEDUPLICATION CONFIGURATION
@@ -33,22 +40,33 @@ class DeduplicationConfig:
     - Flagged for review (score >= flag_threshold but < auto_merge_threshold)
     - Treated as distinct (score < flag_threshold)
 
+    The band defaults mirror
+    :class:`~neo4j_agent_memory.config.settings.ResolutionConfig` — there is
+    one set of thresholds in v0.7 and the message-ingestion path uses those.
+    Before they were aligned, ``add_entity`` without an ontology resolver
+    banded at 0.95/0.85 while ingestion banded at 0.90/0.85, so the same pair
+    of names merged on one path and only got flagged on the other.
+
     Attributes:
         enabled: Whether deduplication is enabled (default True)
-        auto_merge_threshold: Similarity threshold for automatic merging (default 0.95)
-        flag_threshold: Similarity threshold for flagging potential duplicates (default 0.85)
+        auto_merge_threshold: Similarity threshold for automatic merging
+            (default 0.90, matching ``ResolutionConfig.auto_merge_threshold``)
+        flag_threshold: Similarity threshold for flagging potential duplicates
+            (default 0.85, matching ``ResolutionConfig.review_threshold``)
         use_fuzzy_matching: Also check fuzzy string matching (default True)
-        fuzzy_threshold: Threshold for fuzzy matching ratio (default 0.9)
-        max_candidates: Maximum number of candidates to check (default 10)
+        fuzzy_threshold: Threshold for fuzzy matching ratio (default 0.85,
+            matching ``ResolutionConfig.fuzzy_threshold``)
+        max_candidates: Maximum number of candidates to check (default 12,
+            matching ``ResolutionConfig.candidate_limit``)
         match_same_type_only: Only match entities of the same type (default True)
     """
 
     enabled: bool = True
-    auto_merge_threshold: float = 0.95
+    auto_merge_threshold: float = 0.90
     flag_threshold: float = 0.85
     use_fuzzy_matching: bool = True
-    fuzzy_threshold: float = 0.9
-    max_candidates: int = 10
+    fuzzy_threshold: float = 0.85
+    max_candidates: int = 12
     match_same_type_only: bool = True
 
     def __post_init__(self) -> None:
@@ -63,6 +81,30 @@ class DeduplicationConfig:
         # Then check threshold order
         if self.auto_merge_threshold < self.flag_threshold:
             raise ValueError("auto_merge_threshold must be >= flag_threshold")
+
+    @classmethod
+    def from_resolution_config(cls, config: ResolutionConfig) -> DeduplicationConfig:
+        """Derive dedup settings from the resolution settings.
+
+        There is one set of thresholds in v0.7, living on
+        :class:`~neo4j_agent_memory.config.settings.ResolutionConfig`. This
+        projects them onto the older deduplication shape so both the ingestion
+        path and :meth:`LongTermMemory.add_entity` band identically.
+
+        Args:
+            config: The resolution settings to mirror.
+
+        Returns:
+            A :class:`DeduplicationConfig` with the same bands and candidate
+            budget.
+        """
+        return cls(
+            enabled=True,
+            auto_merge_threshold=config.auto_merge_threshold,
+            flag_threshold=config.review_threshold,
+            fuzzy_threshold=config.fuzzy_threshold,
+            max_candidates=config.candidate_limit,
+        )
 
 
 @dataclass
@@ -221,10 +263,12 @@ def _to_python_datetime(neo4j_datetime: Any) -> datetime:
 
 
 if TYPE_CHECKING:
+    from neo4j_agent_memory.config.settings import ResolutionConfig
     from neo4j_agent_memory.embeddings.base import Embedder
     from neo4j_agent_memory.enrichment.background import BackgroundEnrichmentService
     from neo4j_agent_memory.extraction.base import EntityExtractor
     from neo4j_agent_memory.graph.client import Neo4jClient
+    from neo4j_agent_memory.ontology.models import OntologyDocument
     from neo4j_agent_memory.resolution.base import EntityResolver
     from neo4j_agent_memory.services.geocoder import Geocoder
 
@@ -403,6 +447,8 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
         deduplication: DeduplicationConfig | None = None,
         *,
         multi_tenant: bool = False,
+        ontology: OntologyDocument | None = None,
+        validation_mode: Literal["permissive", "strict"] = "permissive",
     ):
         """Initialize long-term memory.
 
@@ -418,6 +464,15 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
             deduplication: Optional deduplication configuration (defaults to enabled)
             multi_tenant: If True, ``add_preference`` raises when
                 ``user_identifier`` is omitted.
+            ontology: The effective ontology, when one is configured. Wired by
+                :class:`~neo4j_agent_memory.MemoryClient` from its resolved
+                ontology.
+            validation_mode: ``"strict"`` makes :meth:`add_entity` and
+                :meth:`add_relationship` raise
+                :class:`~neo4j_agent_memory.core.exceptions.ValidationError`
+                for anything the ontology does not declare; ``"permissive"``
+                (the default, and the pre-v0.7 behaviour) writes it anyway.
+                Ignored when ``ontology`` is ``None``.
         """
         super().__init__(client, embedder, extractor)
         self._multi_tenant = multi_tenant
@@ -427,6 +482,8 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
         self._entity_types = entity_types or POLEO_TYPES
         self._strict_types = strict_types
         self._deduplication = deduplication or DeduplicationConfig()
+        self._ontology = ontology
+        self._validation_mode = validation_mode
 
     def _enforce_multi_tenant(self, user_identifier: str | None) -> None:
         """Raise if multi-tenant is on and ``user_identifier`` is missing."""
@@ -448,6 +505,149 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
             )
 
         return normalized
+
+    @property
+    def _strict_ontology(self) -> OntologyDocument | None:
+        """The ontology to enforce, or ``None`` when enforcement is off."""
+        if self._validation_mode != "strict" or self._ontology is None:
+            return None
+        return self._ontology
+
+    def _enforce_declared_entity(self, entity_type: str, subtype: str | None) -> None:
+        """Reject an entity type the ontology does not declare (strict mode).
+
+        Args:
+            entity_type: POLE+O type of the entity being written.
+            subtype: Optional subtype.
+
+        Raises:
+            ValidationError: In strict mode, when the ontology declares no
+                entity type for this pair.
+        """
+        ontology = self._strict_ontology
+        if ontology is None or ontology.declares(entity_type, subtype):
+            return
+        full_type = f"{entity_type}:{subtype}" if subtype else entity_type
+        raise ValidationError(
+            f"Entity type {full_type!r} is not declared by ontology "
+            f"{ontology.domain.name!r} (validation_mode='strict'). Declared "
+            f"labels: {', '.join(ontology.labels()) or 'none'}.",
+            details={
+                "entity_type": entity_type,
+                "subtype": subtype,
+                "ontology": ontology.domain.name,
+                "declared_labels": ontology.labels(),
+            },
+        )
+
+    def _canonical_relationship_type(self, relationship_type: str) -> str:
+        """The ontology's spelling of ``relationship_type``, matched case-insensitively.
+
+        Returns ``relationship_type`` unchanged when there is no ontology or it
+        declares no such type.
+        """
+        if self._ontology is None:
+            return relationship_type
+        wanted = relationship_type.lower()
+        for declared in self._ontology.relationship_types():
+            if declared.lower() == wanted:
+                return declared
+        return relationship_type
+
+    async def _enforce_declared_relationship(
+        self,
+        source_id: UUID | str,
+        target_id: UUID | str,
+        relationship_type: str,
+    ) -> None:
+        """Reject a relationship the ontology does not permit (strict mode).
+
+        Looks both endpoints' POLE+O typing up in one read, maps each onto its
+        ontology label, and checks the ``(source, type, target)`` pattern.
+
+        An ontology that declares **no** relationships is not a statement that
+        the graph may hold none — it is a schema that says nothing about
+        edges, and it cannot express a violation. This mirrors
+        :meth:`ExtractionResult.validate_relations
+        <neo4j_agent_memory.extraction.base.ExtractionResult.validate_relations>`,
+        which passes a result through untouched for the same reason. It also
+        keeps ``SchemaModel.CUSTOM`` usable: the ad-hoc document
+        :meth:`MemoryClient._resolve_ontology` builds from
+        ``schema_config.entity_types`` has no way to declare a relationship, so
+        enforcing here would make every ``add_relationship`` on a custom schema
+        in strict mode unreachable.
+
+        Args:
+            source_id: Id of the source ``:Entity`` node.
+            target_id: Id of the target ``:Entity`` node.
+            relationship_type: The relationship type being written.
+
+        Raises:
+            ValidationError: In strict mode, when the relationship type is not
+                declared, an endpoint's type is not declared, or the ontology
+                does not permit that endpoint pair.
+        """
+        ontology = self._strict_ontology
+        if ontology is None or not ontology.relationships:
+            return
+
+        declared = {rel_type.lower() for rel_type in ontology.relationship_types()}
+        if relationship_type.lower() not in declared:
+            raise ValidationError(
+                f"Relationship type {relationship_type!r} is not declared by ontology "
+                f"{ontology.domain.name!r} (validation_mode='strict'). Declared types: "
+                f"{', '.join(ontology.relationship_types()) or 'none'}.",
+                details={
+                    "relationship_type": relationship_type,
+                    "ontology": ontology.domain.name,
+                    "declared_types": ontology.relationship_types(),
+                },
+            )
+
+        rows = await self._client.execute_read(
+            queries.GET_ENTITY_TYPES_FOR_PAIR,
+            {"source_id": str(source_id), "target_id": str(target_id)},
+        )
+        by_id = {str(row["id"]): row for row in rows}
+
+        def label_of(entity_id: UUID | str) -> str | None:
+            row = by_id.get(str(entity_id))
+            if row is None:
+                # The endpoint does not exist; add_relationship's own
+                # NotFoundError is the better error for that, so do not
+                # pre-empt it here.
+                return None
+            return ontology.label_for(row.get("type") or "", row.get("subtype"))
+
+        source_label = label_of(source_id)
+        target_label = label_of(target_id)
+        if source_label is None or target_label is None:
+            missing = [
+                str(entity_id)
+                for entity_id, label in ((source_id, source_label), (target_id, target_label))
+                if label is None and str(entity_id) in by_id
+            ]
+            if not missing:
+                return
+            raise ValidationError(
+                f"Cannot create {relationship_type!r}: entity {', '.join(missing)} has a type "
+                f"ontology {ontology.domain.name!r} does not declare "
+                "(validation_mode='strict').",
+                details={"relationship_type": relationship_type, "entities": missing},
+            )
+
+        if not ontology.permits(source_label, relationship_type, target_label):
+            raise ValidationError(
+                f"Ontology {ontology.domain.name!r} does not permit "
+                f"{source_label} -[{relationship_type}]-> {target_label} "
+                "(validation_mode='strict').",
+                details={
+                    "source_label": source_label,
+                    "relationship_type": relationship_type,
+                    "target_label": target_label,
+                    "ontology": ontology.domain.name,
+                },
+            )
 
     async def add(self, content: str, **kwargs: Any) -> Entity:
         """Add content as an entity.
@@ -499,6 +699,11 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
             Tuple of (entity, deduplication_result). If entity was auto-merged,
             returns the existing entity. The deduplication_result indicates
             what action was taken.
+
+        Raises:
+            ValidationError: When ``validation_mode="strict"`` and the
+                configured ontology declares no entity type for this
+                ``(type, subtype)`` pair.
         """
         # Normalize and validate type
         type_str = self._validate_entity_type(
@@ -508,6 +713,9 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
         # Parse type and subtype if provided in type string
         parsed_type, parsed_subtype = parse_entity_type(type_str)
         final_subtype = subtype or parsed_subtype
+
+        # Strict mode: the ontology is the contract for what may be written.
+        self._enforce_declared_entity(parsed_type, final_subtype)
 
         canonical_name = name
         confidence = 1.0
@@ -524,23 +732,45 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
         if generate_embedding and self._embedder is not None:
             embedding = await self._embedder.embed(name)
 
-        # Check for duplicates using embedding similarity
+        # Check for duplicates. The ontology resolver needs no embedding (exact,
+        # alias and prefix matches carry most merges), so it runs either way;
+        # the legacy similarity path skips itself without one.
         dedup_result = DeduplicationResult()
-        if deduplicate and self._deduplication.enabled and embedding is not None:
+        if deduplicate and self._deduplication.enabled:
             dedup_result = await self._check_for_duplicates(
                 name=name,
                 entity_type=parsed_type,
                 embedding=embedding,
+                subtype=final_subtype,
             )
 
-            # If auto-merged, return the existing entity
+            # If auto-merged onto another surface form, return the existing
+            # entity. Re-adding the stored name itself falls through to the
+            # MERGE below instead: it lands on the same node, and its ON MATCH
+            # applies the description, aliases and location passed here.
             if dedup_result.action == "merged" and dedup_result.matched_entity_id:
                 existing_entity = await self._get_entity_by_id(dedup_result.matched_entity_id)
-                if existing_entity:
+                if existing_entity and existing_entity.name != name:
                     # Add the new name as an alias if not already present
                     if name not in existing_entity.aliases and name != existing_entity.name:
                         await self._add_alias_to_entity(dedup_result.matched_entity_id, name)
                         existing_entity.aliases.append(name)
+                    await self._backfill_embedding(existing_entity, embedding)
+                    # No MERGE runs on this path; add the current ontology's
+                    # label for the requested type, as ON MATCH would.
+                    label_query = build_add_ontology_label_query(
+                        parsed_type,
+                        final_subtype,
+                        (
+                            self._ontology.node_label(parsed_type, final_subtype)
+                            if self._ontology is not None
+                            else None
+                        ),
+                    )
+                    if label_query is not None:
+                        await self._client.execute_write(
+                            label_query, {"id": str(dedup_result.matched_entity_id)}
+                        )
                     return existing_entity, dedup_result
 
         # Geocode if this is a LOCATION entity
@@ -582,7 +812,16 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
             storage_metadata["attributes"] = entity.attributes
 
         # Store entity with dynamic labels for type/subtype
-        create_query = build_create_entity_query(entity.type, entity.subtype, include_aliases=True)
+        create_query = build_create_entity_query(
+            entity.type,
+            entity.subtype,
+            include_aliases=True,
+            ontology_label=(
+                self._ontology.node_label(entity.type, entity.subtype)
+                if self._ontology is not None
+                else None
+            ),
+        )
         results = await self._client.execute_write(
             create_query,
             {
@@ -791,11 +1030,12 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
             )
         elif getattr(ref, "type", None):
             await self._client.execute_write(
-                """
-                MATCH (p:Preference {id: $preference_id})
-                MERGE (e:Entity {name: $name, type: $type})
+                f"""
+                MATCH (p:Preference {{id: $preference_id}})
+                MERGE (e:Entity {{name: $name, type: $type}})
                 ON CREATE SET e.id = coalesce(e.id, $name + ':' + $type),
-                              e.created_at = datetime()
+                              e.created_at = datetime(),
+                              {queries.entity_keys_set_clause()}
                 MERGE (p)-[:APPLIES_TO]->(e)
                 """,
                 {
@@ -806,11 +1046,12 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
             )
         else:
             await self._client.execute_write(
-                """
-                MATCH (p:Preference {id: $preference_id})
-                MERGE (e:Entity {name: $name})
+                f"""
+                MATCH (p:Preference {{id: $preference_id}})
+                MERGE (e:Entity {{name: $name}})
                 ON CREATE SET e.id = coalesce(e.id, $name),
-                              e.created_at = datetime()
+                              e.created_at = datetime(),
+                              {queries.entity_keys_set_clause()}
                 MERGE (p)-[:APPLIES_TO]->(e)
                 """,
                 {"preference_id": preference_id, "name": ref.name},
@@ -1010,6 +1251,10 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
         valid_from: datetime | None = None,
         valid_until: datetime | None = None,
         attributes: dict[str, Any] | None = None,
+        message_id: str | None = None,
+        evidence: str | None = None,
+        extractor: str | None = None,
+        derived: bool = False,
     ) -> Relationship:
         """
         Add a relationship between entities.
@@ -1023,12 +1268,39 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
             valid_from: Start of validity
             valid_until: End of validity
             attributes: Optional additional attributes
+            message_id: Optional id of the message this relationship was
+                asserted from. Appended to ``r.source_message_ids`` for
+                provenance (v0.7+); repeated calls accumulate up to 25 ids.
+            evidence: Optional evidence snippet (e.g. the sentence the
+                relationship was read from). Appended to ``r.evidence``
+                (v0.7+); repeated calls accumulate up to 3 snippets.
+            extractor: Optional name of the extractor or caller asserting
+                this relationship, recorded on ``r.extractor`` (v0.7+).
+            derived: Whether this relationship is derived (e.g. an inverse
+                mirror of an asserted relationship) rather than directly
+                observed. Storage folds this with AND across repeated
+                calls, so once any call asserts a given (source, type,
+                target) edge with ``derived=False``, it stays ``False``.
 
         Returns:
             The created relationship
+
+        Raises:
+            ValidationError: When ``validation_mode="strict"`` and the
+                configured ontology does not declare ``relationship_type``, or
+                does not permit it between these two endpoints' labels.
+            NotFoundError: If either endpoint id matches no ``:Entity`` node.
         """
         source_id = source.id if isinstance(source, Entity) else source
         target_id = target.id if isinstance(target, Entity) else target
+
+        # The type is part of the edge's MERGE key, so ``employed_by`` and
+        # ``EMPLOYED_BY`` would be two edges. Store the ontology's spelling.
+        relationship_type = self._canonical_relationship_type(relationship_type)
+
+        # Strict mode: reject undeclared types and forbidden endpoint pairs
+        # before writing anything.
+        await self._enforce_declared_relationship(source_id, target_id, relationship_type)
 
         relationship = Relationship(
             id=uuid4(),
@@ -1053,6 +1325,10 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
                 "confidence": confidence,
                 "valid_from": valid_from.isoformat() if valid_from else None,
                 "valid_until": valid_until.isoformat() if valid_until else None,
+                "derived": derived,
+                "extractor": extractor,
+                "message_id": message_id,
+                "evidence": evidence,
             },
         )
 
@@ -1272,39 +1548,51 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
 
         related = []
         for row in results:
-            # Neo4j relationship object has different access pattern
-            rel = row["r"]
-            # Get relationship properties - use dict() if available, else access via _properties
-            if hasattr(rel, "_properties"):
-                rel_data = dict(rel._properties)
-            elif hasattr(rel, "items"):
-                rel_data = dict(rel)
-            else:
-                # Fallback: create empty dict and get individual properties
-                rel_data = {}
-                for key in ["id", "type", "confidence", "description", "valid_from", "valid_until"]:
-                    try:
-                        val = rel.get(key) if hasattr(rel, "get") else getattr(rel, key, None)
-                        if val is not None:
-                            rel_data[key] = val
-                    except Exception:
-                        pass
-
-            other_data = dict(row["other"])
+            # GET_ENTITY_RELATIONSHIPS projects the RELATED_TO edge's
+            # properties as scalar columns rather than returning the
+            # relationship object itself: ``execute_read`` renders results
+            # via ``Result.data()``, which flattens a relationship to a
+            # ``(start_props, type, end_props)`` tuple and drops its
+            # properties, so they could never be read back from a bare ``r``.
+            # ``rel_type`` is the canonical, semantic relation name (e.g.
+            # "FOUNDED"); ``neo4j_type`` -- the Neo4j relationship label,
+            # always "RELATED_TO" -- is only a fallback for edges written
+            # before that property existed.
+            rel_type = row.get("rel_type") or row.get("neo4j_type") or "RELATED_TO"
 
             # Filter by relationship type
-            rel_type = rel_data.get("type") or (rel.type if hasattr(rel, "type") else "RELATED_TO")
             if relationship_types and rel_type not in relationship_types:
                 continue
 
-            other_entity = self._parse_entity(other_data)
+            other_entity = self._parse_entity(dict(row["other"]))
 
+            rel_id = row.get("rel_id")
+            confidence = row.get("confidence")
             relationship = Relationship(
-                id=UUID(rel_data.get("id", str(uuid4()))),
+                id=UUID(str(rel_id)) if rel_id else uuid4(),
                 source_id=entity_id,
                 target_id=other_entity.id,
                 type=rel_type,
-                confidence=rel_data.get("confidence", 1.0),
+                description=row.get("description"),
+                confidence=confidence if confidence is not None else 1.0,
+                # valid_from/valid_until are written as ISO strings (see
+                # add_relationship), not via Cypher's datetime() -- unlike
+                # created_at/updated_at below, so they're parsed with
+                # fromisoformat rather than _to_python_datetime.
+                valid_from=(
+                    datetime.fromisoformat(row["valid_from"]) if row.get("valid_from") else None
+                ),
+                valid_until=(
+                    datetime.fromisoformat(row["valid_until"]) if row.get("valid_until") else None
+                ),
+                created_at=_to_python_datetime(row.get("created_at")),
+                updated_at=(
+                    _to_python_datetime(row["updated_at"]) if row.get("updated_at") else None
+                ),
+                attributes={
+                    "support": row.get("support"),
+                    "derived": row.get("derived"),
+                },
             )
 
             related.append((other_entity, relationship))
@@ -1373,22 +1661,82 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
     # Entity Deduplication Methods
     # =========================================================================
 
+    async def _backfill_embedding(
+        self,
+        entity: Entity,
+        embedding: list[float] | None,
+    ) -> None:
+        """Give a merged-into node a usable embedding when it has none.
+
+        ``add_entity`` returns early on an auto-merge, so the node the caller's
+        name folded into never goes through the ``MERGE`` write (whose
+        ``ON MATCH SET e.embedding = COALESCE($embedding, e.embedding)`` would
+        have supplied one). Nothing else backfills it, and merges are reached
+        by exact name, alias and gazetteer hits — not only by vector
+        similarity — so the node can easily have no embedding at all: entities
+        written by the message-ingestion path do not carry one. The result is a
+        node that exists, holds the merged aliases, and is invisible to
+        ``search_entities()`` because the vector index has nothing to match.
+        Seeding an entity that a previous run already created therefore
+        silently lost it from semantic search.
+
+        An embedding of the *wrong* width is replaced for the same reason: the
+        index is sized from ``embedder.dimensions``, so a vector of another
+        length is equally unsearchable. A usable embedding is left alone —
+        re-embedding on every merge would be a write per mention, and the
+        canonical node's own vector is the better one to keep.
+
+        Args:
+            entity: The node the new name merged into (updated in place).
+            embedding: Embedding computed for the incoming name, if any.
+        """
+        if embedding is None:
+            return
+        current = entity.embedding
+        if current is not None and len(current) == len(embedding):
+            return
+        await self._client.execute_write(
+            queries.UPDATE_ENTITY_EMBEDDING,
+            {"id": str(entity.id), "embedding": embedding},
+        )
+        entity.embedding = embedding
+
     async def _check_for_duplicates(
         self,
         name: str,
         entity_type: str,
-        embedding: list[float],
+        embedding: list[float] | None,
+        *,
+        subtype: str | None = None,
     ) -> DeduplicationResult:
         """Check if an entity is a potential duplicate of existing entities.
+
+        When the configured resolver is an
+        :class:`~neo4j_agent_memory.resolution.ontology.OntologyResolver`, the
+        decision is delegated to it, so ``add_entity`` and the message
+        ingestion path agree on one set of thresholds, one normalization and
+        one blocking strategy, with or without an embedding. Any other
+        resolver (or none) keeps the original embedding-similarity path
+        unchanged, which finds nothing without an embedding.
 
         Args:
             name: Entity name
             entity_type: Entity type
-            embedding: Entity embedding vector
+            embedding: Entity embedding vector, or ``None`` when there is none
+            subtype: Optional subtype, used for the ontology's per-type
+                threshold overrides.
 
         Returns:
             DeduplicationResult indicating what action to take
         """
+        delegated = await self._resolve_duplicate_via_resolver(
+            name, entity_type, embedding, subtype=subtype
+        )
+        if delegated is not None:
+            return delegated
+        if embedding is None:
+            return DeduplicationResult()
+
         config = self._deduplication
 
         # Search for similar entities by embedding
@@ -1472,6 +1820,60 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
 
         return DeduplicationResult()
 
+    async def _resolve_duplicate_via_resolver(
+        self,
+        name: str,
+        entity_type: str,
+        embedding: list[float] | None,
+        *,
+        subtype: str | None = None,
+    ) -> DeduplicationResult | None:
+        """Delegate the duplicate check to the ontology resolver, if there is one.
+
+        Args:
+            name: Entity name.
+            entity_type: POLE+O type.
+            embedding: Embedding of ``name``, reused rather than recomputed.
+                ``None`` (no embedder, or ``generate_embedding=False``)
+                resolves without the embedding component and never calls
+                the embedder.
+            subtype: Optional subtype.
+
+        Returns:
+            The resolver's decision mapped onto a :class:`DeduplicationResult`,
+            or ``None`` when no ontology resolver is configured (the caller
+            then runs the original embedding path).
+        """
+        from neo4j_agent_memory.resolution.ontology import OntologyResolver
+
+        resolver = self._resolver
+        if not isinstance(resolver, OntologyResolver):
+            return None
+
+        resolution = await resolver.resolve_one(
+            name,
+            entity_type,
+            subtype=subtype,
+            embedding=embedding,
+            embed=False,
+        )
+        if resolution.action == "created" or resolution.matched_entity_id is None:
+            return DeduplicationResult()
+
+        try:
+            matched_id = UUID(str(resolution.matched_entity_id))
+        except (ValueError, AttributeError, TypeError):
+            return DeduplicationResult()
+
+        return DeduplicationResult(
+            is_duplicate=True,
+            action="merged" if resolution.action == "merged" else "flagged",
+            matched_entity_id=matched_id,
+            matched_entity_name=resolution.matched_entity_name,
+            similarity_score=resolution.score,
+            match_type=resolution.match_type,
+        )
+
     async def _get_entity_by_id(self, entity_id: UUID) -> Entity | None:
         """Get an entity by its ID.
 
@@ -1503,15 +1905,7 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
             alias: Alias to add
         """
         await self._client.execute_write(
-            """
-            MATCH (e:Entity {id: $id})
-            SET e.aliases = CASE
-                WHEN e.aliases IS NULL THEN [$alias]
-                WHEN NOT $alias IN e.aliases THEN e.aliases + $alias
-                ELSE e.aliases
-            END
-            RETURN e
-            """,
+            queries.ADD_ENTITY_ALIAS,
             {
                 "id": str(entity_id),
                 "alias": alias,
@@ -1543,6 +1937,13 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
         for row in results:
             entity1 = self._parse_entity(dict(row["e1"]))
             entity2 = self._parse_entity(dict(row["e2"]))
+
+            # GET_POTENTIAL_DUPLICATES projects the SAME_AS edge's properties
+            # as scalar columns rather than returning the relationship object
+            # itself: ``execute_read`` renders results through
+            # ``Result.data()``, which flattens a relationship to a
+            # ``(start_props, type, end_props)`` tuple and drops its
+            # properties, so they could never be read back from a bare ``r``.
             confidence = row.get("confidence")
             duplicates.append((entity1, entity2, float(confidence or 0.0)))
 
@@ -1714,7 +2115,7 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
         Creates or updates an Extractor node in the database.
 
         Args:
-            name: Unique extractor name (e.g., "GLiNEREntityExtractor", "SpacyNER")
+            name: Unique extractor name (e.g., "gliner2", "SpacyNER")
             version: Optional version string
             config: Optional configuration dict (will be JSON serialized)
 
@@ -1849,52 +2250,39 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
 
         row = results[0]
 
-        # Parse sources
-        sources = []
-        for item in row.get("sources", []):
-            if item.get("message"):
-                msg = item["message"]
-                rel = item.get("relationship", {})
-                # Handle relationship properties
-                if hasattr(rel, "_properties"):
-                    rel_data = dict(rel._properties)
-                elif hasattr(rel, "items"):
-                    rel_data = dict(rel)
-                else:
-                    rel_data = {}
+        # GET_ENTITY_PROVENANCE projects each relationship's properties as
+        # map entries (``message_id``, ``confidence``, ``start_pos``, ...)
+        # rather than nesting the relationship object itself inside the
+        # collected map: ``execute_read`` renders results via
+        # ``Result.data()``, which flattens a relationship -- bare or nested
+        # inside a map/list -- to a ``(start_props, type, end_props)`` tuple
+        # and drops its properties, so they could never be read back from a
+        # nested ``relationship`` entry. ``collect()`` drops the ``NULL``
+        # placeholder the query emits when a side has no match, so empty
+        # sources/extractors surface as ``[]``.
+        sources = [
+            {
+                "message_id": item.get("message_id"),
+                "content": item.get("content"),
+                "confidence": item.get("confidence"),
+                "start_pos": item.get("start_pos"),
+                "end_pos": item.get("end_pos"),
+                "context": item.get("context"),
+            }
+            for item in row.get("sources", []) or []
+            if item
+        ]
 
-                sources.append(
-                    {
-                        "message_id": msg.get("id"),
-                        "content": msg.get("content"),
-                        "confidence": rel_data.get("confidence"),
-                        "start_pos": rel_data.get("start_pos"),
-                        "end_pos": rel_data.get("end_pos"),
-                        "context": rel_data.get("context"),
-                    }
-                )
-
-        # Parse extractors
-        extractors = []
-        for item in row.get("extractors", []):
-            if item.get("extractor"):
-                ex = item["extractor"]
-                rel = item.get("relationship", {})
-                if hasattr(rel, "_properties"):
-                    rel_data = dict(rel._properties)
-                elif hasattr(rel, "items"):
-                    rel_data = dict(rel)
-                else:
-                    rel_data = {}
-
-                extractors.append(
-                    {
-                        "name": ex.get("name"),
-                        "version": ex.get("version"),
-                        "confidence": rel_data.get("confidence"),
-                        "extraction_time_ms": rel_data.get("extraction_time_ms"),
-                    }
-                )
+        extractors = [
+            {
+                "name": item.get("name"),
+                "version": item.get("version"),
+                "confidence": item.get("confidence"),
+                "extraction_time_ms": item.get("extraction_time_ms"),
+            }
+            for item in row.get("extractors", []) or []
+            if item
+        ]
 
         return {
             "sources": sources,
@@ -1954,22 +2342,20 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
             {"message_id": str(message_id)},
         )
 
+        # GET_ENTITIES_FROM_MESSAGE projects the EXTRACTED_FROM edge's
+        # properties as scalar columns rather than returning the
+        # relationship object itself: ``execute_read`` renders results via
+        # ``Result.data()``, which flattens a relationship to a
+        # ``(start_props, type, end_props)`` tuple and drops its properties,
+        # so they could never be read back from a bare ``r``.
         entities = []
         for row in results:
             entity = self._parse_entity(dict(row["e"]))
-            rel = row.get("r", {})
-            if hasattr(rel, "_properties"):
-                rel_data = dict(rel._properties)
-            elif hasattr(rel, "items"):
-                rel_data = dict(rel)
-            else:
-                rel_data = {}
-
             extraction_info = {
-                "confidence": rel_data.get("confidence"),
-                "start_pos": rel_data.get("start_pos"),
-                "end_pos": rel_data.get("end_pos"),
-                "context": rel_data.get("context"),
+                "confidence": row.get("confidence"),
+                "start_pos": row.get("start_pos"),
+                "end_pos": row.get("end_pos"),
+                "context": row.get("context"),
             }
             entities.append((entity, extraction_info))
 
@@ -1995,20 +2381,16 @@ class LongTermMemory(BaseMemory[Entity], LongTermProtocol):
             {"extractor_name": extractor_name, "limit": limit},
         )
 
+        # GET_ENTITIES_BY_EXTRACTOR projects the EXTRACTED_BY edge's
+        # properties as scalar columns rather than returning the
+        # relationship object itself -- see get_entities_from_message above
+        # for why a bare ``r`` never survives ``Result.data()``.
         entities = []
         for row in results:
             entity = self._parse_entity(dict(row["e"]))
-            rel = row.get("r", {})
-            if hasattr(rel, "_properties"):
-                rel_data = dict(rel._properties)
-            elif hasattr(rel, "items"):
-                rel_data = dict(rel)
-            else:
-                rel_data = {}
-
             extraction_info = {
-                "confidence": rel_data.get("confidence"),
-                "extraction_time_ms": rel_data.get("extraction_time_ms"),
+                "confidence": row.get("confidence"),
+                "extraction_time_ms": row.get("extraction_time_ms"),
             }
             entities.append((entity, extraction_info))
 
