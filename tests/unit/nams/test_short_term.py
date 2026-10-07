@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 
+import httpx
 import pytest
 import respx
 
@@ -32,6 +33,8 @@ async def transport(nams_config):
 def short_term(transport) -> NamsShortTermMemory:
     return NamsShortTermMemory(transport)
 
+
+CONV = "00000000-0000-0000-0000-0000000c1d00"
 
 # NAMS uses camelCase end-to-end; createdAt is absent on POST responses.
 SAMPLE_MESSAGE = {
@@ -158,6 +161,70 @@ class TestGetConversation:
         ).respond(200, json={"messages": []})
         await short_term.get_conversation("00000000-0000-0000-0000-0000000c1d00", limit=20)
         assert route.calls[0].request.url.params["limit"] == "20"
+
+    @respx.mock
+    async def test_returns_insertion_order_and_asks_for_the_cap(self, short_term):
+        """The service lists newest first (default 50, max 200); the Protocol is
+        insertion order. TCK SPEC 2.7 (test_multiple_messages_preserve_order).
+        """
+        respx.get(f"https://memory.test/v1/conversations/{CONV}").respond(
+            200, json=SAMPLE_CONVERSATION
+        )
+        newest_first = [
+            {
+                **SAMPLE_MESSAGE_WITH_TIMESTAMP,
+                "id": f"00000000-0000-0000-0000-{i:012d}",
+                "content": f"Message {i}",
+            }
+            for i in reversed(range(5))
+        ]
+        route = respx.get(f"https://memory.test/v1/conversations/{CONV}/messages").respond(
+            200, json={"messages": newest_first}
+        )
+
+        conv = await short_term.get_conversation(CONV)
+
+        assert [m.content for m in conv.messages] == [f"Message {i}" for i in range(5)]
+        assert route.calls[0].request.url.params["limit"] == "200"
+
+    @respx.mock
+    async def test_a_limit_above_the_cap_is_clamped(self, short_term, caplog):
+        respx.get(f"https://memory.test/v1/conversations/{CONV}").respond(
+            200, json=SAMPLE_CONVERSATION
+        )
+        route = respx.get(f"https://memory.test/v1/conversations/{CONV}/messages").respond(
+            200, json={"messages": []}
+        )
+
+        with caplog.at_level("WARNING", logger="neo4j_agent_memory.nams.short_term"):
+            await short_term.get_conversation(CONV, limit=1000)
+
+        assert route.calls[0].request.url.params["limit"] == "200"
+        assert "newest 200 messages" in caplog.text
+
+    @respx.mock
+    async def test_the_bridge_keeps_its_order_and_limit(self, bridge_config):
+        """The TCK bridge returns insertion order and has no 200 cap."""
+        auth = StaticApiKeyAuth.from_config(bridge_config)
+        respx.post("https://memory.test/get_conversation").respond(200, json=SAMPLE_CONVERSATION)
+        messages = respx.post("https://memory.test/list_messages").respond(
+            200,
+            json={
+                "messages": [
+                    {
+                        **SAMPLE_MESSAGE_WITH_TIMESTAMP,
+                        "id": f"00000000-0000-0000-0000-{i:012d}",
+                        "content": f"Message {i}",
+                    }
+                    for i in range(3)
+                ]
+            },
+        )
+        async with HttpTransport.from_config(bridge_config, auth=auth) as t:
+            conv = await NamsShortTermMemory(t).get_conversation(CONV)
+
+        assert [m.content for m in conv.messages] == ["Message 0", "Message 1", "Message 2"]
+        assert "limit" not in json.loads(messages.calls[0].request.content or b"{}")
 
     @respx.mock
     async def test_handles_bare_list_messages_response(self, short_term):
@@ -302,6 +369,64 @@ class TestListConversations:
         respx.get("https://memory.test/v1/conversations").respond(200, json=[SAMPLE_CONVERSATION])
         convs = await short_term.list_conversations()
         assert len(convs) == 1
+
+    @staticmethod
+    def _conversations(start: int, count: int) -> list[dict]:
+        return [
+            {**SAMPLE_CONVERSATION, "id": f"00000000-0000-0000-0000-{i:012d}"}
+            for i in range(start, start + count)
+        ]
+
+    @respx.mock
+    async def test_a_limit_above_the_page_cap_follows_next_cursor(self, short_term):
+        """The regression: ``limit=1000`` is a 400 ``invalid_limit`` (cap 200).
+
+        The Strands memory store and session manager both list with 1000.
+        """
+        route = respx.get("https://memory.test/v1/conversations").mock(
+            side_effect=[
+                httpx.Response(
+                    200, json={"conversations": self._conversations(0, 200), "next_cursor": "c1"}
+                ),
+                httpx.Response(
+                    200, json={"conversations": self._conversations(200, 30), "next_cursor": ""}
+                ),
+            ]
+        )
+
+        convs = await short_term.list_conversations(user_identifier="alice", limit=1000)
+
+        assert len(convs) == 230
+        first, second = (call.request.url.params for call in route.calls)
+        assert dict(first) == {"userId": "alice", "limit": "200"}
+        assert dict(second) == {"userId": "alice", "limit": "200", "cursor": "c1"}
+
+    @respx.mock
+    async def test_paging_stops_at_the_limit(self, short_term):
+        route = respx.get("https://memory.test/v1/conversations").mock(
+            side_effect=[
+                httpx.Response(
+                    200, json={"conversations": self._conversations(0, 200), "next_cursor": "c1"}
+                ),
+                httpx.Response(
+                    200, json={"conversations": self._conversations(200, 50), "next_cursor": "c2"}
+                ),
+            ]
+        )
+
+        convs = await short_term.list_conversations(limit=250)
+
+        assert len(convs) == 250
+        assert route.calls[1].request.url.params["limit"] == "50"
+        assert route.call_count == 2
+
+    @respx.mock
+    async def test_the_default_limit_matches_bolt(self, short_term):
+        route = respx.get("https://memory.test/v1/conversations").respond(
+            200, json={"conversations": [], "next_cursor": ""}
+        )
+        await short_term.list_conversations()
+        assert route.calls[0].request.url.params["limit"] == "100"
 
 
 class TestBulkAddMessages:

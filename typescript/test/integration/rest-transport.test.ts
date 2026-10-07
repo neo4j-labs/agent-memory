@@ -102,11 +102,12 @@ describe("RestTransport — short-term", () => {
     expect(convs[1]!.userId).toBe("bob");
   });
 
-  it("listConversations forwards the optional userId filter as user_id", async () => {
-    let observedUserId: string | null = null;
+  it("listConversations forwards the optional userId filter as userId", async () => {
+    // The service's filter param is `userId` (OpenAPI spec); `user_id` is ignored.
+    let observed: URLSearchParams | null = null;
     server.use(
       http.get(`${ENDPOINT}/conversations`, ({ request }) => {
-        observedUserId = new URL(request.url).searchParams.get("user_id");
+        observed = new URL(request.url).searchParams;
         return HttpResponse.json({ conversations: [] });
       }),
     );
@@ -115,7 +116,119 @@ describe("RestTransport — short-term", () => {
     await client.shortTerm.listConversations({ limit: 10, userId: "alice" });
     await client.close();
 
-    expect(observedUserId).toBe("alice");
+    expect(observed!.get("userId")).toBe("alice");
+    expect(observed!.get("user_id")).toBeNull();
+    expect(observed!.get("limit")).toBe("10");
+  });
+
+  const conversations = (start: number, count: number) =>
+    Array.from({ length: count }, (_, i) => ({
+      id: `c${start + i}`,
+      userId: "alice",
+      messageCount: start + i,
+      createdAt: "t",
+      updatedAt: "t",
+    }));
+
+  it("listConversations follows next_cursor past the 200-per-page cap", async () => {
+    // A limit above 200 is a 400 invalid_limit; the Strands memory store scans 1000.
+    const seen: URLSearchParams[] = [];
+    server.use(
+      http.get(`${ENDPOINT}/conversations`, ({ request }) => {
+        const params = new URL(request.url).searchParams;
+        seen.push(params);
+        return params.get("cursor") === "c1"
+          ? HttpResponse.json({ conversations: conversations(200, 30), next_cursor: "" })
+          : HttpResponse.json({ conversations: conversations(0, 200), next_cursor: "c1" });
+      }),
+    );
+
+    const client = newClient();
+    const convs = await client.shortTerm.listConversations({ limit: 1000, userId: "alice" });
+    await client.close();
+
+    expect(convs).toHaveLength(230);
+    expect(convs[229]!.id).toBe("c229");
+    expect(seen.map((p) => [p.get("limit"), p.get("cursor"), p.get("userId")])).toEqual([
+      ["200", null, "alice"],
+      ["200", "c1", "alice"],
+    ]);
+  });
+
+  it("listConversations stops at the limit and defaults to 100", async () => {
+    const limits: (string | null)[] = [];
+    server.use(
+      http.get(`${ENDPOINT}/conversations`, ({ request }) => {
+        limits.push(new URL(request.url).searchParams.get("limit"));
+        return HttpResponse.json({ conversations: conversations(0, 100), next_cursor: "more" });
+      }),
+    );
+
+    const client = newClient();
+    const convs = await client.shortTerm.listConversations();
+    await client.close();
+
+    expect(convs).toHaveLength(100);
+    expect(limits).toEqual(["100"]);
+  });
+
+  it("listSessions keeps each conversation's fields across pages", async () => {
+    server.use(
+      http.get(`${ENDPOINT}/conversations`, ({ request }) =>
+        new URL(request.url).searchParams.get("cursor")
+          ? HttpResponse.json({ conversations: conversations(200, 1), next_cursor: "" })
+          : HttpResponse.json({ conversations: conversations(0, 200), next_cursor: "c1" }),
+      ),
+    );
+
+    const client = newClient();
+    const sessions = await client.shortTerm.listSessions({ limit: 300 });
+    await client.close();
+
+    expect(sessions).toHaveLength(201);
+    expect(sessions[200]!.sessionId).toBe("c200");
+    expect(sessions[200]!.messageCount).toBe(200);
+  });
+
+  it("getConversation returns messages oldest first and asks for the 200 cap", async () => {
+    // The service lists newest first (default 50, max 200).
+    let observedLimit: string | null = null;
+    server.use(
+      http.get(`${ENDPOINT}/conversations/conv-7/messages`, ({ request }) => {
+        observedLimit = new URL(request.url).searchParams.get("limit");
+        return HttpResponse.json({
+          messages: [4, 3, 2, 1, 0].map((i) => ({
+            id: `m${i}`,
+            role: "user",
+            content: `Message ${i}`,
+            createdAt: "t",
+          })),
+        });
+      }),
+    );
+
+    const client = newClient();
+    const conv = await client.shortTerm.getConversation("conv-7");
+    await client.close();
+
+    expect(conv.messages.map((m) => m.content)).toEqual([0, 1, 2, 3, 4].map((i) => `Message ${i}`));
+    expect(observedLimit).toBe("200");
+  });
+
+  it("getConversation clamps a limit above 200", async () => {
+    let observedLimit: string | null = null;
+    server.use(
+      http.get(`${ENDPOINT}/conversations/conv-7/messages`, ({ request }) => {
+        observedLimit = new URL(request.url).searchParams.get("limit");
+        return HttpResponse.json({ messages: [] });
+      }),
+    );
+
+    const client = newClient();
+    await client.shortTerm.getConversation("conv-7", { limit: 1000 });
+    await client.close();
+
+    expect(observedLimit).toBe("200");
   });
 });
 

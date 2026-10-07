@@ -76,12 +76,14 @@ interface ServerState {
 /**
  * Mount handlers that act like the hosted service's
  * GET /conversations/:id/messages + POST /conversations/:id/messages,
- * plus DELETE. No metadata routes — those don't exist on NAMS.
+ * plus DELETE. No metadata routes — those don't exist on NAMS. Like the
+ * service, the GET lists messages newest first; the client restores
+ * insertion order.
  */
 function mountConversationHandlers(state: ServerState) {
   server.use(
     http.get(`${ENDPOINT}/conversations/${SESSION_ID}/messages`, () =>
-      HttpResponse.json({ messages: state.messages.map((m) => ({ ...m })) }),
+      HttpResponse.json({ messages: state.messages.map((m) => ({ ...m })).reverse() }),
     ),
     http.post(`${ENDPOINT}/conversations/${SESSION_ID}/messages`, async ({ request }) => {
       const body = (await request.json()) as {

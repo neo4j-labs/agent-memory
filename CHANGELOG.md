@@ -41,6 +41,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **NAMS: `get_conversation` returns messages oldest first again.** The hosted
+  service now lists a conversation's messages newest first, returning at most
+  the newest 200 (50 by default). Over REST the client asks for 200 when no
+  `limit` is given, clamps a larger `limit` to 200 with a warning, and reverses
+  the page into insertion order, as the bolt backend returns it.
+- **NAMS: `list_conversations` pages past 200.** The service caps a page at
+  200 conversations and answers a larger `limit` with 400 `invalid_limit`. That
+  broke the Strands `Neo4jMemoryStore` and `Neo4jSessionManager` on hosted
+  NAMS, which list 1000 conversations to find theirs. The client now follows
+  `next_cursor` until `limit` conversations are collected, and defaults `limit`
+  to 100 as bolt does.
 - `extraction.gliner_schema` is now the client's resolved ontology when the
   client builds a `gliner` or `pipeline` extractor. Before, ingest-time
   validation dropped every relation the template's extractor decoded.
