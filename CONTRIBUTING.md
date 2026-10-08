@@ -189,9 +189,9 @@ make example-basic  # Will start Docker with test-password
 # Control integration test behavior
 RUN_INTEGRATION_TESTS=1      # Enable integration tests
 SKIP_INTEGRATION_TESTS=1     # Skip integration tests
-AUTO_START_DOCKER=1          # Auto-start Neo4j via Docker (default: true)
-AUTO_STOP_DOCKER=1           # Auto-stop Neo4j after tests (default: false)
 ```
+
+When `NEO4J_URI` is set, integration tests run against that database; otherwise a testcontainers Neo4j is started automatically whenever Docker is available. Pass `--keep` to `./scripts/run-integration-tests.sh` to keep the container running after the tests finish.
 
 ### Integration Test Script
 
