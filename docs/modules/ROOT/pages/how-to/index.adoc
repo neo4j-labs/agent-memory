@@ -99,6 +99,7 @@ anchor:_typescript_sdk_neo4j_labsagent_memory[]
 * xref:how-to/typescript/nams-ai-provider-middleware-mode.adoc[Wrap a model in middleware mode] -- Wrap an existing model instance with automatic memory retrieval and persistence.
 * xref:how-to/typescript/nams-ai-provider-tools-mode.adoc[Expose memory as tools] -- Give the model explicit `query_memory` and `store_memory` tools it decides when to call.
 * xref:how-to/typescript/nams-ai-provider-hooks-mode.adoc[Control memory with lifecycle hooks] -- Drive memory retrieval and persistence from application code with lifecycle hooks around every generation.
+* xref:how-to/typescript/nams-ai-provider-eve.adoc[Add NAMS memory to an eve agent] -- Back an eve memory slot with NAMS: recall before each turn, capture after it, and scope-bound memory tools.
 * xref:how-to/typescript/nextjs-memory-chat.adoc[Build a Next.js chat app with a memory rail] -- Build a Next.js chat UI backed by NAMS memory, with a live memory sidebar.
 * xref:how-to/typescript/mcp.adoc[Use the MCP tools] -- Register the SDK's 12 memory tools on your own MCP server or dispatch them programmatically.
 * xref:how-to/typescript/langchain.adoc[Integrate with LangChain JS] -- Wire the TypeScript client into a LangChain JS agent as memory.

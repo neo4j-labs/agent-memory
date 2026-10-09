@@ -138,8 +138,6 @@ export async function findExistingConversation(
 // Retrieval
 
 const RETRIEVAL = {
-  currentThreshold: 0.4,
-  crossThreshold: 0.4,
   crossSessions: 5,
   maxReasoning: 6,
   maxTotal: 12,
@@ -209,7 +207,7 @@ async function expandEntityGraph(
 }
 
 /** Take one hit from each source in turn, so no single source fills the prompt. */
-function interleave(buckets: MemoryHit[][], limit: number): MemoryHit[] {
+export function interleave(buckets: MemoryHit[][], limit: number): MemoryHit[] {
   // The loop checks the budget only after taking a hit, so zero is handled here.
   if (limit <= 0) return [];
 
@@ -271,7 +269,7 @@ function rankByOverlap<T>(candidates: T[], query: string, contentOf: (item: T) =
 }
 
 /** Search the whole query, then word by word if that finds nothing. */
-async function searchWithFallback<T>(
+export async function searchWithFallback<T>(
   query: string,
   search: (q: string) => Promise<T[]>,
   contentOf: (item: T) => string | undefined,
@@ -329,7 +327,7 @@ async function searchPastConversations(
     past.map(async (conv) => {
       const [messages, steps] = await Promise.all([
         client.shortTerm
-          .searchMessages(query, { sessionId: conv.id, limit: 4, threshold: RETRIEVAL.crossThreshold })
+          .searchMessages(query, { sessionId: conv.id, limit: 4 })
           .catch((e: unknown) => { log.warn('cross-session searchMessages failed', e); return [] as any[]; }),
         client.reasoning.listSteps(conv.id)
           .catch((e: unknown) => { log.warn('cross-session listSteps failed', e); return [] as any[]; }),
@@ -361,7 +359,7 @@ export async function retrieveMemories(
   const [shortHits, longHits, reasoningSteps, crossHits] = await Promise.all([
     searchWithFallback(
       query,
-      (q) => client.shortTerm.searchMessages(q, { sessionId: convId, limit, threshold: RETRIEVAL.currentThreshold }),
+      (q) => client.shortTerm.searchMessages(q, { sessionId: convId, limit }),
       (m) => m.content,
       log,
       'searchMessages',
