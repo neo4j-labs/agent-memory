@@ -16,7 +16,7 @@ from neo4j_agent_memory.schema.models import EntityRef, TraceOutcome
 # tag::messages[]
 async def messages(client, run_id):
     session = f"docs-messages-{run_id}"
-    # Explicit timestamps fix the readback order; in 0.6.0 untimed batch rows share one time.
+    # Explicit timestamps record when each turn happened; untimed rows are stamped in list order.
     start = datetime.now(timezone.utc)
     stored = await client.short_term.add_messages_batch(
         session,
@@ -163,8 +163,9 @@ async def deduplication(client, run_id):
     store = LongTermMemory(
         client.graph,
         embedder=client.long_term.embedder,
+        # The same bands MemoryClient applies from ResolutionConfig (0.90 merge, 0.85 review).
         deduplication=DeduplicationConfig(
-            auto_merge_threshold=0.95, flag_threshold=0.85, use_fuzzy_matching=False
+            auto_merge_threshold=0.90, flag_threshold=0.85, use_fuzzy_matching=False
         ),
     )
     # Create an isolated pair without similarity-based merging so manual review is reproducible.

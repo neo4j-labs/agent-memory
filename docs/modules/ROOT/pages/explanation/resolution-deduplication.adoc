@@ -10,6 +10,8 @@ Entity resolution asks whether two mentions identify the same real-world thing. 
 
 NOTE: Python's configurable resolvers and manual deduplication review methods are Bolt capabilities. NAMS performs resolution server-side and returns service-specific outcomes. See xref:reference/backend-capabilities.adoc[Backend capabilities] and xref:explanation/backends.adoc[Bolt and NAMS] before applying a workflow.
 
+IMPORTANT: Since 0.7.0, Bolt message ingestion resolves extracted mentions by default (`resolution.resolve_on_ingest=True`). Before 0.7.0 only `add_entity` deduplicated, and ingestion stored one node per distinct surface form. See <<resolution-on-ingest>>.
+
 [[_the_entity_resolution_problem]]
 == The entity resolution problem
 
@@ -49,7 +51,63 @@ Exact-name matching detects repeated forms. Fuzzy matching tolerates spelling an
 
 Type-constrained matching reduces some false positives, such as an organization named "Apple" and an object representing the fruit. It does not distinguish two people with the same name or guarantee that a broad `OBJECT` category contains only interchangeable products.
 
-The configured resolver and ingestion deduplication are separate mechanisms. Their thresholds and matching order belong in xref:reference/configuration.adoc[Configuration] and xref:reference/api/long-term.adoc[the long-term API reference].
+On Bolt, the default `OntologyResolver` (what `resolution.strategy="composite"` builds) composes these signals rather than replacing them. It puts the candidate search in Cypher, lets deterministic evidence (an exact normalized match, a declared ontology alias, an acronym expansion) settle the score before any similarity computation, and takes its aliases and per-type bands from the ontology, so a controlled vocabulary works even with embeddings switched off.
+
+The consequence of type-constrained blocking is that a cross-typed duplicate, such as one company extracted once as `ORGANIZATION` and once as `OBJECT`, is never found. Fix the typing, usually with a sharper ontology description, rather than loosening the blocking.
+
+[#resolver-stages]
+=== The resolver's five stages
+
+The stages are separable, and knowing which one a bad decision came from is most of the work of xref:how-to/tune-entity-resolution.adoc[tuning]:
+
+[cols="1,4", options="header"]
+|===
+| Stage | What happens
+
+| 1. Normalize
+| `normalize_name(name, entity_type)` reduces the surface form to a comparison key: NFC, casefolded, punctuation and leading determiners stripped, whitespace collapsed. Organizations lose their legal suffix ("Acme Corp" → `acme`); people lose titles and generational suffixes ("Dr. Ada Lovelace Jr." → `ada lovelace`). It also records the head and tail token, the initials, an acronym flag, and the Shannon entropy of the key. It is deterministic and model-free, so benchmarks compare names exactly the way the resolver does.
+
+| 2. Block
+| Candidates come from Cypher, and blocking never crosses the POLE+O type: "Apple" the company and "Apple" the product embed almost identically. One exact-key query per entity type covers the whole message; the wider buckets (head/tail token prefix, then the entity vector index) are queried only when the exact bucket produced no exact or alias match. An oversized token-prefix bucket (more than 60 rows) carries no signal and is discarded.
+
+| 3. Score
+| Deterministic evidence short-circuits: an exact normalized match scores `1.0`, a declared ontology alias `1.0`, an acronym expansion `0.97` (organizations only, and at least three letters; "IT" is not Isabel Turner). Failing those, the whole-token-prefix rule (<<prefix-rule>>) applies to every type, and otherwise the score is `0.45 × fuzzy + 0.40 × embedding + 0.15 × context`, renormalized over whichever components are available. A low-entropy pair (below 2.5 bits on the lower-entropy side, such as "N600" or "Ada") loses 0.25 unless the prefix rule fired, so the penalty does not depend on which name happens to be the mention. When fuzzy similarity is the only component and one name contains the other as a contiguous run of whole tokens, the score is capped at `review_threshold`: containment is never proof of identity on its own.
+
+| 4. Band
+| At or above `auto_merge_threshold` the mention merges onto the matched entity. At or above `review_threshold` it becomes its own node plus a pending `SAME_AS` edge. Below that it is created normally.
+
+| 5. Cluster
+| A second pass clusters the mentions that matched nothing stored against each other, anchored on the first one seen, without counting their shared context window as corroboration. <<two-passes>> explains why.
+|===
+
+[#prefix-rule]
+=== Why a whole-token prefix needs corroboration
+
+The prefix rule is where most false merges would otherwise come from. A whole-token prefix is not an identity, whatever the type: "Apple" and "Apple Bank" are different companies, "Kansas" and "Kansas City" different places, "Paris" and "Paris Hilton" different people. So the rule scores `0.92` only when independent surrounding context agrees (context similarity 0.60 or above), and `0.88`, inside the review band, otherwise.
+
+Name embeddings do not count as agreement: a name and its extension embed alike whether or not they are one entity (all-MiniLM-L6-v2 scores "Acme Bank" against "Acme Corp" at 0.76, above "Northwind" against "Northwind Logistics" at 0.73). The rule replaces the weighted blend rather than being combined with it, because RapidFuzz rates every whole-token prefix pair at exactly 0.90, the default auto-merge line, which would merge exactly the pairs the rule exists to hold back.
+
+[#resolution-on-ingest]
+== Where resolution happens
+
+Two write paths reach the same decision through the same component:
+
+`long_term.add_entity(...)`:: Deduplicates explicitly and returns an `(Entity, DeduplicationResult)` tuple. This path predates 0.7.0 and keeps its shape.
+
+Message ingestion (`short_term.add_message`, `add_messages_batch`, `extract_entities_from_session`):: Resolves every extracted mention while storing the message. This 0.7.0 change alters what the graph looks like: fewer entity nodes than mentions, aliases accumulating on survivors, and pending `SAME_AS` edges appearing without any `add_entity` call. One setting, `resolution.resolve_on_ingest=False`, restores the earlier behavior.
+
+`OntologyResolver` is what turns two paths into one decision. When it is the configured resolver, `add_entity` delegates its duplicate check to the resolver, so both paths share one normalization, one blocking strategy and one set of thresholds. Any other resolver keeps the earlier embedding-similarity check for `add_entity` and leaves ingestion unresolved.
+
+Resolution is an enhancement, never a gate: if a blocking query fails, the failure is logged and the mentions are stored unresolved.
+
+[#two-passes]
+=== Why a message needs two passes
+
+Resolving each mention against stored entities is not enough. A message that mentions "Acme" and "Acme Corp" for the first time has no stored anchor for either, so a single pass would create two nodes and fragment the graph from the first message. The resolver therefore runs a second pass over the still-unmatched mentions, clustering them against each other and anchoring on the first one seen. Two mentions from the same message share one context window, so context does not count as corroboration between them; otherwise "Apple Bank has no relationship with Apple, the phone maker" would corroborate itself into a merge.
+
+=== Three bands, not two
+
+A binary merge-or-create decision forces a bad trade: merge aggressively and corrupt entities, or never merge and fragment them. A middle band avoids it. At or above `review_threshold` but below `auto_merge_threshold`, the new node is created and a pending `SAME_AS` edge records the suspicion, so a reviewer can examine the pair without blocking ingestion. A steady stream of rejected reviews at high confidence signals that `auto_merge_threshold` is about to make the same mistake silently.
 
 [[_the_same_as_pattern]]
 == The :SAME_AS review pattern
@@ -69,16 +127,16 @@ anchor:_keep_primary_default[]anchor:_merge_properties[]anchor:_keep_aliases[]
 
 A merge selects a surviving record and reconciles supported properties and relationships. It can affect every query that previously referenced either node, so the choice of primary record and handling of conflicting values matter.
 
-An alias preserves an alternative name; it should not conceal a product variant or a separate legal entity. Do not assume that adding arbitrary `metadata.aliases` makes every resolver bypass similarity search. Use the actual alias and merge fields in xref:reference/api/long-term.adoc[the API reference].
+An alias preserves an alternative name; it should not conceal a product variant or a separate legal entity. Do not assume that adding arbitrary `metadata.aliases` makes every resolver bypass similarity search. Aliases declared on an ontology entity type are different: the ontology resolver treats them as a controlled vocabulary. Use the actual alias and merge fields in xref:reference/api/long-term.adoc[the API reference].
 
 [[_configuration_options]]
 == Thresholds express a policy
 
 anchor:_threshold_tuning[]anchor:_per_entity_control[]
 
-Bolt's ingestion configuration separates an automatic-merge threshold from a review threshold. Raising the automatic threshold reduces the set of candidates merged without review; moving the review threshold changes which ambiguous pairs reach the queue. The thresholds are similarity cutoffs, not guaranteed precision percentages.
+Bolt's resolution configuration separates an automatic-merge threshold (`resolution.auto_merge_threshold`, 0.90 by default) from a review threshold (`resolution.review_threshold`, 0.85). An ontology can override both for one entity type. Raising the automatic threshold reduces the set of candidates merged without review; moving the review threshold changes which ambiguous pairs reach the queue. The thresholds are score cutoffs, not guaranteed precision percentages.
 
-Choose them using labeled matches and non-matches from the actual domain. A broad, low threshold is risky for similar product variants or same-name people. Per-entity deduplication controls can preserve intentionally distinct records; see xref:how-to/deduplication.adoc[Configure deduplication].
+Choose them using labeled matches and non-matches from the actual domain. A broad, low threshold is risky for similar product variants or same-name people. Per-entity deduplication controls can preserve intentionally distinct records; see xref:how-to/deduplication.adoc[Configure deduplication] and xref:how-to/tune-entity-resolution.adoc[Tune entity resolution].
 
 [[_handling_edge_cases]]
 == Ambiguity, history, and related entities
@@ -96,7 +154,7 @@ anchor:_deduplication_statistics[]anchor:_quality_signals[]
 
 Evaluate both accepted and rejected matches against a labeled sample. Review queue size alone does not establish quality: a small queue might mean accurate resolution, an overly narrow candidate search, or excessive automatic merging.
 
-Useful observations include false merges, missed aliases, disagreement by entity type, and time spent reviewing candidates. Choose workload-specific targets and record how the sample was labeled. No universal rejection-rate or queue-size percentage establishes that a deployment is healthy.
+Useful observations include false merges, missed aliases, disagreement by entity type, and time spent reviewing candidates. Choose workload-specific targets and record how the sample was labeled. No universal rejection-rate or queue-size percentage establishes that a deployment is healthy. The evaluation harness's resolution dimension scores the configured resolver against labeled clusters; see xref:how-to/evaluation.adoc[Evaluate memory quality].
 
 [[_best_practices]]
 == A conservative identity policy
@@ -111,6 +169,7 @@ A shared memory graph benefits from consistent naming, but consistency is not a 
 == See also
 
 * xref:how-to/deduplication.adoc[Configure and review deduplication]
+* xref:how-to/tune-entity-resolution.adoc[Tune entity resolution]
 * xref:reference/api/long-term.adoc[Long-term memory API]
 * xref:explanation/extraction-pipeline.adoc[Extraction and candidate merging]
 * xref:explanation/poleo-model.adoc[POLE+O classification]

@@ -27,6 +27,14 @@ logger = logging.getLogger(__name__)
 # Default vector dimensions
 DEFAULT_VECTOR_DIMENSIONS = 1536
 
+#: ``(:SchemaMigration {name})`` marker for the legacy ``RELATED_TO.type``
+#: backfill. Present => the scan has already run against this database.
+RELATION_TYPE_BACKFILL = "relation_type_backfill"
+
+#: Marker for the backfill of the resolver's entity lookup keys
+#: (``name_key`` / ``surface_keys``, see ``queries.entity_keys_set_clause``).
+ENTITY_KEYS_BACKFILL = "entity_keys_backfill"
+
 
 def _extract_vector_dimensions(options: object) -> int | None:
     """Pull ``vector.dimensions`` from a ``SHOW VECTOR INDEXES`` options map.
@@ -65,6 +73,7 @@ class SchemaManager:
         client: Neo4jClient,
         *,
         vector_dimensions: int = DEFAULT_VECTOR_DIMENSIONS,
+        backfill_relation_types: bool = True,
     ):
         """
         Initialize schema manager.
@@ -72,14 +81,22 @@ class SchemaManager:
         Args:
             client: Neo4j client
             vector_dimensions: Dimensions for vector indexes
+            backfill_relation_types: Whether :meth:`setup_all` may run the
+                one-shot legacy ``RELATED_TO.relation_type`` -> ``r.type``
+                backfill. Mirrors
+                ``schema_config.backfill_relation_types``; set ``False`` to
+                run the equivalent query yourself in batches.
         """
         self._client = client
         self._vector_dimensions = vector_dimensions
+        self._backfill_relation_types = backfill_relation_types
 
     async def setup_all(self) -> None:
         """Set up all indexes and constraints."""
         await self.setup_constraints()
         await self.setup_indexes()
+        await self._backfill_relation_type()
+        await self._backfill_entity_keys()
         await self.setup_vector_indexes()
         await self.setup_point_indexes()
 
@@ -103,6 +120,12 @@ class SchemaManager:
             # Hygiene + privacy (v0.5)
             ("consolidation_run_id", "ConsolidationRun", "id"),
             ("memory_read_audit_id", "MemoryReadAudit", "id"),
+            # Ontology store (v0.7)
+            ("ontology_id", "Ontology", "id"),
+            ("ontology_version_id", "OntologyVersion", "id"),
+            # Backs the MERGE that serialises concurrent
+            # ``ACTIVATE_ONTOLOGY_VERSION`` writers on one node.
+            ("ontology_lock_id", "OntologyLock", "id"),
         ]
 
         for constraint_name, label, property_name in constraints:
@@ -119,6 +142,8 @@ class SchemaManager:
             ("entity_type_idx", "Entity", "type"),
             ("entity_name_idx", "Entity", "name"),
             ("entity_canonical_idx", "Entity", "canonical_name"),
+            # Resolution blocking (v0.7): name-prefix bucket.
+            ("entity_name_key_idx", "Entity", "name_key"),
             ("preference_category_idx", "Preference", "category"),
             # Reasoning memory
             ("trace_session_idx", "ReasoningTrace", "session_id"),
@@ -129,10 +154,21 @@ class SchemaManager:
             ("conversation_archived_idx", "Conversation", "archived"),
             ("consolidation_run_kind_idx", "ConsolidationRun", "kind"),
             ("memory_read_audit_kind_idx", "MemoryReadAudit", "kind"),
+            # Ontology store (v0.7) — lookup by name for clone/collision checks
+            ("ontology_name_idx", "Ontology", "name"),
         ]
 
         for index_name, label, property_name in indexes:
             await self._create_index(index_name, label, property_name)
+
+        # Text indexes back the resolution blocking queries' ``CONTAINS`` /
+        # ``ENDS WITH`` lookups (exact surface-form bucket, name-suffix bucket).
+        text_indexes = [
+            ("entity_surface_keys_idx", "Entity", "surface_keys"),
+            ("entity_name_key_text_idx", "Entity", "name_key"),
+        ]
+        for index_name, label, property_name in text_indexes:
+            await self._create_index(index_name, label, property_name, text=True)
 
     # Vector indexes the library manages. Used by both
     # :meth:`setup_vector_indexes` and
@@ -230,6 +266,87 @@ class SchemaManager:
             index_name=mismatches[0][0],
         )
 
+    async def _backfill_relation_type(self, *, force: bool = False) -> None:
+        """Backfill the canonical ``r.type`` property on legacy RELATED_TO edges.
+
+        Relationships written before the v0.7 provenance rework only carried
+        ``r.relation_type``; every reader (``MERGE_ENTITIES``, entity-graph
+        traversal, graph export) now keys off ``r.type``. The underlying
+        query only matches edges where ``r.type`` is still unset, so it is
+        idempotent — but it is still a write transaction that scans every
+        ``RELATED_TO`` edge, which is not something to pay for on every
+        :meth:`setup_all` (i.e. every ``connect()``).
+
+        So it runs **once per database**: completion is recorded on a
+        ``(:SchemaMigration {name: "relation_type_backfill"})`` marker, and a
+        run that finds the marker already there returns immediately. Set
+        ``schema_config.backfill_relation_types=False`` to skip it entirely
+        and run the equivalent query yourself in batches (e.g. via
+        ``apoc.periodic.iterate``).
+
+        Failures here are logged, not raised — this is a best-effort hygiene
+        step, not a prerequisite for the library to function. The marker is
+        only written once the scan has actually succeeded, so a failed run
+        is retried on the next connection.
+
+        Args:
+            force: Run even when the marker is present. For tests and for
+                re-running the backfill after loading legacy data.
+        """
+        if not self._backfill_relation_types and not force:
+            return
+        try:
+            if not force:
+                done = await self._client.execute_read(
+                    queries.GET_SCHEMA_MIGRATION, {"name": RELATION_TYPE_BACKFILL}
+                )
+                if done:
+                    return
+            rows = await self._client.execute_write(queries.BACKFILL_RELATION_TYPE)
+            updated = rows[0].get("updated") if rows else None
+            if updated:
+                logger.debug("Backfilled r.type on %s legacy RELATED_TO edges.", updated)
+            await self._client.execute_write(
+                queries.RECORD_SCHEMA_MIGRATION, {"name": RELATION_TYPE_BACKFILL}
+            )
+        except Exception:
+            logger.warning("Failed to backfill RELATED_TO.type from relation_type.", exc_info=True)
+
+    async def _backfill_entity_keys(self, *, force: bool = False) -> None:
+        """Fill the resolver's lookup keys on entities written before v0.7.
+
+        Resolution blocking finds candidates through ``e.name_key`` and
+        ``e.surface_keys`` (``queries.entity_keys_set_clause``), which every
+        entity write path maintains. An entity written before they existed,
+        or by Cypher outside the library, has neither and is invisible to the
+        exact and prefix buckets until this runs. Same once-per-database
+        contract as :meth:`_backfill_relation_type`, gated by the same
+        ``schema_config.backfill_relation_types`` switch; a failure is logged
+        and retried on the next connection.
+
+        Args:
+            force: Run even when the marker is present, e.g. after loading
+                entities with your own Cypher.
+        """
+        if not self._backfill_relation_types and not force:
+            return
+        try:
+            if not force:
+                done = await self._client.execute_read(
+                    queries.GET_SCHEMA_MIGRATION, {"name": ENTITY_KEYS_BACKFILL}
+                )
+                if done:
+                    return
+            rows = await self._client.execute_write(queries.BACKFILL_ENTITY_KEYS)
+            updated = rows[0].get("updated") if rows else None
+            if updated:
+                logger.debug("Backfilled resolution lookup keys on %s entities.", updated)
+            await self._client.execute_write(
+                queries.RECORD_SCHEMA_MIGRATION, {"name": ENTITY_KEYS_BACKFILL}
+            )
+        except Exception:
+            logger.warning("Failed to backfill entity lookup keys.", exc_info=True)
+
     async def setup_point_indexes(self) -> None:
         """Create point indexes for geospatial queries."""
         point_indexes = [
@@ -262,14 +379,17 @@ class SchemaManager:
         index_name: str,
         label: str,
         property_name: str,
+        *,
+        text: bool = False,
     ) -> None:
-        """Create a regular index if it doesn't exist."""
+        """Create a regular (range) or text index if it doesn't exist."""
         try:
             exists = await self._client.check_index_exists(index_name)
             if exists:
                 return
 
-            query = queries.create_index_query(index_name, label, property_name)
+            build = queries.create_text_index_query if text else queries.create_index_query
+            query = build(index_name, label, property_name)
             await self._client.execute_write(query)
         except Exception as e:
             raise SchemaError(f"Failed to create index {index_name}: {e}") from e
@@ -345,6 +465,7 @@ class SchemaManager:
             "user_",
             "consolidation_",
             "memory_read_",
+            "ontology_",
         ]
         return any(name.startswith(prefix) for prefix in memory_prefixes)
 

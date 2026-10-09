@@ -315,6 +315,17 @@ tag prefix and publish workflow.
    then builds and publishes to PyPI and creates a GitHub Release. The `pypi`
    environment has no approval gate, so the push publishes — and a version
    number, once claimed on PyPI, cannot be reused.
+6. Once the release is on PyPI, move the two financial advisor backends onto
+   it. Both are installed from PyPI in CI, so their pins can only name a
+   published version; every other example pins the release being prepared.
+   - Google Cloud: raise the `neo4j-agent-memory` pin in
+     `examples/financial-services-advisor/google-cloud-financial-advisor/backend/pyproject.toml`,
+     then run `cd backend && uv lock` and `make docker-requirements` there. CI
+     regenerates `requirements-docker.txt` from PyPI (`--no-sources`).
+   - AWS: raise the pin in
+     `examples/financial-services-advisor/aws-financial-services-advisor/backend/pyproject.toml`
+     and run `uv lock` in that `backend/`. The CDK app bundles the Lambda with
+     `pip install .`, and CI runs `npm run synth`.
 
 ### TypeScript (@neo4j-labs/agent-memory → npm)
 

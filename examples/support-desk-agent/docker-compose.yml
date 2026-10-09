@@ -1,0 +1,25 @@
+# One Neo4j 5.26 LTS instance for the support-desk agent: the memory graph,
+# the stored support-desk ontology and its revisions, and the reasoning traces.
+#
+# The password matches backend/.env.example. Change both together.
+services:
+  neo4j:
+    image: neo4j:5.26-community
+    container_name: support-desk-neo4j
+    ports:
+      - "7474:7474" # HTTP / Neo4j Browser
+      - "7687:7687" # Bolt
+    environment:
+      NEO4J_AUTH: neo4j/test-password
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p test-password 'RETURN 1' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  neo4j_data:
+  neo4j_logs:

@@ -19,12 +19,12 @@ agent-framework-openai>=1.14,<2
 # 0.6.0 is the first release built on the Agent Framework 1.x GA names; 0.5.0
 # imports BaseContextProvider and fails against agent-framework-core>=1.17.
 # After installing, download the spaCy model: python -m spacy download en_core_web_sm
-neo4j-agent-memory[openai,microsoft-agent,extraction,fuzzy]>=0.6.0,<0.7
+neo4j-agent-memory[openai,microsoft-agent,extraction,fuzzy]>=0.7.0,<0.8
 
 # Web framework
 fastapi>=0.115,<1
 uvicorn[standard]>=0.52.4,<1
-sse-starlette>=3.0,<4
+sse-starlette>=3.4.11,<4
 
 # OpenAI (embeddings + the data loader)
 openai>=2.0,<4

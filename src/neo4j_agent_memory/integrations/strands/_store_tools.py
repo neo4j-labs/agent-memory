@@ -74,11 +74,11 @@ async def _entity_graph(
         # Report the orientation the library reports rather than inventing one:
         # GET_ENTITY_RELATIONSHIPS matches undirected and get_related_entities
         # sets source_id to the centre for every hit, so these ids are the only
-        # direction available. Likewise `type` is what the library resolved --
-        # today always "RELATED_TO", because execute_read's result.data()
-        # flattens a relationship to (start, type, end) and drops its
-        # properties, so the property-level type never survives the round trip.
-        # A library-side fix would flow through here unchanged.
+        # direction available. `type` is the semantic relation name the library
+        # resolved (e.g. "FOUNDED") -- GET_ENTITY_RELATIONSHIPS now projects
+        # `r.type` as an explicit scalar column rather than a bare `r`, which
+        # execute_read's result.data() would otherwise flatten to a
+        # (start, type, end) tuple and strip of its properties.
         names = {
             str(centre.id): centre.display_name,
             str(other.id): other.display_name,

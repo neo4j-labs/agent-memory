@@ -15,9 +15,12 @@ This implementation extends POLE with Organizations as a first-class entity type
 
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field, model_validator
+
+if TYPE_CHECKING:
+    from neo4j_agent_memory.ontology.models import OntologyDocument
 
 
 class POLEOEntityType(str, Enum):
@@ -361,6 +364,39 @@ class EntitySchemaConfig(BaseModel):
     def get_relation_types(self) -> list[str]:
         """Get list of valid relationship type names."""
         return [rt.name for rt in self.relation_types]
+
+    def to_ontology(self) -> "OntologyDocument":
+        """Convert this schema into an ontology document.
+
+        The ontology document is what the extraction, validation and
+        resolution layers consume; this schema is the legacy view of it.
+
+        Returns:
+            The equivalent
+            :class:`~neo4j_agent_memory.ontology.models.OntologyDocument`.
+        """
+        # Imported lazily: ``ontology.convert`` reads this module.
+        from neo4j_agent_memory.ontology.convert import from_entity_schema
+
+        return from_entity_schema(self)
+
+    @classmethod
+    def from_ontology(cls, doc: "OntologyDocument") -> "EntitySchemaConfig":
+        """Project an ontology document back onto this schema shape.
+
+        Fine-grained ontology labels collapse onto their POLE+O ``pole_type``
+        as subtypes, which is what ``graph/query_builder.py`` validation and
+        the CLI ``schemas`` commands expect.
+
+        Args:
+            doc: The ontology document to project.
+
+        Returns:
+            The equivalent :class:`EntitySchemaConfig`.
+        """
+        from neo4j_agent_memory.ontology.convert import to_entity_schema
+
+        return to_entity_schema(doc)
 
 
 def _get_poleo_entity_types() -> list[EntityTypeConfig]:

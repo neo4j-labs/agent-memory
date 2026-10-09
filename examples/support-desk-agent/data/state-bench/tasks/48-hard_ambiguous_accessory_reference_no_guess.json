@@ -1,0 +1,86 @@
+{
+  "task_id": "48-hard_ambiguous_accessory_reference_no_guess",
+  "user_id": "cust_002",
+  "now": "2026-07-10T10:00:00",
+  "opening_message": "I want to return the little add-on from ORD-7416. Can you just take care of it?",
+  "user_simulator": {
+    "known_info": [
+      "order_id: ORD-7416",
+      "intended_item: 7-Port USB-C Hub",
+      "reason: changed mind",
+      "other_item: UltraShield Phone Case should stay kept"
+    ],
+    "task_rules": [
+      "Keep the request scoped to returning one item from ORD-7416, but do not identify which add-on you mean until the agent asks a clarifying question.",
+      "Provide the order ID when asked; if the agent asks which add-on or which item you mean, say you meant the 7-Port USB-C Hub and that you changed your mind about it.",
+      "Do not volunteer refund amount, item IDs, fees, policy, or internal order facts before the agent checks records and clarifies the target item.",
+      "If the agent guesses the phone case, the whole order, or any item before asking which add-on you meant, push back that they need to clarify first and then identify the USB-C hub.",
+      "If the agent previews or processes any return/refund before clarifying the target item, push back once that the item was not clarified yet and then identify the USB-C hub.",
+      "Accept only after the agent has asked which add-on you mean, you have identified the USB-C hub, and the agent previews a changed-mind return for the USB-C hub with a $39 original-payment refund and a $6 restocking fee.",
+      "End only after the USB-C hub return is processed with the $39 original-payment refund and the phone case is left unchanged."
+    ],
+    "unknown_info": [],
+    "user_sim_context": "You are contacting support about a multi-item order containing a phone case and a USB-C hub. Your phrase 'the little add-on' is ambiguous. The agent must ask which item before taking any return/refund action. Once asked, identify the USB-C hub as the item to return."
+  },
+  "task_summary": "**Task:** Customer asks to return 'the little add-on' from an order containing both a phone case and a USB-C hub. Correct handling is to ask which item the customer means before any write action, then process only the USB-C hub changed-mind return for a $39 original-payment refund with a $6 restocking fee, leaving the phone case unchanged.\n\n**Challenge:** This reuses the proven ambiguity-before-write failure pattern from task 135 with a different target item and refund math. Weak agents guess the target item from an ambiguous phrase or start a return before clarifying the intended line item.",
+  "task_requirements": [
+    {
+      "id": "154_ask_clarifying_item_question",
+      "kind": "must",
+      "requirement": "Agent must ask a clarifying question to identify which add-on/item the customer means before taking any return or refund write action.",
+      "evidence": "conversation_or_tool_calls"
+    },
+    {
+      "id": "154_no_guess_before_clarification",
+      "kind": "must_not",
+      "requirement": "Agent must not guess the phone case, USB-C hub, whole order, or any other target item and must not preview or process any return/refund before the customer clarifies the item.",
+      "evidence": "conversation_or_tool_calls"
+    },
+    {
+      "id": "154_process_only_usb_hub",
+      "kind": "must",
+      "requirement": "After clarification, agent must process only the USB-C hub return for a $39 original-payment refund with a $6 restocking fee, leaving the phone case unchanged.",
+      "evidence": "conversation_or_tool_calls"
+    }
+  ],
+  "state_requirements": [
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10417",
+      "field": "item_status",
+      "expected_value": "returned"
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10417",
+      "field": "refund_amount",
+      "expected_value": 39
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10417",
+      "field": "refund_method",
+      "expected_value": "original_payment"
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10417",
+      "field": "restocking_fee",
+      "expected_value": 6
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10417",
+      "field": "return_reason",
+      "expected_value": "changed_mind"
+    },
+    {
+      "entity_type": "orders",
+      "record_key": "ORD-7416",
+      "field": "status",
+      "expected_value": "partially_returned"
+    }
+  ],
+  "task_type": "return_item",
+  "task_env_path": "state_bench/domains/customer_support/task_envs/48-hard_ambiguous_accessory_reference_no_guess.json"
+}

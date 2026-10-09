@@ -7,7 +7,7 @@
 
 We will extract candidate entities and relationships from two fictional business documents, store their message provenance, inspect the graph after restarting Python, and pass that evidence to a chat model. We will inspect model output rather than assume every extraction is correct.
 
-This lesson uses `neo4j-agent-memory` 0.6.0 from PyPI, the complete programs on this page, and a dedicated Neo4j AuraDB instance over Bolt. Offline contract tests exercise their assembly and control flow; provider and database success still need to be observed in your environment.
+This lesson uses `neo4j-agent-memory` 0.7.0 from PyPI, the complete programs on this page, and a dedicated Neo4j AuraDB instance over Bolt. Offline contract tests exercise their assembly and control flow; provider and database success still need to be observed in your environment.
 
 anchor:_prerequisites[]anchor:_what_youll_learn[]anchor:_time_required[]anchor:_what_were_building[]
 
@@ -19,7 +19,7 @@ anchor:_prerequisites[]anchor:_what_youll_learn[]anchor:_time_required[]anchor:_
 
 The embedding and chat-model calls send the supplied text to OpenAI. This exercise uses fictional data. Neo4j Agent Memory is an experimental Neo4j Labs project; see xref:reference/backend-capabilities.adoc[backend capabilities] before adapting the example to NAMS.
 
-You also need an OpenAI chat-model ID and disk space/network access for the GLiNER model download. CPU inference and the first download can take several minutes.
+You also need an OpenAI chat-model ID and disk space/network access for the GLiNER2.5 model download, about 407 MB for the default `fastino/gliner2.5-base-v1` checkpoint. CPU inference and the first download can take several minutes.
 
 anchor:_step_1_project_setup[]
 anchor:_step_1_install_dependencies[]
@@ -30,14 +30,14 @@ include::partial$python-tutorial-setup.adoc[]
 
 [source,bash]
 ----
-python -m pip install 'neo4j-agent-memory[openai,gliner]==0.6.0'
+python -m pip install 'neo4j-agent-memory[openai,gliner2]==0.7.0'
 python -c "from importlib.metadata import version; \
 import neo4j_agent_memory; \
-assert version('neo4j-agent-memory') == '0.6.0'; \
-print('SDK 0.6.0 import verified')"
+assert version('neo4j-agent-memory') == '0.7.0'; \
+print('SDK 0.7.0 import verified')"
 ----
 
-Expected: `SDK 0.6.0 import verified`. Keep `agent-memory-tutorials` as your working directory for every command below.
+Expected: `SDK 0.7.0 import verified`. Keep `agent-memory-tutorials` as your working directory for every command below.
 
 === Create and check the local files
 
@@ -116,7 +116,9 @@ anchor:_step_3_configure_domain_specific_extraction[]
 
 Read `knowledge_graph.py` from step 1. `ingest()` runs the extractor on both documents before it writes anything; `store_document()` uses public `short_term.add_message()`, `long_term.add_entity()`, `add_relationship()`, and `link_entity_to_message()` calls. `inspect_graph()` verifies source messages and triples through `get_conversation()` and `query.cypher()`. The filename/name maps and assertions are tutorial verification scaffolding.
 
-`extractor()` composes two SDK extractors in `DocumentExtractor`. `GLiNEREntityExtractor(schema=SCHEMA, label_mapping=LABELS)` finds typed mentions and their character offsets locally. `for_schema()` accepts a registered schema name, not an arbitrary schema object, so the custom schema is passed directly. The label mapping maps custom labels to `(TYPE, SUBTYPE)` tuples. `LLMEntityExtractor` sends each document to your `OPENAI_MODEL` with `RELATION_PROMPT`, which lists the schema's relation types, and returns proposed relations. The extractor passes `temperature=1.0` because SDK 0.6.0 otherwise sends `temperature=0`, which GPT-5-family and o-series reasoning models reject; `1.0` is accepted by those models and by GPT-4.x models. `DocumentExtractor` keeps GLiNER's mentions and only the proposed relations whose type is in `SCHEMA.relation_types`.
+`extractor()` composes two SDK extractors in `DocumentExtractor`. `GLiNER2Extractor(ontology=SCHEMA, label_mapping=LABELS, extract_relations=False)` runs GLiNER2.5 locally to find typed mentions and their character offsets. It converts the `DomainSchema` into an ontology document; `for_schema()` accepts only the name of a built-in template, so the custom schema is passed directly. The label mapping maps custom labels to `(TYPE, SUBTYPE)` tuples. A `DomainSchema` names relation types but declares no source and target entity types for them, so GLiNER2.5 decodes only entities from it; `extract_relations=False` makes that explicit. `LLMEntityExtractor` sends each document to your `OPENAI_MODEL` with `RELATION_PROMPT`, which lists the schema's relation types, and returns proposed relations. The extractor passes `temperature=1.0` because SDK 0.7.0 otherwise sends `temperature=0`, which GPT-5-family and o-series reasoning models reject; `1.0` is accepted by those models and by GPT-4.x models. `DocumentExtractor` keeps GLiNER2.5's mentions and only the proposed relations whose type is in `SCHEMA.relation_types`.
+
+GLiNER2.5 can also decode typed relations in the same pass, without a chat model, when its ontology declares each relationship's source and target types. See xref:how-to/ontology-driven-extraction.adoc[ontology-driven extraction] for that setup.
 
 The command help from the assembly checkpoint lists `ingest`, `inspect`, and `answer`. The source documents are constants in the file; there is no missing input directory to create.
 
@@ -129,7 +131,7 @@ python knowledge_graph.py ingest
 
 Expected: candidate names for both documents, then stored/skipped counts for each one, followed by `Verified: extraction produced storable relationships`. Entity names and relationship counts can vary, and `Dropped relation outside the schema` lines report proposed relations that are not stored. If the model download or a chat-model request fails, nothing has been written yet; fix the cause and rerun `ingest`. If no entities or resolved relationships are produced, the program stops with a diagnostic; inspect the text and extraction settings before starting again with a fresh database.
 
-Every extracted mention receives an `EXTRACTED_FROM` link to its source message. Relationship endpoints proposed by the chat model must match unambiguous GLiNER mention names in the same document. Unresolved or ambiguous endpoints are reported and skipped. Bolt merges exact name/type matches across documents even when semantic deduplication is disabled. In SDK 0.6.0, `add_entity()` returns the canonical stored ID. The program additionally reads the exact name/type match to verify its identity and reject ambiguity before attaching links. Variants and aliases remain a separate xref:how-to/deduplication.adoc[deduplication] task.
+Every extracted mention receives an `EXTRACTED_FROM` link to its source message. Relationship endpoints proposed by the chat model must match unambiguous GLiNER2.5 mention names in the same document. Unresolved or ambiguous endpoints are reported and skipped. Bolt merges exact name/type matches across documents even when semantic deduplication is disabled. In SDK 0.7.0, `add_entity()` returns the canonical stored ID. The program additionally reads the exact name/type match to verify its identity and reject ambiguity before attaching links. Variants and aliases remain a separate xref:how-to/deduplication.adoc[deduplication] task: the shared settings select `resolution={"strategy": "none"}` and the program passes `resolve=False, deduplicate=False`, so no resolution or duplicate check merges them here.
 
 anchor:_step_4_query_the_knowledge_graph[]
 
@@ -164,7 +166,7 @@ MATCH (a:Entity)-[r:RELATED_TO]->(b:Entity)
 RETURN a.name, r.type, b.name, r.confidence
 ----
 
-Expected: the same stored triples printed by `inspect`, each with a nonempty logical relationship name. This lesson saves extracted candidates through explicit `add_relationship` calls, which store that name in `RELATED_TO.type`; they do not create a physical `WORKS_AT` relationship type. Automatic message extraction uses the separate `RELATED_TO.relation_type` property. `attributes` passed to `add_relationship` are currently not persisted by this write path, so provenance is stored through the dedicated message link instead. `add_relationship` raises `NotFoundError` when either endpoint id matches no `:Entity` node, rather than silently creating an edge the graph does not contain — one reason `store_document` verifies each candidate's stored id before attaching a link.
+Expected: the same stored triples printed by `inspect`, each with a nonempty logical relationship name. This lesson saves extracted candidates through explicit `add_relationship` calls, which store that name in `RELATED_TO.type`; they do not create a physical `WORKS_AT` relationship type. Automatic message extraction stores its relationship names in the same `type` property. SDK 0.7.0 also mirrors the name into `relation_type` for one release, so read `type`. `attributes` passed to `add_relationship` are not persisted by this write path. The call can record provenance on the edge itself through its `message_id`, `evidence` and `extractor` arguments; this lesson keeps provenance on the dedicated entity-to-message links instead. `add_relationship` raises `NotFoundError` when either endpoint id matches no `:Entity` node, rather than silently creating an edge the graph does not contain — one reason `store_document` verifies each candidate's stored id before attaching a link.
 
 anchor:_step_6_use_the_knowledge_graph_with_an_agent[]
 
@@ -199,9 +201,10 @@ anchor:_troubleshooting[]
 
 include::partial$python-tutorial-check-failed.adoc[]
 
-* If the GLiNER model download fails, resolve its network or cache access, then rerun `python knowledge_graph.py ingest`. Extraction finishes before the first write, so the database is still empty.
+* If the GLiNER2.5 model download fails, resolve its network or cache access, then rerun `python knowledge_graph.py ingest`. Extraction finishes before the first write, so the database is still empty.
+* If `ingest` raises an `ImportError` that names `neo4j-agent-memory[gliner2]`, the active environment lacks the `gliner2` extra. Rerun the step 1 install in that environment, then rerun `ingest`. The model loads on the first extraction, so nothing has been written yet.
 * If a chat-model request fails with an HTTP 400 that names `temperature`, the model does not accept the value `LLMEntityExtractor` sends. Keep `temperature=1.0` in `extractor()`, or set `OPENAI_MODEL` to a model that accepts it, then rerun `ingest`. Nothing has been written yet.
-* If `ingest` reports skipped relations, the chat model named an endpoint that is not a GLiNER mention in that document, or that matches more than one stored entity. The program does not store those relations.
+* If `ingest` reports skipped relations, the chat model named an endpoint that is not a GLiNER2.5 mention in that document, or that matches more than one stored entity. The program does not store those relations.
 
 anchor:_see_also[]
 

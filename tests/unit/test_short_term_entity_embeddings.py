@@ -9,8 +9,10 @@ from uuid import uuid4
 
 import pytest
 
+from neo4j_agent_memory.config.settings import ResolutionConfig
 from neo4j_agent_memory.extraction.base import ExtractedEntity, ExtractionResult
 from neo4j_agent_memory.memory.short_term import Message, MessageRole, ShortTermMemory
+from neo4j_agent_memory.resolution.ontology import OntologyResolver
 
 
 class _Extractor:
@@ -172,4 +174,54 @@ async def test_without_an_embedder_entities_are_stored_without_embeddings(mock_c
 
     await memory._extract_and_link_entities(message)
 
+    assert _entity_writes(mock_client) == {"Maya Chen": None, "Northstar Robotics": None}
+
+
+def _resolver(client, embedder) -> OntologyResolver:
+    return OntologyResolver(client, embedder=embedder, config=ResolutionConfig())
+
+
+@pytest.mark.asyncio
+async def test_ingest_resolution_reuses_the_name_embeddings(mock_client):
+    embedder = _Embedder()
+    memory = ShortTermMemory(
+        mock_client,
+        embedder=embedder,
+        extractor=_Extractor(ENTITIES),
+        resolver=_resolver(mock_client, embedder),
+    )
+    message = Message(id=uuid4(), role=MessageRole.USER, content="Maya Chen runs Northstar.")
+
+    await memory._extract_and_link_entities(message)
+
+    # One embed_batch for the episode: resolution blocks on the same vectors
+    # the entity writes store, instead of embedding the names a second time.
+    assert embedder.batches == [["Maya Chen", "Northstar Robotics"]]
+    assert _entity_writes(mock_client) == {
+        "Maya Chen": [9.0, 0.0, 1.0],
+        "Northstar Robotics": [18.0, 0.0, 1.0],
+    }
+
+
+@pytest.mark.asyncio
+async def test_ingest_resolution_without_embeddings_never_calls_the_embedder(mock_client):
+    # A recording embedder, not _FailingEmbedder: resolution swallows embedder
+    # errors so they never gate a write, which would hide a call here.
+    embedder = _Embedder()
+    memory = ShortTermMemory(
+        mock_client,
+        embedder=embedder,
+        extractor=_Extractor(ENTITIES),
+        resolver=_resolver(mock_client, embedder),
+    )
+
+    await memory.add_message(
+        "session-1",
+        "user",
+        "Maya Chen runs Northstar Robotics.",
+        extract_entities=True,
+        generate_embedding=False,
+    )
+
+    assert embedder.batches == []
     assert _entity_writes(mock_client) == {"Maya Chen": None, "Northstar Robotics": None}

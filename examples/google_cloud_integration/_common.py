@@ -29,7 +29,7 @@ from pydantic import SecretStr
 
 from neo4j_agent_memory import MemorySettings, Neo4jConfig
 from neo4j_agent_memory.config.settings import ExtractionConfig, ExtractorType
-from neo4j_agent_memory.extraction import create_extractor, is_gliner_available
+from neo4j_agent_memory.extraction import create_extractor, is_gliner2_available
 
 #: Default embedding ids. Vertex: ``gemini-embedding-001`` (``text-embedding-004``
 #: was shut down 2026-01-14). OpenAI: ``text-embedding-3-small``.
@@ -92,14 +92,14 @@ def local_extraction() -> ExtractionConfig:
     except ImportError:
         has_spacy = False
 
-    if not (has_spacy or is_gliner_available()):
+    if not (has_spacy or is_gliner2_available()):
         # Explicit rather than letting the pipeline fall back to NoOpExtractor.
         return ExtractionConfig(extractor_type=ExtractorType.NONE, enable_llm_fallback=False)
 
     return ExtractionConfig(
         extractor_type=ExtractorType.PIPELINE,
         enable_spacy=has_spacy,
-        enable_gliner=is_gliner_available(),
+        enable_gliner=is_gliner2_available(),
         enable_llm_fallback=False,
     )
 

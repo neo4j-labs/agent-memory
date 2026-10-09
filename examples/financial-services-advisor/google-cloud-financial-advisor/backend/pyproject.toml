@@ -30,7 +30,11 @@ dependencies = [
     # [vertex-ai] supplies google-cloud-aiplatform + google-genai for the
     # embedder; [litellm] supplies the Gemini LLM route used for entity
     # extraction (see src/services/memory_service.py).
-    "neo4j-agent-memory[google-adk,vertex-ai,litellm]>=0.5.0,<0.7",
+    # Unlike the other examples, this pin names the latest *published* release:
+    # requirements-docker.txt is exported from PyPI with --no-sources, and CI
+    # fails if that export cannot resolve. Raise it after each release
+    # (CONTRIBUTING.md, Publishing step 6).
+    "neo4j-agent-memory[google-adk,vertex-ai,litellm]>=0.7.0,<0.8",
     "neo4j>=6.3,<7",
     "python-dotenv>=1.0,<2",
     "httpx>=0.28,<1",

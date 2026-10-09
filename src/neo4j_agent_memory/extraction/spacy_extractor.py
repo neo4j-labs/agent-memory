@@ -47,7 +47,7 @@ class SpacyEntityExtractor:
     Location, Event, Organization).
 
     Note: spaCy does not extract relations or preferences - use in combination
-    with other extractors (GLiNER, LLM) for full extraction.
+    with other extractors (GLiNER2.5, LLM) for full extraction.
     """
 
     # Mapping from spaCy labels to POLE+O types
@@ -102,6 +102,8 @@ class SpacyEntityExtractor:
         subtype_mapping: dict[str, str] | None = None,
         default_confidence: float = 0.85,
         context_window: int = 50,
+        *,
+        drop_unmapped: bool = False,
     ):
         """
         Initialize spaCy entity extractor.
@@ -112,13 +114,21 @@ class SpacyEntityExtractor:
             subtype_mapping: Custom mapping from spaCy labels to subtypes
             default_confidence: Default confidence score (spaCy doesn't provide per-entity scores)
             context_window: Number of characters of context to include around entities
+            drop_unmapped: Skip entities whose spaCy label ``type_mapping``
+                does not name, instead of typing them ``OBJECT``. The factory
+                sets it when the mapping comes from an ontology.
         """
         self._model_name = model
         self._nlp: Language | None = None  # Lazy load
-        self.type_mapping = type_mapping or self.DEFAULT_TYPE_MAPPING.copy()
-        self.subtype_mapping = subtype_mapping or self.DEFAULT_SUBTYPE_MAPPING.copy()
+        self.type_mapping = (
+            self.DEFAULT_TYPE_MAPPING.copy() if type_mapping is None else type_mapping
+        )
+        self.subtype_mapping = (
+            self.DEFAULT_SUBTYPE_MAPPING.copy() if subtype_mapping is None else subtype_mapping
+        )
         self.default_confidence = default_confidence
         self.context_window = context_window
+        self.drop_unmapped = drop_unmapped
 
     @property
     def nlp(self) -> Any:
@@ -156,6 +166,8 @@ class SpacyEntityExtractor:
 
         for ent in doc.ents:
             # Map spaCy label to POLE+O type
+            if self.drop_unmapped and ent.label_ not in self.type_mapping:
+                continue
             mapped_type = self.type_mapping.get(ent.label_, "OBJECT")
 
             # Filter by requested entity types
@@ -196,7 +208,7 @@ class SpacyEntityExtractor:
         Extract entities from text using spaCy NER.
 
         Note: spaCy NER does not extract relations or preferences.
-        For full extraction, combine with GLiNER or LLM extractors.
+        For full extraction, combine with GLiNER2.5 or LLM extractors.
 
         Args:
             text: The text to extract from

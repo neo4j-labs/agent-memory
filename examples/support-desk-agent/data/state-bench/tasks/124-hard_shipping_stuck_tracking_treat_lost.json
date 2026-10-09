@@ -1,0 +1,73 @@
+{
+  "task_id": "124-hard_shipping_stuck_tracking_treat_lost",
+  "user_id": "cust_003",
+  "now": "2026-07-15T10:00:00",
+  "opening_message": "ORD-7227 has had no tracking update for over a week. Please don't tell me to wait again.",
+  "user_simulator": {
+    "known_info": [
+      "order_id: ORD-7227",
+      "tracking: stale over 7 days",
+      "preferred_resolution: refund to original payment (only reveal if the agent asks)"
+    ],
+    "task_rules": [
+      "Keep the request scoped to resolving ORD-7227 because tracking has been stale for more than seven days; do not volunteer your refund preference until the agent asks you to choose a resolution.",
+      "Provide the order ID and the stale-tracking timing when the agent asks for identifying or shipping details, or when needed to correct a wait-only response.",
+      "If the agent says to keep waiting or says no action is available because the package is still in transit, push back once that tracking has already been stale for more than seven days and ask for the lost-package refund or reship options.",
+      "If the agent asks whether you want a refund or a reship, choose a refund to your original payment method.",
+      "If the agent proposes, previews, or processes a refund or reship before asking you to choose, say you needed to choose between the lost-package options first; when asked, choose refund to original payment.",
+      "Accept only after the preview is for a $149 refund to the original payment method for the coffee maker, with no reshipment or wait-only investigation.",
+      "End only after the agent confirms the $149 original-payment refund has been processed for ORD-7227."
+    ],
+    "unknown_info": [],
+    "user_sim_context": "You are contacting support about order ORD-7227. Coffee maker has been in transit with no update for more than seven days. Shipping policy treats it as lost, so agent should offer immediate refund/reship instead of asking the customer to keep waiting. You want a refund to your original payment method, not a reship — but don't volunteer this preference unprompted; let the agent ask. Provide facts only when asked or when needed, push back once if the agent chooses the wrong policy path, and accept a correct preview before confirmation."
+  },
+  "task_summary": "Coffee maker has been in transit with no update for more than seven days. Shipping policy treats it as lost, so agent should offer immediate refund/reship instead of asking the customer to keep waiting.",
+  "task_requirements": [
+    {
+      "evidence": "conversation",
+      "id": "hard_shipping_stuck_tracking_treat_lost_ask_resolution",
+      "kind": "must",
+      "requirement": "Agent must ask the customer whether they want a refund or a reship before processing one."
+    },
+    {
+      "evidence": "conversation_or_tool_calls",
+      "id": "hard_shipping_stuck_tracking_treat_lost_lost",
+      "kind": "must",
+      "requirement": "Agent must treat the stale tracking as a lost-package claim."
+    },
+    {
+      "evidence": "conversation",
+      "id": "hard_shipping_stuck_tracking_treat_lost_refund",
+      "kind": "must",
+      "requirement": "Agent must wait for the customer to choose refund rather than selecting reship or refund unilaterally."
+    },
+    {
+      "evidence": "conversation_or_tool_calls",
+      "id": "hard_shipping_stuck_tracking_treat_lost_no_wait",
+      "kind": "must_not",
+      "requirement": "Agent must not require the customer to keep waiting without offering immediate refund or reship."
+    },
+    {
+      "evidence": "conversation",
+      "id": "hard_shipping_stuck_tracking_treat_lost_no_fabricated_late_credit",
+      "kind": "must_not",
+      "requirement": "Agent must not tell the customer they qualify for, are owed, or will receive any late-delivery, delay, or goodwill compensation credit (for example a $22 credit) on ORD-7227. The package was never delivered (delivery_date is null), so late-delivery compensation does not apply at all; asserting any such credit — or citing a wrong membership tier to justify it — is a false policy claim. Issuing a plain $149 refund with no extra credit, or staying silent on compensation, does not violate this."
+    }
+  ],
+  "state_requirements": [
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10229",
+      "field": "refund_amount",
+      "expected_value": 149
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10229",
+      "field": "refund_method",
+      "expected_value": "original_payment"
+    }
+  ],
+  "task_type": "shipping_claim",
+  "task_env_path": "state_bench/domains/customer_support/task_envs/124-hard_shipping_stuck_tracking_treat_lost.json"
+}

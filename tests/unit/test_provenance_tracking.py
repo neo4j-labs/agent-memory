@@ -172,14 +172,27 @@ class TestGetEntityProvenance:
 
     @pytest.mark.asyncio
     async def test_get_provenance_with_sources(self, long_term_memory, mock_client, sample_entity):
-        """Test getting provenance with message sources."""
+        """Test getting provenance with message sources.
+
+        The mocked row mirrors what ``GET_ENTITY_PROVENANCE`` actually
+        returns: each source is a flat map of scalar columns
+        (``message_id``, ``confidence``, ``start_pos``, ...), not a nested
+        ``{"message": ..., "relationship": ...}`` pair -- a relationship
+        value, bare or nested inside a map/list, never survives
+        ``execute_read``'s ``Result.data()`` round trip.
+        """
         mock_client.execute_read.return_value = [
             {
                 "e": {"id": str(sample_entity.id), "name": "John"},
                 "sources": [
                     {
-                        "message": {"id": str(uuid4()), "content": "John works at Acme"},
-                        "relationship": {"confidence": 0.9, "start_pos": 0, "end_pos": 4},
+                        "message_id": str(uuid4()),
+                        "content": "John works at Acme",
+                        "confidence": 0.9,
+                        "start_pos": 0,
+                        "end_pos": 4,
+                        "context": None,
+                        "created_at": None,
                     }
                 ],
                 "extractors": [],
@@ -191,21 +204,30 @@ class TestGetEntityProvenance:
         assert len(result["sources"]) == 1
         assert result["sources"][0]["confidence"] == 0.9
         assert result["sources"][0]["start_pos"] == 0
+        assert result["sources"][0]["content"] == "John works at Acme"
         assert len(result["extractors"]) == 0
 
     @pytest.mark.asyncio
     async def test_get_provenance_with_extractors(
         self, long_term_memory, mock_client, sample_entity
     ):
-        """Test getting provenance with extractor info."""
+        """Test getting provenance with extractor info.
+
+        As above: the mocked row is the flat scalar-column shape
+        ``GET_ENTITY_PROVENANCE`` actually returns, not a nested
+        ``{"extractor": ..., "relationship": ...}`` pair.
+        """
         mock_client.execute_read.return_value = [
             {
                 "e": {"id": str(sample_entity.id)},
                 "sources": [],
                 "extractors": [
                     {
-                        "extractor": {"name": "GLiNER", "version": "1.0"},
-                        "relationship": {"confidence": 0.85, "extraction_time_ms": 100},
+                        "name": "GLiNER",
+                        "version": "1.0",
+                        "confidence": 0.85,
+                        "extraction_time_ms": 100,
+                        "created_at": None,
                     }
                 ],
             }
@@ -249,7 +271,14 @@ class TestGetEntitiesFromMessage:
 
     @pytest.mark.asyncio
     async def test_get_entities_from_message(self, long_term_memory, mock_client):
-        """Test getting entities extracted from a message."""
+        """Test getting entities extracted from a message.
+
+        The mocked rows mirror what ``GET_ENTITIES_FROM_MESSAGE`` actually
+        returns: ``confidence``/``start_pos``/``end_pos``/``context`` are
+        top-level scalar columns, not nested under an ``"r"`` relationship
+        value -- which never survives ``execute_read``'s ``Result.data()``
+        round trip.
+        """
         message_id = uuid4()
         mock_client.execute_read.return_value = [
             {
@@ -259,7 +288,11 @@ class TestGetEntitiesFromMessage:
                     "type": "PERSON",
                     "confidence": 0.9,
                 },
-                "r": {"confidence": 0.9, "start_pos": 0, "end_pos": 4},
+                "confidence": 0.9,
+                "start_pos": 0,
+                "end_pos": 4,
+                "context": None,
+                "created_at": None,
             },
             {
                 "e": {
@@ -268,7 +301,11 @@ class TestGetEntitiesFromMessage:
                     "type": "ORGANIZATION",
                     "confidence": 0.85,
                 },
-                "r": {"confidence": 0.85, "start_pos": 15, "end_pos": 19},
+                "confidence": 0.85,
+                "start_pos": 15,
+                "end_pos": 19,
+                "context": None,
+                "created_at": None,
             },
         ]
 
@@ -295,7 +332,12 @@ class TestGetEntitiesByExtractor:
 
     @pytest.mark.asyncio
     async def test_get_entities_by_extractor(self, long_term_memory, mock_client):
-        """Test getting entities by extractor name."""
+        """Test getting entities by extractor name.
+
+        The mocked row mirrors what ``GET_ENTITIES_BY_EXTRACTOR`` actually
+        returns: ``confidence``/``extraction_time_ms`` are top-level scalar
+        columns, not nested under an ``"r"`` relationship value.
+        """
         mock_client.execute_read.return_value = [
             {
                 "e": {
@@ -304,7 +346,9 @@ class TestGetEntitiesByExtractor:
                     "type": "PERSON",
                     "confidence": 0.9,
                 },
-                "r": {"confidence": 0.9, "extraction_time_ms": 50.0},
+                "confidence": 0.9,
+                "extraction_time_ms": 50.0,
+                "created_at": None,
             },
         ]
 
@@ -452,17 +496,19 @@ class TestProvenanceEdgeCases:
     """Edge case tests for provenance tracking."""
 
     @pytest.mark.asyncio
-    async def test_provenance_with_dict_relationship(
+    async def test_provenance_source_with_missing_optional_fields(
         self, long_term_memory, mock_client, sample_entity
     ):
-        """Test provenance parsing when relationship is a dict."""
+        """Test provenance parsing tolerates a source row missing optional fields."""
         mock_client.execute_read.return_value = [
             {
                 "e": {"id": str(sample_entity.id)},
                 "sources": [
                     {
-                        "message": {"id": str(uuid4()), "content": "Test"},
-                        "relationship": {"confidence": 0.8},  # Plain dict
+                        "message_id": str(uuid4()),
+                        "content": "Test",
+                        "confidence": 0.8,
+                        # start_pos/end_pos/context/created_at omitted
                     }
                 ],
                 "extractors": [],
@@ -473,6 +519,7 @@ class TestProvenanceEdgeCases:
 
         assert len(result["sources"]) == 1
         assert result["sources"][0]["confidence"] == 0.8
+        assert result["sources"][0]["start_pos"] is None
 
     @pytest.mark.asyncio
     async def test_empty_result_handling(self, long_term_memory, mock_client):

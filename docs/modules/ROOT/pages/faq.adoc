@@ -75,9 +75,11 @@ The current CLI constructs `MemorySettings`, which supports the documented envir
 anchor:_troubleshooting[]
 
 [[gliner-not-installed]]
-=== ImportError: GLiNER not installed
+=== ImportError: GLiNER2.5 not installed
 
-GLiNER is optional. Install the specific extraction extras declared by xref:how-to/entity-extraction.adoc[the guide] in the environment running the program. A broad extra does not necessarily include local models, and installing a Python package does not download every model.
+GLiNER2.5 is optional. Install the `gliner2` extra, `pip install "neo4j-agent-memory[gliner2]==0.7.0"`, in the environment running the program; the `extraction` and `full` extras include it too, and `gliner` remains a deprecated alias until 0.8. `GLiNER2Extractor` loads the `gliner2` package on its first extraction, so the `ImportError` appears there rather than when the extractor is constructed. A broad extra does not necessarily include local models, and installing a Python package does not download every model. See xref:how-to/entity-extraction.adoc[Configure extraction].
+
+Importing a name that 0.7.0 removed, such as `GLiNEREntityExtractor`, `GLiRELExtractor`, `GLiNERWithRelationsExtractor` or `is_gliner_available`, raises an `ImportError` that names its replacement. See xref:how-to/migrate-to-gliner2.adoc[Migrate to GLiNER2.5].
 
 [[spacy-model-not-found]]
 === spaCy model not found
@@ -85,23 +87,23 @@ GLiNER is optional. Install the specific extraction extras declared by xref:how-
 Installing the spaCy package does not necessarily install the configured language model. Install the exact model named by the extraction configuration, then rerun the extraction guide's verification. See xref:how-to/entity-extraction.adoc[Configure extraction].
 
 [[gliner-download-fails]]
-=== GLiNER model download fails
+=== GLiNER2.5 model download fails
 
 Check the selected model identifier, access permissions, network access, and any configured offline mode. If using a local model path, confirm the required files are present. See xref:how-to/entity-extraction.adoc[the model setup procedure].
+
+A `ValueError` that names a GLiNER v1 checkpoint is a different problem: identifiers under `urchade/`, `gliner-community/` or `numind/` belong to the removed GLiNER package, and `GLiNER2Extractor` rejects them before downloading anything. Use a GLiNER2.5 checkpoint such as the default `fastino/gliner2.5-base-v1`.
 
 [[extra-forbidden-from-env]]
 === Why does `MemorySettings(...)` raise `extra_forbidden` for `neo4j_uri` / `openai_api_key`?
 
-Releases before 0.2.1 raised this error when a `.env` file held unprefixed keys such as `NEO4J_URI` or `OPENAI_API_KEY`. From 0.2.1, including 0.6.0, `MemorySettings` ignores `.env` keys that are not its own settings, so upgrading fixes that case:
+Releases before 0.2.1 raised this error when a `.env` file held unprefixed keys such as `NEO4J_URI` or `OPENAI_API_KEY`. From 0.2.1, including 0.7.0, `MemorySettings` ignores `.env` keys that are not its own settings, so upgrading fixes that case:
 
 [source,bash]
 ----
-pip install --upgrade 'neo4j-agent-memory==0.6.0' 'httpx>=0.27'
+pip install --upgrade 'neo4j-agent-memory==0.7.0'
 ----
 
-The command also installs `httpx`, which release 0.6.0 imports when connecting over Bolt but declares only in the `nams` extra.
-
-If the error persists on 0.6.0, a keyword argument is misspelled or flattened: `MemorySettings(neo4j_uri=...)` still raises `extra_forbidden`, because the field is `MemorySettings(neo4j={"uri": ...})`, or `NAM_NEO4J__URI` in the environment. Validation stays strict so that typos fail; do not disable it to hide an unknown key. See xref:reference/configuration.adoc[Settings] and xref:reference/environment-variables.adoc[Environment variables].
+If the error persists on 0.7.0, a keyword argument is misspelled or flattened: `MemorySettings(neo4j_uri=...)` still raises `extra_forbidden`, because the field is `MemorySettings(neo4j={"uri": ...})`, or `NAM_NEO4J__URI` in the environment. Validation stays strict so that typos fail; do not disable it to hide an unknown key. See xref:reference/configuration.adoc[Settings] and xref:reference/environment-variables.adoc[Environment variables].
 
 [[storing-and-retrieving-memory]]
 == Storing and retrieving memory
@@ -116,7 +118,7 @@ Bolt manages constraints and indexes needed by its configured schema and search 
 [[entity-labels]]
 === How are entities labeled in Neo4j?
 
-On Bolt, managed entities carry `:Entity`, a type property, and supported type/subtype labels such as `:Person` or `:Vehicle`. See xref:explanation/poleo-model.adoc[POLE+O] and xref:reference/schema-objects.adoc[Schema objects] for the distinction between stored labels and conceptual categories.
+On Bolt, managed entities carry `:Entity`, a type property, supported type/subtype labels such as `:Person` or `:Vehicle`, and the label the client's ontology declares for the entity's exact type and subtype, such as `:Customer`. See xref:explanation/poleo-model.adoc[POLE+O] and xref:reference/schema-objects.adoc[Schema objects] for the distinction between stored labels and conceptual categories.
 
 [[query-by-type]]
 === Can I query entities by type directly?
@@ -133,17 +135,17 @@ Resolution decides whether different mentions refer to the same entity. Similari
 [[resolution-strategies]]
 === What resolution strategies are available?
 
-Python's Bolt resolution components use exact, fuzzy, semantic, or composite matching. Ingestion deduplication has separate configuration, and NAMS owns its server-side behavior. See xref:reference/configuration.adoc[Resolution settings] and xref:reference/backend-capabilities.adoc[Backend capabilities].
+Python's Bolt client selects exact, fuzzy, semantic, or composite matching with `resolution.strategy`. In 0.7.0 the default, `composite`, builds an ontology-aware `OntologyResolver`, which resolves extracted mentions against stored entities on ingest unless `resolution.resolve_on_ingest` is `False`. NAMS owns its server-side behavior. See xref:how-to/tune-entity-resolution.adoc[Tune entity resolution], xref:reference/configuration.adoc[Resolution settings] and xref:reference/backend-capabilities.adoc[Backend capabilities].
 
 [[resolution-type-aware]]
 === Is resolution type-aware?
 
-Type constraints can prevent some false matches, but the behavior depends on the resolver and its configuration. Even same-type entities can be different people or product variants. See xref:explanation/resolution-deduplication.adoc[Identity evidence] and xref:how-to/deduplication.adoc[Configure deduplication].
+Type constraints can prevent some false matches, but the behavior depends on the resolver and its configuration. `OntologyResolver` only fetches candidates of the same type, so it never merges a `PERSON` with a `LOCATION`, and it also never finds the same company extracted once as `ORGANIZATION` and once as `OBJECT`; correct the typing instead. Even same-type entities can be different people or product variants. See xref:explanation/resolution-deduplication.adoc[Identity evidence] and xref:how-to/deduplication.adoc[Configure deduplication].
 
 [[deduplication-on-ingest]]
 === How does entity deduplication on ingest work?
 
-Bolt's `DeduplicationConfig` uses separate automatic-merge and review thresholds. Its defaults are `0.95` and `0.85` respectively; these are similarity cutoffs, not calibrated correctness probabilities. See xref:reference/api/long-term.adoc[the long-term API] and xref:how-to/deduplication.adoc[the review workflow]. NAMS uses its service-side contract.
+On Bolt in 0.7.0, message ingestion and `long_term.add_entity()` make the same decision through `OntologyResolver` when it is the configured resolver, which is the default. `ResolutionConfig` sets the bands: a score at or above `auto_merge_threshold` (`0.90`) reuses the stored entity and keeps the new name as an alias, and a score at or above `review_threshold` (`0.85`) creates the entity with a pending `SAME_AS` edge for review. An ontology can override both per entity type. These are similarity cutoffs, not calibrated correctness probabilities. Set `resolution.resolve_on_ingest=False` to have message ingestion store one node per distinct extracted name and type instead. There is no `deduplication` settings section. See xref:how-to/tune-entity-resolution.adoc[Tune entity resolution] and xref:how-to/deduplication.adoc[the review workflow]. NAMS uses its service-side contract.
 
 [[same-as-relationships]]
 === What are SAME_AS relationships?
@@ -185,7 +187,7 @@ anchor:_entity_extraction_pipeline[]
 [[how-pipeline-works]]
 === How does the extraction pipeline work?
 
-Python's Bolt pipeline runs configured extraction stages and combines their candidates. Stages differ in vocabulary, resource requirements, and failure modes. See xref:explanation/extraction-pipeline.adoc[How extraction works] for the design and xref:how-to/entity-extraction.adoc[Configure extraction] for the procedure.
+Python's Bolt pipeline runs configured extraction stages and combines their candidates. When an ontology is configured, the pipeline then drops relations the ontology does not permit. Stages differ in vocabulary, resource requirements, and failure modes. See xref:explanation/extraction-pipeline.adoc[How extraction works] for the design and xref:how-to/entity-extraction.adoc[Configure extraction] for the procedure.
 
 [[single-extractor]]
 === Can I use just one extractor instead of the full pipeline?
@@ -200,14 +202,14 @@ Pipeline merge strategies combine candidates from extraction stages. The impleme
 [[which-extractor]]
 === Which extractor should I use?
 
-Compare the required labels and relationships, local versus remote processing, resource limits, and quality on representative text. No extractor is universally fastest or most accurate. GLiREL and LLM extraction can both produce relationships. See xref:explanation/extraction-pipeline.adoc[Extraction tradeoffs].
+Compare the required labels and relationships, local versus remote processing, resource limits, and quality on representative text. No extractor is universally fastest or most accurate. GLiNER2.5, when the ontology declares relationship types, and LLM extraction can both produce relationships. See xref:explanation/extraction-pipeline.adoc[Extraction tradeoffs].
 
 anchor:_gliner_and_domain_schemas[]
 
 [[schemas-gliner-only]]
-=== Are domain schemas only used with GLiNER?
+=== Are domain schemas only used with GLiNER2.5?
 
-Python's `DomainSchema` configures GLiNER labels and descriptions. Other schema concepts are separate: spaCy has model-defined labels, LLM extraction has a response schema, and NAMS ontologies define a hosted graph vocabulary. See xref:reference/schemas.adoc[Domain schemas] and xref:explanation/ontologies.adoc[Ontologies].
+Python's `DomainSchema` gives GLiNER2.5 its labels and descriptions. Since 0.7.0 a domain schema converts into an ontology document, and every stage built from the same ontology reads it: GLiNER2.5 compiles it into its extraction schema, the LLM prompt includes its descriptions and permitted relationships, and spaCy can only map its fixed, model-defined labels onto the ontology's types. Ontologies can also be stored and activated, on NAMS or in your own database through `client.ontology` on Bolt. See xref:reference/schemas.adoc[Domain schemas] and xref:explanation/ontologies.adoc[Ontologies].
 
 [[labels-vs-schemas]]
 === What's the difference between entity labels and domain schemas?
@@ -217,7 +219,7 @@ Labels name the desired entity categories; a domain schema also gives those labe
 [[schemas-with-pipeline]]
 === Can I use domain schemas with the full pipeline?
 
-Yes. A GLiNER schema can configure that stage inside a pipeline. It does not automatically change every other stage's vocabulary. See xref:how-to/entity-extraction.adoc[Configure the pipeline] and xref:reference/extractors.adoc[Extractor builder reference].
+Yes. With `ExtractorBuilder.with_gliner_schema()`, the named template becomes the ontology for every stage the builder creates, and the pipeline drops relations that ontology does not permit. It cannot add labels to spaCy's trained model. See xref:how-to/entity-extraction.adoc[Configure the pipeline] and xref:reference/extractors.adoc[Extractor builder reference].
 
 [[which-schema]]
 === Which schema should I use?
@@ -227,7 +229,7 @@ Choose a vocabulary matching what the application needs to retain, then inspect 
 [[custom-schemas]]
 === Can I create custom schemas?
 
-Yes. Define the entity labels and descriptions for the GLiNER task, using the actual `DomainSchema` fields. See xref:how-to/entity-extraction-schemas.adoc[Use custom extraction schemas]. For hosted graph validation, use xref:how-to/use-ontologies.adoc[NAMS ontologies] instead.
+Yes. Define the entity labels and descriptions for the GLiNER2.5 task, using the actual `DomainSchema` fields. See xref:how-to/entity-extraction-schemas.adoc[Use custom extraction schemas]. To declare typed relationships or validate what is stored, write an ontology document: see xref:how-to/ontology-driven-extraction.adoc[ontology-driven extraction] on Bolt and xref:how-to/use-ontologies.adoc[NAMS ontologies] for a hosted workspace.
 
 [[poleo-mapping]]
 === Do schema entity types map to POLE+O types?
@@ -244,7 +246,7 @@ The available labels depend on the installed spaCy language model. Common Englis
 [[spacy-custom-types]]
 === Can I use custom entity types with spaCy?
 
-Changing a GLiNER schema does not change spaCy's trained NER labels. A custom spaCy model or additional application extraction logic is a separate approach. See xref:explanation/extraction-pipeline.adoc[the extractor tradeoffs] before selecting that path.
+Changing a GLiNER2.5 schema does not change spaCy's trained NER labels. A custom spaCy model or additional application extraction logic is a separate approach. See xref:explanation/extraction-pipeline.adoc[the extractor tradeoffs] before selecting that path.
 
 [[spacy-model-choice]]
 === Which spaCy model should I use?
@@ -256,7 +258,7 @@ anchor:_llm_extraction[]
 [[when-use-llm]]
 === When should I use the LLM extractor?
 
-An LLM can help when extraction depends on broader context or a response schema. It adds provider calls and potential failures; it is not guaranteed to outperform local extraction. Relationship extraction is also available with GLiREL. See xref:explanation/extraction-pipeline.adoc[Extraction approaches].
+An LLM can help when extraction depends on broader context or a response schema. It adds provider calls and potential failures; it is not guaranteed to outperform local extraction. GLiNER2.5 also extracts relationships locally when the ontology declares relationship types. See xref:explanation/extraction-pipeline.adoc[Extraction approaches].
 
 [[llm-models]]
 === What LLM models are supported?
@@ -288,12 +290,12 @@ Chunk documents when their length or structure exceeds the selected extractor's 
 [[relation-extraction-llm-free]]
 === Can I extract relationships without LLM calls?
 
-Yes. GLiREL can predict relationships alongside local entity extraction. It requires its own model and compute resources, even when it avoids remote LLM API calls. See xref:reference/extractors.adoc[GLiREL reference] and xref:how-to/running-without-an-llm.adoc[Run without an LLM].
+Yes. GLiNER2.5 decodes entities and relationships in one local pass and enforces the ontology's source and target types while it decodes. It decodes relationships only when the ontology declares relationship types: the `poleo`, `podcast` and `news` templates do, and the other five templates are entity-only until you attach relationships. It needs its own model and compute resources, even though it avoids remote LLM API calls. The separate GLiREL model was removed in 0.7.0. See xref:reference/extractor-classes.adoc[Extractor classes] and xref:how-to/running-without-an-llm.adoc[Run without an LLM].
 
 [[low-accuracy]]
 === Low extraction accuracy
 
-Compare labeled expected entities and relations with actual output. Inspect domain vocabulary, ambiguous names, filtering, and chunk boundaries before changing thresholds. Lower thresholds may improve recall while adding false positives. See xref:explanation/extraction-pipeline.adoc[Extraction tradeoffs].
+Compare labeled expected entities and relations with actual output. Inspect domain vocabulary, ambiguous names, filtering, and chunk boundaries before changing thresholds. Lower thresholds may improve recall while adding false positives. An empty GLiNER2.5 result with a `RuntimeWarning` about `feasible=False` means the decoder could not satisfy the ontology's hard constraints, such as uniqueness or acyclicity; it does not mean the text has no entities. See xref:explanation/extraction-pipeline.adoc[Extraction tradeoffs].
 
 [[filtered-incorrectly]]
 === Entities being filtered incorrectly
@@ -303,7 +305,7 @@ Check the extracted name against the implemented entity validation and stopword 
 [[memory-errors]]
 === Memory errors with large texts
 
-Reduce input chunk size or concurrency according to the extractor's limits, and inspect peak runtime memory. Preserve enough overlap to retain useful context at boundaries. See xref:how-to/entity-extraction-batch.adoc[Batch and streaming extraction].
+Reduce input chunk size or concurrency according to the extractor's limits, and inspect peak runtime memory. Preserve enough overlap to retain useful context at boundaries. `GLiNER2Extractor` windows input longer than `max_words` (384 by default) on its own, because relation recall drops sharply past roughly 400 words; a relationship whose endpoints land in different windows is lost, so extract per message or document section where you can. See xref:how-to/entity-extraction-batch.adoc[Batch and streaming extraction].
 
 [[hosted-service-and-previews]]
 == Hosted service and previews
@@ -361,12 +363,12 @@ anchor:_performance_and_optimization[]
 [[speed-up-extraction]]
 === How can I speed up extraction?
 
-Measure which stage dominates the actual workload, then evaluate changes to enabled stages, model choice, batching, and concurrency. Track quality as well as runtime. See xref:explanation/extraction-pipeline.adoc[Extraction tradeoffs] and xref:how-to/entity-extraction-batch.adoc[Batch and streaming extraction].
+Measure which stage dominates the actual workload, then evaluate changes to enabled stages, model choice, batching, and concurrency. For GLiNER2.5, the options include the smaller `fastino/gliner2.5-small-v1` checkpoint, a GPU `device`, `quantize=True` (fp16) and `compile=True`. Track quality as well as runtime. See xref:explanation/extraction-pipeline.adoc[Extraction tradeoffs] and xref:how-to/entity-extraction-batch.adoc[Batch and streaming extraction].
 
 [[memory-footprint]]
 === What's the memory footprint?
 
-Runtime memory depends on the installed model, precision, device, input sizes, and concurrency. Model download size is not the same as peak process memory. Measure the configured environment; the docs do not provide a portable RAM estimate for every extractor.
+Runtime memory depends on the installed model, precision, device, input sizes, and concurrency. Model download size is not the same as peak process memory. Measure the configured environment; the docs do not provide a portable RAM estimate for every extractor. As download sizes, the GLiNER2.5 checkpoints are about 296 MB for `fastino/gliner2.5-small-v1`, 407 MB for `fastino/gliner2.5-base-v1` (the default) and 594 MB for the multilingual `fastino/gliner2.5-multi-v1`.
 
 [[caching]]
 === Can I cache extraction results?

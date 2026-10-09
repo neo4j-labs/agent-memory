@@ -147,7 +147,7 @@ def test_every_settings_group_is_documented():
 
 
 def test_domain_schema_labels_and_descriptions_match_registry():
-    tree = ast.parse((SOURCE / "extraction/gliner_extractor.py").read_text())
+    tree = ast.parse((SOURCE / "extraction/domain_schemas.py").read_text())
     registry = next(
         n for n in tree.body if isinstance(n, ast.AnnAssign) and n.target.id == "DOMAIN_SCHEMAS"
     )
@@ -175,8 +175,10 @@ def test_schema_object_inventory_matches_bolt_schema_manager():
             "setup_indexes",
             "setup_point_indexes",
         }:
-            assignment = next(n for n in node.body if isinstance(n, ast.Assign))
-            expected.update(ast.literal_eval(assignment.value))
+            # Every list literal (setup_indexes declares range and text indexes).
+            for assignment in node.body:
+                if isinstance(assignment, ast.Assign) and isinstance(assignment.value, ast.List):
+                    expected.update(ast.literal_eval(assignment.value))
     text = (REFERENCE / "schema-objects.adoc").read_text()
     documented = set(re.findall(r"^\| `([^`]+)`\s+\| `([^`]+)`\s+\| `([^`]+)`", text, re.MULTILINE))
     assert documented == expected

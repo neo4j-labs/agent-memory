@@ -11,17 +11,22 @@ include::partial$backend-bolt-only.adoc[]
 .Entity similarity can trigger an automatic merge or a review flag
 image::diagrams/entity-dedup-flow.svg["Entity similarity can trigger merging or a review flag",width=100%,link=self]
 
+[IMPORTANT]
+====
+*Two write paths, one decision (0.7.0).* `long_term.add_entity` deduplicates explicitly and returns a `DeduplicationResult`. Since 0.7.0, message ingestion also resolves the mentions it extracts, by default; see <<ingest-time-resolution>>. With `resolution.strategy="composite"`, the Bolt default, both paths go through `OntologyResolver` and share one set of thresholds. For the resolver's stages and settings, see xref:how-to/tune-entity-resolution.adoc[Tune entity resolution].
+====
+
 == Prerequisites
 
 anchor:_overview[]
 
-Use a dedicated AuraDB instance from xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the first memory tutorial's Aura setup], with exported `NEO4J_URI`, `NEO4J_USERNAME`, and `NEO4J_PASSWORD`. Set `OPENAI_API_KEY` for the selected embedding provider. Prepare the example files below and install the provider extra plus `httpx`, which release 0.6.0 imports when connecting over Bolt but declares only in the `nams` extra:
+Use a dedicated AuraDB instance from xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the first memory tutorial's Aura setup], with exported `NEO4J_URI`, `NEO4J_USERNAME`, and `NEO4J_PASSWORD`. Set `OPENAI_API_KEY` for the selected embedding provider. Prepare the example files below and install the provider extra:
 
 include::partial$python-tutorial-setup.adoc[]
 
 [source,bash]
 ----
-python -m pip install 'neo4j-agent-memory[openai]==0.6.0' 'httpx>=0.27'
+python -m pip install 'neo4j-agent-memory[openai]==0.7.0'
 ----
 
 include::partial$python-core-recipe-intro.adoc[]
@@ -32,7 +37,7 @@ include::partial$python-core-recipe-files.adoc[]
 
 anchor:_configure_deduplication[]anchor:_basic_configuration[]anchor:_domain_specific_thresholds[]anchor:_disable_deduplication[]anchor:_per_entity_bypass[]anchor:_bulk_import_without_deduplication[]
 
-Configure custom deduplication thresholds and merge a reviewed duplicate pair. `DeduplicationConfig` is imported from `neo4j_agent_memory.memory.long_term`. For custom thresholds, construct `LongTermMemory` with the connected Bolt graph and embedder. `MemoryClient` does not accept a `deduplication=` argument, and `MemorySettings.deduplication` is not a setting. The example uses a deliberately created pair and bypasses automatic deduplication so the manual review step is reproducible.
+Configure custom deduplication thresholds and merge a reviewed duplicate pair. On a `MemoryClient`, `add_entity` takes its bands from `MemorySettings.resolution`: `auto_merge_threshold` (default 0.90) and `review_threshold` (default 0.85), the same values message ingestion uses. `MemoryClient` does not accept a `deduplication=` argument, and there is no `MemorySettings.deduplication` section; `NAM_DEDUPLICATION__*` environment variables are ignored. `DeduplicationConfig`, imported from `neo4j_agent_memory.memory.long_term`, applies when you construct `LongTermMemory` yourself, as this recipe does with the connected Bolt graph and embedder; `DeduplicationConfig.from_resolution_config(settings.resolution)` derives it from the client's bands. The example uses a deliberately created pair and bypasses automatic deduplication so the manual review step is reproducible.
 
 The function below is included from the complete maintained program, which already supplies imports, client setup, unique IDs, and `asyncio.run`. Run the file in step 2; this extract is not a separate top-level script.
 
@@ -54,15 +59,26 @@ The command retains its example records for inspection. Remove the disposable tu
 
 anchor:_review_flagged_duplicates[]anchor:_find_pending_reviews[]anchor:_confirm_or_reject_duplicates[]anchor:_automated_review_rules[]anchor:_get_statistics[]anchor:_4_regular_review_cycles[]
 
-To let new writes use the configured policy, leave `deduplicate=True` on `store.add_entity`. Inspect the returned `DeduplicationResult.action`, `matched_entity_id`, and `similarity_score`. Default thresholds are 0.95 for automatic merging and 0.85 for review; their suitability depends on the corpus and embedding model.
+To let new writes use the configured policy, leave `deduplicate=True` on `store.add_entity`. Inspect the returned `DeduplicationResult.action` (`"none"`, `"merged"` or `"flagged"`), `matched_entity_id`, and `similarity_score`. Default thresholds are 0.90 for automatic merging and 0.85 for review, in both `ResolutionConfig` and `DeduplicationConfig`; their suitability depends on the corpus and embedding model. When an ontology declares `resolution_threshold` or `review_threshold` on an entity type, `OntologyResolver` uses those bands for that type.
 
-`find_potential_duplicates(limit=...)` returns `(entity1, entity2, confidence)` tuples for pending pairs. In 0.6.0 on Bolt, `confidence` is always `0.0` and each pending pair appears twice, once in each direction, so do not rank or filter candidates by that value; read the `confidence` property of the `SAME_AS` relationship with a Cypher query if you need it. After an application review, call `review_duplicate(source_id, target_id, confirm=True)` to merge or `confirm=False` to reject the flag. An empty review queue is a valid result. `get_deduplication_stats()` returns a dataclass with `total_entities`, `merged_entities`, `same_as_relationships`, and `pending_reviews`.
+`find_potential_duplicates(limit=...)` returns `(entity1, entity2, confidence)` tuples for pending pairs, highest confidence first. In 0.7.0 each pair appears once, with the flagged (newer) entity first and its existing match second, and `confidence` is the `SAME_AS` edge's stored score. Pairs flagged during message ingestion join the same queue. After an application review, call `review_duplicate(source_id, target_id, confirm=True)` to merge or `confirm=False` to reject the flag. An empty review queue is a valid result. `get_deduplication_stats()` returns a dataclass with `total_entities`, `merged_entities`, `same_as_relationships`, and `pending_reviews`.
+
+[#ingest-time-resolution]
+== Account for resolution during ingestion
+
+Since 0.7.0, storing a message resolves the mentions extracted from it against the entities already in the graph, using the same resolver and bands as `add_entity`. Each mention has one of three outcomes:
+
+* *Merged*: no new node. The message's `MENTIONS` edge points at the matched entity, and the mention's surface form is appended to that entity's `aliases`.
+* *Review*: a new node plus a pending `SAME_AS` edge to the matched entity, which `find_potential_duplicates()` returns.
+* *Created*: a new node, as before 0.7.0.
+
+The decision is recorded in each new node's `metadata` as `resolution.action`, `resolution.score` and `resolution.match_type`. A merged mention is therefore not a pair for this page's manual merge; inspect the survivor's `aliases` instead. To restore the earlier behavior, one node per distinct surface form, pass `resolution={"resolve_on_ingest": False}` in `MemorySettings`. `add_entity` keeps deduplicating either way. See xref:how-to/tune-entity-resolution.adoc[Tune entity resolution].
 
 == Check relationship coverage before merging
 
 anchor:_manual_entity_merging[]anchor:_merge_specific_entities[]anchor:_merge_with_property_strategy[]anchor:_best_practices[]anchor:_1_start_conservative[]anchor:_2_use_specific_entity_types[]anchor:_3_add_known_aliases_upfront[]anchor:_adjust_thresholds_based_on_quality[]
 
-As of SDK 0.6.0, the merge query adds the source name as a target alias and copies the source's edges of these types onto the target — inbound `MENTIONS`, `RELATED_TO` in both directions, `SAME_AS`, outbound `EXTRACTED_FROM` and `EXTRACTED_BY` provenance, inbound `APPLIES_TO`, and inbound `TOUCHED` — then marks the source with `merged_into`/`merged_at`. It copies rather than deletes, so the source keeps its own edges. The copies are marked differently by type: `RELATED_TO` copies keep the source edge's `id` and gain a `migrated_from` property set to the source entity ID; `EXTRACTED_FROM`, `EXTRACTED_BY`, `APPLIES_TO`, and `TOUCHED` copies gain `migrated_from` only; `MENTIONS` copies carry no marker, and `SAME_AS` copies are recorded with `match_type: 'merged'` but no source reference. To audit or undo a merge, rely on the source's `merged_into` marker and the retained source edges rather than on a marker on every copy. Relationship types outside that list are not transferred automatically; inspect those edges and decide how your application will reconcile them before merging a populated graph.
+In SDK 0.7.0, the merge query adds the source name as a target alias and copies the source's edges of these types onto the target — inbound `MENTIONS`, `RELATED_TO` in both directions, `SAME_AS`, outbound `EXTRACTED_FROM` and `EXTRACTED_BY` provenance, inbound `APPLIES_TO`, and inbound `TOUCHED` — then marks the source with `merged_into`/`merged_at`. It copies rather than deletes, so the source keeps its own edges. The copies are marked differently by type: `RELATED_TO` copies keep the source edge's `id` and gain a `migrated_from` property set to the source entity ID; `EXTRACTED_FROM`, `EXTRACTED_BY`, `APPLIES_TO`, and `TOUCHED` copies gain `migrated_from` only; `MENTIONS` copies carry no marker, and `SAME_AS` copies are recorded with `match_type: 'merged'` but no source reference. To audit or undo a merge, rely on the source's `merged_into` marker and the retained source edges rather than on a marker on every copy. Relationship types outside that list are not transferred automatically; inspect those edges and decide how your application will reconcile them before merging a populated graph.
 
 Known aliases, type consistency, and a labeled sample of true/false duplicates help assess a policy. Do not choose automatic thresholds from an unmeasured "safe" universal value.
 
@@ -76,3 +92,4 @@ Expected: `Verified: reviewed pair merged into ...; merged nodes=...`. The asser
 
 * xref:explanation/resolution-deduplication.adoc[Resolution and deduplication] — the distinction between the two mechanisms.
 * xref:reference/api/long-term.adoc[The long-term API reference] — configuration and return models.
+* xref:how-to/tune-entity-resolution.adoc[Tune entity resolution] — the bands, alias gazetteer and per-type overrides that both write paths use.

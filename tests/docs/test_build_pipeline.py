@@ -135,6 +135,7 @@ def test_external_example_files_render_in_full(built_docs: Path, project_root: P
         "no_llm": "how-to/running-without-an-llm.html",
         "eval-harness": "how-to/evaluation.html",
         "team-memory": "how-to/team-memory-in-your-editor.html",
+        "ontology-lifecycle-bolt": "how-to/migrate-a-bolt-ontology.html",
     }
     listings = {
         folder: named_file_listings((built_docs / "agent-memory" / page).read_text())

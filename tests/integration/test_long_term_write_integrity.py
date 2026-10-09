@@ -329,15 +329,30 @@ class TestMergeMigratesEdges:
         message = await clean_memory_client.short_term.add_message(
             f"session-{uuid4()}", "user", "Jon Smith was here.", extract_entities=False
         )
-        await long_term.link_entity_to_message(source, message.id, confidence=0.9, context="ctx")
+        await long_term.link_entity_to_message(
+            source, message.id, confidence=0.9, start_pos=0, end_pos=9, context="ctx"
+        )
         await long_term.register_extractor("TestExtractor", version="1.0.0")
-        await long_term.link_entity_to_extractor(source, "TestExtractor", confidence=0.9)
+        await long_term.link_entity_to_extractor(
+            source, "TestExtractor", confidence=0.85, extraction_time_ms=42.5
+        )
 
         await long_term.merge_duplicate_entities(source.id, target.id)
 
         provenance = await long_term.get_entity_provenance(target)
-        assert any(s["message_id"] == str(message.id) for s in provenance["sources"])
-        assert any(e["name"] == "TestExtractor" for e in provenance["extractors"])
+        source_info = next(s for s in provenance["sources"] if s["message_id"] == str(message.id))
+        # GET_ENTITY_PROVENANCE used to nest the EXTRACTED_FROM/EXTRACTED_BY
+        # relationship inside a ``collect({...})`` map, which Result.data()
+        # flattens to a (start, type, end) tuple and drops properties, so
+        # these came back as None/default no matter what was written.
+        assert source_info["confidence"] == pytest.approx(0.9)
+        assert source_info["start_pos"] == 0
+        assert source_info["end_pos"] == 9
+        assert source_info["context"] == "ctx"
+
+        extractor_info = next(e for e in provenance["extractors"] if e["name"] == "TestExtractor")
+        assert extractor_info["confidence"] == pytest.approx(0.85)
+        assert extractor_info["extraction_time_ms"] == pytest.approx(42.5)
 
     async def test_merge_is_idempotent(self, clean_memory_client):
         long_term = clean_memory_client.long_term

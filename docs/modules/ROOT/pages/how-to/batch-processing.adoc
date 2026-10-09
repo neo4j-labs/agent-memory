@@ -12,11 +12,11 @@ How to efficiently process large document collections to build your context grap
 
 == Prerequisites
 
-* Install `pip install 'neo4j-agent-memory[gliner]==0.6.0'` for the GLiNER examples and allow the configured model to download before an offline run.
+* Install `pip install 'neo4j-agent-memory[gliner2]==0.7.0'` for the GLiNER2.5 examples and allow the configured model (`fastino/gliner2.5-base-v1` by default) to download before an offline run.
 * Configure a connected client with `MemorySettings` and `async with MemoryClient(settings) as client:` as in xref:how-to/messages.adoc[Store, retrieve, and summarize messages]. Storage snippets below run inside that block.
 * Use a test database and synthetic documents first. Choose positive batch sizes and concurrency limits that fit available memory.
 
-The first sections use `documents: list[str]`. The financial and catalog variations define their own inputs. Local GLiNER entity extraction does not guarantee relation extraction; persist relations only when the chosen pipeline actually returns them.
+The first sections use `documents: list[str]`. The financial and catalog variations define their own inputs. GLiNER2.5 decodes relations only when its ontology declares relationship types, and the `business` template used on this page declares none. Persist relations only when the chosen pipeline actually returns them.
 
 == Goal
 
@@ -30,13 +30,13 @@ anchor:_basic_batch_extraction[]anchor:_process_multiple_texts[]anchor:_with_pro
 
 xref:how-to/entity-extraction-batch.adoc[Account for batch and chunk extraction results] covers `ExtractionPipeline.extract_batch` in full, with a maintained runnable program: progress tracking, per-item result access, and the distinction between a failed item and an empty successful result. Read that guide first if you have not already.
 
-The rest of this page assumes an `extractor` (a `GLiNEREntityExtractor`), a `pipeline` (an `ExtractionPipeline` wrapping it), a `documents: list[str]`, and the batch `result` from extracting them:
+The rest of this page assumes an `extractor` (a `GLiNER2Extractor`), a `pipeline` (an `ExtractionPipeline` wrapping it), a `documents: list[str]`, and the batch `result` from extracting them. The examples call `pipeline.extract_batch()`, which returns a `BatchExtractionResult` with a success flag per item. `GLiNER2Extractor.extract_batch()` returns a plain `list[ExtractionResult]` instead; see <<_tune_batch_size,Tune batch size>>.
 
 [source,python]
 ----
-from neo4j_agent_memory.extraction import ExtractionPipeline, GLiNEREntityExtractor
+from neo4j_agent_memory.extraction import ExtractionPipeline, GLiNER2Extractor
 
-extractor = GLiNEREntityExtractor.for_schema("business")
+extractor = GLiNER2Extractor.for_schema("business")
 pipeline = ExtractionPipeline(stages=[extractor], fallback_on_error=False)
 
 # List of documents to process
@@ -94,6 +94,8 @@ async for chunk_result in streamer.extract_streaming(long_document):
 
 To store the cross-chunk deduplicated result instead of storing per chunk, call `await streamer.extract(long_document, deduplicate=True)` and store from the returned `result.entities` once extraction completes.
 
+GLiNER2.5 also windows any chunk longer than its `max_words` limit (384 words by default), and a relation whose endpoints fall in different windows is not decoded. When relations matter, keep each chunk under that limit.
+
 == 3. Store successful batch results
 
 anchor:_store_batch_results_in_context_graph[]
@@ -126,7 +128,7 @@ async def store_entity(client, **kwargs):
 
 This extra read guards against concurrent writers racing on the same
 name/type pair during a large batch import; it is not required to work
-around SDK ID handling on 0.6.0, and it is not an atomic upsert contract
+around SDK ID handling on 0.7.0, and it is not an atomic upsert contract
 either way. It assumes library UUID entity IDs and no concurrent deletion.
 Inspect ambiguous matches instead of choosing a semantic nearest neighbor.
 
@@ -185,8 +187,12 @@ print(f"Merged with existing: {merged_count}")
 
 `add_entity` accepts the per-call `deduplicate` boolean, not a
 `deduplication` configuration keyword. Its deduplication actions are `none`,
-`merged`, and `flagged`; `none` is not an insertion-count guarantee. For
-threshold configuration see xref:how-to/deduplication.adoc[Merge a reviewed entity pair].
+`merged`, and `flagged`; `none` is not an insertion-count guarantee. With the
+default Bolt resolver, the decision uses the `ResolutionConfig` bands
+(`auto_merge_threshold=0.90`, `review_threshold=0.85`), the same ones message
+ingestion uses. For thresholds see
+xref:how-to/tune-entity-resolution.adoc[Tune entity resolution]; for reviewing
+flagged pairs see xref:how-to/deduplication.adoc[Merge a reviewed entity pair].
 
 === With provenance tracking
 
@@ -194,8 +200,9 @@ threshold configuration see xref:how-to/deduplication.adoc[Merge a reviewed enti
 ----
 # Register the extractor for provenance
 await client.long_term.register_extractor(
-    name="GLiNEREntityExtractor",
-    config={"schema": "business"},
+    name=extractor.name,  # "gliner2"
+    version=extractor.version,  # installed gliner2 package version
+    config={"model": extractor.model_id, "schema": "business"},
 )
 
 # Store with provenance
@@ -235,10 +242,18 @@ for item in result.results:
         # Link to extractor
         await client.long_term.link_entity_to_extractor(
             entity=stored,
-            extractor_name="GLiNEREntityExtractor",
+            extractor_name=extractor.name,
             confidence=entity.confidence,
         )
 ----
+
+To let the client extract instead of the batch above, store the documents with
+`client.short_term.add_messages_batch(session_id, messages, extract_entities=True)`,
+where each message is a `{"role": ..., "content": ...}` dict. It runs the
+client's configured extractor, resolves the extracted entities against stored
+entities by default (`resolution.resolve_on_ingest=True`), and links them with
+`MENTIONS` rather than `EXTRACTED_FROM`. Messages without a `timestamp` are
+stored in input order.
 
 == Optional: Process financial documents
 
@@ -248,11 +263,11 @@ Example for processing financial documents:
 
 [source,python]
 ----
-from neo4j_agent_memory.extraction import GLiNEREntityExtractor, ExtractionPipeline
+from neo4j_agent_memory.extraction import ExtractionPipeline, GLiNER2Extractor
 
 # Configure for financial domain
 pipeline = ExtractionPipeline(
-    stages=[GLiNEREntityExtractor.for_schema("business")],
+    stages=[GLiNER2Extractor.for_schema("business")],
     fallback_on_error=False,
 )
 
@@ -375,7 +390,7 @@ async def import_product_catalog(products: list[dict]):
 
     # Extract additional entities from descriptions
     pipeline = ExtractionPipeline(
-        stages=[GLiNEREntityExtractor.for_schema("business")],
+        stages=[GLiNER2Extractor.for_schema("business")],
         fallback_on_error=False,
     )
     result = await pipeline.extract_batch(
@@ -480,7 +495,7 @@ result = await pipeline.extract_batch(
     max_concurrency=2,
 )
 
-# Larger batches for high-memory environments with GPU
+# Larger batches for high-memory environments
 result = await pipeline.extract_batch(
     texts=documents,
     batch_size=50,  # Larger batches
@@ -488,14 +503,35 @@ result = await pipeline.extract_batch(
 )
 ----
 
+`ExtractionPipeline.extract_batch()` still sends each text through the stages
+separately, up to `max_concurrency` at once; `batch_size` only groups that
+work. To decode several texts
+in one forward pass on a GPU, call `GLiNER2Extractor.extract_batch()` directly.
+It returns one `ExtractionResult` per input, in input order, with no
+`max_concurrency`, `fail_fast`, or per-item success flag: an error in a slice
+raises out of the call.
+
+[source,python]
+----
+gpu_extractor = GLiNER2Extractor.for_schema("business", device="cuda")
+
+results = await gpu_extractor.extract_batch(documents, batch_size=32)
+
+for index, extraction in enumerate(results):
+    print(f"Doc {index}: {extraction.entity_count} entities")
+----
+
 === Choose an extractor for your data
 
 anchor:_use_appropriate_extractor[]
 
 Measure extraction quality and throughput on labeled samples before choosing
-spaCy, GLiNER, or an LLM stage. The settings above are starting points, not
-hardware-specific performance guarantees. A GLiNER-only pipeline may return
-no relationships; add a relation-capable extractor when your goal requires them.
+spaCy, GLiNER2.5, or an LLM stage. The settings above are starting points, not
+hardware-specific performance guarantees. A GLiNER2.5 stage returns
+relationships only when its ontology declares relationship types: the `poleo`,
+`podcast`, and `news` templates do, and `business` does not. Use one of those
+templates, attach relationships with `DomainSchema.to_ontology(relationships=[...])`,
+or add an LLM stage when your goal requires them.
 
 === Skip failures and continue
 
@@ -617,4 +653,5 @@ source IDs and completed batches outside this example before adding retries.
 * xref:how-to/entity-extraction.adoc[Extract and inspect entity candidates]
 * xref:how-to/entity-extraction-batch.adoc[Account for batch and chunk extraction results] — the `extract_batch`/`StreamingExtractor` API and its result bookkeeping in depth; this page covers ingesting and storing the documents that feed it.
 * xref:how-to/deduplication.adoc[Merge a reviewed entity pair]
+* xref:how-to/tune-entity-resolution.adoc[Tune entity resolution]
 * xref:reference/extractors.adoc[Extractor classes reference]

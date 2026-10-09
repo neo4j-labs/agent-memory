@@ -1,0 +1,78 @@
+{
+  "task_id": "117-hard_exchange_user_pivots_to_return",
+  "user_id": "cust_003",
+  "now": "2026-07-08T10:00:00",
+  "opening_message": "I wanted to exchange the shoes in ORD-7219, but if the replacement is unavailable I just want to return them.",
+  "user_simulator": {
+    "known_info": [
+      "order_id: ORD-7219",
+      "initial_goal: exchange",
+      "fallback: return"
+    ],
+    "task_rules": [
+      "Start by trying to exchange the shoes from ORD-7219, but treat a normal return as your fallback if the replacement is unavailable.",
+      "Provide the order ID when asked, and ask the agent to check whether the replacement is in stock before deciding between exchange and return.",
+      "If the agent says the replacement is out of stock or the exchange cannot be completed, clearly pivot to returning the shoes instead.",
+      "Push back if the agent keeps offering exchange, replacement, store-credit, cancellation, or unrelated alternatives after you have pivoted to the return path.",
+      "Accept only a return preview for the shoes with reason changed_mind and refund to the original payment method; ask for those details if the agent asks for confirmation too early.",
+      "End only after the agent has processed the return and confirmed the shoes are returned with the original-payment refund recorded."
+    ],
+    "unknown_info": [],
+    "user_sim_context": "You are contacting support about order ORD-7219. Customer starts with an out-of-stock exchange request, then explicitly pivots to a return. Agent must follow the final return request rather than staying on exchange alternatives. Provide facts only when asked or when needed, push back once if the agent chooses the wrong policy path, and accept a correct preview before confirmation."
+  },
+  "task_summary": "Customer starts with an out-of-stock exchange request, then explicitly pivots to a return. Agent must follow the final return request rather than staying on exchange alternatives.",
+  "task_requirements": [
+    {
+      "evidence": "conversation_or_tool_calls",
+      "id": "hard_exchange_user_pivots_to_return_pivot",
+      "kind": "must",
+      "requirement": "Agent must pivot from exchange handling to the customer's final return request."
+    },
+    {
+      "evidence": "conversation_or_tool_calls",
+      "id": "hard_exchange_user_pivots_to_return_no_exchange",
+      "kind": "must_not",
+      "requirement": "Agent must not attempt to complete the out-of-stock exchange."
+    }
+  ],
+  "state_requirements": [
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10220",
+      "field": "item_status",
+      "expected_value": "returned"
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10220",
+      "field": "refund_amount",
+      "expected_value": 121
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10220",
+      "field": "refund_method",
+      "expected_value": "original_payment"
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10220",
+      "field": "restocking_fee",
+      "expected_value": 0
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10220",
+      "field": "return_reason",
+      "expected_value": "changed_mind"
+    },
+    {
+      "entity_type": "orders",
+      "record_key": "ORD-7219",
+      "field": "status",
+      "expected_value": "fully_returned"
+    }
+  ],
+  "task_type": "exchange_item",
+  "task_env_path": "state_bench/domains/customer_support/task_envs/117-hard_exchange_user_pivots_to_return.json"
+}

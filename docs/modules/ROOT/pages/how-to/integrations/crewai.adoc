@@ -11,13 +11,13 @@ Retrieve Neo4j memory for a CrewAI task, run the crew, and persist its result wi
 anchor:_overview[]
 anchor:_prerequisites[]
 
-Use Python 3.10+ and a POSIX shell. The recipe uses xref:reference/configuration.adoc[`BoltSettings`] to select Neo4j explicitly and disables entity extraction so that message persistence can be checked independently. Use a dedicated AuraDB instance with vector-index support and no incompatible existing vectors. Follow xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the Aura connection setup] and copy its connection values into the exports below. These recipes use the published Python 0.6.0 package; provider access and database execution must be verified in your environment.
+Use Python 3.10+ and a POSIX shell. The recipe uses xref:reference/configuration.adoc[`BoltSettings`] to select Neo4j explicitly and disables entity extraction so that message persistence can be checked independently. Use a dedicated AuraDB instance with vector-index support and no incompatible existing vectors. Follow xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the Aura connection setup] and copy its connection values into the exports below. These recipes use the published Python 0.7.0 package; provider access and database execution must be verified in your environment.
 
 include::partial$python-tutorial-setup.adoc[]
 
 [source,bash]
 ----
-python -m pip install 'neo4j-agent-memory[crewai,openai]==0.6.0'
+python -m pip install 'neo4j-agent-memory[crewai,openai]==0.7.0'
 export NEO4J_URI='neo4j+s://<instance-id>.databases.neo4j.io'
 export NEO4J_USERNAME='neo4j'
 export NEO4J_PASSWORD='replace-with-your-Aura-password'

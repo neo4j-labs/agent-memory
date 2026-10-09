@@ -9,6 +9,21 @@ appear in minor versions with a callout in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **REST: `getConversation` returns messages oldest first again.** The hosted
+  service now lists a conversation's messages newest first, returning at most
+  the newest 200 (50 by default). The REST transport asks for 200 when no
+  `limit` is given, clamps a larger one to 200, and reverses the page.
+- **REST: `listConversations` and `listSessions` page past 200.** The service
+  caps a page at 200 conversations and answers a larger `limit` with 400
+  `invalid_limit`, which broke the Strands memory store's 1000-conversation
+  sink scan. The transport now follows `next_cursor` until `limit` are
+  collected. `listConversations` defaults to 100, as `listSessions` already did.
+- **REST: `listConversations({ userId })` filters by user.** The transport sent
+  the filter as `user_id`, a query param the service ignores, so every listing
+  covered the whole workspace. It now sends `userId`.
+
 ### Added
 
 - **`ActiveOntology.schemaHash`** — `ontology.getActive()` now returns the bound

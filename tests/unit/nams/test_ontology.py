@@ -202,6 +202,40 @@ class TestGetActive:
             await ontology.get_active()
         assert len(respx.calls) == 1
 
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"domain": {"id": "d", "name": "D"}, "entity_types": "not-a-list"},
+            {"entity_types": []},
+            ["not", "an", "object"],
+            "not json",
+        ],
+    )
+    @respx.mock
+    async def test_a_corrupt_active_document_is_an_error_not_unbound(self, ontology, body):
+        """The regression: a document pydantic rejects came back as "nothing bound"."""
+        respx.get(f"{BASE}/ontologies/active").respond(200, json={"ontology": body})
+        with pytest.raises(ValueError):
+            await ontology.get_active()
+
+    @pytest.mark.parametrize(
+        "payload", [{}, {"ontology": None}, {"ontology": None, "version": None}]
+    )
+    @respx.mock
+    async def test_an_absent_active_document_means_nothing_is_bound(self, ontology, payload):
+        respx.get(f"{BASE}/ontologies/active").respond(200, json=payload)
+        with pytest.raises(NotSupportedError, match="No active ontology"):
+            await ontology.get_active()
+
+    @respx.mock
+    async def test_a_version_with_a_corrupt_schema_is_an_error(self, ontology):
+        broken = {**_version(1), "schema_json": json.dumps({"entity_types": "x"})}
+        respx.get(f"{BASE}/ontologies/ont_1").respond(
+            200, json={"record": {"id": "ont_1", "name": "legal-clone"}, "versions": [broken]}
+        )
+        with pytest.raises(ValueError):
+            await ontology.get("ont_1")
+
     @respx.mock
     async def test_rejects_conflicting_schema_documents(self, ontology):
         other = {**DOC, "domain": {"id": "other", "name": "Other"}}

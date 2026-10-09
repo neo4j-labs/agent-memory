@@ -11,7 +11,16 @@ template, activate and inspect a strict revision, then restore the exact
 previous binding. After restoration is verified, we will delete only the
 created clone and confirm its absence in a fresh process.
 
-This lesson uses `neo4j-agent-memory` 0.6.0 from PyPI and the complete
+[NOTE]
+====
+`client.ontology` is not NAMS-only. Since 0.7.0 the same methods run against
+your own Neo4j database, where versions are stored as `:Ontology` /
+`:OntologyVersion` nodes and the active document drives local extraction and
+resolution. For that workflow, see
+xref:how-to/ontology-driven-extraction.adoc[drive extraction from an ontology].
+====
+
+This lesson uses `neo4j-agent-memory` 0.7.0 from PyPI and the complete
 programs on this page in a POSIX shell. It uses the NAMS ontology API; Aura
 connection credentials cannot replace a NAMS workspace key. The checks below
 verify activation and restoration against your hosted workspace.
@@ -35,14 +44,14 @@ include::partial$python-tutorial-setup.adoc[]
 
 [source,bash]
 ----
-python -m pip install 'neo4j-agent-memory[nams]==0.6.0'
+python -m pip install 'neo4j-agent-memory[nams]==0.7.0'
 python -c "from importlib.metadata import version; \
 import neo4j_agent_memory; \
-assert version('neo4j-agent-memory') == '0.6.0'; \
-print('SDK 0.6.0 import verified')"
+assert version('neo4j-agent-memory') == '0.7.0'; \
+print('SDK 0.7.0 import verified')"
 ----
 
-Expected: `SDK 0.6.0 import verified`. Configure the dedicated workspace:
+Expected: `SDK 0.7.0 import verified`. Configure the dedicated workspace:
 
 [source,bash]
 ----
@@ -84,10 +93,13 @@ older than the ontology's latest revision. Missing or contradictory binding
 metadata is an error; the program never chooses the latest revision as a
 restoration fallback.
 
-Because the published SDK 0.6.0's `client.ontology.get_active()` can report the
-latest revision instead of the bound revision, this tutorial reads the binding
-directly through its `read_active_binding()` helper and validates it before any
-mutation. The remaining ontology operations use the published SDK.
+SDK 0.7.0's `client.ontology.get_active()` reports the bound revision, but it
+returns `None` metadata, rather than failing, when the service response carries
+no version record. (Releases before 0.7.0 could report the latest revision
+instead of the bound one.) This tutorial therefore reads the binding directly
+through its `read_active_binding()` helper, which validates it and stops before
+any mutation when it is missing or inconsistent. The remaining ontology
+operations use the published SDK.
 
 Restoration precedes clone deletion. If restoration or its readback fails, the
 clone and local state are retained for recovery. If another client changes the
@@ -286,3 +298,10 @@ for those tasks, xref:explanation/ontologies.adoc[Ontologies] for the underlying
 concepts, or continue to xref:tutorials/skills-quickstart.adoc[distilling a
 skill] after satisfying that lesson's empty-workspace and resource-disposition
 requirements.
+
+To work with an ontology on your own Neo4j database instead, the
+https://github.com/neo4j-labs/agent-memory/tree/main/examples/ontology-extraction[ontology extraction example]
+runs on Bolt without API keys: it creates and activates an ontology, ingests
+messages with alias variation, and reads the typed relationships back. The
+xref:how-to/ontology-driven-extraction.adoc[ontology-driven extraction guide]
+describes that workflow.

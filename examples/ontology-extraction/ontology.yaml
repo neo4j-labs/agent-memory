@@ -1,0 +1,124 @@
+# A support-desk ontology, in the shape `neo4j_agent_memory.ontology` parses.
+#
+# Every `description` here is an *annotation guideline*, not documentation.
+# GLiNER2.5 serialises them into the encoder input, so they steer extraction
+# directly — which is why each one ends with the negative case that the model
+# would otherwise get wrong ("The thing that broke, never the fix for it.").
+#
+# Validate and compile it without a database:
+#
+#   uv run neo4j-agent-memory ontology validate examples/ontology-extraction/ontology.yaml
+#   uv run neo4j-agent-memory ontology compile  examples/ontology-extraction/ontology.yaml
+
+domain:
+  id: support-desk
+  name: support-desk
+  description: Customers, engineers, products and the incidents that connect them.
+  tagline: A worked ontology for a product support desk.
+  emoji: "\U0001F6E0"
+
+entity_types:
+  - label: Customer
+    pole_type: PERSON
+    subtype: CUSTOMER
+    description: >-
+      A named person who reports a problem or asks for help on behalf of the
+      organization that bought the product. Named individuals only — never a
+      job title, never a team, and never the organization itself.
+    # Slightly stricter than the global floor: support transcripts are full of
+    # role words ("the admin", "their DBA") that read like people.
+    threshold: 0.55
+
+  - label: Engineer
+    pole_type: PERSON
+    subtype: ENGINEER
+    description: >-
+      A named member of the support or engineering team who investigates,
+      diagnoses or fixes an incident. The person working the ticket, never the
+      person who reported it.
+
+  - label: Organization
+    pole_type: ORGANIZATION
+    description: >-
+      A company, institution or public body that buys, operates or resells the
+      product. Never a product name, and never a team inside a company.
+    # Resolution gazetteer: canonical name -> surface forms seen in the wild.
+    # OntologyResolver treats an alias hit as an exact match (score 1.0), so
+    # "Acme" and "ACME Corporation" land on the "Acme Corp" node — while
+    # "Acme Bank", which is not listed, stays its own organization.
+    aliases:
+      Acme Corp:
+        - Acme
+        - ACME Corporation
+        - Acme Corp.
+
+  - label: Product
+    pole_type: OBJECT
+    subtype: PRODUCT
+    description: >-
+      A named product, edition or subscription a customer runs. The whole
+      shipped thing, never one of its internal parts and never the company
+      that sells it.
+
+  - label: Component
+    pole_type: OBJECT
+    subtype: COMPONENT
+    description: >-
+      A named part, module, subsystem or service inside a product — an
+      importer, a scheduler, a connector. Never the product as a whole.
+
+  - label: Incident
+    pole_type: EVENT
+    subtype: INCIDENT
+    description: >-
+      A specific reported failure, outage, crash or support ticket, including
+      its ticket identifier. The thing that broke, never the fix for it.
+
+relationships:
+  # A person works for exactly one organization at a time, so the decoder is
+  # told to keep only its best head match (`unique_source` -> max_per_head=1).
+  # The low threshold is deliberate: employment is stated obliquely in support
+  # text ("Dana from Acme Corp") and 0.5 loses most of it.
+  - type: EMPLOYED_BY
+    source: Customer
+    target: Organization
+    description: The person is employed by, or writes on behalf of, the organization.
+    unique_source: true
+    threshold: 0.35
+  - type: EMPLOYED_BY
+    source: Engineer
+    target: Organization
+    description: The person is employed by, or writes on behalf of, the organization.
+    unique_source: true
+    threshold: 0.35
+
+  - type: REPORTED
+    source: Customer
+    target: Incident
+    description: The customer opened or reported this incident. Reporting it, not fixing it.
+
+  - type: USES
+    source: Customer
+    target: Product
+    description: The person or organization runs, deploys or subscribes to the product.
+  - type: USES
+    source: Organization
+    target: Product
+    description: The person or organization runs, deploys or subscribes to the product.
+
+  - type: AFFECTS
+    source: Incident
+    target: Product
+    description: The incident degrades or breaks this product or component.
+  - type: AFFECTS
+    source: Incident
+    target: Component
+    description: The incident degrades or breaks this product or component.
+
+  # Containment: a component belongs to a product, and nothing may be part of
+  # itself or part of its own part (`acyclic`).
+  - type: PART_OF
+    source: Component
+    target: Product
+    description: The component ships as part of the product. Containment, not mere association.
+    acyclic: true

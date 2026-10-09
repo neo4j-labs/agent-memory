@@ -63,10 +63,10 @@ async def test_hybrid_recipe_runs_against_neo4j(live_programs, capsys):
     assert "Verified stored message" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("command", ["extract", "schema", "batch", "streaming"])
+@pytest.mark.parametrize("command", ["extract", "schema", "relations", "batch", "streaming"])
 async def test_extraction_recipe_command_runs_with_the_local_model(live_programs, command, capsys):
-    """``python extraction_recipes.py <command>`` runs the real GLiNER model."""
-    pytest.importorskip("gliner", reason="the extraction recipes need the gliner extra")
+    """``python extraction_recipes.py <command>`` runs the real GLiNER2.5 model."""
+    pytest.importorskip("gliner2", reason="the extraction recipes need the gliner2 extra")
     recipes = live_programs.load("extraction_recipes")
 
     await live_programs.run(recipes, command)

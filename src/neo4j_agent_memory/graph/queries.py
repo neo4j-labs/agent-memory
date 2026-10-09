@@ -270,6 +270,32 @@ RETURN session_id, title, created_at, updated_at, message_count, first_message_p
 # LONG-TERM MEMORY QUERIES
 # =============================================================================
 
+
+def entity_keys_set_clause(var: str = "e") -> str:
+    """``SET`` items that refresh an entity's stored lookup keys.
+
+    ``name_key`` is the lower-cased name; ``surface_keys`` is every surface
+    form (name, canonical name, aliases) lower-cased and wrapped in ``|``
+    delimiters, so an exact match is ``surface_keys CONTAINS '|' + key + '|'``.
+    The resolver's blocking queries find candidates through these two indexed
+    properties only, so append this to every write that creates an entity or
+    changes one of those three properties, after they are set.
+
+    Args:
+        var: The Cypher variable bound to the entity node.
+
+    Returns:
+        Comma-separated ``SET`` items, without the ``SET`` keyword.
+    """
+    return (
+        f"{var}.name_key = toLower(toString({var}.name)),\n"
+        f"    {var}.surface_keys = reduce(acc = '|', form IN "
+        f"[{var}.name, {var}.canonical_name] + coalesce({var}.aliases, []) | "
+        f"CASE WHEN form IS NULL THEN acc "
+        f"ELSE acc + replace(toLower(toString(form)), '|', ' ') + '|' END)"
+    )
+
+
 # NOTE: CREATE_ENTITY is now dynamically generated to support type/subtype as node labels.
 # Use build_create_entity_query(entity_type, subtype) from query_builder module instead.
 # This static query is kept for reference but should not be used directly.
@@ -278,8 +304,8 @@ RETURN session_id, title, created_at, updated_at, message_count, first_message_p
 # from neo4j_agent_memory.graph.query_builder import build_create_entity_query
 # query = build_create_entity_query("OBJECT", "VEHICLE")
 
-CREATE_ENTITY = """
-MERGE (e:Entity {name: $name, type: $type})
+CREATE_ENTITY = f"""
+MERGE (e:Entity {{name: $name, type: $type}})
 ON CREATE SET
     e.id = $id,
     e.subtype = $subtype,
@@ -295,6 +321,7 @@ ON MATCH SET
     e.description = COALESCE($description, e.description),
     e.embedding = COALESCE($embedding, e.embedding),
     e.updated_at = datetime()
+SET {entity_keys_set_clause()}
 RETURN e
 """
 
@@ -308,6 +335,16 @@ MATCH (e:Entity)
 WHERE e.name = $name OR e.canonical_name = $name OR $name IN COALESCE(e.aliases, [])
 RETURN e
 LIMIT 1
+"""
+
+# Fetch the POLE+O typing of both endpoints of a prospective relationship in
+# one read. Used by strict ontology validation in
+# ``LongTermMemory.add_relationship`` to map each endpoint onto its ontology
+# label before checking ``OntologyDocument.permits``.
+GET_ENTITY_TYPES_FOR_PAIR = """
+MATCH (e:Entity)
+WHERE e.id IN [$source_id, $target_id]
+RETURN e.id AS id, e.type AS type, e.subtype AS subtype
 """
 
 SEARCH_ENTITIES_BY_EMBEDDING = """
@@ -397,11 +434,26 @@ MATCH (e2:Entity {id: $target_id})
 MERGE (e1)-[r:RELATED_TO {type: $relation_type}]->(e2)
 ON CREATE SET
     r.id = $id,
+    r.relation_type = $relation_type,
     r.description = $description,
     r.confidence = $confidence,
+    r.support = 1,
+    r.derived = $derived,
+    r.extractor = $extractor,
+    r.source_message_ids = CASE WHEN $message_id IS NULL THEN [] ELSE [$message_id] END,
+    r.evidence = CASE WHEN $evidence IS NULL THEN [] ELSE [$evidence] END,
     r.valid_from = $valid_from,
     r.valid_until = $valid_until,
     r.created_at = datetime()
+ON MATCH SET
+    r.confidence = CASE WHEN $confidence > r.confidence THEN $confidence ELSE r.confidence END,
+    r.support = coalesce(r.support, 1) + 1,
+    r.derived = coalesce(r.derived, false) AND $derived,
+    r.source_message_ids = (coalesce(r.source_message_ids, []) +
+        [x IN [$message_id] WHERE x IS NOT NULL AND NOT x IN coalesce(r.source_message_ids, [])])[..25],
+    r.evidence = (coalesce(r.evidence, []) +
+        [x IN [$evidence] WHERE x IS NOT NULL AND NOT x IN coalesce(r.evidence, [])])[..3],
+    r.updated_at = datetime()
 // Project the properties rather than ``RETURN r``: the client reads results
 // via ``Result.data()``, which serializes a relationship as a
 // ``(start_props, type, end_props)`` tuple and drops its own properties.
@@ -456,9 +508,34 @@ RETURN node AS p, score
 ORDER BY score DESC
 """
 
+# Fetch entities related to a given entity over RELATED_TO edges (undirected:
+# matches edges where the entity is either endpoint).
+#
+# Projected as explicit scalar columns rather than ``RETURN e, r, other``:
+# ``Neo4jClient.execute_read`` renders results through ``Result.data()``,
+# which flattens a relationship to a ``(start_props, type, end_props)`` tuple
+# and drops its own properties, so a bare ``r`` can never be read back as a
+# dict of its properties -- every edge silently fell back to default
+# confidence=1.0, type="RELATED_TO", and a fresh random id. ``r.type`` is the
+# canonical, semantic relation name (e.g. "FOUNDED") written by
+# CREATE_ENTITY_RELATIONSHIP; ``type(r) AS neo4j_type`` -- the actual Neo4j
+# relationship label, always "RELATED_TO" today -- is returned only as a
+# fallback for edges written before that property existed (see
+# BACKFILL_RELATION_TYPE).
 GET_ENTITY_RELATIONSHIPS = """
 MATCH (e:Entity {id: $entity_id})-[r:RELATED_TO]-(other:Entity)
-RETURN e, r, other
+RETURN other,
+       r.id AS rel_id,
+       r.type AS rel_type,
+       r.confidence AS confidence,
+       r.support AS support,
+       r.derived AS derived,
+       r.description AS description,
+       r.valid_from AS valid_from,
+       r.valid_until AS valid_until,
+       r.created_at AS created_at,
+       r.updated_at AS updated_at,
+       type(r) AS neo4j_type
 """
 
 LINK_MESSAGE_TO_ENTITY = """
@@ -473,7 +550,19 @@ RETURN r
 """
 
 # Create RELATED_TO relationship between entities by name (for extraction)
-# This query looks up entities by name to support cross-message relations
+# This query looks up entities by name to support cross-message relations.
+#
+# The merge key includes ``type`` so two differently-typed relations between
+# the same pair of entities both survive (e.g. a person can be both
+# EMPLOYED_BY and FOUNDED an organization). ``r.type`` is the canonical
+# relation-name property — every reader in this codebase reads it — while
+# ``r.relation_type`` is kept as a write-only mirror for one release so
+# nothing that still reads it (outside this package) breaks. ``r.support``
+# counts how many times this exact (source, type, target) has been
+# observed; ``r.derived`` is folded with AND across observations so one
+# asserted (non-derived) observation permanently clears the flag.
+# ``r.source_message_ids`` and ``r.evidence`` are capped (25 / 3 entries) so
+# a frequently-reobserved relation does not grow the property unboundedly.
 CREATE_ENTITY_RELATION_BY_NAME = """
 MATCH (source:Entity)
 WHERE toLower(source.name) = toLower($source_name)
@@ -483,30 +572,106 @@ MATCH (target:Entity)
 WHERE toLower(target.name) = toLower($target_name)
    OR toLower(target.canonical_name) = toLower($target_name)
 WITH source, target LIMIT 1
-MERGE (source)-[r:RELATED_TO]->(target)
+// No self-loops: two surface forms that resolved onto one node ("Apple Bank"
+// and "Apple" after an over-eager merge) would otherwise write an edge from
+// an entity to itself. Yields no rows, which the caller reports as "stored
+// nothing" exactly as it does for an unresolvable endpoint.
+WITH source, target WHERE elementId(source) <> elementId(target)
+MERGE (source)-[r:RELATED_TO {type: $relation_type}]->(target)
 ON CREATE SET
+    r.id = $id,
     r.relation_type = $relation_type,
     r.confidence = $confidence,
+    r.support = 1,
+    r.derived = $derived,
+    r.extractor = $extractor,
+    r.source_message_ids = CASE WHEN $message_id IS NULL THEN [] ELSE [$message_id] END,
+    r.evidence = CASE WHEN $evidence IS NULL THEN [] ELSE [$evidence] END,
     r.created_at = datetime()
 ON MATCH SET
     r.confidence = CASE WHEN $confidence > r.confidence THEN $confidence ELSE r.confidence END,
+    r.support = coalesce(r.support, 1) + 1,
+    r.derived = coalesce(r.derived, false) AND $derived,
+    r.source_message_ids = (coalesce(r.source_message_ids, []) +
+        [x IN [$message_id] WHERE x IS NOT NULL AND NOT x IN coalesce(r.source_message_ids, [])])[..25],
+    r.evidence = (coalesce(r.evidence, []) +
+        [x IN [$evidence] WHERE x IS NOT NULL AND NOT x IN coalesce(r.evidence, [])])[..3],
     r.updated_at = datetime()
 RETURN r, source.id AS source_id, target.id AS target_id
 """
 
-# Create RELATED_TO relationship between entities by ID
+# Create RELATED_TO relationship between entities by ID.
+# Same typed-merge-key and provenance shape as CREATE_ENTITY_RELATION_BY_NAME
+# above — see that query's comment for the rationale.
 CREATE_ENTITY_RELATION_BY_ID = """
 MATCH (source:Entity {id: $source_id})
 MATCH (target:Entity {id: $target_id})
-MERGE (source)-[r:RELATED_TO]->(target)
+// No self-loops -- see CREATE_ENTITY_RELATION_BY_NAME. The caller guards this
+// too; the query guards it so a direct caller cannot slip one through.
+WITH source, target WHERE elementId(source) <> elementId(target)
+MERGE (source)-[r:RELATED_TO {type: $relation_type}]->(target)
 ON CREATE SET
+    r.id = $id,
     r.relation_type = $relation_type,
     r.confidence = $confidence,
+    r.support = 1,
+    r.derived = $derived,
+    r.extractor = $extractor,
+    r.source_message_ids = CASE WHEN $message_id IS NULL THEN [] ELSE [$message_id] END,
+    r.evidence = CASE WHEN $evidence IS NULL THEN [] ELSE [$evidence] END,
     r.created_at = datetime()
 ON MATCH SET
     r.confidence = CASE WHEN $confidence > r.confidence THEN $confidence ELSE r.confidence END,
+    r.support = coalesce(r.support, 1) + 1,
+    r.derived = coalesce(r.derived, false) AND $derived,
+    r.source_message_ids = (coalesce(r.source_message_ids, []) +
+        [x IN [$message_id] WHERE x IS NOT NULL AND NOT x IN coalesce(r.source_message_ids, [])])[..25],
+    r.evidence = (coalesce(r.evidence, []) +
+        [x IN [$evidence] WHERE x IS NOT NULL AND NOT x IN coalesce(r.evidence, [])])[..3],
     r.updated_at = datetime()
 RETURN r
+"""
+
+# Idempotent backfill: relations written before the v0.7 provenance rework
+# only carried ``relation_type``; every reader now keys off ``r.type`` (see
+# the comment on CREATE_ENTITY_RELATION_BY_NAME above). Matches nothing once
+# every edge has ``r.type`` set, but it is still a *write* over every
+# ``RELATED_TO`` edge in the database, so ``SchemaManager`` runs it once per
+# database and records the fact on a ``(:SchemaMigration)`` marker rather
+# than re-scanning on every ``connect()``. On very large graphs, prefer
+# running the equivalent of this query manually in batches (e.g. via
+# ``apoc.periodic.iterate``) with ``schema_config.backfill_relation_types``
+# turned off.
+BACKFILL_RELATION_TYPE = """
+MATCH ()-[r:RELATED_TO]->()
+WHERE r.type IS NULL AND r.relation_type IS NOT NULL
+SET r.type = r.relation_type, r.support = coalesce(r.support, 1)
+RETURN count(r) AS updated
+"""
+
+# Fill the resolver's lookup keys (see entity_keys_set_clause) on entities
+# written before v0.7 maintained them. Runs once per database, like the
+# relation-type backfill.
+BACKFILL_ENTITY_KEYS = f"""
+MATCH (e:Entity)
+WHERE e.surface_keys IS NULL
+SET {entity_keys_set_clause()}
+RETURN count(e) AS updated
+"""
+
+# One-shot-migration bookkeeping. ``name`` identifies the migration (only
+# ``relation_type_backfill`` and ``entity_keys_backfill``); the marker node is what makes the scan
+# above once-per-database instead of once-per-connect.
+GET_SCHEMA_MIGRATION = """
+MATCH (m:SchemaMigration {name: $name})
+RETURN m.name AS name, m.completed_at AS completed_at
+LIMIT 1
+"""
+
+RECORD_SCHEMA_MIGRATION = """
+MERGE (m:SchemaMigration {name: $name})
+ON CREATE SET m.completed_at = datetime()
+RETURN m.name AS name, m.completed_at AS completed_at
 """
 
 LINK_PREFERENCE_TO_ENTITY = """
@@ -731,21 +896,23 @@ ON CREATE SET r.recorded_at = datetime()
 RETURN s, e
 """
 
-RECORD_TOUCHED_EDGE_BY_NAME_TYPE = """
-MATCH (s:ReasoningStep {id: $step_id})
-MERGE (e:Entity {name: $name, type: $type})
+RECORD_TOUCHED_EDGE_BY_NAME_TYPE = f"""
+MATCH (s:ReasoningStep {{id: $step_id}})
+MERGE (e:Entity {{name: $name, type: $type}})
 ON CREATE SET e.id = coalesce(e.id, $name + ':' + $type),
-              e.created_at = datetime()
+              e.created_at = datetime(),
+              {entity_keys_set_clause()}
 MERGE (s)-[r:TOUCHED]->(e)
 ON CREATE SET r.recorded_at = datetime()
 RETURN s, e
 """
 
-RECORD_TOUCHED_EDGE_BY_NAME = """
-MATCH (s:ReasoningStep {id: $step_id})
-MERGE (e:Entity {name: $name})
+RECORD_TOUCHED_EDGE_BY_NAME = f"""
+MATCH (s:ReasoningStep {{id: $step_id}})
+MERGE (e:Entity {{name: $name}})
 ON CREATE SET e.id = coalesce(e.id, $name),
-              e.created_at = datetime()
+              e.created_at = datetime(),
+              {entity_keys_set_clause()}
 MERGE (s)-[r:TOUCHED]->(e)
 ON CREATE SET r.recorded_at = datetime()
 RETURN s, e
@@ -947,27 +1114,66 @@ ON CREATE SET
 RETURN r
 """
 
-# Get provenance for an entity
+# Get provenance for an entity.
+#
+# The relationships are nested inside ``collect({...})`` maps rather than
+# returned as bare relationship objects: ``Neo4jClient.execute_read`` renders
+# results through ``Result.data()``, which flattens a relationship to a
+# ``(start_props, type, end_props)`` tuple and drops its own properties, so a
+# relationship value -- bare or nested inside a map/list -- can never be read
+# back as a dict of its properties. Projecting each needed property as its
+# own map entry (``ef.confidence``, ``ef.start_pos``, ...) survives the
+# ``Result.data()`` round trip because plain scalars pass through unchanged.
 GET_ENTITY_PROVENANCE = """
 MATCH (e:Entity {id: $entity_id})
 OPTIONAL MATCH (e)-[ef:EXTRACTED_FROM]->(m:Message)
 OPTIONAL MATCH (e)-[eb:EXTRACTED_BY]->(ex:Extractor)
 RETURN e,
-       collect(DISTINCT {message: m, relationship: ef}) AS sources,
-       collect(DISTINCT {extractor: ex, relationship: eb}) AS extractors
+       collect(DISTINCT CASE WHEN m IS NULL THEN NULL ELSE {
+           message_id: m.id,
+           content: m.content,
+           confidence: ef.confidence,
+           start_pos: ef.start_pos,
+           end_pos: ef.end_pos,
+           context: ef.context,
+           created_at: ef.created_at
+       } END) AS sources,
+       collect(DISTINCT CASE WHEN ex IS NULL THEN NULL ELSE {
+           name: ex.name,
+           version: ex.version,
+           confidence: eb.confidence,
+           extraction_time_ms: eb.extraction_time_ms,
+           created_at: eb.created_at
+       } END) AS extractors
 """
 
-# Get all entities extracted from a message
+# Get all entities extracted from a message.
+#
+# Projected as explicit scalar columns rather than ``RETURN e, r``: see
+# GET_ENTITY_PROVENANCE above for why a bare/nested relationship value never
+# survives ``Result.data()``.
 GET_ENTITIES_FROM_MESSAGE = """
 MATCH (m:Message {id: $message_id})<-[r:EXTRACTED_FROM]-(e:Entity)
-RETURN e, r
+RETURN e,
+       r.confidence AS confidence,
+       r.start_pos AS start_pos,
+       r.end_pos AS end_pos,
+       r.context AS context,
+       r.created_at AS created_at
 ORDER BY r.start_pos
 """
 
-# Get all entities extracted by an extractor
+# Get all entities extracted by an extractor.
+#
+# Projected as explicit scalar columns rather than ``RETURN e, r``: see
+# GET_ENTITY_PROVENANCE above for why a bare/nested relationship value never
+# survives ``Result.data()``.
 GET_ENTITIES_BY_EXTRACTOR = """
 MATCH (ex:Extractor {name: $extractor_name})<-[r:EXTRACTED_BY]-(e:Entity)
-RETURN e, r
+RETURN e,
+       r.confidence AS confidence,
+       r.extraction_time_ms AS extraction_time_ms,
+       r.created_at AS created_at
 ORDER BY e.created_at DESC
 LIMIT $limit
 """
@@ -1020,6 +1226,7 @@ FIND_SIMILAR_ENTITIES_BY_EMBEDDING = """
 CALL db.index.vector.queryNodes('entity_embedding_idx', $limit, $embedding)
 YIELD node, score
 WHERE score >= $threshold AND ($type IS NULL OR node.type = $type)
+  AND node.merged_into IS NULL
 RETURN node AS e, score
 ORDER BY score DESC
 """
@@ -1039,14 +1246,22 @@ RETURN r
 """
 
 # Get entities that might be duplicates (have SAME_AS relationships).
-# The pattern is directed so each flagged pair comes back once, as
-# (newly added entity, existing match). Confidence is projected as a scalar:
-# a relationship returned through Result.data() loses its properties.
+#
+# Matched directed (``-[r:SAME_AS]->``, not ``-[r:SAME_AS]-``) so each pair
+# surfaces once rather than once per traversal direction, and projected as
+# explicit scalar columns rather than ``RETURN ... r``: ``Neo4jClient.execute_read``
+# renders results through ``Result.data()``, which flattens a relationship to a
+# ``(start_props, type, end_props)`` tuple and drops its own properties, so a
+# bare ``r`` can never be read back as a dict of its properties.
 GET_POTENTIAL_DUPLICATES = """
 MATCH (e1:Entity)-[r:SAME_AS]->(e2:Entity)
 WHERE r.status = 'pending'
-RETURN e1, e2, r.confidence AS confidence
-ORDER BY confidence DESC
+RETURN e1, e2,
+       r.confidence AS confidence,
+       r.match_type AS match_type,
+       r.status AS status,
+       r.created_at AS created_at
+ORDER BY r.confidence DESC
 LIMIT $limit
 """
 
@@ -1060,9 +1275,15 @@ ORDER BY distance
 
 # Merge two entities (mark source as merged into target)
 # Note: This query uses CALL subqueries which require Neo4j 4.1+
-MERGE_ENTITIES = """
+MERGE_ENTITIES = (
+    """
 MATCH (source:Entity {id: $source_id})
 MATCH (target:Entity {id: $target_id})
+// A merge already recorded on the source has transferred everything. Every
+// transfer below is guarded edge by edge except the RELATED_TO folds, which
+// add the source edge's support to an existing target edge: a re-run (a
+// retried review_duplicate, say) would count those observations again.
+WITH source, target, coalesce(source.merged_into = target.id, false) AS already_merged
 // Transfer MENTIONS relationships from source to target using CALL subquery
 CALL (source, target) {
     MATCH (source)<-[:MENTIONS]-(m:Message)
@@ -1083,33 +1304,90 @@ CALL (source, target) {
 }
 // Transfer outgoing RELATED_TO edges. Without this the merged-away node keeps
 // the only copy of the edge and the surviving entity loses it.
-CALL (source, target) {
+//
+// The merge key is ``coalesce(r.type, r.relation_type, 'RELATED_TO')``, not
+// ``r.type``: an edge written before the v0.7 provenance rework (or one that
+// BACKFILL_RELATION_TYPE has not reached yet) has a null ``type``, and Neo4j
+// refuses a MERGE whose property map contains null. The whole merge --
+// including the mentions and provenance transfers above -- then failed.
+//
+// Provenance is carried over rather than dropped: support, derived,
+// source_message_ids, evidence and extractor are what make a transferred
+// edge auditable. When the surviving entity already has an edge of the same
+// type to the same neighbour, the two observations are folded together
+// (support summed, id lists unioned) instead of one being discarded.
+CALL (source, target, already_merged) {
     MATCH (source)-[r:RELATED_TO]->(other:Entity)
-    WHERE other <> target AND NOT (target)-[:RELATED_TO {type: r.type}]->(other)
-    MERGE (target)-[nr:RELATED_TO {type: r.type}]->(other)
+    WHERE other <> target AND NOT already_merged
+    WITH source, target, other, r,
+         coalesce(r.type, r.relation_type, 'RELATED_TO') AS rel_type
+    MERGE (target)-[nr:RELATED_TO {type: rel_type}]->(other)
     ON CREATE SET
         nr.id = r.id,
+        nr.relation_type = rel_type,
         nr.description = r.description,
         nr.confidence = r.confidence,
+        nr.support = coalesce(r.support, 1),
+        nr.derived = coalesce(r.derived, false),
+        nr.extractor = r.extractor,
+        nr.source_message_ids = coalesce(r.source_message_ids, []),
+        nr.evidence = coalesce(r.evidence, []),
         nr.valid_from = r.valid_from,
         nr.valid_until = r.valid_until,
         nr.created_at = r.created_at,
         nr.migrated_from = source.id
+    ON MATCH SET
+        nr.confidence = CASE
+            WHEN coalesce(r.confidence, 0.0) > coalesce(nr.confidence, 0.0)
+            THEN r.confidence ELSE nr.confidence END,
+        nr.support = coalesce(nr.support, 1) + coalesce(r.support, 1),
+        nr.derived = coalesce(nr.derived, false) AND coalesce(r.derived, false),
+        nr.source_message_ids = (coalesce(nr.source_message_ids, []) +
+            [x IN coalesce(r.source_message_ids, [])
+             WHERE NOT x IN coalesce(nr.source_message_ids, [])])[..25],
+        nr.evidence = (coalesce(nr.evidence, []) +
+            [x IN coalesce(r.evidence, [])
+             WHERE NOT x IN coalesce(nr.evidence, [])])[..3],
+        nr.migrated_from = source.id,
+        nr.updated_at = datetime()
     RETURN count(*) AS relatedOutTransferred
 }
-// Transfer incoming RELATED_TO edges
-CALL (source, target) {
+// Transfer incoming RELATED_TO edges -- same null-safe merge key and
+// provenance folding as the outgoing transfer above.
+CALL (source, target, already_merged) {
     MATCH (other:Entity)-[r:RELATED_TO]->(source)
-    WHERE other <> target AND NOT (other)-[:RELATED_TO {type: r.type}]->(target)
-    MERGE (other)-[nr:RELATED_TO {type: r.type}]->(target)
+    WHERE other <> target AND NOT already_merged
+    WITH source, target, other, r,
+         coalesce(r.type, r.relation_type, 'RELATED_TO') AS rel_type
+    MERGE (other)-[nr:RELATED_TO {type: rel_type}]->(target)
     ON CREATE SET
         nr.id = r.id,
+        nr.relation_type = rel_type,
         nr.description = r.description,
         nr.confidence = r.confidence,
+        nr.support = coalesce(r.support, 1),
+        nr.derived = coalesce(r.derived, false),
+        nr.extractor = r.extractor,
+        nr.source_message_ids = coalesce(r.source_message_ids, []),
+        nr.evidence = coalesce(r.evidence, []),
         nr.valid_from = r.valid_from,
         nr.valid_until = r.valid_until,
         nr.created_at = r.created_at,
         nr.migrated_from = source.id
+    ON MATCH SET
+        nr.confidence = CASE
+            WHEN coalesce(r.confidence, 0.0) > coalesce(nr.confidence, 0.0)
+            THEN r.confidence ELSE nr.confidence END,
+        nr.support = coalesce(nr.support, 1) + coalesce(r.support, 1),
+        nr.derived = coalesce(nr.derived, false) AND coalesce(r.derived, false),
+        nr.source_message_ids = (coalesce(nr.source_message_ids, []) +
+            [x IN coalesce(r.source_message_ids, [])
+             WHERE NOT x IN coalesce(nr.source_message_ids, [])])[..25],
+        nr.evidence = (coalesce(nr.evidence, []) +
+            [x IN coalesce(r.evidence, [])
+             WHERE NOT x IN coalesce(nr.evidence, [])])[..3],
+        nr.migrated_from = source.id,
+        nr.updated_at = datetime()
     RETURN count(*) AS relatedInTransferred
 }
 // Transfer provenance: which messages the entity was extracted from
@@ -1158,15 +1436,19 @@ CALL (source, target) {
 }
 // Mark source as merged
 SET source.merged_into = target.id,
-    source.merged_at = datetime()
+    source.merged_at = CASE WHEN already_merged THEN source.merged_at ELSE datetime() END
 // Add source name as alias on target
 SET target.aliases = CASE
     WHEN target.aliases IS NULL THEN [source.name]
     WHEN NOT source.name IN target.aliases THEN target.aliases + source.name
     ELSE target.aliases
 END
+SET """
+    + entity_keys_set_clause("target")
+    + """
 RETURN source, target
 """
+)
 
 # Get existing entities of a type with embeddings for deduplication
 GET_ENTITIES_WITH_EMBEDDINGS = """
@@ -1194,6 +1476,148 @@ WITH count(DISTINCT e) AS total_entities,
 OPTIONAL MATCH ()-[pending:SAME_AS {status: 'pending'}]-()
 WITH total_entities, merged_entities, same_as_relationships, count(DISTINCT pending) AS pending_reviews
 RETURN total_entities, merged_entities, same_as_relationships, pending_reviews
+"""
+
+# =============================================================================
+# ONTOLOGY RESOLUTION BLOCKING QUERIES (v0.7)
+# =============================================================================
+#
+# Candidate generation for
+# ``neo4j_agent_memory.resolution.ontology.OntologyResolver``. Everything here
+# is *blocking*: cheap, recall-oriented candidate fetches that the resolver
+# then scores in Python. Four invariants:
+#
+# 1. Blocking is always type-constrained. "Apple" the company and "Apple" the
+#    product embed almost identically; restricting candidate generation to
+#    same-type mentions is the cheapest precision win available.
+# 2. Every query is bounded by ``$limit``. The resolver never falls back to
+#    the 1000-row ``SEARCH_ENTITIES_BY_TYPE`` scan per mention.
+# 3. Whole nodes are returned (``RETURN e``) rather than a property
+#    projection, so the client reads optional properties (``aliases``,
+#    ``metadata``, ``description``) off the returned node in Python.
+# 4. Every bucket is index-backed, because it runs on every ``add_message``.
+#    The surface forms are compared through the stored lookup keys
+#    ``entity_keys_set_clause`` maintains: ``e.name_key`` (the lower-cased
+#    name, range + text indexed, for the prefix/suffix bucket) and
+#    ``e.surface_keys`` (``|name|canonical name|alias|...|`` lower-cased,
+#    text indexed, for the exact bucket). Matching ``toLower(e.name)`` instead
+#    scanned every entity of the type per message. There are no index
+#    hints: a hint errors while its index is still populating (the first
+#    connect after an upgrade), and the planner picks these indexes on its
+#    own once the graph holds any entities.
+#
+# The ``_FOR_USER`` variants implement ``resolution.scope="user"``: candidates
+# are restricted to entities this tenant has actually mentioned, reached
+# through ``(:Conversation)-[:HAS_MESSAGE]->(:Message)-[:MENTIONS]->(:Entity)``
+# (the edge ``LINK_MESSAGE_TO_ENTITY`` writes). ``:Entity`` nodes themselves
+# are global, so ``scope="global"`` is the pre-existing behaviour. They start
+# from the tenant's mentions and filter on the same stored keys.
+
+# Exact-key blocking, batched once per (episode, entity type): any surface
+# form (name, canonical name, alias) equal to one of the normalized keys the
+# resolver computed for this episode. Keys never contain ``|``.
+FIND_ENTITIES_BY_NORMALIZED_KEYS = """
+UNWIND $keys AS key
+MATCH (e:Entity)
+WHERE e.surface_keys CONTAINS ('|' + key + '|')
+  AND e.type = $type AND e.merged_into IS NULL
+RETURN DISTINCT e
+LIMIT $limit
+"""
+
+FIND_ENTITIES_BY_NORMALIZED_KEYS_FOR_USER = """
+MATCH (c:Conversation {user_identifier: $user_identifier})-[:HAS_MESSAGE]->(:Message)
+      -[:MENTIONS]->(e:Entity {type: $type})
+WHERE e.merged_into IS NULL
+  AND any(key IN $keys WHERE e.surface_keys CONTAINS ('|' + key + '|'))
+RETURN DISTINCT e
+LIMIT $limit
+"""
+
+# Token-prefix blocking, per mention: the name starts with the head token or
+# ends with the tail token. Buckets larger than the resolver's cap are
+# discarded client-side (a huge bucket carries no signal), which is why the
+# caller asks for one row more than the cap.
+FIND_ENTITIES_BY_TOKEN_PREFIX = """
+CALL () {
+    MATCH (e:Entity)
+    WHERE $head IS NOT NULL AND e.name_key STARTS WITH $head
+    RETURN e
+    UNION
+    MATCH (e:Entity)
+    WHERE $tail IS NOT NULL AND e.name_key ENDS WITH $tail
+    RETURN e
+}
+WITH e
+WHERE e.type = $type AND e.merged_into IS NULL
+RETURN e
+LIMIT $limit
+"""
+
+FIND_ENTITIES_BY_TOKEN_PREFIX_FOR_USER = """
+MATCH (c:Conversation {user_identifier: $user_identifier})-[:HAS_MESSAGE]->(:Message)
+      -[:MENTIONS]->(e:Entity {type: $type})
+WHERE e.merged_into IS NULL
+  AND (($head IS NOT NULL AND e.name_key STARTS WITH $head)
+       OR ($tail IS NOT NULL AND e.name_key ENDS WITH $tail))
+RETURN DISTINCT e
+LIMIT $limit
+"""
+
+# Vector-index blocking, tenant-scoped. Same vector query as
+# FIND_SIMILAR_ENTITIES_BY_EMBEDDING, then filtered through the tenant's
+# mention path -- ``:Entity`` nodes are global and the vector index is global
+# with them, so without this the resolver happily proposed another tenant's
+# near-identical name as a merge target under ``resolution.scope="user"``.
+#
+# The index's own ``$limit`` applies *before* the tenant filter, so a tenant
+# whose entities are a small slice of the graph may see fewer than ``$limit``
+# candidates. That matches the recall/cost trade-off of the other _FOR_USER
+# blocking queries: the exact-key and token-prefix buckets still run.
+FIND_SIMILAR_ENTITIES_BY_EMBEDDING_FOR_USER = """
+CALL db.index.vector.queryNodes('entity_embedding_idx', $limit, $embedding)
+YIELD node, score
+WHERE score >= $threshold AND ($type IS NULL OR node.type = $type)
+  AND node.merged_into IS NULL
+  AND EXISTS {
+      MATCH (:Conversation {user_identifier: $user_identifier})-[:HAS_MESSAGE]->(:Message)
+            -[:MENTIONS]->(node)
+  }
+RETURN node AS e, score
+ORDER BY score DESC
+"""
+
+# Explicit mentions (``add_message(extraction_mode="explicit")``): an
+# EntityRef with an id is looked up by it; a typed one goes through the
+# ingestion path's entity writes (query_builder.build_create_entity_query).
+GET_ENTITY_ID = """
+MATCH (e:Entity {id: $id}) RETURN e.id AS id LIMIT 1
+"""
+
+# An untyped explicit mention links an existing entity by any surface form,
+# through the indexed lookup keys (entity_keys_set_clause). Two rows back
+# lets the caller tell "exactly one" from "ambiguous".
+FIND_ENTITY_IDS_BY_SURFACE_FORM = """
+MATCH (e:Entity)
+WHERE e.surface_keys CONTAINS ('|' + $key + '|') AND e.merged_into IS NULL
+RETURN e.id AS id
+LIMIT 2
+"""
+
+# Append a surface form to an entity's top-level ``aliases`` list. Single
+# write, so two concurrent ingesters cannot drop each other's alias. Shared by
+# ``LongTermMemory._add_alias_to_entity`` and the short-term ingestion path,
+# which appends the merged-away surface form when a mention resolves onto an
+# existing node.
+ADD_ENTITY_ALIAS = f"""
+MATCH (e:Entity {{id: $id}})
+SET e.aliases = CASE
+    WHEN e.aliases IS NULL THEN [$alias]
+    WHEN NOT $alias IN e.aliases THEN e.aliases + $alias
+    ELSE e.aliases
+END
+SET {entity_keys_set_clause()}
+RETURN e
 """
 
 # =============================================================================
@@ -1327,6 +1751,24 @@ def create_index_query(index_name: str, label: str, property_name: str) -> str:
     """
     return f"""
     CREATE INDEX {index_name} IF NOT EXISTS
+    FOR (n:{label})
+    ON (n.{property_name})
+    """
+
+
+def create_text_index_query(index_name: str, label: str, property_name: str) -> str:
+    """Generate CREATE TEXT INDEX query (``CONTAINS`` / ``ENDS WITH`` lookups).
+
+    Args:
+        index_name: Name of the index
+        label: Node label to index
+        property_name: String property to index
+
+    Returns:
+        Cypher query string
+    """
+    return f"""
+    CREATE TEXT INDEX {index_name} IF NOT EXISTS
     FOR (n:{label})
     ON (n.{property_name})
     """
@@ -1500,6 +1942,7 @@ def adopt_label_to_entity_query(
         n.type = $type,
         n.id = coalesce(n.id, computed_id),
         n.name = coalesce(n.name, n.`{name_property}`)
+    SET {entity_keys_set_clause("n")}
     RETURN count(n) AS migrated_count
     """
 
@@ -1518,4 +1961,245 @@ def count_already_adopted_query(label: str) -> str:
     return f"""
     MATCH (n:`{label}`:Entity)
     RETURN count(n) AS already_adopted_count
+    """
+
+
+# =============================================================================
+# ONTOLOGY STORE QUERIES (v0.7)
+# =============================================================================
+#
+# Backing store for ``client.ontology`` on bolt
+# (:class:`neo4j_agent_memory.ontology.store.BoltOntology`). The shape is::
+#
+#     (:Ontology {id, name, description, is_system, created_at})
+#       -[:HAS_VERSION]->
+#     (:OntologyVersion {id, ontology_id, revision, validation_mode,
+#                        document, schema_hash, is_active, created_at, message})
+#
+# ``document`` is the JSON-serialised ``OntologyDocument`` (Neo4j has no map
+# property type — the same trick ``:Schema.config`` uses). At most one
+# ``:OntologyVersion`` carries ``is_active = true`` per database; see
+# ``ACTIVATE_ONTOLOGY_VERSION``, which enforces that in a single write.
+
+CREATE_ONTOLOGY = """
+CREATE (o:Ontology {
+    id: $id,
+    name: $name,
+    description: $description,
+    is_system: false,
+    created_at: datetime()
+})
+RETURN o
+"""
+
+CREATE_ONTOLOGY_VERSION = """
+MATCH (o:Ontology {id: $ontology_id})
+CREATE (o)-[:HAS_VERSION]->(v:OntologyVersion {
+    id: $id,
+    ontology_id: $ontology_id,
+    revision: $revision,
+    validation_mode: $validation_mode,
+    document: $document,
+    schema_hash: $schema_hash,
+    is_active: false,
+    created_at: datetime(),
+    message: $message
+})
+RETURN v
+"""
+
+LIST_ONTOLOGIES = """
+MATCH (o:Ontology)
+OPTIONAL MATCH (o)-[:HAS_VERSION]->(v:OntologyVersion)
+WITH o,
+     max(v.revision) AS current_revision,
+     count(CASE WHEN v.is_active THEN 1 END) AS active_count
+RETURN o AS ontology, current_revision, active_count > 0 AS is_active
+ORDER BY o.created_at ASC, o.name ASC
+"""
+
+GET_ONTOLOGY = """
+MATCH (o:Ontology {id: $id})
+OPTIONAL MATCH (o)-[:HAS_VERSION]->(v:OntologyVersion)
+WITH o, v
+ORDER BY v.revision ASC
+RETURN o AS ontology, collect(v) AS versions
+"""
+
+GET_ONTOLOGY_VERSION = """
+MATCH (v:OntologyVersion {id: $id})
+RETURN v
+"""
+
+# Cheap "what would the next revision be?" probe — deliberately avoids
+# dragging every revision's serialised document back over the wire.
+GET_ONTOLOGY_MAX_REVISION = """
+MATCH (o:Ontology {id: $id})
+OPTIONAL MATCH (o)-[:HAS_VERSION]->(v:OntologyVersion)
+WITH o, v
+ORDER BY v.revision DESC
+WITH o, collect(v) AS versions
+RETURN o.id AS ontology_id,
+       coalesce(head(versions).revision, 0) AS max_revision,
+       head(versions).validation_mode AS latest_validation_mode
+"""
+
+# The newest active version and its parent. The parent is reached through the
+# ``ontology_id`` the version stores; ``Ontology.id`` is constraint-backed.
+# ``connect()`` runs this on every connection, against databases that mostly
+# never store an ontology: Neo4jClient.execute_read filters the server's
+# UNRECOGNIZED notifications for library queries, so naming ``is_active`` here
+# does not warn (CLAUDE.md item 23).
+GET_ACTIVE_ONTOLOGY_VERSION = """
+MATCH (v:OntologyVersion)
+WHERE v.is_active = true
+WITH v
+ORDER BY v.created_at DESC
+LIMIT 1
+OPTIONAL MATCH (o:Ontology {id: v.ontology_id})
+RETURN v, o AS ontology
+"""
+
+# Single-write activation: bind one version and clear the flag on every
+# other version in the same transaction, so "exactly one active version per
+# database" holds even under concurrent activations.
+#
+# The MERGE + SET on the singleton ``(:OntologyLock {id: 'active'})`` is what
+# makes that true. ``other.is_active`` is read without a lock, so two
+# concurrent activations could each see the other's version as already
+# inactive and both commit ``is_active = true``. Writing to one shared node
+# first serialises the writers on it (the ``ontology_lock_id`` uniqueness
+# constraint backs the MERGE), so the second transaction only reads
+# ``is_active`` after the first has committed.
+ACTIVATE_ONTOLOGY_VERSION = """
+MATCH (v:OntologyVersion {id: $id})
+MERGE (lock:OntologyLock {id: 'active'})
+SET lock.updated_at = datetime()
+WITH v
+SET v.is_active = true
+WITH v
+OPTIONAL MATCH (other:OntologyVersion)
+WHERE other.id <> v.id AND other.is_active = true
+SET other.is_active = false
+WITH v, count(other) AS deactivated
+RETURN v, deactivated
+"""
+
+# Deletes the ontology, every revision hanging off it, and any migration
+# rows recorded against it. The counts are computed before the DELETE.
+DELETE_ONTOLOGY = """
+MATCH (o:Ontology {id: $id})
+OPTIONAL MATCH (o)-[:HAS_VERSION]->(v:OntologyVersion)
+OPTIONAL MATCH (m:OntologyMigration {ontology_id: $id})
+WITH o, collect(DISTINCT v) AS versions, collect(DISTINCT m) AS migrations
+WITH size(versions) AS deleted_versions,
+     size(migrations) AS deleted_migrations,
+     versions + migrations + [o] AS doomed
+UNWIND doomed AS node
+DETACH DELETE node
+RETURN deleted_versions, deleted_migrations
+"""
+
+CREATE_ONTOLOGY_MIGRATION = """
+CREATE (m:OntologyMigration {
+    id: $id,
+    ontology_id: $ontology_id,
+    status: $status,
+    total: $total,
+    processed: $processed,
+    errored: $errored,
+    spec: $spec,
+    error_message: $error_message,
+    created_at: datetime(),
+    completed_at: datetime()
+})
+RETURN m
+"""
+
+GET_ONTOLOGY_MIGRATION = """
+MATCH (m:OntologyMigration {id: $id})
+RETURN m
+"""
+
+
+# -----------------------------------------------------------------------------
+# Ontology migration (relabel) query builders
+# -----------------------------------------------------------------------------
+#
+# Labels cannot be parameterized in Cypher, so these interpolate. Callers
+# must pass labels through ``graph.query_builder.sanitize_label`` first — it
+# rejects anything outside ``[A-Za-z][A-Za-z0-9_]*``.
+
+
+def count_entities_with_label_query(label: str) -> str:
+    """Count :Entity nodes carrying ``label`` (the migration dry-run path)."""
+    return f"""
+    MATCH (e:Entity:`{label}`)
+    RETURN count(e) AS matched
+    """
+
+
+def relabel_entities_query(
+    from_label: str,
+    to_label: str,
+    *,
+    set_type: bool,
+    type_label: str | None = None,
+    subtype_label: str | None = None,
+) -> str:
+    """Move :Entity nodes from ``from_label`` to ``to_label``.
+
+    A node carries up to three labels beside ``:Entity``: its POLE+O type
+    label, the built-in subtype label (custom subtypes get none) and the
+    ontology's declared label. Moving it means swapping all three, and Cypher
+    cannot remove a label without naming it. So the query names every
+    candidate and removes each one only from the nodes whose stored
+    ``type``/``subtype`` produced it. That is exact per node, whatever revision
+    wrote the node, and needs no knowledge of the source version.
+
+    Args:
+        from_label: Sanitised label to remove.
+        to_label: Sanitised label to add.
+        set_type: Whether to also rewrite ``e.type`` (needed when the target
+            label maps onto a different POLE+O ``pole_type``). The query then
+            requires a ``$type`` parameter, and the old type label is removed.
+        type_label: The target type's label (``Person``), added to every node.
+        subtype_label: The target's built-in subtype label, or ``None`` for a
+            custom subtype or none at all.
+
+    Returns:
+        Cypher query string returning ``migrated`` (the node count).
+    """
+    from neo4j_agent_memory.graph.query_builder import VALID_SUBTYPES, to_pascal_case
+
+    keep = {to_label, type_label, subtype_label}
+    removals: list[str] = []
+    if set_type:
+        for pole_type in sorted(VALID_SUBTYPES):
+            label = to_pascal_case(pole_type)
+            if label not in keep:
+                removals.append(
+                    f"FOREACH (_ IN CASE WHEN toUpper(e.type) = '{pole_type}' "
+                    f"THEN [1] ELSE [] END | REMOVE e:`{label}`)"
+                )
+    for pole_type in sorted(VALID_SUBTYPES):
+        for subtype in sorted(VALID_SUBTYPES[pole_type]):
+            label = to_pascal_case(subtype)
+            if label not in keep:
+                removals.append(
+                    f"FOREACH (_ IN CASE WHEN toUpper(e.type) = '{pole_type}' "
+                    f"AND toUpper(e.subtype) = '{subtype}' THEN [1] ELSE [] END "
+                    f"| REMOVE e:`{label}`)"
+                )
+    removal_clauses = "".join(f"\n    {clause}" for clause in removals)
+    added = ", ".join(
+        f"e:`{label}`" for label in dict.fromkeys([type_label, subtype_label, to_label]) if label
+    )
+    type_clause = ",\n        e.type = $type" if set_type else ""
+    return f"""
+    MATCH (e:Entity:`{from_label}`)
+    REMOVE e:`{from_label}`{removal_clauses}
+    SET {added},
+        e.subtype = $subtype{type_clause}
+    RETURN count(e) AS migrated
     """

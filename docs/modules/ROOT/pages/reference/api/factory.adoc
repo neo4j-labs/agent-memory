@@ -147,7 +147,7 @@ Install one of the following:
 ----
 
 For the version used by these docs, install the selected extra with a release
-pin, for example `python -m pip install 'neo4j-agent-memory[anthropic]==0.6.0'`.
+pin, for example `python -m pip install 'neo4j-agent-memory[anthropic]==0.7.0'`.
 
 == Debugging which adapter you got
 

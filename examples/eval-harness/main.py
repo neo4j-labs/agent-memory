@@ -24,7 +24,7 @@ Every case is built to be able to fail:
 
 Install the published package in an activated virtual environment::
 
-    python -m pip install 'neo4j-agent-memory[sentence-transformers]==0.6.0'
+    python -m pip install 'neo4j-agent-memory[sentence-transformers]==0.7.0'
 
 Export NEO4J_URI, NEO4J_USERNAME and NEO4J_PASSWORD for a dedicated test Aura
 database; NEO4J_DATABASE defaults to neo4j. The fixture resets its demo records

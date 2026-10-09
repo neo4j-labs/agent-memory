@@ -1,0 +1,67 @@
+[project]
+name = "support-desk-agent"
+version = "0.1.0"
+description = "Support-desk agent on neo4j-agent-memory: ontology-typed memory, entity resolution and reasoning traces"
+# Matches the library floor (repo-wide `>=3.10`).
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.32,<1",
+    # PydanticAI 2.x. We depend on the `pydantic-ai-slim` distribution (same
+    # `pydantic_ai` import package) with only the OpenAI provider. To point
+    # AGENT_MODEL at another provider, add its extra too (e.g.
+    # `pydantic-ai-slim[openai,anthropic]`). AGENT_MODEL=test needs none.
+    "pydantic-ai-slim[openai]>=2.0,<3",
+    "pydantic-settings>=2.6,<3",
+    "sse-starlette>=3.4,<4",
+    "python-dotenv>=1.0,<2",
+    # `gliner2` brings GLiNER2.5, which extracts against the active ontology;
+    # `sentence-transformers` brings the local embedder. No LLM extra: the
+    # memory layer runs with llm=None and needs no API key.
+    "neo4j-agent-memory[gliner2,sentence-transformers]>=0.7.0,<0.8",
+]
+
+[project.optional-dependencies]
+dev = [
+    "mypy>=1.13",
+    "ruff>=0.8",
+]
+
+[tool.uv]
+package = true
+
+[tool.uv.sources]
+# Local development: resolve the library from this repo.
+neo4j-agent-memory = { path = "../../..", editable = true }
+# Deployment: drop the line above and let the version range resolve from PyPI,
+# or point at a tag: neo4j-agent-memory = { git = "https://github.com/neo4j-labs/agent-memory", tag = "python-v0.7.0" }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+# The STATE-Bench environment is copied unchanged (see src/statebench/vendor/__init__.py).
+extend-exclude = ["src/statebench/vendor"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["neo4j_agent_memory", "src"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_unused_ignores = false
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+# The STATE-Bench environment is copied unchanged; it is not written for --strict.
+module = "src.statebench.vendor.*"
+ignore_errors = true

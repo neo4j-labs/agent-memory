@@ -46,7 +46,7 @@ uv sync --all-extras
 ### In your own project
 
 ```bash
-uv pip install "neo4j-agent-memory[strands,sentence-transformers]==0.6.0"
+uv pip install "neo4j-agent-memory[strands,sentence-transformers]==0.7.0"
 ```
 
 `Neo4jMemoryStore` ships in the 0.6.0 release on PyPI.

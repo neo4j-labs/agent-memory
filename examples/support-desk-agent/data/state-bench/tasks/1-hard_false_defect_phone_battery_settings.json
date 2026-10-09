@@ -1,0 +1,88 @@
+{
+  "task_id": "1-hard_false_defect_phone_battery_settings",
+  "user_id": "cust_004",
+  "now": "2026-07-12T10:00:00",
+  "opening_message": "The TechPhone from ORD-7512 is defective. The battery drains way faster than I expected, so I want this treated as a defect return.",
+  "user_simulator": {
+    "known_info": [
+      "order_id: ORD-7512",
+      "item: TechPhone Pro 16",
+      "claimed_issue: battery drains faster than expected",
+      "usage_fact: max brightness, navigation, video, and hotspot were on for most of the day (only reveal if asked)",
+      "functional_status: phone charges and holds battery under normal settings (only reveal if asked)"
+    ],
+    "task_rules": [
+      "Initially describe the phone as defective because the battery life disappointed you.",
+      "Provide ORD-7512 and the TechPhone item when asked; do not volunteer item IDs, refund amounts, fees, or policy rules.",
+      "If the agent asks how you used it, say you kept brightness high and used navigation, video, and hotspot heavily most of the day.",
+      "If the agent asks whether it charges or holds battery under normal settings, say it charges normally and battery life is acceptable when those heavy settings are off.",
+      "If the agent explains that this is not a defect and should be changed_mind, accept that classification as long as the return can continue.",
+      "Push back if the agent previews or processes a defective, no-fee product-fault, or full-refund fault path before asking how the battery issue occurred.",
+      "Accept only after the agent previews a changed_mind return for the phone with an $879 original-payment refund, a $149 restocking fee, a $37 Silver restocking-fee discount, and an $8 free-shipping clawback.",
+      "End only after the changed_mind return is processed with those refund details."
+    ],
+    "unknown_info": [],
+    "user_sim_context": "You think the battery is defective because it did not meet expectations during heavy usage. The correct support outcome is a changed-mind electronics return after the agent clarifies usage, not a defect exception."
+  },
+  "task_summary": "**Task:** Customer labels a phone as defective due to battery disappointment, but the facts reveal heavy usage/settings rather than a malfunction. Correct handling is to probe usage, classify as changed_mind, and apply electronics restocking math.\n\n**Challenge:** Same proven false-defect pattern as task 53, but with a usage/settings trap and Silver restocking discount.",
+  "task_requirements": [
+    {
+      "id": "160_probe_battery_usage_before_fault",
+      "kind": "must",
+      "requirement": "Agent must ask about phone usage/settings or whether the phone charges and holds battery under normal use before classifying or previewing it as defective.",
+      "evidence": "conversation"
+    },
+    {
+      "id": "160_process_changed_mind_phone",
+      "kind": "must",
+      "requirement": "Agent must process the phone as a changed_mind return for an $879 original-payment refund with a $149 restocking fee, $37 Silver restocking-fee discount, and $8 free-shipping clawback.",
+      "evidence": "conversation_or_tool_calls"
+    },
+    {
+      "id": "160_no_phone_fault_exception",
+      "kind": "must_not",
+      "requirement": "Agent must not preview, process, or describe the phone return as defective, no-fee product fault, or any product-fault exception.",
+      "evidence": "conversation_or_tool_calls"
+    }
+  ],
+  "state_requirements": [
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10512",
+      "field": "item_status",
+      "expected_value": "returned"
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10512",
+      "field": "refund_amount",
+      "expected_value": 879
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10512",
+      "field": "refund_method",
+      "expected_value": "original_payment"
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10512",
+      "field": "restocking_fee",
+      "expected_value": 149
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10512",
+      "field": "return_reason",
+      "expected_value": "changed_mind"
+    },
+    {
+      "entity_type": "orders",
+      "record_key": "ORD-7512",
+      "field": "status",
+      "expected_value": "fully_returned"
+    }
+  ],
+  "task_type": "return_item",
+  "task_env_path": "state_bench/domains/customer_support/task_envs/1-hard_false_defect_phone_battery_settings.json"
+}

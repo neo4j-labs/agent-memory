@@ -11,7 +11,7 @@ To change an existing Bolt application to NAMS, inventory its operations and dat
 anchor:_1_install_the_nams_extra[]anchor:_2_provision_an_api_key[]
 
 * An application with a passing Bolt baseline and identified memory reads/writes.
-* Python 3.10+ with `neo4j-agent-memory[nams]==0.6.0`; follow the installation and connection check in xref:how-to/use-nams.adoc[Connect a Python application to NAMS].
+* Python 3.10+ with `neo4j-agent-memory[nams]==0.7.0`; follow the installation and connection check in xref:how-to/use-nams.adoc[Connect a Python application to NAMS].
 * A NAMS sandbox workspace key and a synthetic test dataset. Use a separate workspace for migration tests.
 * A data-migration decision. Keep the source database until any separately planned import and rollback procedure has been verified.
 

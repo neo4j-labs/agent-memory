@@ -11,13 +11,13 @@ Add verified conversation persistence to a LangChain 1.x `create_agent` agent wi
 anchor:_overview[]
 anchor:_prerequisites[]
 
-Use Python 3.10+ and a POSIX shell. The recipe uses xref:reference/configuration.adoc[`BoltSettings`] to select Neo4j explicitly and disables entity extraction so that message persistence can be checked independently. Use a dedicated AuraDB instance with vector-index support and no incompatible existing vectors. Follow xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the Aura connection setup] and copy its connection values into the exports below. These recipes use the published Python 0.6.0 package; provider access and database execution must be verified in your environment.
+Use Python 3.10+ and a POSIX shell. The recipe uses xref:reference/configuration.adoc[`BoltSettings`] to select Neo4j explicitly and disables entity extraction so that message persistence can be checked independently. Use a dedicated AuraDB instance with vector-index support and no incompatible existing vectors. Follow xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the Aura connection setup] and copy its connection values into the exports below. These recipes use the published Python 0.7.0 package; provider access and database execution must be verified in your environment.
 
 include::partial$python-tutorial-setup.adoc[]
 
 [source,bash]
 ----
-python -m pip install 'neo4j-agent-memory[langchain-agents,openai]==0.6.0' langchain-openai
+python -m pip install 'neo4j-agent-memory[langchain-agents,openai]==0.7.0' langchain-openai
 export NEO4J_URI='neo4j+s://<instance-id>.databases.neo4j.io'
 export NEO4J_USERNAME='neo4j'
 export NEO4J_PASSWORD='replace-with-your-Aura-password'
@@ -112,7 +112,7 @@ This repository supports the 1.x packages declared in `pyproject.toml`. The old 
 
 == Adapter reference
 
-This section lists the adapter options of the published 0.6.0 package. Import the classes from `neo4j_agent_memory.integrations.langchain`.
+This section lists the adapter options of the published 0.7.0 package. Import the classes from `neo4j_agent_memory.integrations.langchain`.
 
 === Middleware options
 
@@ -180,7 +180,7 @@ anchor:_retrieve_from_memory[]
 |===
 |Field |Default |Effect
 
-|`session_id` |`None` |Scope message search to one conversation. Required for message results on the hosted backend.
+|`session_id` |`None` |Passed to message search. On the hosted backend it scopes the search to one conversation and is required for message results; Bolt message search ignores it and searches every stored message.
 |`search_short_term` |`True` |Search messages.
 |`search_long_term` |`True` |Search entities and preferences.
 |`search_reasoning` |`True` |Search reasoning traces.

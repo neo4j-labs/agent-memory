@@ -22,7 +22,7 @@ include::partial$python-tutorial-setup.adoc[]
 
 [source,bash]
 ----
-python -m pip install 'neo4j-agent-memory[vertex-ai]==0.6.0'
+python -m pip install 'neo4j-agent-memory[vertex-ai]==0.7.0'
 export GOOGLE_CLOUD_PROJECT='replace-with-your-project-id'
 export GOOGLE_CLOUD_LOCATION='us-central1'
 export NEO4J_URI='neo4j+s://<instance-id>.databases.neo4j.io'
@@ -115,7 +115,7 @@ anchor:_examples[]
 anchor:_financial_advisor_full_application[]
 anchor:_see_also[]
 
-`VertexAIEmbeddingProvider` accepts the model string, `project_id`, `location`, `task_type`, `dimensions` and `batch_size`, and delegates to `VertexAIEmbedder`. In 0.6.0 it does not forward `dimensions` as `output_dimensionality`, so keep it at 768. For 1536 or 3072 dimensions, construct `VertexAIEmbedder(output_dimensionality=...)` directly and pass it as `embedder=` to `MemoryClient`. Use one consistent model/configuration for both stored document vectors and retrieval. Changing dimensions requires an intentional index/data migration; matching dimension counts alone does not make embeddings from different models compatible. xref:how-to/configure-embedding-provider.adoc#_use_vertex_ai_embeddings[Configure embeddings] shows the adapter in `MemorySettings`.
+`VertexAIEmbeddingProvider` accepts the model string, `project_id`, `location`, `task_type`, `dimensions` and `batch_size`, and delegates to `VertexAIEmbedder`. In 0.7.0 it does not forward `dimensions` as `output_dimensionality`, so keep it at 768. For 1536 or 3072 dimensions, construct `VertexAIEmbedder(output_dimensionality=...)` directly and pass it as `embedder=` to `MemoryClient`. Use one consistent model/configuration for both stored document vectors and retrieval. Changing dimensions requires an intentional index/data migration; matching dimension counts alone does not make embeddings from different models compatible. xref:how-to/configure-embedding-provider.adoc#_use_vertex_ai_embeddings[Configure embeddings] shows the adapter in `MemorySettings`.
 
 `VertexAIEmbedder` accepts the model IDs below. Each model's native dimensions apply only with `output_dimensionality=None`; the embedder requests 768 dimensions by default.
 

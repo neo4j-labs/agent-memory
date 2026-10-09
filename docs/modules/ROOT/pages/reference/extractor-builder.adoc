@@ -25,7 +25,9 @@ extractor = (
 )
 ----
 
-The union method is `merge_by_union()`. `with_schema(EntitySchemaConfig)` copies entity type names into extraction labels; it does not apply relation endpoints, properties, constraints, or indexes. Use the explicit schema/validation APIs for those purposes.
+The union method is `merge_by_union()`. `with_gliner_relations()` was removed in 0.7: the GLiNER2.5 stage added by `with_gliner` or `with_gliner_schema` decodes relations itself.
+
+`build()` resolves one ontology and gives it to every stage it creates: the spaCy label mapping, the GLiNER2.5 JointIE schema, the LLM prompt, and the pipeline's relation validation. A `with_gliner_schema` template takes precedence over a document from `with_ontology` or `with_schema`. When no ontology is named, the GLiNER2.5 stage uses POLE+O (or the `with_entity_types` labels) and a multi-stage build does not validate relations.
 
 === with_spacy
 
@@ -39,7 +41,7 @@ def with_spacy(model: str='en_core_web_sm') -> ExtractorBuilder: ...
 
 === with_gliner
 
-Add GLiNER2 extractor to pipeline with simple labels.
+Add the GLiNER2.5 stage on the builder's ontology (POLE+O when none is set).
 
 // contract: extraction/factory.py:ExtractorBuilder.with_gliner
 [source,python]
@@ -50,41 +52,66 @@ def with_gliner(
     device: str='cpu',
     *,
     model_name: str | None=None,
+    relation_threshold: float | None=None,
 ) -> ExtractorBuilder: ...
 ----
 
 [cols="1,4",options="header"]
 |===
 | Parameter | Description
-| `model` | GLiNER model identifier (e.g. `gliner-community/gliner_medium-v2.5`).
-| `threshold` | Confidence threshold.
+| `model` | GLiNER2.5 checkpoint (default `fastino/gliner2.5-base-v1`). A GLiNER v1 id raises `ValueError` when `build()` constructs the stage.
+| `threshold` | Entity confidence threshold.
 | `device` | Inference device (`cpu` / `cuda` / `mps`).
 | `model_name` | Alias for `model` (kept for compatibility with the CLI and older call sites).
+| `relation_threshold` | Confidence floor for decoded relations.
 |===
+
+"gliner" in the builder method names means GLiNER2.5.
 
 === with_gliner_schema
 
-Add GLiNER2 extractor with a domain schema for better accuracy.
+Add the GLiNER2.5 stage on a built-in domain template. The template carries entity descriptions, and `poleo`, `podcast` and `news` also carry typed relationships.
 
 // contract: extraction/factory.py:ExtractorBuilder.with_gliner_schema
 [source,python]
 ----
 def with_gliner_schema(
     schema_name: str,
-    model: str='gliner-community/gliner_medium-v2.5',
+    model: str | None=None,
     threshold: float=0.5,
     device: str='cpu',
+    *,
+    relation_threshold: float | None=None,
 ) -> ExtractorBuilder: ...
 ----
 
 [cols="1,4",options="header"]
 |===
 | Parameter | Description
-| `schema_name` | Name of the schema (poleo, podcast, news, scientific, business, entertainment, medical, legal)
-| `model` | GLiNER2 model to use
-| `threshold` | Confidence threshold
+| `schema_name` | Name of the template (poleo, podcast, news, scientific, business, entertainment, medical, legal), resolved with `neo4j_agent_memory.ontology.get_template` when `build()` runs. An unknown name raises `ValueError` there.
+| `model` | GLiNER2.5 checkpoint; `None` selects `fastino/gliner2.5-base-v1`
+| `threshold` | Entity confidence threshold
 | `device` | Device to run on (cpu, cuda, mps)
+| `relation_threshold` | Confidence floor for decoded relations
 |===
+
+=== with_ontology
+
+Extract against an explicit `OntologyDocument`. This configures the ontology only; add the stages with `with_gliner`, `with_llm_fallback` or `with_spacy`. The LLM stage's flat type set becomes the ontology's POLE+O types.
+
+// contract: extraction/factory.py:ExtractorBuilder.with_ontology
+[source,python]
+----
+def with_ontology(ontology: OntologyDocument) -> ExtractorBuilder: ...
+----
+
+[source,python]
+----
+from neo4j_agent_memory.extraction import ExtractorBuilder
+from neo4j_agent_memory.ontology import get_template
+
+extractor = ExtractorBuilder().with_ontology(get_template("news")).with_gliner().build()
+----
 
 === with_llm
 
@@ -98,7 +125,7 @@ def with_llm(model: str='gpt-4o-mini') -> ExtractorBuilder: ...
 
 === with_llm_fallback
 
-Add an LLM extractor stage. Despite the name, the stage is not a fallback: the pipeline that `build()` returns runs every stage on every call and merges the results with the selected merge strategy, so the LLM is called for every text even when spaCy or GLiNER find entities. The builder has no early-stop option. For true fallback behaviour, construct xref:reference/extractor-pipeline.adoc[`ExtractionPipeline`] directly with `stop_on_success=True` or `MergeStrategy.FIRST_SUCCESS`.
+Add an LLM extractor stage. Despite the name, the stage is not a fallback: the pipeline that `build()` returns runs every stage on every call and merges the results with the selected merge strategy, so the LLM is called for every text even when spaCy or GLiNER2.5 find entities. The builder has no early-stop option. For true fallback behaviour, construct xref:reference/extractor-pipeline.adoc[`ExtractionPipeline`] directly with `stop_on_success=True` or `MergeStrategy.FIRST_SUCCESS`.
 
 // contract: extraction/factory.py:ExtractorBuilder.with_llm_fallback
 [source,python]
@@ -108,7 +135,7 @@ def with_llm_fallback(model: str='gpt-4o-mini') -> ExtractorBuilder: ...
 
 === with_entity_types
 
-Set entity types to extract.
+Set the flat entity type set for the LLM stage. When neither an ontology nor a template is set, the lower-cased types also become the GLiNER2.5 labels; that ad-hoc label set declares no relationships, so the GLiNER2.5 stage then decodes entities only.
 
 // contract: extraction/factory.py:ExtractorBuilder.with_entity_types
 [source,python]
@@ -132,9 +159,11 @@ def with_schema(schema_config: EntitySchemaConfig) -> ExtractorBuilder: ...
 | `schema_config` | Entity schema configuration. Each `EntityTypeConfig` contributes its `name` to the extractor's type set.
 |===
 
+The schema is converted with `EntitySchemaConfig.to_ontology()`, which becomes the builder's ontology: entity types and, when `enable_subtypes` is on, their subtypes become GLiNER2.5 labels, and `relation_types` become typed relationships expanded over `source_types` × `target_types`. Endpoints naming a type the schema does not declare are dropped. It does not create constraints or indexes, and it does not store or activate anything.
+
 === with_confidence_threshold
 
-Set the confidence threshold for entity extraction.
+Set the confidence threshold for entity extraction. GLiNER2.5 decodes with it as its entity threshold, and when `build()` returns a pipeline, entities and relations below it are dropped from the merged result, so spaCy and LLM stages are held to the same floor. A value outside `[0.0, 1.0]` raises `ValueError`.
 
 // contract: extraction/factory.py:ExtractorBuilder.with_confidence_threshold
 [source,python]

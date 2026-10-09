@@ -17,6 +17,8 @@ On Bolt, entity writes merge by exact `(name, type)`, including when `deduplicat
 
 Add an entity and return `(Entity, DeduplicationResult)`. Geocoding and enrichment flags default to True, but run only when their providers are configured. There is no `confidence` keyword; `attributes` and `metadata` are distinct fields.
 
+The duplicate check runs when `deduplicate=True` and an embedding was generated. In 0.7.0, when the client's resolver is an `OntologyResolver` (the Bolt default, `resolution.strategy="composite"`), the check delegates to it, so `add_entity` uses the same bands as message ingestion: merge at `ResolutionConfig.auto_merge_threshold` (0.90) and a pending `SAME_AS` review edge at `review_threshold` (0.85). See xref:how-to/tune-entity-resolution.adoc[Tune entity resolution].
+
 // contract: memory/long_term.py:LongTermMemory.add_entity
 [source,python]
 ----
@@ -122,6 +124,10 @@ async def add_relationship(
     valid_from: datetime | None=None,
     valid_until: datetime | None=None,
     attributes: dict[str, Any] | None=None,
+    message_id: str | None=None,
+    evidence: str | None=None,
+    extractor: str | None=None,
+    derived: bool=False,
 ) -> Relationship: ...
 ----
 
@@ -136,9 +142,15 @@ async def add_relationship(
 | `valid_from` | Start of validity
 | `valid_until` | End of validity
 | `attributes` | Optional additional attributes
+| `message_id` | Id of the message the relationship was asserted from, appended to `r.source_message_ids` (at most 25 ids are kept)
+| `evidence` | Evidence snippet, such as the sentence the relationship was read from, appended to `r.evidence` (at most 3 snippets are kept)
+| `extractor` | Name of the extractor or caller asserting the relationship, stored on `r.extractor`
+| `derived` | Whether the relationship is derived (for example an inverse mirror) rather than observed. Folded with AND across calls, so one call with `derived=False` clears it for that edge
 |===
 
 The current implementation includes `attributes` on the returned model but does not pass them to the graph write. Do not depend on arbitrary relationship attributes surviving a later read through this method.
+
+With `validation_mode="strict"`, `add_relationship` raises `ValidationError` when the configured ontology does not declare `relationship_type` or does not permit it between the two endpoints' labels.
 
 If `source` or `target` does not resolve to a persisted `:Entity` node — a stale id, or the freshly generated id `add_entity` falls back to for a matched node that has no `id` property (see `add_entity` above) — `add_relationship` raises `NotFoundError` rather than silently returning a `Relationship` the graph does not contain. Re-adding an already-stored `(source, target, relationship_type)` triple does not raise: the `MERGE` keeps the original edge, and the returned `Relationship.id` is the id already stored on that edge, not a newly generated one.
 

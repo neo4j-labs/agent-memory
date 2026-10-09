@@ -3,11 +3,13 @@
 :page-pagination:
 :toclevels: 2
 
-The eight registered GLiNER domain schemas from xref:reference/schemas.adoc[Domain schemas reference], and how to select one for extraction.
+The eight built-in domain schemas from xref:reference/schemas.adoc[Domain schemas reference], the relationships their ontology templates declare, and how to select one for extraction.
 
 == Available schemas
 
-The exact keys below are labels supplied to GLiNER. They are not necessarily the stored Entity.type; the extractor maps labels to POLE+O types/subtypes.
+The exact keys below are labels supplied to GLiNER2.5. They are not necessarily the stored Entity.type; the extractor maps labels to POLE+O types/subtypes (see xref:reference/schemas-custom.adoc#_entity_type_mapping[Entity type mapping]). The tables are the catalogs in `DOMAIN_SCHEMAS` (`neo4j_agent_memory.extraction.domain_schemas`), which `get_schema(name)` returns.
+
+Extraction uses the ontology template of the same name (`neo4j_agent_memory.ontology.get_template`). Every template except `poleo` is its catalog converted with `to_ontology()`, with relationships attached for `podcast` and `news`. The `poleo` template is the curated `POLEO_ONTOLOGY` described under <<_poleo>>. Every template keeps the document default `no_self_loops=True`, so no declared relationship accepts a self-loop.
 
 === poleo
 
@@ -20,6 +22,29 @@ The exact keys below are labels supplied to GLiNER. They are not necessarily the
 | `location` | A geographic place, address, city, country, or landmark
 | `event` | An incident, meeting, transaction, or notable occurrence
 | `object` | A physical or digital item like a vehicle, device, or document
+|===
+
+`get_template("poleo")`, `GLiNER2Extractor.for_schema("poleo")`, `GLiNER2Extractor.for_poleo()` and `ExtractorBuilder.with_gliner_schema("poleo")` use `POLEO_ONTOLOGY` (`neo4j_agent_memory.ontology`) rather than this flat catalog: the same five types, labelled `Person`, `Organization`, `Location`, `Event` and `Object`, with longer annotation guidelines and these relationships:
+
+[cols="1,3,1",options="header"]
+|===
+| Type | Permitted endpoints | Constraints
+| `KNOWS` | `Person` -> `Person` | —
+| `ALIAS_OF` | `Person` -> `Person` | acyclic
+| `MEMBER_OF` | `Person` -> `Organization` | —
+| `EMPLOYED_BY` | `Person` -> `Organization` | unique source
+| `OWNS` | `Person` -> `Object`, `Organization` -> `Object` | —
+| `USES` | `Person` -> `Object` | —
+| `LOCATED_AT` | `Person`, `Object`, `Organization` or `Event` -> `Location` | —
+| `RESIDES_AT` | `Person` -> `Location` | unique source
+| `HEADQUARTERS_AT` | `Organization` -> `Location` | unique source
+| `PARTICIPATED_IN` | `Person` -> `Event`, `Organization` -> `Event` | —
+| `OCCURRED_AT` | `Event` -> `Location` | —
+| `INVOLVED` | `Event` -> `Object` | —
+| `SUBSIDIARY_OF` | `Organization` -> `Organization` | acyclic
+| `PARTNER_WITH` | `Organization` -> `Organization` | —
+| `RELATED_TO` | any label -> any label | threshold 0.6
+| `MENTIONS` | any label -> any label | threshold 0.6
 |===
 
 === podcast
@@ -40,6 +65,17 @@ The exact keys below are labels supplied to GLiNER. They are not necessarily the
 | `technology` | A technology, platform, programming language, or technical tool
 |===
 
+Relationships declared by the `podcast` template:
+
+[cols="1,3",options="header"]
+|===
+| Type | Permitted endpoints
+| `WORKS_AT` | `person` -> `company`
+| `FOUNDED` | `person` -> `company`
+| `LOCATED_IN` | `company` -> `location`
+| `DISCUSSES` | `person` -> `concept`
+|===
+
 === news
 
 // domain-schema: news
@@ -51,6 +87,17 @@ The exact keys below are labels supplied to GLiNER. They are not necessarily the
 | `location` | A geographic location, city, or country
 | `event` | A news event, incident, or occurrence
 | `date` | A date, time period, or temporal reference
+|===
+
+Relationships declared by the `news` template:
+
+[cols="1,3",options="header"]
+|===
+| Type | Permitted endpoints
+| `WORKS_AT` | `person` -> `organization`
+| `LOCATED_IN` | `organization` -> `location`
+| `PARTICIPATED_IN` | `person` -> `event`
+| `OCCURRED_AT` | `event` -> `location`
 |===
 
 === scientific
@@ -68,6 +115,8 @@ The exact keys below are labels supplied to GLiNER. They are not necessarily the
 | `tool` | A software tool, library, or framework
 |===
 
+The `scientific` template declares no relationships, so an extractor built from it decodes entities only. Attach typed relationships with `to_ontology(relationships=[...])`; see <<_converting_a_schema_to_an_ontology>>.
+
 === business
 
 // domain-schema: business
@@ -81,6 +130,8 @@ The exact keys below are labels supplied to GLiNER. They are not necessarily the
 | `financial_metric` | A financial metric, revenue, or valuation
 | `location` | A business location, headquarters, or market
 |===
+
+The `business` template declares no relationships, so an extractor built from it decodes entities only. Attach typed relationships with `to_ontology(relationships=[...])`; see <<_converting_a_schema_to_an_ontology>>.
 
 === entertainment
 
@@ -98,6 +149,8 @@ The exact keys below are labels supplied to GLiNER. They are not necessarily the
 | `genre` | A genre or category of entertainment
 |===
 
+The `entertainment` template declares no relationships, so an extractor built from it decodes entities only. Attach typed relationships with `to_ontology(relationships=[...])`; see <<_converting_a_schema_to_an_ontology>>.
+
 === medical
 
 // domain-schema: medical
@@ -112,6 +165,8 @@ The exact keys below are labels supplied to GLiNER. They are not necessarily the
 | `gene` | A gene, protein, or biomarker
 | `organism` | A pathogen, virus, or organism
 |===
+
+The `medical` template declares no relationships, so an extractor built from it decodes entities only. Attach typed relationships with `to_ontology(relationships=[...])`; see <<_converting_a_schema_to_an_ontology>>.
 
 === legal
 
@@ -128,20 +183,25 @@ The exact keys below are labels supplied to GLiNER. They are not necessarily the
 | `monetary_amount` | A settlement, fine, or monetary value
 |===
 
+The `legal` template declares no relationships, so an extractor built from it decodes entities only. Attach typed relationships with `to_ontology(relationships=[...])`; see <<_converting_a_schema_to_an_ontology>>.
+
 == Using schemas
 
-=== With GLiNEREntityExtractor
+[[_with_glinerentityextractor]]
+=== With GLiNER2Extractor
 
 [source,python]
 ----
-from neo4j_agent_memory.extraction import GLiNEREntityExtractor
+from neo4j_agent_memory.extraction import GLiNER2Extractor
 
 # Use named schema
-extractor = GLiNEREntityExtractor.for_schema("podcast")
+extractor = GLiNER2Extractor.for_schema("podcast")
 
 # With custom threshold
-extractor = GLiNEREntityExtractor.for_schema("medical", threshold=0.6)
+extractor = GLiNER2Extractor.for_schema("medical", threshold=0.6)
 ----
+
+`for_schema()` resolves the name with `get_template`, so the extractor receives the template's relationships as well as its labels. An unknown name raises `ValueError`.
 
 === With ExtractorBuilder
 
@@ -171,6 +231,36 @@ schema = get_schema("podcast")
 for entity_type, description in schema.entity_types.items():
     print(f"{entity_type}: {description}")
 ----
+
+`neo4j_agent_memory.ontology.list_templates()` returns the same eight names, and `get_template(name)` returns the template's `OntologyDocument`.
+
+=== Converting a schema to an ontology
+
+`DomainSchema.to_ontology()` maps each label onto its POLE+O type and subtype and keeps the description as the annotation guideline. Pass `relationships` to add typed relationships:
+
+[source,python]
+----
+from neo4j_agent_memory.extraction import GLiNER2Extractor, get_schema
+from neo4j_agent_memory.ontology import RelationshipDef
+
+# Labels only
+doc = get_schema("medical").to_ontology()
+
+# Labels plus typed relationships
+doc = get_schema("medical").to_ontology(
+    relationships=[
+        RelationshipDef(
+            type="TREATS",
+            source="drug",
+            target="disease",
+            description="A medication used to treat a condition",
+        ),
+    ],
+)
+extractor = GLiNER2Extractor.for_ontology(doc)
+----
+
+Each `source` and `target` must name a label the schema declares; compiling a document that names an undeclared label raises `ValueError`. A relationship without a description takes one from `DomainSchema.relation_types` when it names the same type.
 
 == See also
 

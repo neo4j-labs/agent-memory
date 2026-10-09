@@ -25,10 +25,10 @@ script walks one whole revision cycle of a support-desk domain:
 8. **Read back** — activate revision 2 and count the new label with
    ``query.cypher()``.
 
-This is the hosted-only half of the library's schema story. Its bolt-side twin
-is ``client.schema.adopt_existing_graph()`` (see ``examples/existing-graph/``);
-``client.schema`` is bolt-only and ``client.ontology`` is NAMS-only — each
-raises ``NotSupportedError`` on the other backend.
+This is the hosted half of the story. Its bolt twin,
+``examples/ontology-lifecycle-bolt/``, runs the same lifecycle on the same
+Arrows document and transcript against your own Neo4j, with extraction running
+locally: ``client.ontology`` has the same methods on both backends since 0.7.
 
 Run:
 
@@ -245,7 +245,8 @@ async def main() -> None:
     if not os.environ.get("MEMORY_API_KEY"):
         raise SystemExit(
             "Set MEMORY_API_KEY to your NAMS API key. "
-            "The ontology surface is hosted-only. "
+            "This example runs on NAMS; examples/ontology-lifecycle-bolt runs the "
+            "same lifecycle on your own Neo4j. "
             "Sign up at https://memory.neo4jlabs.com to get one."
         )
 

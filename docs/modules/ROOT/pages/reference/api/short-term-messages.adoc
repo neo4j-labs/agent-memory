@@ -46,7 +46,7 @@ async def add_message(
 | `generate_embedding` | Whether to generate embedding
 | `metadata` | Optional metadata
 | `extraction_mode` | How to populate `:MENTIONS` edges for this message. `'auto'` (default): run the configured extractor pipeline. `'skip'`: do not run extraction, do not write `:MENTIONS` edges. `'explicit'`: do not run extraction, write `:MENTIONS` edges only for the entities supplied via `explicit_mentions`.
-| `explicit_mentions` | When `extraction_mode='explicit'`, a list of xref:reference/api/reasoning-models.adoc#_entityref[EntityRef] (element type `~neo4j_agent_memory.schema.models.EntityRef`) describing the entities to MERGE on and link.
+| `explicit_mentions` | When `extraction_mode='explicit'`, a list of xref:reference/api/reasoning-models.adoc#_entityref[EntityRef] (element type `~neo4j_agent_memory.schema.models.EntityRef`) describing the entities to link. An `id` links that entity; a typed reference is stored the way an extracted mention is (strict-mode check, ingest-time resolution, then a MERGE on name and type); a name alone links the one existing entity with that surface form and never creates one.
 | `user_identifier` | When provided, scopes the conversation to a :User node via `(:User)-[:HAS_CONVERSATION]->(:Conversation)`. Required when `MemorySettings.memory.multi_tenant=True`.
 |===
 
@@ -94,7 +94,7 @@ anchor:_get_message[]
 
 === get_conversation
 
-Return a `Conversation` with its messages. On Bolt, `limit=None` uses the implementation's 1,000-message cap; pass an explicit larger limit when required. `since` filters the fetched messages by timestamp, so it does not provide server-side pagination.
+Return a `Conversation` with its messages, oldest first. On Bolt, `limit=None` uses the implementation's 1,000-message cap; pass an explicit larger limit when required. On NAMS the service returns at most the newest 200 messages, so `limit=None` asks for 200 and a larger `limit` is clamped to 200 with a warning; older messages cannot be listed. `since` filters the fetched messages by timestamp, so it does not provide server-side pagination.
 
 // contract: memory/short_term.py:ShortTermMemory.get_conversation
 [source,python]
@@ -163,7 +163,7 @@ async def create_conversation(
 
 === list_conversations
 
-List conversation metadata. Both backends accept `user_identifier` and `limit` through kwargs; bolt defaults to 100 results ordered by most recently updated. Message bodies are not populated by the bolt listing.
+List conversation metadata, most recently updated first. Both backends accept `user_identifier` and `limit` through kwargs, and both default to 100 results. NAMS serves at most 200 conversations per page, so a larger `limit` is collected over several requests that follow the service's `next_cursor`. Message bodies are not populated by either listing.
 
 // contract: nams/short_term.py:NamsShortTermMemory.list_conversations
 [source,python]
@@ -221,7 +221,7 @@ async def get_extraction_status(session_id: str | None=None, *, conversation_id:
 |===
 | NAMS operation | Honored options and behavior
 | `add_message` | `session_id` / `conversation_id`, `role`, `content`. Other kwargs, including metadata and extraction flags, are not sent.
-| `get_conversation` | Conversation ID and `limit`; assembles header and messages from two requests. Bolt's `since` is not sent.
+| `get_conversation` | Conversation ID and `limit` (at most 200, the newest messages); assembles header and messages from two requests and returns the messages oldest first, although the service lists them newest first. Bolt's `since` is not sent.
 | `search_messages` | `query`, required conversation ID, optional `limit`. `threshold` and `metadata_filters` are not sent. Returns `Message` objects; do not assume a bolt-style similarity score is present.
 | `get_context` | Required conversation ID; formats reflections, observations, and recent messages. `query` and bolt context-size controls are not sent to the endpoint.
 | `clear_session` | Deletes the entire conversation, not one message.

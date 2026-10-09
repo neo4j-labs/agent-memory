@@ -15,7 +15,7 @@ For the rationale, see xref:explanation/memory-types.adoc[Understanding the thre
 
 [NOTE]
 ====
-This recipe targets Bolt. The Python NAMS client stores and reads conversations with these differences in 0.6.0:
+This recipe targets Bolt. The Python NAMS client stores and reads conversations with these differences in 0.7.0:
 
 * Create the conversation with `create_conversation(label)`, then pass `str(conversation.id)` as `session_id` to later calls. NAMS issues conversation IDs; your label is not sent to the service and cannot address the conversation.
 * `add_message` sends only `role` and `content`; metadata is dropped. For batches, use `bulk_add_messages(session_id, messages)` (at most 100 per call). `add_messages_batch` is not defined on NAMS and raises `AttributeError`.
@@ -27,13 +27,13 @@ This recipe targets Bolt. The Python NAMS client stores and reads conversations 
 
 anchor:_prerequisites[]
 
-Use a dedicated AuraDB instance from xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the first memory tutorial's Aura setup], with exported `NEO4J_URI`, `NEO4J_USERNAME`, and `NEO4J_PASSWORD`. Set `OPENAI_API_KEY` for the selected embedding provider. Prepare the example files below and install the provider extra plus `httpx`, which release 0.6.0 imports when connecting over Bolt but declares only in the `nams` extra:
+Use a dedicated AuraDB instance from xref:tutorials/first-agent-memory.adoc#_step_2_set_up_neo4j[the first memory tutorial's Aura setup], with exported `NEO4J_URI`, `NEO4J_USERNAME`, and `NEO4J_PASSWORD`. Set `OPENAI_API_KEY` for the selected embedding provider. Prepare the example files below and install the provider extra:
 
 include::partial$python-tutorial-setup.adoc[]
 
 [source,bash]
 ----
-python -m pip install 'neo4j-agent-memory[openai]==0.6.0' 'httpx>=0.27'
+python -m pip install 'neo4j-agent-memory[openai]==0.7.0'
 ----
 
 include::partial$python-core-recipe-intro.adoc[]
@@ -44,7 +44,7 @@ include::partial$python-core-recipe-files.adoc[]
 
 anchor:_store_messages[]anchor:_basic_message_storage[]anchor:_store_with_metadata[]anchor:_batch_message_loading[]
 
-The batch supplies explicit roles, searchable metadata, and increasing ISO `timestamp` values. `get_conversation` orders messages by timestamp; in 0.6.0, batch rows without a `timestamp` share one write time, so their readback order is not defined. `get_conversation(session).messages` performs the session-specific readback. The custom summarizer demonstrates the callable contract; replace its fixed demonstration text with a summarizer that processes the supplied transcript.
+The batch supplies explicit roles, searchable metadata, and increasing ISO `timestamp` values. `get_conversation` orders messages by timestamp, then by message ID. Batch rows without a `timestamp` are stamped with strictly increasing times in input order, starting after the conversation's last message. Explicit values are stored as given, so an explicit `timestamp` earlier than the last stored message reads back before it. `get_conversation(session).messages` performs the session-specific readback. The custom summarizer demonstrates the callable contract; replace its fixed demonstration text with a summarizer that processes the supplied transcript.
 
 The function below is included from the complete maintained program, which already supplies imports, client setup, unique IDs, and `asyncio.run`. Run the file in step 3; this extract is not a separate top-level script.
 

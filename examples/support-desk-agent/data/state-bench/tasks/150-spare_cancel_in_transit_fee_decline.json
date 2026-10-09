@@ -1,0 +1,68 @@
+{
+  "task_id": "150-spare_cancel_in_transit_fee_decline",
+  "user_id": "cust_001",
+  "now": "2026-07-08T10:00:00",
+  "opening_message": "Cancel everything left in ORD-7281. The phone already arrived today, but the phone case has not shipped yet. I paid with card plus gift card, so make sure you only reverse what is actually cancellable.",
+  "user_simulator": {
+    "known_info": [
+      "order_id: ORD-7281",
+      "delivered_item: phone",
+      "unshipped_item: phone case",
+      "payment: split"
+    ],
+    "task_rules": [
+      "Keep the request scoped to cancelling whatever is still cancellable in ORD-7281, while leaving the delivered phone unchanged once the agent explains it cannot be cancelled.",
+      "Provide the order ID, the delivered-phone fact, the unshipped phone-case fact, and the split-payment fact when asked or when needed to keep the cancellation scoped correctly.",
+      "Push back once if the agent tries to cancel, refund, reverse, return, or otherwise change the delivered phone through the cancellation workflow.",
+      "Ask how the split card and gift-card refund applies if the agent does not explain that only the phone-case cancellation is being reversed through the split tender.",
+      "Accept only a preview that cancels the phone case, leaves the delivered phone unchanged, and explains the split-tender refund applies only to the case cancellation.",
+      "If the agent asks for confirmation before showing the case-only cancellation and split-refund details, ask for that preview first.",
+      "End only after the agent confirms the phone case was cancelled, the phone was left unchanged, and the case refund was recorded through the split-payment method."
+    ],
+    "unknown_info": [],
+    "user_sim_context": "You are contacting support about order ORD-7281. Mixed-status split-tender order: the phone is already delivered but the phone case is still unshipped. Customer asks to cancel both. Agent must cancel only the unshipped case, explain the delivered phone cannot be cancelled, and leave the phone unchanged. Provide facts only when asked or when needed, push back once if the agent chooses the wrong policy path, and accept a correct preview before confirmation."
+  },
+  "task_summary": "Mixed-status split-tender order: the phone is already delivered but the phone case is still unshipped. Customer asks to cancel both. Agent must cancel only the unshipped case, explain the delivered phone cannot be cancelled, and leave the phone unchanged.",
+  "task_requirements": [
+    {
+      "evidence": "conversation",
+      "id": "spare_cancel_in_transit_fee_decline_deny_phone",
+      "kind": "must",
+      "requirement": "Agent must explain that the delivered phone cannot be cancelled through cancellation workflow."
+    },
+    {
+      "evidence": "conversation",
+      "id": "spare_cancel_in_transit_fee_decline_split_case",
+      "kind": "must",
+      "requirement": "Agent must explain that any split-tender refund applies only to the phone-case cancellation, not to the delivered phone."
+    }
+  ],
+  "state_requirements": [
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10286",
+      "field": "item_status",
+      "expected_value": "cancelled"
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10286",
+      "field": "refund_amount",
+      "expected_value": 35
+    },
+    {
+      "entity_type": "order_items",
+      "record_key": "ITEM-10286",
+      "field": "refund_method",
+      "expected_value": "split"
+    },
+    {
+      "entity_type": "orders",
+      "record_key": "ORD-7281",
+      "field": "status",
+      "expected_value": "partially_cancelled"
+    }
+  ],
+  "task_type": "cancel_order",
+  "task_env_path": "state_bench/domains/customer_support/task_envs/150-spare_cancel_in_transit_fee_decline.json"
+}

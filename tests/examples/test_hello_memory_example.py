@@ -132,11 +132,12 @@ class TestHelloMemoryStructure:
     def test_sticks_to_released_surface(self):
         """``uv run`` resolves the *published* library, not this working tree.
 
-        The PEP 723 header pins ``>=0.5.0``, and 0.5.0 exports neither
-        ``BoltSettings``/``NamsSettings``/``connect`` nor a bolt-side
-        ``create_conversation`` — a stranger's first run would end in an
-        ``ImportError`` or ``AttributeError``. Every other example may use
-        unreleased surface; this one may not until the pin floor moves.
+        The PEP 723 header pins the release being prepared (``>=0.7.0``), so
+        until it is on PyPI a stranger's ``uv run`` resolves nothing newer than
+        the previous release. The script therefore keeps to surface every
+        release since 0.5.0 exports — ``MemorySettings(backend=...)`` rather
+        than ``BoltSettings``/``NamsSettings``/``connect``, and a guarded
+        ``create_conversation`` — so it also runs on the published line.
         """
         source = MAIN_PY.read_text(encoding="utf-8")
         for unreleased in ("BoltSettings", "NamsSettings", "connect("):
