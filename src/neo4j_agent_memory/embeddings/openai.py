@@ -58,7 +58,16 @@ class OpenAIEmbedder(BaseEmbedder):
                 from openai import AsyncOpenAI
             except ImportError:
                 raise EmbeddingError(
-                    "OpenAI package not installed. Install with: pip install neo4j-agent-memory[openai]"
+                    "OpenAI embeddings are selected, but the 'openai' package is not installed.\n"
+                    "For OpenAI, install: pip install 'neo4j-agent-memory[openai]' "
+                    "and provide api_key or set OPENAI_API_KEY.\n"
+                    "For local embeddings, install: "
+                    "pip install 'neo4j-agent-memory[sentence-transformers]' "
+                    "and configure MemorySettings(embedding='sentence-transformers/all-MiniLM-L6-v2').\n"
+                    "For the MCP server, select the local model with "
+                    "--embedding sentence-transformers/all-MiniLM-L6-v2 "
+                    "or NAM_EMBEDDING=sentence-transformers/all-MiniLM-L6-v2.\n"
+                    "Docs: https://neo4j.com/labs/agent-memory/how-to/configure-embedding-provider/"
                 )
             self._client = AsyncOpenAI(api_key=self._api_key)
         return self._client
