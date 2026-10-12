@@ -15,13 +15,13 @@
   },
   "dependencies": {
     "@neo4j-labs/agent-memory": "file:../..",
-    "@modelcontextprotocol/sdk": "^1.30.0",
-    "zod": "^4.6.0"
+    "@modelcontextprotocol/sdk": "^1.30.1",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
-    "tsx": "^4.23.0",
+    "tsx": "^4.23.15",
     "typescript": "^5.9.0",
-    "vitest": "^5.0.0",
-    "@types/node": "^22.0.0"
+    "vitest": "^5.0.1",
+    "@types/node": "^22.20.4"
   }
 }
