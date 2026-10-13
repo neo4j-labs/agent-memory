@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** Remove the ignored `user_identifier` / `user_id` keywords from
+  NAMS feedback tools in MCP, Pydantic AI, and Strands. Callers must omit them;
+  backend isolation is unchanged.
+- Enforce positive limits for MCP history/reflections and Pydantic AI history.
+
 ## [0.7.0] - 2026-10-07
 
 Release 0.7 replaces the local extraction stack. `gliner` v1 and the separate
