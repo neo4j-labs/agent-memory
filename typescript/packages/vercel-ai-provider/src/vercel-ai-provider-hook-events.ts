@@ -21,7 +21,6 @@ export interface SessionTurn {
 }
 
 // Inputs
-
 export interface NamsHookBase {
   readonly event: NamsHookEvent;
   readonly userId: string;
@@ -31,7 +30,6 @@ export interface NamsHookBase {
 
 export interface SessionStartInput extends NamsHookBase {
   event: 'SessionStart';
-  /** `resumed` when the user already had a conversation, `created` otherwise. */
   reason: 'created' | 'resumed';
 }
 
@@ -61,7 +59,6 @@ export interface PostToolUseFailureInput extends NamsHookBase {
   toolCallId?: string;
   input: unknown;
   error: unknown;
-  /** 1 on the first failure, 2 after a hook asked for a retry. */
   attempt: number;
 }
 
@@ -93,47 +90,36 @@ export interface NamsHookInputs {
 }
 
 // Outputs
-
 export interface NamsHookOutputBase {
-  /** Text handed to the model on the next `prepare()` call. */
   additionalContext?: string;
-  /** Message for the app to show or log. */
   systemMessage?: string;
 }
 
 export interface SessionStartOutput extends NamsHookOutputBase {}
 
 export interface UserPromptSubmitOutput extends NamsHookOutputBase {
-  /** `block` rejects the prompt: `prepare()` returns blocked and no history. */
   decision?: 'block';
   blockReason?: string;
-  /** Replaces the prompt for the model and for the saved turn. */
   updatedPrompt?: string;
 }
 
 export interface PreToolUseOutput extends NamsHookOutputBase {
-  /** `deny` stops the tool running. The model gets the reason back instead. */
   permissionDecision?: 'allow' | 'deny';
   permissionDecisionReason?: string;
-  /** Replaces the tool arguments. Later hooks see the replacement. */
   updatedInput?: unknown;
 }
 
 export interface PostToolUseOutput extends NamsHookOutputBase {
-  /** Replaces the tool result before the model sees it. */
   updatedOutput?: unknown;
 }
 
 export interface PostToolUseFailureOutput extends NamsHookOutputBase {
-  /** Run the tool once more. Honoured on the first failure only. */
   retry?: boolean;
 }
 
 export interface PreMemoryWriteOutput extends NamsHookOutputBase {
-  /** `block` drops the whole write. Nothing reaches NAMS. */
   decision?: 'block';
   blockReason?: string;
-  /** Replaces the turns to save, e.g. after redacting them. */
   updatedTurns?: SessionTurn[];
 }
 
@@ -160,15 +146,12 @@ export type NamsHookHandler<E extends NamsHookEvent> = (
 
 export interface NamsHookEntry<E extends NamsHookEvent> {
   handler: NamsHookHandler<E>;
-  /** Milliseconds before the handler is abandoned (default: 30000). */
   timeout?: number;
-  /** Shown in log lines. Defaults to the function name. */
   name?: string;
 }
 
 /** A matcher plus the handlers it applies to. */
 export interface NamsHookGroup<E extends NamsHookEvent> {
-  /** Which tools (or session reasons) this applies to: `*`, a name, `a|b`, or a regex. */
   matcher?: string;
   hooks: Array<NamsHookHandler<E> | NamsHookEntry<E>>;
 }
@@ -184,14 +167,12 @@ export type NamsSystemMessageSink = (message: string, event: NamsHookEvent) => v
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
-/** Events with nothing to match on. Matchers on these are ignored. */
 const MATCHERLESS: ReadonlySet<NamsHookEvent> = new Set([
   'UserPromptSubmit',
   'PreMemoryWrite',
   'Stop',
 ]);
 
-/** Plain names, separated by `|` or `,`. Anything else is treated as a regex. */
 const PLAIN_MATCHER = /^[A-Za-z0-9_\-, |]*$/;
 
 type Matcher = (subject?: string) => boolean;
@@ -228,7 +209,7 @@ const subjectOf = (input: NamsHookInputs[NamsHookEvent]): string | undefined => 
   }
 };
 
-/** Fold a handler's rewrite fields back into the input the next handler sees. */
+
 const applyRewrite = (
   input: NamsHookInputs[NamsHookEvent],
   output: NamsHookOutputs[NamsHookEvent],
@@ -257,19 +238,15 @@ const applyRewrite = (
 // Dispatch
 
 export interface NamsHookResult<E extends NamsHookEvent> {
-  /** The input after every rewrite. Read the tool arguments and turns from here. */
   input: NamsHookInputs[E];
-  /** True when a handler denied or blocked. */
   blocked: boolean;
   reason?: string;
   additionalContext: string[];
   systemMessages: string[];
-  /** True when a `PostToolUseFailure` handler asked for a retry. */
   retry: boolean;
 }
 
 export interface NamsHookRegistry {
-  /** False when no handler is registered, so callers can skip the work. */
   has(event: NamsHookEvent): boolean;
   run<E extends NamsHookEvent>(event: E, input: NamsHookInputs[E]): Promise<NamsHookResult<E>>;
 }
@@ -360,7 +337,6 @@ export function compileHooks(
             () => log.warn(`${event} hook ${entry.name} timed out after ${entry.timeout}ms, ignoring it`),
           ) as NamsHookOutputs[E] | undefined;
         } catch (err) {
-          // A broken hook must not break the generation.
           log.error(`${event} hook ${entry.name} threw, ignoring it`, err);
           continue;
         }

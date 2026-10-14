@@ -15,7 +15,7 @@
  */
 
 import { openai } from '@ai-sdk/openai';
-import { ToolLoopAgent, stepCountIs, tool } from 'ai';
+import { ToolLoopAgent, isStepCount, tool } from 'ai';
 import { z } from 'zod';
 import { createNams } from '../src/index';
 
@@ -104,9 +104,9 @@ const agent = new ToolLoopAgent({
     runtimeContext: options,
   }),
 
-  onFinish: session.onFinish(),
+  onEnd: session.onFinish(),
 
-  stopWhen: stepCountIs(5),
+  stopWhen: isStepCount(5),
 });
 
 async function turn(label: string, message: string): Promise<void> {

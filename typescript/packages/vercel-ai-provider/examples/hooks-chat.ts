@@ -1,6 +1,6 @@
 /**
  * Hooks mode demo. The model gets no memory tools. `loadSession` restores the
- * transcript before each generation, and `onFinish` saves every turn after.
+ * transcript before each generation, and `onFinish()` saves every turn after.
  *
  * Run with:
  *
@@ -21,14 +21,14 @@
  */
 
 import { openai } from '@ai-sdk/openai';
-import { ToolLoopAgent, stepCountIs, tool } from 'ai';
+import { ToolLoopAgent, isStepCount, tool } from 'ai';
 import { z } from 'zod';
 import { createNams } from '../src/index';
 
 const userId = process.env.NAMS_DEMO_USER ?? 'demo-user-hooks-chat';
 const model = process.env.NAMS_DEMO_MODEL ?? 'gpt-5.4-mini';
 
-// One factory, so loadSession and onFinish use the same conversation.
+// One factory, so loadSession() and onFinish() use the same conversation.
 const nams = createNams({ apiKey: process.env.MEMORY_API_KEY! });
 const session = nams.hooks({ userId });
 
@@ -56,14 +56,14 @@ const agent = new ToolLoopAgent({
       ...(await session.loadSession(options)),
       { role: 'user' as const, content: options!.prompt },
     ],
-    // Passes the scope to onFinish.
+    // Passes the scope to the onEnd callback.
     runtimeContext: options,
   }),
 
   // After: save every turn once.
-  onFinish: session.onFinish(),
+  onEnd: session.onFinish(),
 
-  stopWhen: stepCountIs(5),
+  stopWhen: isStepCount(5),
 });
 
 async function turn(label: string, message: string): Promise<void> {

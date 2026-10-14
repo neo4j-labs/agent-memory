@@ -11,7 +11,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { makeFakeClient, makeFakeModel, drainStream, settle, type FakeClient } from './vercel-ai-provider-helpers';
+import { makeFakeClient, makeFakeModel, drainStream, settle, type FakeClient, ownedBySearcher } from './vercel-ai-provider-helpers';
 
 const holder = vi.hoisted(() => ({ client: undefined as unknown }));
 
@@ -40,9 +40,9 @@ const userPrompt = (text: string) => [
 
 describe('middleware mode — memory injection', () => {
   it('injects retrieved memories into the last user message', async () => {
-    fake.longTerm.searchEntities.mockResolvedValue([
+    fake.longTerm.searchEntities.mockImplementation(ownedBySearcher([
       { name: 'Alex', description: 'User is named Alex and works at TechCorp', type: 'person', score: 0.9 },
-    ]);
+    ]));
 
     const { model, capturedParams } = makeFakeModel();
     const wrapped = createNamsMemory({ apiKey: 'k' }).wrap(model, { userId: freshUser() });
@@ -58,9 +58,9 @@ describe('middleware mode — memory injection', () => {
   });
 
   it('injects stored relationships as triples, and explains the notation once', async () => {
-    fake.longTerm.searchEntities.mockResolvedValue([
+    fake.longTerm.searchEntities.mockImplementation(ownedBySearcher([
       { id: 'ent-alex', name: 'Alex', description: 'The user', type: 'person' },
-    ]);
+    ]));
     fake.longTerm.getEntity.mockResolvedValue({
       id: 'ent-alex',
       name: 'Alex',
@@ -80,9 +80,9 @@ describe('middleware mode — memory injection', () => {
   });
 
   it('does not explain the triple notation when no relationship was found', async () => {
-    fake.longTerm.searchEntities.mockResolvedValue([
+    fake.longTerm.searchEntities.mockImplementation(ownedBySearcher([
       { id: 'ent-alex', name: 'Alex', description: 'The user', type: 'person' },
-    ]);
+    ]));
 
     const { model, capturedParams } = makeFakeModel();
     const wrapped = createNamsMemory({ apiKey: 'k' }).wrap(model, { userId: freshUser() });
@@ -121,9 +121,9 @@ describe('middleware mode — memory injection', () => {
 describe('middleware mode — persistence', () => {
   it('persists the clean user text and the assistant response after generate', async () => {
     // A memory is added to the prompt, but the saved text must be the original.
-    fake.longTerm.searchEntities.mockResolvedValue([
+    fake.longTerm.searchEntities.mockImplementation(ownedBySearcher([
       { name: 'Fact', description: 'Some stored fact', type: 'fact' },
-    ]);
+    ]));
 
     const { model } = makeFakeModel('Graphs model relationships.');
     const conversationId = 'conv-explicit';
@@ -201,9 +201,9 @@ describe('middleware mode — persistence', () => {
   });
 
   it('saves one user and one assistant message for a whole tool loop, searching once', async () => {
-    fake.longTerm.searchEntities.mockResolvedValue([
+    fake.longTerm.searchEntities.mockImplementation(ownedBySearcher([
       { name: 'Alex', description: 'lives in Paris', type: 'person', confidence: 0.9 },
-    ]);
+    ]));
     const seen: any[] = [];
     let step = 0;
     const { model } = makeFakeModel();
@@ -271,9 +271,9 @@ describe('middleware mode — persistence', () => {
   it('injects exactly one memory block when a step is retried', async () => {
     // Retries reuse the prompt array and rerun transformParams. Editing it in
     // place used to add a second memory block.
-    fake.longTerm.searchEntities.mockResolvedValue([
+    fake.longTerm.searchEntities.mockImplementation(ownedBySearcher([
       { name: 'Alex', description: 'works at TechCorp', type: 'person', confidence: 0.9 },
-    ]);
+    ]));
 
     const seen: string[] = [];
     const { model } = makeFakeModel();
@@ -304,9 +304,9 @@ describe('middleware mode — persistence', () => {
   });
 
   it('persists the user text, never the memory-augmented prompt, across a retry', async () => {
-    fake.longTerm.searchEntities.mockResolvedValue([
+    fake.longTerm.searchEntities.mockImplementation(ownedBySearcher([
       { name: 'Alex', description: 'works at TechCorp', type: 'person', confidence: 0.9 },
-    ]);
+    ]));
 
     const { model } = makeFakeModel('answer');
     const generate = (model as any).doGenerate;

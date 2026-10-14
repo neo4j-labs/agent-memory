@@ -1,7 +1,6 @@
 /**
  * Neo4j Agent Memory (NAMS) for the Vercel AI SDK. Four ways to add memory:
  * a provider, middleware, tools the model calls, or hooks your code drives.
- * See the README for each one.
  */
 
 export type { NamsConfig, NamsScope, NamsLogger, MemoryHit, StoreInput, GraphExtractor } from './vercel-ai-provider-client';
@@ -54,9 +53,7 @@ import { createNamsHooks, type NamsHooksOptions } from './vercel-ai-provider-hoo
 export type NamsMode = 'provider' | 'middleware' | 'tools' | 'hooks';
 
 export interface NamsFactoryConfig extends NamsConfig {
-  /** Tools mode only: pull entities out of each stored memory. One extra model call per memory. */
   extractionModel?: LanguageModel;
-  /** Extractor options, e.g. a custom `skipEntity` filter. */
   extractionOptions?: GraphExtractorOptions;
   maxMemories?: number;
   persistInteractions?: boolean;
@@ -71,13 +68,13 @@ export function createNams(config: NamsFactoryConfig) {
     logger: config.logger,
     crossSessionLimit: config.crossSessionLimit,
     graphExpansionLimit: config.graphExpansionLimit,
+    workspaceGraph: config.workspaceGraph,
     maxMemories: config.maxMemories,
     persistInteractions: config.persistInteractions,
   };
 
   const memory = createNamsMemory(providerConfig);
 
-  // Warn once when extractionModel is set in a mode that ignores it.
   let extractionScopeWarned = false;
   const warnExtractionIgnored = (mode: string): void => {
     if (extractionScopeWarned || !config.extractionModel) return;
@@ -89,13 +86,10 @@ export function createNams(config: NamsFactoryConfig) {
   };
 
   return {
-    /** Middleware mode. Returns the model with memory added. No tool calls. */
     wrap(model: WrappableModel, scope: NamsScope): WrappedModel {
       warnExtractionIgnored('middleware');
       return memory.wrap(model, scope);
     },
-
-    /** Tools mode. Returns `query_memory` and `store_memory` for the model to call. */
     tools(scope: NamsScope) {
       return createNamsMemoryTools({
         ...config,
@@ -105,7 +99,6 @@ export function createNams(config: NamsFactoryConfig) {
       });
     },
 
-    /** Tools mode plus MCP server tools. Call `close()` when done. */
     async toolsWithMcp(scope: NamsScope, mcpConfig?: McpConfig) {
       return createNamsTools({
         ...config,
@@ -116,7 +109,6 @@ export function createNams(config: NamsFactoryConfig) {
       });
     },
 
-    /** Hooks mode. Your code loads the session and saves it; the model is not involved. */
     hooks(scope?: Partial<NamsScope> & Pick<NamsHooksOptions, 'hooks' | 'onSystemMessage' | 'sessionLimit'>) {
       warnExtractionIgnored('hooks');
       const { extractionModel: _m, extractionOptions: _o, ...hooksConfig } = config;

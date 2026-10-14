@@ -10,7 +10,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { makeFakeClient, type FakeClient } from './vercel-ai-provider-helpers';
+import { makeFakeClient, type FakeClient, ownedBySearcher } from './vercel-ai-provider-helpers';
 
 const holder = vi.hoisted(() => ({ client: undefined as unknown }));
 
@@ -59,9 +59,9 @@ beforeEach(() => {
 
 describe('query_memory', () => {
   it('returns found=true with ranked memories', async () => {
-    fake.longTerm.searchEntities.mockResolvedValue([
+    fake.longTerm.searchEntities.mockImplementation(ownedBySearcher([
       { name: 'Alex', description: 'User is named Alex', type: 'person', confidence: 0.92 },
-    ]);
+    ]));
     fake.shortTerm.searchMessages.mockResolvedValue([
       { content: 'I love terse answers' },
     ]);
@@ -96,9 +96,9 @@ describe('query_memory', () => {
   });
 
   it('deduplicates identical content across sources', async () => {
-    fake.longTerm.searchEntities.mockResolvedValue([
+    fake.longTerm.searchEntities.mockImplementation(ownedBySearcher([
       { name: 'x', description: 'duplicate fact', type: 'fact' },
-    ]);
+    ]));
     fake.shortTerm.searchMessages.mockResolvedValue([{ content: 'duplicate fact' }]);
 
     const { query_memory } = createNamsMemoryTools({
@@ -112,9 +112,9 @@ describe('query_memory', () => {
   });
 
   it('caps the number of returned memories at the requested limit', async () => {
-    fake.longTerm.searchEntities.mockResolvedValue(
+    fake.longTerm.searchEntities.mockImplementation(ownedBySearcher(
       Array.from({ length: 5 }, (_, i) => ({ name: `e${i}`, description: `fact ${i}`, type: 'fact' })),
-    );
+    ));
     fake.shortTerm.searchMessages.mockResolvedValue(
       Array.from({ length: 5 }, (_, i) => ({ content: `message ${i}` })),
     );
@@ -149,10 +149,11 @@ describe('store_memory', () => {
     expect(fake.longTerm.addEntity).not.toHaveBeenCalled();
   });
 
-  it('stores a fact as a long-term entity with confidence feedback', async () => {
+  it("stores a fact as a long-term entity in the user's memory, with confidence feedback", async () => {
+    const userId = freshUser();
     const { store_memory } = createNamsMemoryTools({
       apiKey: 'k',
-      userId: freshUser(),
+      userId,
       conversationId: 'conv-s2',
     });
 
@@ -162,19 +163,20 @@ describe('store_memory', () => {
 
     expect(out.stored).toBe(true);
     expect(fake.longTerm.addEntity).toHaveBeenCalledWith(
-      'Prefers dark mode', 'user_preference', { description: 'Prefers dark mode' },
+      'Prefers dark mode', 'user_preference', { description: 'Prefers dark mode', userId },
     );
     expect(fake.longTerm.setEntityFeedback).toHaveBeenCalledWith(
       'ent-Prefers dark mode', { userScore: 0.9, confirmed: true },
     );
   });
 
-  it('reuses an existing entity instead of duplicating it', async () => {
-    fake.longTerm.getEntityByName.mockResolvedValue({ id: 'ent-existing', name: 'Prefers dark mode', type: 'fact' });
+  it("reuses the user's existing entity instead of duplicating it", async () => {
+    const userId = freshUser();
+    fake.longTerm.getEntityByName.mockResolvedValue({ id: 'ent-existing', name: 'Prefers dark mode', type: 'fact', userId });
 
     const { store_memory } = createNamsMemoryTools({
       apiKey: 'k',
-      userId: freshUser(),
+      userId,
       conversationId: 'conv-s3',
     });
 
@@ -185,6 +187,32 @@ describe('store_memory', () => {
     expect(fake.longTerm.addEntity).not.toHaveBeenCalled();
     expect(fake.longTerm.setEntityFeedback).toHaveBeenCalledWith(
       'ent-existing', expect.objectContaining({ userScore: 0.7 }),
+    );
+  });
+
+  it("searches for the user's own entity when the name lookup finds another user's", async () => {
+    const userId = freshUser();
+    fake.longTerm.getEntityByName.mockResolvedValue(
+      { id: 'ent-other', name: 'Prefers dark mode', type: 'fact', userId: 'someone-else' },
+    );
+    fake.longTerm.searchEntities.mockResolvedValue(
+      [{ id: 'ent-own', name: 'Prefers dark mode', type: 'fact', userId }],
+    );
+
+    const { store_memory } = createNamsMemoryTools({
+      apiKey: 'k',
+      userId,
+      conversationId: 'conv-s3b',
+    });
+
+    await callTool<StoreOutput>(store_memory,
+      { content: 'Prefers dark mode', type: 'fact', confidence: 0.7, tags: [] },
+    );
+
+    expect(fake.longTerm.getEntityByName).toHaveBeenCalledWith('Prefers dark mode', { type: 'fact', userId });
+    expect(fake.longTerm.addEntity).not.toHaveBeenCalled();
+    expect(fake.longTerm.setEntityFeedback).toHaveBeenCalledWith(
+      'ent-own', expect.objectContaining({ userScore: 0.7 }),
     );
   });
 
@@ -249,8 +277,8 @@ describe('enforceQueryMemory', () => {
 });
 
 describe('ensureMemoryStored', () => {
-  const tools = (conversationId: string) =>
-    createNamsMemoryTools({ apiKey: 'k', userId: freshUser(), conversationId });
+  const tools = (conversationId: string, userId = freshUser()) =>
+    createNamsMemoryTools({ apiKey: 'k', userId, conversationId });
 
   it('persists the assistant turn as an interaction when store_memory never ran', async () => {
     const t = tools('conv-e1');
@@ -303,7 +331,8 @@ describe('ensureMemoryStored', () => {
   });
 
   it('honours a custom fallback, including returning null to skip', async () => {
-    const t = tools('conv-e5');
+    const userId = freshUser();
+    const t = tools('conv-e5', userId);
 
     const stored = await ensureMemoryStored(t, {
       fallback: ({ text, toolNames }) => ({
@@ -316,7 +345,7 @@ describe('ensureMemoryStored', () => {
     expect(stored).toMatchObject({ stored: true });
     expect(fake.longTerm.addEntity).toHaveBeenCalledWith(
       '[query_memory] Alex works at TechCorp', 'fact',
-      { description: '[query_memory] Alex works at TechCorp' },
+      { description: '[query_memory] Alex works at TechCorp', userId },
     );
 
     const skipped = await ensureMemoryStored(t, { fallback: () => null })({ text: 'anything' });

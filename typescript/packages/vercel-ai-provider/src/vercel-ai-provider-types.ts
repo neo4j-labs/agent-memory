@@ -12,12 +12,10 @@ export interface NamsConfig {
   apiKey: string;
   endpoint?: string;
   workspaceId?: string;
-  /** Logger for non-fatal errors (default: console). */
   logger?: NamsLogger;
-  /** How many of the user's other recent conversations to also search (default: 5). `0` turns this off. */
   crossSessionLimit?: number;
-  /** How many matched entities to read relationships for, one request each (default: 2). `0` turns this off. */
   graphExpansionLimit?: number;
+  workspaceGraph?: boolean;
 }
 
 export interface NamsScope {
@@ -29,11 +27,9 @@ export type MemorySource = 'long-term' | 'graph' | 'conversation' | 'cross-sessi
 export type MemoryType = 'fact' | 'interaction' | 'pattern' | 'user_preference';
 
 export interface MemoryHit {
-  /** For a `graph` hit, one relationship: `(Alex)-[WORKS_AT]->(TechCorp)`. */
   content: string;
   source: MemorySource;
   type: string;
-  /** The entity's stored confidence, where there is one. It rates the extraction, not the match, so hits are not ordered by it. */
   score?: number;
 }
 
@@ -44,13 +40,16 @@ export interface StoreInput {
   tags?: string[];
 }
 
-export type GraphExtractor = (client: MemoryClient, input: StoreInput) => Promise<void>;
+/** `scope.userId`, when given, is the user whose memory the extracted entities go in. */
+export type GraphExtractor = (
+  client: MemoryClient,
+  input: StoreInput,
+  scope?: { userId?: string },
+) => Promise<void>;
 
 export interface ClientState {
   convCache: Map<string, string>;
   logger: NamsLogger;
-  /** True after the first graph extraction failure. */
   extractionFailed?: boolean;
-  /** True once the backend has said it can't write relationships. */
   relationshipWritesUnsupported?: boolean;
 }

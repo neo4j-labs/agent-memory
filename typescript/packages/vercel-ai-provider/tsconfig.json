@@ -14,5 +14,7 @@
     "forceConsistentCasingInFileNames": true,
     "types": ["node"]
   },
-  "include": ["src", "test", "examples"]
+  "include": ["src", "test", "examples"],
+  // Separate test app with its own packages.
+  "exclude": ["node_modules", "dist", "examples/eve-memory-eval"]
 }

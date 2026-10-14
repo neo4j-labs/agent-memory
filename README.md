@@ -48,7 +48,7 @@ TypeScript agents read and write the same memory.
 | Python | [`neo4j-agent-memory`](https://pypi.org/project/neo4j-agent-memory/) | `pip install 'neo4j-agent-memory==0.7.0'` | [Python SDK docs](https://neo4j.com/labs/agent-memory/sdks/python) |
 | TypeScript | [`@neo4j-labs/agent-memory`](https://www.npmjs.com/package/@neo4j-labs/agent-memory) | `npm install @neo4j-labs/agent-memory@0.5.0` | [TypeScript SDK docs](https://neo4j.com/labs/agent-memory/sdks/typescript) |
 
-Related package: [`@neo4j-labs/nams-ai-provider`](https://www.npmjs.com/package/@neo4j-labs/nams-ai-provider) (npm, `0.3.0`) wraps the TypeScript SDK for the Vercel AI SDK — a provider, middleware, tools and lifecycle hooks for NAMS-backed agents. Source: [`typescript/packages/vercel-ai-provider/`](typescript/packages/vercel-ai-provider/).
+Related package: [`@neo4j-labs/nams-ai-provider`](https://www.npmjs.com/package/@neo4j-labs/nams-ai-provider) (npm, `0.3.0`) wraps the TypeScript SDK for the Vercel AI SDK — a provider, middleware, tools and lifecycle hooks for NAMS-backed agents — and, from its `/eve` entry point, is a memory provider for [eve](https://eve.dev) agents. Source: [`typescript/packages/vercel-ai-provider/`](typescript/packages/vercel-ai-provider/).
 
 The Python SDK lives at the repo root (`src/neo4j_agent_memory/`,
 `examples/`); the TypeScript SDK lives at `typescript/`. The two SDKs are

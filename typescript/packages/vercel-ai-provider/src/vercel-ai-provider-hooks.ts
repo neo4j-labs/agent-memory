@@ -22,44 +22,32 @@ export type { SessionTurn };
 // Options
 
 export interface NamsHooksOptions extends NamsConfig {
-  /** Default scope. Every hook call can override it. */
   userId?: string;
   conversationId?: string;
-  /** Max prior turns `loadSession` restores (default: 40). */
   sessionLimit?: number;
-  /** Lifecycle hooks by event. See `NamsHookConfig`. */
   hooks?: NamsHookConfig;
-  /** Where a hook's `systemMessage` goes. Defaults to the logger. */
   onSystemMessage?: NamsSystemMessageSink;
 }
 
 export interface LoadSessionOptions {
   userId?: string;
   conversationId?: string;
-  /** Max prior turns to restore. Defaults to `sessionLimit`. */
   limit?: number;
 }
 
 export interface PrepareOptions {
   userId?: string;
   conversationId?: string;
-  /** The user's message for this turn. */
   prompt: string;
-  /** Max prior turns to restore. Defaults to `sessionLimit`. */
   limit?: number;
 }
 
 export interface PrepareResult {
-  /** The history, then this turn's prompt. Never contains a system message. */
   messages: ModelMessage[];
-  /** Extra context from hooks. Add it to your own `instructions`. */
   instructions?: string;
-  /** The prompt after any `UserPromptSubmit` rewrite. Pass this one to `onFinish`. */
   prompt: string;
-  /** True when a `UserPromptSubmit` hook blocked the turn. Do not call the model. */
   blocked: boolean;
   blockReason?: string;
-  /** Anything a hook asked the app to show. */
   systemMessages: string[];
 }
 
@@ -73,9 +61,7 @@ export interface NamsToolBlocked {
 export interface OnFinishScope {
   userId?: string;
   conversationId?: string;
-  /** The user input of this generation, saved as the `user` turn. */
   prompt?: string | ModelMessage[];
-  /** Save the user prompt as a turn (default: true). */
   persistUserPrompt?: boolean;
 }
 
@@ -87,11 +73,8 @@ interface ResponseMessageLike {
 }
 
 export interface NamsOnFinishEvent {
-  /** Final assistant text. */
   readonly text?: string;
-  /** Assistant and tool messages from every step, in order. */
   readonly responseMessages?: ReadonlyArray<ResponseMessageLike>;
-  /** Per-call scope in ai v7. */
   readonly runtimeContext?: unknown;
   readonly finalStep?: { readonly runtimeContext?: unknown };
 }
@@ -100,8 +83,6 @@ export interface NamsOnFinishEvent {
 export type NamsOnFinishCallback = (event: NamsOnFinishEvent) => Promise<void>;
 
 // Turn extraction
-
-/** Marks a saved tool record. `loadSession` skips these. */
 const AUDIT_KIND_KEY = 'namsKind';
 
 /** Max hook context lines queued per scope. */
@@ -155,7 +136,6 @@ const turnsFromResponse = (messages: ReadonlyArray<ResponseMessageLike>): Sessio
         continue;
       }
       if (!Array.isArray(message.content)) continue;
-      // Keep order: text joins into one turn until a tool call.
       let text = '';
       const flushText = () => {
         if (text) turns.push({ role: 'assistant', content: text });
@@ -209,8 +189,6 @@ async function persistTurns(
 }
 
 // Factory
-
-/** Create the session hooks. See the README for a full example. */
 export function createNamsHooks(options: NamsHooksOptions) {
   const client = makeClient(options);
   const log = getLogger(client);
@@ -238,7 +216,6 @@ export function createNamsHooks(options: NamsHooksOptions) {
     timestamp: new Date(),
   });
 
-  // Hook context queued for the next prepare().
   const pendingContext = new Map<string, string[]>();
   const startedSessions = new Set<string>();
   const scopeKey = (scope: NamsScope): string => `${scope.userId}::${scope.conversationId ?? ''}`;
@@ -257,7 +234,6 @@ export function createNamsHooks(options: NamsHooksOptions) {
     return queued;
   };
 
-  /** Load past user and assistant messages (not tool records). Never throws; a new user gets `[]`. */
   const loadSession = async (opts: LoadSessionOptions = {}): Promise<ModelMessage[]> => {
     const scope = resolveScope(opts, 'loadSession');
 
@@ -397,7 +373,6 @@ export function createNamsHooks(options: NamsHooksOptions) {
                 attempt,
               });
               queueContext(resolved, failure.additionalContext);
-              // One retry only, so a hook cannot loop the tool forever.
               if (failure.retry && attempt === 1) continue;
               throw err;
             }
@@ -409,7 +384,6 @@ export function createNamsHooks(options: NamsHooksOptions) {
     return wrapped as unknown as T;
   };
 
-  /** The callback that saves the turn. With `ToolLoopAgent`, pass the scope on `runtimeContext`. */
   const onFinish = (scope: OnFinishScope = {}): NamsOnFinishCallback => {
     return async (event) => {
       const context = (event.finalStep?.runtimeContext ?? event.runtimeContext ?? {}) as OnFinishScope;
@@ -468,7 +442,6 @@ export function createNamsHooks(options: NamsHooksOptions) {
     };
   };
 
-  /** Run `SessionEnd` and reset, so the next `prepare()` starts a new session. */
   const end = async (scope: { userId?: string; conversationId?: string; reason?: string } = {}): Promise<void> => {
     const resolved = resolveScope(scope, 'end');
 

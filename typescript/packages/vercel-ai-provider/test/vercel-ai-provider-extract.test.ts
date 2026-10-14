@@ -49,6 +49,18 @@ describe('createGraphExtractor', () => {
     expect(fake.longTerm.addRelationship).toHaveBeenCalledWith('ent-Alex', 'ent-TechCorp', 'WORKS_AT');
   });
 
+  it("with a userId, writes to that user's memory and never reuses another user's entity", async () => {
+    fake.longTerm.getEntityByName.mockRejectedValue(new Error('unsupported on this backend'));
+    // Worst case: search ignores the filter and returns another user's Alex.
+    fake.longTerm.searchEntities.mockResolvedValue([{ id: 'ent-their-alex', name: 'Alex', type: 'person', userId: 'u2' }]);
+    mockedGenerateText.mockResolvedValue(graphResult([{ name: 'Alex', type: 'person', description: 'A user' }]));
+
+    await createGraphExtractor({} as any)(fake as any, { content: 'Alex', type: 'fact' }, { userId: 'u1' });
+
+    expect(fake.longTerm.searchEntities).toHaveBeenCalledWith('Alex', { limit: 5, userId: 'u1' });
+    expect(fake.longTerm.addEntity).toHaveBeenCalledWith('Alex', 'person', { description: 'A user', userId: 'u1' });
+  });
+
   it('skips relationships whose endpoints were not extracted', async () => {
     mockedGenerateText.mockResolvedValue(graphResult(
       [{ name: 'Alex', type: 'person' }],

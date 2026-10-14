@@ -6,7 +6,7 @@
  */
 
 import { openai } from '@ai-sdk/openai';
-import { ToolLoopAgent, createAgentUIStreamResponse, stepCountIs, type UIMessage } from 'ai';
+import { ToolLoopAgent, createAgentUIStreamResponse, isStepCount, type UIMessage } from 'ai';
 // In your app, import from the published package instead:
 //   import { createNamsProvider } from '@neo4j-labs/nams-ai-provider';
 import { createNamsProvider } from '../src/index';
@@ -28,7 +28,7 @@ export async function POST(req: Request): Promise<Response> {
   const agent = new ToolLoopAgent({
     model: nams.languageModel(model),
     instructions: 'You are a helpful assistant.',
-    stopWhen: stepCountIs(1), // no tools needed in provider mode
+    stopWhen: isStepCount(1), // no tools needed in provider mode
   });
 
   return createAgentUIStreamResponse({ agent, uiMessages: messages });

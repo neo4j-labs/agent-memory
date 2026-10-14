@@ -18,7 +18,7 @@
  */
 
 import { openai } from '@ai-sdk/openai';
-import { ToolLoopAgent, stepCountIs } from 'ai';
+import { ToolLoopAgent, isStepCount } from 'ai';
 import { createNamsProvider } from '../src/index';
 
 const userId = process.env.NAMS_DEMO_USER ?? 'demo-user-basic-chat';
@@ -35,7 +35,7 @@ async function session(label: string, message: string): Promise<void> {
   const agent = new ToolLoopAgent({
     model: nams.languageModel(model),
     instructions: 'You are a helpful assistant.',
-    stopWhen: stepCountIs(1), // no tools needed in provider mode
+    stopWhen: isStepCount(1), // no tools needed in provider mode
   });
 
   const { text } = await agent.generate({ prompt: message });

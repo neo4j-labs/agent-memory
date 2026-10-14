@@ -1,0 +1,16 @@
+{
+  // Type settings for this test app. eve builds the code itself, so tsc only checks it.
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "types": ["node"],
+    "strict": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "noEmit": true
+  },
+  "include": ["agent/**/*", "evals/**/*"],
+  "exclude": ["node_modules", ".eve", ".output"]
+}

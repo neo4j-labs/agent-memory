@@ -16,7 +16,7 @@
  */
 
 import { openai } from '@ai-sdk/openai';
-import { ToolLoopAgent, stepCountIs } from 'ai';
+import { ToolLoopAgent, isStepCount } from 'ai';
 import { z } from 'zod';
 import {
   createNams,
@@ -53,7 +53,7 @@ function buildChat(): Chat {
       const agent = new ToolLoopAgent({
         model: nams.languageModel(model),
         instructions: 'You are a helpful assistant.',
-        stopWhen: stepCountIs(1),
+        stopWhen: isStepCount(1),
       });
       return { send: async (message) => (await agent.generate({ prompt: message })).text };
     }
@@ -64,7 +64,7 @@ function buildChat(): Chat {
       const agent = new ToolLoopAgent({
         model: nams.wrap(openai(model), scope),
         instructions: 'You are a helpful assistant.',
-        stopWhen: stepCountIs(1),
+        stopWhen: isStepCount(1),
       });
       return { send: async (message) => (await agent.generate({ prompt: message })).text };
     }
@@ -80,8 +80,8 @@ function buildChat(): Chat {
           'giving your final answer.',
         tools,
         prepareStep: enforceQueryMemory(),
-        onFinish: async (event) => { await ensureMemoryStored(tools)(event); },
-        stopWhen: stepCountIs(6),
+        onEnd: async (event) => { await ensureMemoryStored(tools)(event); },
+        stopWhen: isStepCount(6),
       });
       return { send: async (message) => (await agent.generate({ prompt: message })).text };
     }
@@ -101,8 +101,8 @@ function buildChat(): Chat {
           ],
           runtimeContext: options,
         }),
-        onFinish: session.onFinish(),
-        stopWhen: stepCountIs(6),
+        onEnd: session.onFinish(),
+        stopWhen: isStepCount(6),
       });
       return {
         send: async (message) =>

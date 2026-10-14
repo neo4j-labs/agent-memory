@@ -138,7 +138,11 @@ const buildMiddleware = (
 
     const memories = await retrieveMemories(
       client, scope, convId, userText, maxMemories,
-      { crossSessionLimit: config.crossSessionLimit, graphExpansionLimit: config.graphExpansionLimit },
+      {
+        crossSessionLimit: config.crossSessionLimit,
+        graphExpansionLimit: config.graphExpansionLimit,
+        workspaceGraph: config.workspaceGraph,
+      },
     ).catch(e => { log.warn('retrieve failed', e); return [] as MemoryHit[]; });
     turnMemories = { userText, memories };
     return memories;

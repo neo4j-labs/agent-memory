@@ -49,22 +49,18 @@ export type StoreInput = z.infer<typeof storeSchema>;
 export type QueryOutput = { found: boolean; count?: number; message?: string; memories: MemoryHit[] };
 export type StoreOutput = { stored: boolean; type: string; preview: string; message: string };
 
-/** The third generic of `tool()`, added in AI SDK v7. */
 type ToolContext = Record<string, unknown>;
 
 // Options
 
 export interface NamsToolsOptions extends NamsConfig, NamsScope {
   extractionModel?: LanguageModel;
-  /** Extractor options, e.g. a custom `skipEntity` filter. */
   extractionOptions?: GraphExtractorOptions;
 }
 
-/** MCP server connection. `headers` are sent on every request. */
 export interface McpConfig {
   url: string;
   headers?: Record<string, string> | (() => Record<string, string> | Promise<Record<string, string>>);
-  /** Added to each MCP tool name (e.g. `'mcp_'`) to avoid name clashes. */
   toolPrefix?: string;
   optional?: boolean;
 }
@@ -75,16 +71,12 @@ export interface NamsToolsWithMcpOptions extends NamsToolsOptions {
 
 export interface McpConnectionStatus {
   connected: boolean;
-  /** Tool names the model sees, with `toolPrefix` applied. */
   toolNames: string[];
-  /** Set when `mcp.optional` hid a connection failure. */
   error?: NamsMcpConnectionError;
 }
 
 export interface NamsToolsResult {
-  /** NAMS and MCP tools together. */
   tools: ToolSet;
-  /** Close the MCP connection (no-op without MCP). */
   close: () => Promise<void>;
   mcp?: McpConnectionStatus;
 }
@@ -119,6 +111,7 @@ interface MemoryToolsHandle {
   client: MemoryClient;
   getConvId: () => Promise<string>;
   extractor?: GraphExtractor;
+  userId: string;
 }
 
 const handleByToolSet = new WeakMap<object, MemoryToolsHandle>();
@@ -145,7 +138,11 @@ export function createNamsMemoryTools(options: NamsToolsOptions) {
         const convId = await getConvId();
         const memories = await retrieveMemories(
           client, scope, convId, query, limit,
-          { crossSessionLimit: options.crossSessionLimit, graphExpansionLimit: options.graphExpansionLimit },
+          {
+            crossSessionLimit: options.crossSessionLimit,
+            graphExpansionLimit: options.graphExpansionLimit,
+            workspaceGraph: options.workspaceGraph,
+          },
         );
         if (memories.length === 0)
           return { found: false, message: 'No relevant memories found.', memories: [] };
@@ -169,7 +166,7 @@ export function createNamsMemoryTools(options: NamsToolsOptions) {
     execute: async ({ content, type, confidence, tags }) => {
       try {
         const convId = await getConvId();
-        await storeMemory(client, convId, { content, type, confidence, tags }, { extractor });
+        await storeMemory(client, convId, { content, type, confidence, tags }, { extractor, userId: scope.userId });
         return {
           stored: true,
           type,
@@ -184,29 +181,22 @@ export function createNamsMemoryTools(options: NamsToolsOptions) {
   });
 
   const tools = { query_memory, store_memory };
-  handleByToolSet.set(tools, { client, getConvId, extractor });
+  handleByToolSet.set(tools, { client, getConvId, extractor, userId: scope.userId });
   return tools;
 }
 
 export interface FinishedTurn {
-  /** Assistant text from the final step. */
   text?: string;
-  /** Tool calls from all steps. */
   toolCalls?: ReadonlyArray<{ toolName: string }>;
-  /** Per-step tool calls, used if `toolCalls` is missing. */
   steps?: ReadonlyArray<{ toolCalls?: ReadonlyArray<{ toolName: string }> }>;
 }
 
-/** The turn passed to `fallback` when nothing was stored. */
 export interface UnstoredTurn {
-  /** Final assistant text, or `''`. */
   text: string;
-  /** Tools called this turn, without duplicates. */
   toolNames: string[];
 }
 
 export interface EnsureMemoryStoredOptions {
-  /** What to save if the model never stored anything. `null` saves nothing. */
   fallback?: (turn: UnstoredTurn) => MemoryStoreInput | null;
 }
 
@@ -249,7 +239,7 @@ export function ensureMemoryStored(
 
     try {
       const convId = await handle.getConvId();
-      await storeMemory(handle.client, convId, input, { extractor: handle.extractor });
+      await storeMemory(handle.client, convId, input, { extractor: handle.extractor, userId: handle.userId });
       return { stored: true, input };
     } catch (err) {
       getLogger(handle.client).error('ensureMemoryStored failed to persist the turn', err);
@@ -259,7 +249,6 @@ export function ensureMemoryStored(
 }
 
 export interface EnforceQueryMemoryOptions {
-  /** Steps allowed before `query_memory` is forced (default: 3). Keep it 2 below your step limit. */
   graceSteps?: number;
 }
 

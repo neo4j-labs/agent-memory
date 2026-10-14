@@ -1,0 +1,5 @@
+node_modules/
+.eve/
+.output/
+# Changes on every build of the local package, so not saved.
+package-lock.json

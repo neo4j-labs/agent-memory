@@ -8,6 +8,8 @@
  *    without end punctuation or a possessive 's
  *  - fallback results are sorted by word overlap with the query
  *  - fallback errors are swallowed
+ *  - entities come from the user's own memory, shared ones only when asked,
+ *    and other users' never
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -26,7 +28,7 @@ const scope = { userId: 'u1' };
 describe('retrieveMemories — substring-search fallback', () => {
   it('does not retry when the direct phrase search already finds a match', async () => {
     fake.longTerm.searchEntities.mockResolvedValue([
-      { name: 'Fact', description: 'User is from Delhi.', type: 'fact' },
+      { name: 'Fact', description: 'User is from Delhi.', type: 'fact', userId: 'u1' },
     ]);
 
     await retrieveMemories(fake as any, scope, 'conv-1', 'User is from Delhi', 5);
@@ -37,7 +39,7 @@ describe('retrieveMemories — substring-search fallback', () => {
 
   it('retries with Title-Case and as-given word variants when the direct search finds nothing', async () => {
     fake.longTerm.searchEntities.mockImplementation(async (q: string) =>
-      q === 'Delhi' ? [{ name: 'Fact', description: 'User is from Delhi.', type: 'fact' }] : [],
+      q === 'Delhi' ? [{ name: 'Fact', description: 'User is from Delhi.', type: 'fact', userId: 'u1' }] : [],
     );
 
     const hits = await retrieveMemories(fake as any, scope, 'conv-1', 'where do i live delhi', 5);
@@ -54,8 +56,8 @@ describe('retrieveMemories — substring-search fallback', () => {
       if (q !== 'User') return [];
       // Several "User..." entities match. The one sharing the most query words comes first.
       return [
-        { name: 'e1', description: "User's name is Alex.", type: 'fact' },
-        { name: 'e2', description: 'User is from Delhi.', type: 'fact' },
+        { name: 'e1', description: "User's name is Alex.", type: 'fact', userId: 'u1' },
+        { name: 'e2', description: 'User is from Delhi.', type: 'fact', userId: 'u1' },
       ];
     });
 
@@ -87,7 +89,7 @@ describe('retrieveMemories — substring-search fallback', () => {
 
   it("drops a possessive 's, so \"Alex's\" finds Alex", async () => {
     fake.longTerm.searchEntities.mockImplementation(async (q: string) =>
-      q === 'Alex' ? [{ name: 'Alex', description: 'The user.', type: 'person' }] : [],
+      q === 'Alex' ? [{ name: 'Alex', description: 'The user.', type: 'person', userId: 'u1' }] : [],
     );
 
     const query = "what is Alex’s editor? ask O'Brien";
@@ -102,7 +104,7 @@ describe('retrieveMemories — substring-search fallback', () => {
 
   it('lower-cases the rest of the Title Case variant, so "NEOVIM" finds Neovim', async () => {
     fake.longTerm.searchEntities.mockImplementation(async (q: string) =>
-      q === 'Neovim' ? [{ name: 'Neovim', description: 'A text editor.', type: 'tool' }] : [],
+      q === 'Neovim' ? [{ name: 'Neovim', description: 'A text editor.', type: 'tool', userId: 'u1' }] : [],
     );
 
     const hits = await retrieveMemories(fake as any, scope, 'conv-1', 'DO I USE NEOVIM', 5);
@@ -127,7 +129,7 @@ describe('retrieveMemories — substring-search fallback', () => {
 describe('retrieveMemories — long-term hits carry the entity name', () => {
   it('renders name and description together', async () => {
     fake.longTerm.searchEntities.mockResolvedValue([
-      { name: 'Python', description: 'Preferred language', type: 'ProgrammingLanguage' },
+      { name: 'Python', description: 'Preferred language', type: 'ProgrammingLanguage', userId: 'u1' },
     ]);
 
     const hits = await retrieveMemories(fake as any, scope, 'conv-1', 'Preferred language', 5);
@@ -137,7 +139,7 @@ describe('retrieveMemories — long-term hits carry the entity name', () => {
 
   it('falls back to the bare name when the entity has no description', async () => {
     fake.longTerm.searchEntities.mockResolvedValue([
-      { name: 'Bangalore', type: 'Location' },
+      { name: 'Bangalore', type: 'Location', userId: 'u1' },
     ]);
 
     const hits = await retrieveMemories(fake as any, scope, 'conv-1', 'Bangalore', 5);
@@ -149,8 +151,8 @@ describe('retrieveMemories — long-term hits carry the entity name', () => {
     fake.longTerm.searchEntities.mockImplementation(async (q: string) =>
       q === 'prefer' || q === 'Prefer'
         ? [
-            { name: 'Rust', description: 'A language the user prefers', type: 'lang' },
-            { name: 'Python', description: 'A language the user prefers', type: 'lang' },
+            { name: 'Rust', description: 'A language the user prefers', type: 'lang', userId: 'u1' },
+            { name: 'Python', description: 'A language the user prefers', type: 'lang', userId: 'u1' },
           ]
         : [],
     );
@@ -164,8 +166,8 @@ describe('retrieveMemories — long-term hits carry the entity name', () => {
 
   it('keeps distinct entities that happen to share a description', async () => {
     fake.longTerm.searchEntities.mockResolvedValue([
-      { name: 'Python', description: 'Preferred language', type: 'lang' },
-      { name: 'TypeScript', description: 'Preferred language', type: 'lang' },
+      { name: 'Python', description: 'Preferred language', type: 'lang', userId: 'u1' },
+      { name: 'TypeScript', description: 'Preferred language', type: 'lang', userId: 'u1' },
     ]);
 
     const hits = await retrieveMemories(fake as any, scope, 'conv-1', 'Preferred language', 5);
@@ -217,7 +219,7 @@ describe('retrieveMemories — cross-session search', () => {
  * NAMS stored are only in the prompt if they are read back.
  */
 describe('retrieveMemories — graph expansion', () => {
-  const alex = { id: 'ent-alex', name: 'Alex', description: 'The user', type: 'person' };
+  const alex = { id: 'ent-alex', name: 'Alex', description: 'The user', type: 'person', userId: 'u1' };
 
   const relationships = (...refs: Array<[string, string?]>) =>
     refs.map(([type, targetName], i) => ({ id: `r${i}`, type, targetId: `t${i}`, targetName }));
@@ -231,7 +233,7 @@ describe('retrieveMemories — graph expansion', () => {
 
     const hits = await retrieveMemories(fake as any, scope, 'conv-1', 'Alex', 5);
 
-    expect(fake.longTerm.getEntity).toHaveBeenCalledWith('ent-alex');
+    expect(fake.longTerm.getEntity).toHaveBeenCalledWith('ent-alex', { userId: 'u1' });
     expect(hits).toContainEqual({
       content: '(Alex)-[WORKS_AT]->(TechCorp)', source: 'graph', type: 'WORKS_AT',
     });
@@ -323,7 +325,7 @@ describe('retrieveMemories — graph expansion', () => {
 describe('retrieveMemories — merging the sources', () => {
   const entities = (n: number, confidence?: number) =>
     Array.from({ length: n }, (_, i) => ({
-      id: `e${i}`, name: `e${i}`, description: `fact ${i}`, type: 'fact', confidence,
+      id: `e${i}`, name: `e${i}`, description: `fact ${i}`, type: 'fact', confidence, userId: 'u1',
     }));
 
   it('gives each source a turn instead of filling the budget from one', async () => {
@@ -359,8 +361,8 @@ describe('retrieveMemories — merging the sources', () => {
 
   it('keeps the order the backend returned each source in', async () => {
     fake.longTerm.searchEntities.mockResolvedValue([
-      { id: 'e0', name: 'first', type: 'fact', confidence: 0.1 },
-      { id: 'e1', name: 'second', type: 'fact', confidence: 0.9 },
+      { id: 'e0', name: 'first', type: 'fact', confidence: 0.1, userId: 'u1' },
+      { id: 'e1', name: 'second', type: 'fact', confidence: 0.9, userId: 'u1' },
     ]);
 
     const hits = await retrieveMemories(fake as any, scope, 'conv-1', 'anything', 5, {
@@ -368,5 +370,55 @@ describe('retrieveMemories — merging the sources', () => {
     });
 
     expect(hits.map(h => h.content)).toEqual(['first', 'second']);
+  });
+});
+
+/**
+ * NAMS files the entities it extracts from a conversation under the conversation's
+ * userId. The fake below returns every user's entities (the worst case), so these
+ * checks hold even when the server-side filter is missing.
+ */
+describe("retrieveMemories — the user's own entities", () => {
+  const everyones = [
+    { id: 'e-mine', name: 'Lisbon', description: 'Where u1 is moving', type: 'place', userId: 'u1' },
+    { id: 'e-theirs', name: 'Lisbon office', description: "u2's office", type: 'place', userId: 'u2' },
+    { id: 'e-shared', name: 'Lisbon Tower', description: 'A landmark', type: 'place' },
+  ];
+
+  beforeEach(() => {
+    fake.longTerm.searchEntities.mockResolvedValue(everyones);
+  });
+
+  it("searches with the user's id and keeps only their entities", async () => {
+    const hits = await retrieveMemories(fake as any, scope, 'conv-1', 'Lisbon', 5);
+    const contents = hits.map(h => h.content);
+
+    expect(fake.longTerm.searchEntities.mock.calls.map(c => c[1])).toEqual([{ limit: 5, userId: 'u1' }]);
+    expect(contents).toContain('Lisbon — Where u1 is moving');
+    expect(contents.join('\n')).not.toMatch(/office|Tower/);
+  });
+
+  it('expands only their entities, asking NAMS for relationships within their memory', async () => {
+    await retrieveMemories(fake as any, scope, 'conv-1', 'Lisbon', 5);
+
+    expect(fake.longTerm.getEntity.mock.calls).toEqual([['e-mine', { userId: 'u1' }]]);
+  });
+
+  it('adds shared entities with workspaceGraph, and still no other user\'s', async () => {
+    const hits = await retrieveMemories(fake as any, scope, 'conv-1', 'Lisbon', 5, { workspaceGraph: true });
+    const contents = hits.map(h => h.content);
+
+    expect(contents).toEqual(expect.arrayContaining(['Lisbon — Where u1 is moving', 'Lisbon Tower — A landmark']));
+    expect(contents.join('\n')).not.toMatch(/office/);
+    // A shared entity's edges can lead into other users' memory, so it is not expanded.
+    expect(fake.longTerm.getEntity.mock.calls.map(c => c[0])).toEqual(['e-mine']);
+  });
+
+  it('recalls no entities when NAMS reports no owners (SDK 0.5.0)', async () => {
+    fake.longTerm.searchEntities.mockResolvedValue(everyones.map(({ userId: _u, ...e }) => e));
+
+    const hits = await retrieveMemories(fake as any, scope, 'conv-1', 'Lisbon', 5);
+
+    expect(hits.filter(h => h.source === 'long-term' || h.source === 'graph')).toEqual([]);
   });
 });

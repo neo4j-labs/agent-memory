@@ -55,6 +55,15 @@ export function makeFakeClient(): FakeClient {
   };
 }
 
+/**
+ * A `searchEntities` implementation that answers like hosted NAMS: a search filtered on
+ * `userId` returns entities in that user's memory, so each one carries the `userId`.
+ * Without the filter they come back shared, with none.
+ */
+export const ownedBySearcher = (entities: object[]) =>
+  async (_query: string, options?: { userId?: string }) =>
+    entities.map(e => ({ ...e, ...(options?.userId ? { userId: options.userId } : {}) }));
+
 export interface FakeModelResult {
   capturedParams: any[];
   model: LanguageModelV4;

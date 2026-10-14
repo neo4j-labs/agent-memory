@@ -33,9 +33,12 @@ To add NAMS memory to an AI SDK application:
 npm install @neo4j-labs/nams-ai-provider@0.3.0 @neo4j-labs/agent-memory@0.5.0 ai@^7 zod@^4
 ----
 
-Requires Node.js 22 or newer. The package is ESM-only — it ships one entry
-point (`@neo4j-labs/nams-ai-provider`, no subpaths) — so your project needs
-`"type": "module"` in `package.json` (`npm pkg set type=module` sets it).
+Requires Node.js 22 or newer. The package is ESM-only, so your project needs
+`"type": "module"` in `package.json` (`npm pkg set type=module` sets it). The
+four modes all come from the main entry point, `@neo4j-labs/nams-ai-provider`.
+A second entry point, `@neo4j-labs/nams-ai-provider/eve`, is the memory
+provider for eve agents; see
+xref:how-to/typescript/nams-ai-provider-eve.adoc[Add NAMS memory to an eve agent].
 
 == Pick a mode
 
@@ -144,6 +147,7 @@ lifecycle hooks.
 * xref:how-to/typescript/nams-ai-provider-middleware-mode.adoc[Wrap a model in middleware mode]
 * xref:how-to/typescript/nams-ai-provider-tools-mode.adoc[Expose memory as tools]
 * xref:how-to/typescript/nams-ai-provider-hooks-mode.adoc[Control memory with lifecycle hooks]
+* xref:how-to/typescript/nams-ai-provider-eve.adoc[Add NAMS memory to an eve agent]
 * xref:reference/nams-ai-provider.adoc[NAMS AI provider API reference]
 * xref:explanation/nams-ai-provider-retrieval.adoc[How the NAMS AI provider retrieves memory]
 * xref:how-to/typescript/vercel-ai.adoc[Integrate with the Vercel AI SDK]

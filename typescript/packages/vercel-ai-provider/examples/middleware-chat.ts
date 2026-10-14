@@ -20,7 +20,7 @@
  */
 
 import { openai } from '@ai-sdk/openai';
-import { ToolLoopAgent, stepCountIs } from 'ai';
+import { ToolLoopAgent, isStepCount } from 'ai';
 import { createNams } from '../src/index';
 
 const userId = process.env.NAMS_DEMO_USER ?? 'demo-user-middleware-chat';
@@ -34,7 +34,7 @@ async function turn(label: string, message: string): Promise<void> {
   const agent = new ToolLoopAgent({
     model: wrappedModel,
     instructions: 'You are a helpful assistant.',
-    stopWhen: stepCountIs(1), // no tools needed in middleware mode
+    stopWhen: isStepCount(1), // no tools needed in middleware mode
   });
 
   const { text } = await agent.generate({ prompt: message });

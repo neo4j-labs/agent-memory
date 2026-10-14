@@ -93,6 +93,7 @@
 ***** xref:how-to/typescript/nams-ai-provider-middleware-mode.adoc[Wrap a model in middleware mode]
 ***** xref:how-to/typescript/nams-ai-provider-tools-mode.adoc[Expose memory as tools]
 ***** xref:how-to/typescript/nams-ai-provider-hooks-mode.adoc[Control memory with lifecycle hooks]
+***** xref:how-to/typescript/nams-ai-provider-eve.adoc[Add NAMS memory to an eve agent]
 **** xref:how-to/typescript/nextjs-memory-chat.adoc[Build a Next.js chat app with a memory rail]
 **** xref:how-to/typescript/mcp.adoc[Use the MCP tools]
 **** xref:how-to/typescript/langchain.adoc[Integrate with LangChain JS]

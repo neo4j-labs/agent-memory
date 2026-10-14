@@ -8,8 +8,6 @@ const defaultLogger: NamsLogger = {
   error: (message, error) => console.error(`[nams] ${message}`, error ?? ''),
 };
 
-// Per-client state, so users sharing one process don't mix up conversations.
-
 const stateByClient = new WeakMap<MemoryClient, ClientState>();
 
 function getState(client: MemoryClient): ClientState {
@@ -21,12 +19,10 @@ function getState(client: MemoryClient): ClientState {
   return state;
 }
 
-/** The logger set by makeClient (default: console). */
 export function getLogger(client: MemoryClient): NamsLogger {
   return getState(client).logger;
 }
 
-/** The configured logger, without needing a client. */
 export function resolveLogger(config: NamsConfig): NamsLogger {
   return config.logger ?? defaultLogger;
 }
@@ -45,7 +41,6 @@ export function reportExtractionFailure(client: MemoryClient, message: string, e
   );
 }
 
-/** Log a failed relationship write. "Not supported" is logged only once per client. */
 export function reportRelationshipFailure(client: MemoryClient, err: unknown): void {
   const state = getState(client);
 
@@ -64,6 +59,32 @@ export function reportRelationshipFailure(client: MemoryClient, err: unknown): v
   );
 }
 
+// User-scoped entities
+
+interface UserScopedEntities {
+  searchEntities(query: string, options: { limit: number; userId?: string }): Promise<Entity[]>;
+  getEntity(entityId: string, options?: { userId?: string }): Promise<Entity>;
+  getEntityByName(name: string, options?: { type?: string; userId?: string }): Promise<Entity | null>;
+  addEntity(name: string, type: string, options: { description?: string; userId?: string }): Promise<Entity>;
+}
+
+const scoped = (client: MemoryClient): UserScopedEntities => client.longTerm as unknown as UserScopedEntities;
+
+function ownerOf(entity: object): string | undefined {
+  const { userId } = entity as { userId?: unknown };
+  return typeof userId === 'string' && userId ? userId : undefined;
+}
+
+export function createEntity(
+  client: MemoryClient,
+  name: string,
+  type: string,
+  description: string,
+  userId?: string,
+): Promise<Entity> {
+  return scoped(client).addEntity(name, type, { description, ...(userId ? { userId } : {}) });
+}
+
 export function makeClient(config: NamsConfig): MemoryClient {
   const client = new MemoryClient({
     endpoint: config.endpoint ?? DEFAULT_ENDPOINT,
@@ -80,7 +101,7 @@ function cacheKey(config: NamsConfig, userId: string): string {
   return `${config.workspaceId ?? 'default'}:${userId}`;
 }
 
-/** The conversation id: the given one, else the cached one, else the user's latest, else a new one. */
+/** The conversation id */
 export async function resolveConversation(
   client: MemoryClient,
   config: NamsConfig,
@@ -112,7 +133,7 @@ export async function resolveConversation(
   return conv.id;
 }
 
-/** Like `resolveConversation`, but never creates one. Returns null if none exists. */
+/** Like `resolveConversation`, but never creates one.*/
 export async function findExistingConversation(
   client: MemoryClient,
   config: NamsConfig,
@@ -138,15 +159,11 @@ export async function findExistingConversation(
 // Retrieval
 
 const RETRIEVAL = {
-  currentThreshold: 0.4,
-  crossThreshold: 0.4,
   crossSessions: 5,
   maxReasoning: 6,
   maxTotal: 12,
   maxLongterm: 5,
-  /** Matched entities to read relationships for. One request each. */
   graphExpansions: 2,
-  /** Cap per entity, so one hub entity cannot fill the whole budget. */
   maxTriples: 5,
 };
 
@@ -171,13 +188,15 @@ function entityContent(e: { name?: string; description?: string }): string {
   return name || description || '';
 }
 
-// Graph expansion
-
-/** Read the relationships around the entities that matched. Search returns entities without them. */
+/**
+ * Read the relationships around the entities that matched. Search returns entities without
+ * them. With `userId`, NAMS returns only relationships to that user's entities.
+ */
 async function expandEntityGraph(
   client: MemoryClient,
   entities: Entity[],
   maxEntities: number,
+  userId: string,
 ): Promise<MemoryHit[]> {
   const log = getLogger(client);
   const roots = entities.filter(e => e.id).slice(0, maxEntities);
@@ -185,7 +204,7 @@ async function expandEntityGraph(
 
   const expanded = await Promise.all(
     roots.map(async (root) => {
-      const detail = await client.longTerm.getEntity(root.id).catch((err: unknown) => {
+      const detail = await scoped(client).getEntity(root.id, { userId }).catch((err: unknown) => {
         log.warn(`getEntity failed for "${root.name}", skipping its relationships`, err);
         return null;
       });
@@ -194,7 +213,6 @@ async function expandEntityGraph(
       if (!from) return [];
 
       return (detail?.relationships ?? [])
-        // A bare id tells the model nothing, so an unnamed target is dropped.
         .filter(ref => ref.type?.trim() && ref.targetName?.trim())
         .slice(0, RETRIEVAL.maxTriples)
         .map((ref): MemoryHit => ({
@@ -209,8 +227,7 @@ async function expandEntityGraph(
 }
 
 /** Take one hit from each source in turn, so no single source fills the prompt. */
-function interleave(buckets: MemoryHit[][], limit: number): MemoryHit[] {
-  // The loop checks the budget only after taking a hit, so zero is handled here.
+export function interleave(buckets: MemoryHit[][], limit: number): MemoryHit[] {
   if (limit <= 0) return [];
 
   const out: MemoryHit[] = [];
@@ -225,9 +242,6 @@ function interleave(buckets: MemoryHit[][], limit: number): MemoryHit[] {
   }
   return out;
 }
-
-// NAMS search matches exact text, so a whole question rarely finds anything.
-// When it finds nothing, search again word by word.
 
 /** First letter upper case, the rest lower case, so "NEOVIM" becomes "Neovim". */
 function titleCase(word: string): string {
@@ -271,7 +285,7 @@ function rankByOverlap<T>(candidates: T[], query: string, contentOf: (item: T) =
 }
 
 /** Search the whole query, then word by word if that finds nothing. */
-async function searchWithFallback<T>(
+export async function searchWithFallback<T>(
   query: string,
   search: (q: string) => Promise<T[]>,
   contentOf: (item: T) => string | undefined,
@@ -303,6 +317,34 @@ async function searchWithFallback<T>(
   return rankByOverlap(merged, query, contentOf);
 }
 
+/**
+ * Entities matching `query` from the user's memory: the ones NAMS extracted from their
+ * conversations, and the ones stored for them. With `workspaceGraph`, also the shared ones,
+ * which belong to no user. Another user's entities are never returned.
+ */
+export async function searchUserEntities(
+  client: MemoryClient,
+  query: string,
+  userId: string,
+  opts: { limit: number; workspaceGraph?: boolean },
+): Promise<{ own: Entity[]; shared: Entity[] }> {
+  const find = async (filter: string | undefined, keep: (owner: string | undefined) => boolean) => {
+    const found = await searchWithFallback(
+      query,
+      q => scoped(client).searchEntities(q, { limit: opts.limit, ...(filter ? { userId: filter } : {}) }),
+      entityContent,
+      getLogger(client),
+      'searchEntities',
+    );
+    return found.filter(e => keep(ownerOf(e)));
+  };
+  const [own, shared] = await Promise.all([
+    find(userId, owner => owner === userId),
+    opts.workspaceGraph ? find(undefined, owner => owner === undefined) : Promise.resolve([] as Entity[]),
+  ]);
+  return { own, shared };
+}
+
 async function searchPastConversations(
   client: MemoryClient,
   userId: string,
@@ -329,7 +371,7 @@ async function searchPastConversations(
     past.map(async (conv) => {
       const [messages, steps] = await Promise.all([
         client.shortTerm
-          .searchMessages(query, { sessionId: conv.id, limit: 4, threshold: RETRIEVAL.crossThreshold })
+          .searchMessages(query, { sessionId: conv.id, limit: 4 })
           .catch((e: unknown) => { log.warn('cross-session searchMessages failed', e); return [] as any[]; }),
         client.reasoning.listSteps(conv.id)
           .catch((e: unknown) => { log.warn('cross-session listSteps failed', e); return [] as any[]; }),
@@ -355,24 +397,21 @@ export async function retrieveMemories(
   convId: string,
   query: string,
   limit = 5,
-  opts: { crossSessionLimit?: number; graphExpansionLimit?: number } = {},
+  opts: { crossSessionLimit?: number; graphExpansionLimit?: number; workspaceGraph?: boolean } = {},
 ): Promise<MemoryHit[]> {
   const log = getLogger(client);
-  const [shortHits, longHits, reasoningSteps, crossHits] = await Promise.all([
+  const [shortHits, entities, reasoningSteps, crossHits] = await Promise.all([
     searchWithFallback(
       query,
-      (q) => client.shortTerm.searchMessages(q, { sessionId: convId, limit, threshold: RETRIEVAL.currentThreshold }),
+      (q) => client.shortTerm.searchMessages(q, { sessionId: convId, limit }),
       (m) => m.content,
       log,
       'searchMessages',
     ),
-    searchWithFallback(
-      query,
-      (q) => client.longTerm.searchEntities(q, { limit: RETRIEVAL.maxLongterm }),
-      entityContent,
-      log,
-      'searchEntities',
-    ),
+    searchUserEntities(client, query, scope.userId, {
+      limit: RETRIEVAL.maxLongterm,
+      workspaceGraph: opts.workspaceGraph,
+    }),
     client.reasoning.listSteps(convId)
       .catch((e: unknown) => { log.warn('listSteps failed', e); return [] as any[]; }),
     searchPastConversations(
@@ -380,12 +419,11 @@ export async function retrieveMemories(
     ),
   ]);
 
-  // Depends on which entities matched, so it cannot join the batch above.
   const triples = await expandEntityGraph(
-    client, longHits, opts.graphExpansionLimit ?? RETRIEVAL.graphExpansions,
+    client, entities.own, opts.graphExpansionLimit ?? RETRIEVAL.graphExpansions, scope.userId,
   );
+  const longHits = [...entities.own, ...entities.shared];
 
-  // One bucket per source, merged by taking turns rather than stacking.
   const seen = new Set<string>();
   const entityHits: MemoryHit[] = [];
   const graphHits: MemoryHit[] = [];
@@ -431,29 +469,38 @@ const sameText = (a: string | undefined, b: string): boolean =>
   a?.trim().toLowerCase() === b.trim().toLowerCase();
 
 /**
- * The stored entity with this name and type, or null. Hosted NAMS cannot look up
- * a name, so search is used — and only an exact name matches, since search would
- * otherwise return "Alexandra" for "Alex" and merge two real entities.
+ * The stored entity with this name and type, or null.
  */
-export async function findEntity(client: MemoryClient, name: string, type: string): Promise<Entity | null> {
+export async function findEntity(
+  client: MemoryClient,
+  name: string,
+  type: string,
+  userId?: string,
+): Promise<Entity | null> {
   const matchesWanted = (e: Entity): boolean =>
-    sameText(e.type, type) && (sameText(e.name, name) || sameText(e.canonicalName, name));
+    sameText(e.type, type) && (sameText(e.name, name) || sameText(e.canonicalName, name)) &&
+    (userId === undefined || ownerOf(e) === userId);
 
-  const direct = await client.longTerm.getEntityByName(name).catch(() => null);
-  if (direct) return matchesWanted(direct) ? direct : null;
+  const direct = await scoped(client)
+    .getEntityByName(name, { type, ...(userId ? { userId } : {}) })
+    .catch(() => null);
+  if (direct && matchesWanted(direct)) return direct;
 
-  const candidates = await client.longTerm
-    .searchEntities(name, { limit: RETRIEVAL.maxLongterm })
+  const candidates = await scoped(client)
+    .searchEntities(name, { limit: RETRIEVAL.maxLongterm, ...(userId ? { userId } : {}) })
     .catch(() => [] as Entity[]);
   return candidates.find(matchesWanted) ?? null;
 }
 
-/** Save a memory: an `interaction` to the conversation, anything else to the graph. */
+/**
+ * Save a memory: an `interaction` to the conversation, anything else to the graph. With
+ * `userId`, graph entities go in that user's memory; without it they are shared.
+ */
 export async function storeMemory(
   client: MemoryClient,
   convId: string,
   input: StoreInput,
-  opts: { extractor?: GraphExtractor } = {},
+  opts: { extractor?: GraphExtractor; userId?: string } = {},
 ): Promise<void> {
   if (input.type === 'interaction') {
     await client.shortTerm.addMessage(convId, 'assistant', input.content);
@@ -462,7 +509,7 @@ export async function storeMemory(
 
   if (opts.extractor) {
     try {
-      await opts.extractor(client, input);
+      await opts.extractor(client, input, { userId: opts.userId });
       return;
     } catch (err) {
       reportExtractionFailure(client, 'graph extraction failed, falling back to flat entity', err);
@@ -470,9 +517,9 @@ export async function storeMemory(
   }
 
   const name = entityName(input.content);
-  let entity = await findEntity(client, name, input.type);
+  let entity = await findEntity(client, name, input.type, opts.userId);
   if (!entity) {
-    entity = await client.longTerm.addEntity(name, input.type, { description: input.content });
+    entity = await createEntity(client, name, input.type, input.content, opts.userId);
   }
   if (entity?.id && input.confidence !== undefined) {
     await client.longTerm

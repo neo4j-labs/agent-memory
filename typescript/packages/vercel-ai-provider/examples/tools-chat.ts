@@ -23,7 +23,7 @@
  */
 
 import { openai } from '@ai-sdk/openai';
-import { ToolLoopAgent, stepCountIs } from 'ai';
+import { ToolLoopAgent, isStepCount } from 'ai';
 import { createNams, enforceQueryMemory, ensureMemoryStored } from '../src/index';
 
 const userId = process.env.NAMS_DEMO_USER ?? 'demo-user-tools-chat';
@@ -41,13 +41,13 @@ async function main(): Promise<void> {
       'giving your final answer.',
     tools,
     prepareStep: enforceQueryMemory(),
-    onFinish: async (event) => {
+    onEnd: async (event) => {
       const outcome = await ensureMemoryStored(tools)(event);
       console.log(
         `\nensureMemoryStored: ${outcome.stored ? 'persisted the turn' : outcome.reason}`,
       );
     },
-    stopWhen: stepCountIs(6),
+    stopWhen: isStepCount(6),
   });
 
   const result = await agent.generate({

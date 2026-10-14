@@ -13,9 +13,12 @@ Community provider for the [Vercel AI SDK](https://ai-sdk.dev) that adds persist
 > or scheduled deprecation commitments. APIs may change without notice. For questions and support, please use
 > the [Neo4j Community Forum](https://community.neo4j.com).
 
-The wrapper retrieves selected conversation history, workspace entities and
-configured cross-conversation results, then attempts to store the exchange.
-Retrieval scope and persistence/error behavior depend on the selected mode. No Neo4j infrastructure to manage.
+Provider and middleware mode read the user's memory from NAMS before each turn,
+add it to the prompt, and save the user message and the answer afterwards. Tools
+mode gives the model `query_memory` and `store_memory` instead, and hooks mode
+restores and saves the whole transcript around each generation. A separate
+`/eve` entry point is a memory provider for [eve](https://eve.dev). Everything
+runs against hosted NAMS with an API key; there is no Neo4j database to run.
 
 ## What does it do?
 
@@ -23,13 +26,23 @@ Without this package, every chat session starts fresh — the model has no recol
 
 `@neo4j-labs/nams-ai-provider` wraps your existing AI model and transparently adds memory to every call:
 
-1. **Before the model responds** — NAMS searches its memory store for facts, preferences, and past interactions relevant to the current message, reads back the relationships around whatever matched, and injects both into the prompt automatically.
-2. **After the model responds** — NAMS persists the exchange so the next session can recall it, and extracts entities from those messages into a Neo4j knowledge graph server-side.
+1. **Before the model responds**, the package searches four sources in NAMS for the current message: the current conversation, this user's entities, the reasoning steps stored for the conversation, and the user's other recent conversations. It reads back the relationships of the best entity matches and adds everything to the last user message as one memory block.
+2. **After the model responds**, the package saves the user message and the answer to the conversation. NAMS then extracts entities and relationships from them on the server, a few seconds later, so the next session can recall them.
 
-Cross-conversation selection is this package's application policy, not automatic
-behavior of the core middleware. Workspace entity retrieval can return shared
-data; do not treat a user id or conversation id as authorization. Verify failure
-handling and stream completion before promising durable storage to callers.
+**Whose memory is read.** `scope.userId` is the NAMS `userId` of every
+conversation and entity this package writes. Conversation lookups send it to
+NAMS, which filters on the server. Entity searches send it too, and the package
+also drops any returned entity that belongs to another user. Entities that belong
+to no user, such as ones your own ingestion wrote, are read only with
+`workspaceGraph: true`. The package does not authenticate anyone: take `userId`
+from your signed-in session, never from the request body.
+
+**What happens when NAMS fails.** No mode fails the model call because of NAMS.
+A failed read is logged with `logger.warn` and the turn runs without memory. A
+failed write is logged with `logger.error` and the response is still returned.
+In tools mode the tool returns `found: false` or `stored: false` to the model.
+Writes are not retried. A streamed turn is saved when the stream ends, so a
+client that stops reading early leaves that turn unsaved.
 
 ```
 User message
@@ -56,15 +69,21 @@ User message
 
 **1. Install the provider and its peer dependencies**
 
-Requires Node.js 22+. Install version 0.3.0 with the core SDK it builds on:
+Requires Node.js 22+ (24+ for the eve entry point). Install the provider with
+the core SDK it calls NAMS through:
 
 ```bash
-npm install @neo4j-labs/nams-ai-provider@0.3.0 @neo4j-labs/agent-memory@0.5.0 ai@^7 zod@^4
+npm install @neo4j-labs/nams-ai-provider @neo4j-labs/agent-memory ai@^7 zod@^4
 ```
 
 The peer dependencies are `ai` `^7.0.0`, `zod` `^3.25.76 || ^4.1.8` and
-`@neo4j-labs/agent-memory` `~0.4.0 || ~0.5.0`. `@ai-sdk/mcp` `^2.0.0` is an
-optional peer, needed only for [MCP tool merging](#tools-mode-with-mcp-optional).
+`@neo4j-labs/agent-memory` `~0.5.0`. This README describes the source, which
+needs a provider release newer than 0.3.0 and an SDK release newer than 0.5.0.
+SDK 0.5.0 installs but fails against hosted NAMS: it sends `threshold` with
+every message search, which NAMS rejects with 400, and sends the conversation
+user filter as `user_id`, which NAMS ignores. Two optional peers are needed only for one feature each:
+`@ai-sdk/mcp` `^2.0.0` for [MCP tool merging](#tools-mode-with-mcp-optional),
+and `eve` `>=0.69.0` for the [eve memory provider](#eve-memory-provider).
 
 **2. Get a free API key** at [memory.neo4jlabs.com](https://memory.neo4jlabs.com)
 
@@ -85,13 +104,13 @@ import {
   ToolLoopAgent,
   createUIMessageStream,
   createUIMessageStreamResponse,
-  stepCountIs,
+  isStepCount,
 } from 'ai';
 
 const agent = new ToolLoopAgent({
   model:        openai('gpt-5.4-mini'),
   instructions: 'You are a helpful assistant.',
-  stopWhen:     stepCountIs(10),
+  stopWhen:     isStepCount(10),
 });
 
 const stream = createUIMessageStream({
@@ -112,7 +131,7 @@ import {
   ToolLoopAgent,
   createUIMessageStream,
   createUIMessageStreamResponse,
-  stepCountIs,
+  isStepCount,
 } from 'ai';
 
 const nams = createNamsProvider({
@@ -124,7 +143,7 @@ const nams = createNamsProvider({
 const agent = new ToolLoopAgent({
   model:        nams.languageModel('gpt-5.4-mini'),  // ← only change
   instructions: 'You are a helpful assistant.',
-  stopWhen:     stepCountIs(10),
+  stopWhen:     isStepCount(10),
 });
 
 const stream = createUIMessageStream({
@@ -155,6 +174,10 @@ There are four ways to integrate NAMS depending on how much control you want:
 | **Tools** | Expose memory as explicit AI SDK tools (optionally merged with tools from an MCP server) | When you want the model to decide when to remember |
 | **Hooks** | The runtime reads/writes the session transcript around every generation via AI SDK hooks — nothing memory-related is shown to the LLM | Applications that explicitly coordinate transcript writes |
 
+Building on [eve](https://eve.dev)? Use the [eve memory provider](#eve-memory-provider)
+instead: eve owns the conversation history, so it takes a memory slot, not a
+model wrapper.
+
 Switching modes is purely a code-level choice — all four use the same API key
 and environment variables (see [Environment variables](#environment-variables)).
 To make it a deploy-time choice instead, see
@@ -165,13 +188,24 @@ Middleware and tools modes can also be
 [combined on one agent](#combining-tools-mode-with-middleware-hybrid) —
 injected baseline context plus explicit memory tools.
 
-> **How does this relate to `@neo4j-labs/agent-memory/middleware/vercel-ai`?**
-> Both the current core middleware and this provider package target AI SDK 7 /
-> provider specification 4. The core middleware reads the selected conversation
-> and persists messages. This separate package adds a registrable `ProviderV4`,
-> retrieval policies, optional graph extraction, explicit tools, and MCP tool
-> merging. Choose by those features and validate the selected artifact; the
-> core middleware is not obsolete because of its model-interface version.
+### This package or the core SDK's middleware?
+
+The core SDK ships its own AI SDK middleware,
+`agentMemoryMiddleware` from `@neo4j-labs/agent-memory/middleware/vercel-ai`.
+Both implement AI SDK 7's middleware specification v4. They read different
+memory:
+
+| | Core `agentMemoryMiddleware` | This package (middleware and provider mode) |
+|---|---|---|
+| Reads | One conversation: its NAMS reflections and observations as one system message, and its recent messages replayed as turns | A search of the current conversation, this user's entities and their relationships, the conversation's reasoning steps, and the user's other recent conversations, added to the last user message |
+| Without `conversationId` | Creates a new conversation on the first call (`userId` defaults to `anonymous`) | Reuses the user's most recent conversation, or creates one |
+| Writes | The user message before the call, the answer after it | The user message and the answer after the call |
+| Streams | Saved without delaying the stream, also when the client stops reading | Saved when the stream ends; a stream the client stops reading is not saved |
+| Failures | Ignored silently | Logged through `logger` |
+| Also offers | Nothing else | `ProviderV4`, tools mode, hooks mode, MCP tool merging, the eve provider |
+
+Use the core middleware to replay one conversation's history and summaries.
+Use this package to recall across conversations and from the knowledge graph.
 
 ---
 
@@ -186,7 +220,7 @@ import {
   ToolLoopAgent,
   createUIMessageStream,
   createUIMessageStreamResponse,
-  stepCountIs,
+  isStepCount,
 } from 'ai';
 
 // One instance per user session
@@ -199,7 +233,7 @@ const nams = createNamsProvider({
 const agent = new ToolLoopAgent({
   model:        nams.languageModel('gpt-5.4-mini'),
   instructions: 'You are a helpful assistant.',
-  stopWhen:     stepCountIs(1),       // no tools needed in provider mode
+  stopWhen:     isStepCount(1),       // no tools needed in provider mode
 });
 
 const stream = createUIMessageStream({
@@ -227,7 +261,7 @@ const registry = createRegistry({
 
 const agent = new ToolLoopAgent({
   model:    registry.languageModel('nams:gpt-5.4-mini'),
-  stopWhen: stepCountIs(1),
+  stopWhen: isStepCount(1),
 });
 ```
 
@@ -244,13 +278,13 @@ import {
   ToolLoopAgent,
   createUIMessageStream,
   createUIMessageStreamResponse,
-  stepCountIs,
+  isStepCount,
 } from 'ai';
 
 const nams  = createNams({ apiKey: process.env.MEMORY_API_KEY! });
 const model = nams.wrap(openai('gpt-5.4-mini'), { userId: session.userId });
 
-const agent = new ToolLoopAgent({ model, stopWhen: stepCountIs(1) });
+const agent = new ToolLoopAgent({ model, stopWhen: isStepCount(1) });
 
 const stream = createUIMessageStream({
   execute: async ({ writer }) => {
@@ -275,7 +309,7 @@ import {
   ToolLoopAgent,
   createUIMessageStream,
   createUIMessageStreamResponse,
-  stepCountIs,
+  isStepCount,
 } from 'ai';
 
 const nams  = createNams({ apiKey: process.env.MEMORY_API_KEY! });
@@ -289,8 +323,8 @@ const agent = new ToolLoopAgent({
     'giving your final answer.',
   tools,
   prepareStep:  enforceQueryMemory(),
-  onFinish:     ensureMemoryStored(tools),
-  stopWhen:     stepCountIs(10),
+  onEnd:        async (event) => { await ensureMemoryStored(tools)(event); },
+  stopWhen:     isStepCount(10),
 });
 
 const stream = createUIMessageStream({
@@ -318,9 +352,11 @@ forced query and the final answer both fit.
 
 `prepareStep` cannot guarantee the *write* side: the loop ends when the model
 emits final text, so there is no later step to force `store_memory` into.
-`ensureMemoryStored(tools)` is an `onFinish` hook that closes the gap after the
-loop instead — if the model never called `store_memory`, it persists the turn
-itself:
+`ensureMemoryStored(tools)` closes the gap after the loop instead. It returns a
+function that takes the `onEnd` event and, if the model never called
+`store_memory`, persists the turn itself. Call it from your `onEnd` callback:
+AI SDK 7 types that callback as returning nothing, and this function returns
+a result, so it cannot be passed as `onEnd` directly.
 
 ```ts
 const tools = nams.tools({ userId: session.userId });
@@ -328,9 +364,12 @@ const tools = nams.tools({ userId: session.userId });
 const agent = new ToolLoopAgent({
   model:       openai('gpt-5.4-mini'),
   tools,
-  prepareStep: enforceQueryMemory(),      // requests retrieval mid-loop
-  onFinish:    ensureMemoryStored(tools), // attempts storage after the loop
-  stopWhen:    stepCountIs(10),
+  prepareStep: enforceQueryMemory(), // requests retrieval mid-loop
+  onEnd: async (event) => {
+    const outcome = await ensureMemoryStored(tools)(event); // stores the turn if the model did not
+    if (!outcome.stored) console.log('not stored:', outcome.reason);
+  },
+  stopWhen:    isStepCount(10),
 });
 ```
 
@@ -347,10 +386,13 @@ why the graph extractor skips such entities. Pass `fallback` to decide for
 yourself — including returning `null` to store nothing:
 
 ```ts
-onFinish: ensureMemoryStored(tools, {
-  // The onFinish event carries no user message; close over your own prompt.
+const storeTurn = ensureMemoryStored(tools, {
+  // The onEnd event carries no user message; close over your own prompt.
   fallback: ({ text }) => ({ content: `User: ${prompt}\nAssistant: ${text}`, type: 'interaction' }),
-})
+});
+
+// in the agent settings:
+onEnd: async (event) => { await storeTurn(event); },
 ```
 
 Pass the tool set object itself, not a copy — `ensureMemoryStored({ ...tools })`
@@ -369,7 +411,7 @@ passed.
 ```ts
 import { createNams, enforceQueryMemory } from '@neo4j-labs/nams-ai-provider';
 import { openai } from '@ai-sdk/openai';
-import { ToolLoopAgent, stepCountIs } from 'ai';
+import { ToolLoopAgent, isStepCount } from 'ai';
 
 const nams = createNams({ apiKey: process.env.MEMORY_API_KEY! });
 
@@ -386,7 +428,7 @@ const agent = new ToolLoopAgent({
   model:       openai('gpt-5.4-mini'),
   tools,       // query_memory + store_memory + mcp_* server tools
   prepareStep: enforceQueryMemory(),  // memory queried before answering, MCP tools in any order
-  stopWhen:    stepCountIs(10),
+  stopWhen:    isStepCount(10),
 });
 
 try {
@@ -416,7 +458,7 @@ const scope = { userId: session.userId };
 const agent = new ToolLoopAgent({
   model:    nams.wrap(openai('gpt-5.4-mini'), scope), // baseline context injected every call
   tools:    nams.tools(scope),                        // targeted search + explicit writes
-  stopWhen: stepCountIs(10),
+  stopWhen: isStepCount(10),
 });
 ```
 
@@ -444,11 +486,11 @@ decides.
 ```ts
 import { createNams } from '@neo4j-labs/nams-ai-provider';
 import { openai } from '@ai-sdk/openai';
-import { ToolLoopAgent, stepCountIs } from 'ai';
+import { ToolLoopAgent, isStepCount } from 'ai';
 import { z } from 'zod';
 
 const nams    = createNams({ apiKey: process.env.MEMORY_API_KEY! });
-const session = nams.hooks();   // one instance: loadSession + onFinish share a client
+const session = nams.hooks();   // one instance: loadSession and onFinish() share a client
 
 const agent = new ToolLoopAgent({
   model: openai('gpt-5.4-mini'),
@@ -460,7 +502,7 @@ const agent = new ToolLoopAgent({
     prompt: z.string(),
   }),
 
-  // ── PRE hook: restore history + scope onFinish ─────────────────────────────
+  // ── PRE hook: restore history and pass the scope to onEnd ──────────────────
   // Strip `prompt` / `messages` from the incoming settings — the AI SDK
   // enforces prompt XOR messages, and we're replacing them with the restored
   // transcript.
@@ -470,14 +512,14 @@ const agent = new ToolLoopAgent({
       ...(await session.loadSession(options)),
       { role: 'user', content: options!.prompt },
     ],
-    // Per-call scope flows to the construction-time onFinish below.
+    // Per-call scope flows to the construction-time onEnd callback below.
     runtimeContext: options,
   }),
 
   // ── POST hook: persist every turn exactly once ─────────────────────────────
-  onFinish: session.onFinish(),
+  onEnd: session.onFinish(),
 
-  stopWhen: stepCountIs(10),
+  stopWhen: isStepCount(10),
 });
 
 // Usage
@@ -500,12 +542,13 @@ replayed as provider tool-result blocks, because OpenAI Responses and
 Anthropic Messages reject orphan tool results without the matching prior
 assistant tool call.
 
-**Why `runtimeContext`?** `ToolLoopAgent` only accepts `onFinish` at
-construction time, but you still need per-call scope (`userId`,
-`conversationId`, `prompt`). The hook reads those from the generation's
-`runtimeContext`, which you set inside `prepareCall`. With one-shot
-`generateText` / `streamText` you can skip the context and bake the scope in
-as a closure instead:
+**Why `runtimeContext`?** The agent above sets `onEnd` once, when it is
+constructed, so the callback cannot close over each call's `userId`,
+`conversationId` and `prompt`. It reads them from the generation's
+`runtimeContext`, which `prepareCall` sets. You can bind the scope per call
+instead: AI SDK 7 also accepts `onEnd` on the call itself
+(`agent.generate({ ..., onEnd: session.onFinish({ userId, prompt }) })`), and
+one-shot `generateText` / `streamText` take it the same way:
 
 ```ts
 const { text } = await generateText({
@@ -514,7 +557,7 @@ const { text } = await generateText({
     ...(await session.loadSession({ userId })),
     { role: 'user', content: prompt },
   ],
-  onFinish: session.onFinish({ userId, prompt }),
+  onEnd: session.onFinish({ userId, prompt }),
 });
 ```
 
@@ -536,7 +579,7 @@ example, or run it side by side with the other modes via
 
 ## Lifecycle Hooks
 
-`loadSession` / `onFinish` cover the transcript. Lifecycle hooks cover
+`loadSession()` and `onFinish()` cover the transcript. Lifecycle hooks cover
 everything around it: gate a prompt, deny a tool call, rewrite tool arguments,
 redact a memory write, add context for the next turn. The model will be
 familiar from editor hook systems — events, matcher groups, and decision
@@ -628,11 +671,98 @@ prepareCall: ({ options, ...settings }) => ({
   recent entries. Ignore the field and that context is dropped.
 - **A denied tool returns `{ blocked: true, toolName, reason }`** to the model
   rather than throwing, so the loop continues and the model can explain itself.
-- **`Stop` cannot block.** The generation is already finished when `onFinish`
+- **`Stop` cannot block.** The generation is already finished when `onFinish()`
   runs. Use `UserPromptSubmit` or `PreToolUse` for control.
 
 See [`examples/advanced-hooks-chat.ts`](examples/advanced-hooks-chat.ts) for a
 runnable example covering every event.
+
+---
+
+## eve Memory Provider
+
+[eve](https://eve.dev) owns an agent's memory slots: it locks who a slot's
+memory belongs to, asks the slot's provider to recall context before each turn
+and capture the turn after it, and gives the model the provider's tools.
+`@neo4j-labs/nams-ai-provider/eve` implements eve's
+[memory-provider contract](https://eve.dev/docs/memory/custom-provider) with
+NAMS. It needs eve 0.69.0 or later and Node.js 24, and is tested on eve 0.69.0,
+0.70.3, 0.71.0, 0.75.1, 0.77.0, 0.78.0 and 0.79.0. The entry point ships in the
+first provider release after 0.3.0.
+
+```bash
+npm install @neo4j-labs/nams-ai-provider @neo4j-labs/agent-memory
+```
+
+```ts
+// agent/memory/nams.ts
+import { namsMemory } from '@neo4j-labs/nams-ai-provider/eve';
+import { defineMemory } from 'eve/memory';
+import { byPrincipal } from 'eve/memory/scope';
+
+export default defineMemory({
+  description: 'Durable facts and earlier sessions for the current user, from Neo4j Agent Memory.',
+  provider: namsMemory(), // reads MEMORY_API_KEY (and MEMORY_WORKSPACE_ID if set)
+  scope: byPrincipal,
+});
+```
+
+| eve phase | What the provider does |
+|---|---|
+| Recall (`turn.started`, `compaction.completed`) | One record, id `nams-memory`: notes saved with `remember`, the summaries NAMS wrote about earlier sessions, messages from them that match the user's message, and the entities NAMS extracted from this user's conversations. Each turn's record replaces the last. |
+| Capture (`turn.completed`) | The user's message and final answer, written to one NAMS conversation per eve session. NAMS extracts entities and writes summaries from it. |
+| Tools | `nams__search` finds messages in earlier sessions and notes, and this user's entities; `nams__remember` saves a note. Both are bound to the locked scope. |
+
+**Isolation.** Every conversation the provider writes carries eve's opaque
+`memory.scope.key` as its NAMS `userId`, and every read starts from that
+scope's own conversations. NAMS files the entities it extracts from those
+conversations under the same `userId`, and the provider searches entities with
+it. The provider also checks the `userId` of every conversation and entity it
+reads, so a server that returns other users' data cannot leak it. The raw
+principal id never reaches NAMS.
+
+**Replays.** eve can replay a handler with the same `operationId`. Within one
+process a replayed recall returns the record from the first call; after a
+restart the record is read from NAMS again, so it differs if the scope's memory
+changed in between, and eve then fails the turn. A replayed capture is detected
+by comparing the end of the session's conversation with the turn, also after a
+restart, and is not written twice. Each tool's `execute` is
+an eve durable callback whose closure is the scope key, slot and session id:
+eve's workflow bundler leaves it intact, and the client and API key never
+enter durable state.
+
+**Limits.** Entities written without a `userId`, for example by your own
+ingestion, are shared by the whole workspace. They are recalled only with
+`workspaceGraph: true`; other users' entities never are. Hosted NAMS cannot
+delete a single message, so there is no `forget` tool yet. To erase one
+scope's memory, call NAMS `DELETE /v1/memory?userId=<scope key>`.
+
+**Requires an `@neo4j-labs/agent-memory` release newer than 0.5.0.** With
+0.5.0 the provider loses most of its memory against hosted NAMS: every message
+search sends `threshold`, which NAMS rejects with 400, so recall's matching
+messages and `nams__search` come back empty; the conversation listing sends
+`user_id`, which NAMS ignores, so the provider sees only the workspace's newest
+200 conversations; and entity searches go out without `userId` and come back
+without owners, so no entities are recalled. Saved notes and session summaries
+still work.
+
+```ts
+namsMemory({
+  apiKey?:            string,  // Default: MEMORY_API_KEY
+  workspaceId?:       string,  // Default: MEMORY_WORKSPACE_ID
+  endpoint?:          string,  // Default: https://memory.neo4jlabs.com/v1
+  logger?:            NamsLogger,
+  crossSessionLimit?: number,  // Earlier sessions read per recall. 0 = off. Default: 3
+  maxMemories?:       number,  // Max lines in the recalled record. Default: 8
+  capture?:           boolean, // Write completed turns to NAMS. Default: true
+  tools?:             boolean, // Offer search and remember. Default: true
+  workspaceGraph?:    boolean, // Also recall shared entities (no user). Default: false
+});
+```
+
+A rejected (401) or missing API key fails the turn; any other NAMS error
+during recall, a 403 included, is logged, and the turn goes on with a record
+that says memory is unavailable.
 
 ---
 
@@ -653,11 +783,12 @@ createNamsProvider({
   persistInteractions?: boolean,  // Save each turn. Default: true
   crossSessionLimit?:   number,   // Other recent conversations each lookup also searches, 2 requests each. 0 = off. Default: 5
   graphExpansionLimit?: number,   // Matched entities whose relationships are read back, 1 request each. 0 = off. Default: 2
+  workspaceGraph?:      boolean,  // Also recall shared entities (no user). Default: false
 });
 ```
 
-`crossSessionLimit` and `graphExpansionLimit` also apply to `createNams`
-(middleware, tools, and hooks modes).
+`crossSessionLimit`, `graphExpansionLimit` and `workspaceGraph` also apply to
+`createNams` (middleware, tools, and hooks modes).
 
 `extractionModel` / `extractionOptions` live on `createNams` and apply to tools
 mode only — see [Graph Extraction](#graph-extraction-tools-mode).
@@ -671,7 +802,8 @@ variables:
 
 | Variable | Required | Used for |
 |----------|----------|----------|
-| `MEMORY_API_KEY` | yes | NAMS API key — pass it as `apiKey` (the examples and snippets read it from the environment) |
+| `MEMORY_API_KEY` | yes | NAMS API key — pass it as `apiKey` (the examples and snippets read it from the environment; the eve provider reads it when `apiKey` is not passed) |
+| `MEMORY_WORKSPACE_ID` | no | NAMS workspace, read by the core SDK when `workspaceId` is not passed |
 | `OPENAI_API_KEY` | yes* | Read by `@ai-sdk/openai`; *swap for whichever `@ai-sdk/*` provider key your base model needs |
 | `NAMS_DEMO_USER` | no | Overrides the demo `userId` in the [runnable examples](./examples) |
 | `NAMS_DEMO_MODEL` | no | Overrides the demo model id (default: `gpt-5.4-mini`) in the [runnable examples](./examples) |
@@ -701,7 +833,8 @@ instead of one sentence-shaped node.
 > again from the client would just duplicate that work. Setting
 > `extractionModel` and using another mode logs a warning.
 
-An extracted entity that is already stored under the same name and type is
+Extracted entities are stored in the user's memory (`userId` on the write). An
+extracted entity that this user already has under the same name and type is
 reused rather than created again, so every memory about "Alex" adds its edges
 to the same Alex node. Hosted NAMS has no lookup-by-name route, so the match is
 made through entity search; because that search is nearest-neighbour, only an
@@ -734,17 +867,26 @@ extractionOptions: {
 
 ## Memory Sources
 
-NAMS searches four sources in parallel, once per turn, then expands the
+The package searches four sources in NAMS in parallel, once per turn, then expands the
 entities that matched into a fifth. In middleware and provider modes, later
 steps of a tool loop reuse the turn's memories instead of searching again.
 
 | Source | What it stores |
 |--------|---------------|
-| Long-term graph | Facts, preferences, patterns (Neo4j entities) |
+| Long-term graph | Facts, preferences, patterns: the Neo4j entities in this user's memory |
 | Graph | The relationships around the entities that matched — see below |
 | Current conversation | Messages in the active session |
 | Cross-session | Messages from the user's 5 most recent other conversations (`crossSessionLimit`) |
-| Reasoning traces | Prior step-by-step reasoning from agent runs |
+| Reasoning steps | Steps your app recorded for the current conversation with the core SDK's `client.reasoning` API, where the action is `direct response`. Other conversations' steps come in through cross-session. This package reads them but never writes them. |
+
+Entities are per user. NAMS files the entities it extracts from a conversation
+under the conversation's `userId`, and `store_memory` writes them with it too, so
+the long-term search asks NAMS for `scope.userId`'s entities and keeps only the
+ones that carry that id. Graph expansion asks for relationships within the same
+user's memory. `workspaceGraph: true` adds shared entities, the ones with no user
+(for example a catalog your own code wrote without a `userId`); they are not
+expanded, since their edges can lead into other users' memory. Another user's
+entities are never recalled.
 
 NAMS uses vector search where the workspace has embeddings, and a text match
 otherwise. For a text match, a question that finds nothing is retried with its
@@ -794,11 +936,15 @@ logged and skipped — the other sources still answer.
 ## Development
 
 ```bash
-npm install        # install dev dependencies
-npm test           # run the vitest suite (provider, middleware, tools, hooks)
+npm ci             # install dev dependencies
+npm test           # vitest: provider, middleware, tools, hooks, extraction and eve
 npm run typecheck  # tsc --noEmit
 npm run build      # tsup → dist/
 ```
+
+The unit tests replace NAMS with a fake client. To run the eve provider inside
+eve's own runtime, use [`examples/eve-memory-eval`](examples/eve-memory-eval),
+which installs the SDK and this package from the checkout.
 
 > **Note on conversation caching:** each provider / tools instance keeps its own
 > conversation-id cache (scoped per `MemoryClient`). Create one instance per user
