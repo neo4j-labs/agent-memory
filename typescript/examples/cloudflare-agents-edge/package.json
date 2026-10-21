@@ -21,10 +21,10 @@
   },
   "devDependencies": {
     "@ai-sdk/provider": "^4.0",
-    "@cloudflare/vitest-pool-workers": "^0.22.0",
-    "@cloudflare/workers-types": "^5.20260911.1",
+    "@cloudflare/vitest-pool-workers": "^0.23.0",
+    "@cloudflare/workers-types": "^5.20261007.1",
     "typescript": "^5.9.3",
     "vitest": "^4.1.0",
-    "wrangler": "^4.131.0"
+    "wrangler": "^4.148.0"
   }
 }
