@@ -1111,18 +1111,28 @@ class TestRelationsUseResolvedNodeIds:
 
 
 class _FailingEmbedder:
-    """Embedder whose ``embed`` and ``embed_batch`` always raise."""
+    """Embedder whose ``embed`` always raises.
+
+    ``embed_batch`` raises too unless ``fail_batch=False``. That second shape
+    models the bug-#104 case: an oversize *message* is rejected, while the short
+    entity names extracted from it still embed. A total embedder outage during
+    entity-name embedding is a different case; ``add_message`` raises after the
+    message is stored (see the 0.7 CHANGELOG entry on extracted-entity embeddings).
+    """
 
     dimensions = 3
 
-    def __init__(self, error: Exception | None = None) -> None:
+    def __init__(self, error: Exception | None = None, *, fail_batch: bool = True) -> None:
         self._error = error or RuntimeError("simulated embed failure")
+        self._fail_batch = fail_batch
 
     async def embed(self, text: str) -> list[float]:
         raise self._error
 
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        raise self._error
+        if self._fail_batch:
+            raise self._error
+        return [[0.1, 0.2, 0.3] for _ in texts]
 
 
 class _SucceedingEmbedder:
@@ -1180,7 +1190,7 @@ class TestEmbeddingResilience:
         extractor = MockExtractorWithRelations(entities, [])
         memory = ShortTermMemory(
             mock_client,
-            embedder=_FailingEmbedder(),
+            embedder=_FailingEmbedder(fail_batch=False),
             extractor=extractor,
         )
 
