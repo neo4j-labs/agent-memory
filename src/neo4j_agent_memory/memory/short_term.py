@@ -695,12 +695,23 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
                     )
                 )
 
-            # Generate embeddings in batch if enabled
+            # Generate embeddings in batch if enabled. A batch embed failure must never abort the
+            # whole batch insert: I fall back to null vectors for every message in this batch and
+            # continue, matching the single-message add_message() resilience behavior above.
             if generate_embeddings and self._embedder is not None:
-                embeddings = await self._embedder.embed_batch(contents_for_embedding)
-                for j, emb in enumerate(embeddings):
-                    batch_data[j]["embedding"] = emb
-                    batch_messages[j].embedding = emb
+                try:
+                    embeddings = await self._embedder.embed_batch(contents_for_embedding)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(
+                        "batch embedding failed for %d message(s); storing this batch without "
+                        "vectors and continuing: %s",
+                        len(contents_for_embedding),
+                        str(e)[:200],
+                    )
+                else:
+                    for j, emb in enumerate(embeddings):
+                        batch_data[j]["embedding"] = emb
+                        batch_messages[j].embedding = emb
 
             # Insert and link the batch in one transaction: the query locks the
             # conversation, reads its tail, creates the messages in input order
@@ -952,10 +963,21 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
             session_id, conversation_id, user_identifier=user_identifier
         )
 
-        # Generate embedding if enabled
-        embedding = None
+        # Generate embedding if enabled. An embedding failure must never drop the message or its
+        # extracted entities: I degrade to a null message-vector and continue. Entities extracted
+        # from this message carry their own embeddings, so the memory remains fully recallable even
+        # without the message-level vector.
+        embedding: list[float] | None = None
         if generate_embedding and self._embedder is not None:
-            embedding = await self._embedder.embed(content)
+            try:
+                embedding = await self._embedder.embed(content)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "message embedding failed; storing message without a vector and continuing "
+                    "with extraction: %s",
+                    str(e)[:200],
+                )
+                embedding = None
 
         # Create message
         message = Message(
