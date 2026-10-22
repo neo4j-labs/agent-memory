@@ -17,7 +17,7 @@
   "dependencies": {
     "@chakra-ui/react": "^3.37.0",
     "@emotion/react": "^11.14.0",
-    "@neo4j-nvl/base": "^1.2.1",
+    "@neo4j-nvl/base": "^2.0.0",
     "@neo4j-nvl/react": "^1.2.1",
     "next": "^16.3.4",
     "next-themes": "^0.4.6",
