@@ -77,7 +77,7 @@
     "@neo4j-labs/agent-memory": "file:../..",
     "@types/node": "^22",
     "ai": "^7.0.148",
-    "eve": "~0.71.0",
+    "eve": "~0.79.2",
     "tsup": "^9.0.0",
     "typescript": "^5.0.0",
     "vitest": "^4.1.12",
