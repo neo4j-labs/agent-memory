@@ -272,6 +272,10 @@ dev = [
     # the real path rather than the fallback (it was only ever present
     # transitively via pydantic-settings).
     "python-dotenv>=1.0",
+    # tests/unit/embeddings/test_openai.py exercises the real tiktoken path of
+    # OpenAIEmbedder's input truncation. tiktoken is an optional runtime
+    # dependency, so declare it here or those tests fail on a clean dev install.
+    "tiktoken>=0.7",
     # TODO: add `langchain-openai>=1.0,<2` here so CI exercises the
     # `llm_provider_from_langchain` branch of examples/langchain_agent.py
     # (requested by the LangChain example's review pass). It must land in the

@@ -4241,6 +4241,7 @@ dev = [
     { name = "respx" },
     { name = "ruff" },
     { name = "testcontainers", extra = ["neo4j"] },
+    { name = "tiktoken" },
     { name = "ty" },
     { name = "types-pyyaml" },
 ]
@@ -4316,6 +4317,7 @@ dev = [
     { name = "respx", specifier = ">=0.21.0" },
     { name = "ruff", specifier = ">=0.3.0" },
     { name = "testcontainers", extras = ["neo4j"], specifier = ">=4.0.0" },
+    { name = "tiktoken", specifier = ">=0.7" },
     { name = "ty", specifier = "==0.0.13" },
     { name = "types-pyyaml", specifier = "==6.0.12.20260906" },
 ]
