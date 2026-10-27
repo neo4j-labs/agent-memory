@@ -18,7 +18,7 @@
     "@ai-sdk/openai": "^4.0",
     "@neo4j-labs/agent-memory": "file:../..",
     "ai": "^7.0",
-    "eve": "^0.53.1",
+    "eve": "^0.78.0",
     "zod": "^4.5"
   },
   "devDependencies": {
