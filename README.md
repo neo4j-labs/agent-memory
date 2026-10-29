@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/neo4j-labs-agent-memory-badge.png)](https://mseep.ai/app/neo4j-labs-agent-memory)
+
 # Neo4j Agent Memory
 
 > This is an experimental Neo4j Labs project and not part of Neo4j's supported product lineup. See the [Neo4j Labs disclaimer](./LABS_DISCLAIMER.txt).
