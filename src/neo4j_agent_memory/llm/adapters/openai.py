@@ -9,6 +9,13 @@ materially better extraction quality than LiteLLM's normalized
 Falls back to :func:`~neo4j_agent_memory.llm.structured.schema_aligned_extract`
 for older OpenAI models that do not support strict mode.
 
+GPT-5-family and o-series reasoning models reject non-default sampling
+parameters (``temperature`` / ``top_p`` / ``logprobs``) and the legacy
+``max_tokens`` field, so for those models this adapter accepts the
+protocol's ``temperature`` argument without forwarding it and sends the
+token budget as ``max_completion_tokens`` instead. Older models keep the
+historical request shape unchanged.
+
 Install with::
 
     pip install 'neo4j-agent-memory[openai]'
@@ -18,6 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from pydantic import BaseModel, ValidationError
@@ -51,6 +59,62 @@ def _strip_provider_prefix(model: str) -> str:
     if model.startswith("openai/"):
         return model[len("openai/") :]
     return model
+
+
+# GPT-5-family models (``gpt-5``, ``gpt-5-mini``, ``gpt-5.1``, ...) and the
+# o-series reasoning models (``o1``, ``o3``, ``o4-mini``, ...) only run at
+# their default sampling settings: the API answers a request carrying
+# ``temperature`` (or ``top_p`` / ``logprobs``) with a 400, and the output
+# token budget must be sent as ``max_completion_tokens`` — ``max_tokens``
+# is rejected the same way.
+_FIXED_SAMPLING_MODEL_RE = re.compile(r"^(?:gpt-5|o\d)(?:[.\-]|$)")
+
+
+def _rejects_sampling_parameters(bare_model: str) -> bool:
+    """Whether the bare model name is a fixed-sampling reasoning model."""
+    return _FIXED_SAMPLING_MODEL_RE.match(bare_model) is not None
+
+
+_sampling_warning_emitted = False
+
+
+def _note_dropped_temperature(temperature: float, bare_model: str) -> None:
+    """Log once when a caller asks for a temperature the model cannot take.
+
+    Silence would hide the difference between what the caller asked for
+    and what was sent, so say it once. The protocol default (0.0) is not
+    worth a warning: every caller passes it, dropped or not.
+    """
+    global _sampling_warning_emitted
+    if temperature == 0.0 or _sampling_warning_emitted:
+        return
+    _sampling_warning_emitted = True
+    logger.warning(
+        "%s does not accept sampling parameters (temperature=%s ignored); "
+        "GPT-5-family and o-series models only run at the default temperature.",
+        bare_model,
+        temperature,
+    )
+
+
+def _completion_sampling_kwargs(
+    bare_model: str, temperature: float, max_tokens: int | None
+) -> dict[str, Any]:
+    """Sampling kwargs for one chat completion request.
+
+    Fixed-sampling models get no ``temperature`` at all and the budget
+    under ``max_completion_tokens``; every other model keeps the
+    historical ``temperature`` / ``max_tokens`` shape.
+    """
+    if _rejects_sampling_parameters(bare_model):
+        _note_dropped_temperature(temperature, bare_model)
+        if max_tokens is None:
+            return {}
+        return {"max_completion_tokens": max_tokens}
+    kwargs: dict[str, Any] = {"temperature": temperature}
+    if max_tokens is not None:
+        kwargs["max_tokens"] = max_tokens
+    return kwargs
 
 
 def _translate_usage(usage: Any) -> Usage | None:
@@ -205,10 +269,8 @@ class OpenAIProvider(_OpenAISDKMixin):
         kwargs: dict[str, Any] = {
             "model": self._bare_model,
             "messages": [m.model_dump(exclude_none=True) for m in messages],
-            "temperature": temperature,
         }
-        if max_tokens is not None:
-            kwargs["max_tokens"] = max_tokens
+        kwargs.update(_completion_sampling_kwargs(self._bare_model, temperature, max_tokens))
         if stop is not None:
             kwargs["stop"] = list(stop)
         if timeout is not None:
@@ -287,7 +349,6 @@ class OpenAIProvider(_OpenAISDKMixin):
         kwargs: dict[str, Any] = {
             "model": self._bare_model,
             "messages": [m.model_dump(exclude_none=True) for m in messages],
-            "temperature": temperature,
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {
@@ -297,6 +358,10 @@ class OpenAIProvider(_OpenAISDKMixin):
                 },
             },
         }
+        if _rejects_sampling_parameters(self._bare_model):
+            _note_dropped_temperature(temperature, self._bare_model)
+        else:
+            kwargs["temperature"] = temperature
         if timeout is not None:
             kwargs["timeout"] = timeout
 

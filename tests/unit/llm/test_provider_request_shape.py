@@ -306,3 +306,110 @@ async def test_openai_embedding_request_keywords_exist_in_installed_sdk() -> Non
     sent = recorder.last
     assert sent["dimensions"] == 256
     _assert_kwargs_accepted(sent, openai.AsyncOpenAI(api_key="x").embeddings.create)
+
+
+async def test_openai_gpt5_complete_omits_temperature_and_renames_budget() -> None:
+    from neo4j_agent_memory.llm.adapters.openai import OpenAIProvider
+
+    recorder = _Recorder()
+    provider = OpenAIProvider("openai/gpt-5-mini", api_key="<redacted>")
+    provider._client = _FakeOpenAIClient(recorder)  # type: ignore[assignment]
+
+    # The conversation-summary call shape from the issue: the protocol
+    # default temperature plus an explicit token budget.
+    await provider.complete(
+        [ChatMessage(role="user", content="summarize")],
+        temperature=0.0,
+        max_tokens=500,
+    )
+
+    sent = recorder.last
+    # GPT-5 models answer both of these with a 400.
+    assert "temperature" not in sent
+    assert "max_tokens" not in sent
+    assert sent["max_completion_tokens"] == 500
+
+
+async def test_openai_gpt5_structured_omits_temperature() -> None:
+    from neo4j_agent_memory.llm.adapters.openai import OpenAIProvider
+
+    recorder = _Recorder()
+    provider = OpenAIProvider("openai/gpt-5-mini", api_key="<redacted>")
+    provider._client = _FakeOpenAIClient(recorder, content='{"value": "ok"}')  # type: ignore[assignment]
+
+    result = await provider.complete_structured(
+        [ChatMessage(role="user", content="extract")],
+        _Extraction,
+        temperature=0.0,
+    )
+
+    assert result.value == "ok"
+    sent = recorder.last
+    assert "temperature" not in sent
+    assert sent["response_format"]["type"] == "json_schema"
+
+
+async def test_openai_reasoning_model_uses_completion_tokens() -> None:
+    from neo4j_agent_memory.llm.adapters.openai import OpenAIProvider
+
+    recorder = _Recorder()
+    provider = OpenAIProvider("openai/o4-mini", api_key="<redacted>")
+    provider._client = _FakeOpenAIClient(recorder)  # type: ignore[assignment]
+
+    await provider.complete(
+        [ChatMessage(role="user", content="hi")],
+        temperature=0.0,
+        max_tokens=64,
+    )
+
+    sent = recorder.last
+    assert "temperature" not in sent
+    assert "max_tokens" not in sent
+    assert sent["max_completion_tokens"] == 64
+
+
+async def test_openai_legacy_model_request_shape_unchanged() -> None:
+    from neo4j_agent_memory.llm.adapters.openai import OpenAIProvider
+
+    recorder = _Recorder()
+    provider = OpenAIProvider("openai/gpt-4o-mini", api_key="<redacted>")
+    provider._client = _FakeOpenAIClient(recorder)  # type: ignore[assignment]
+
+    await provider.complete(
+        [ChatMessage(role="user", content="hi")],
+        temperature=0.2,
+        max_tokens=32,
+    )
+
+    sent = recorder.last
+    assert sent["temperature"] == 0.2
+    assert sent["max_tokens"] == 32
+    assert "max_completion_tokens" not in sent
+
+    structured_recorder = _Recorder()
+    structured = OpenAIProvider("openai/gpt-4o-mini", api_key="<redacted>")
+    structured._client = _FakeOpenAIClient(  # type: ignore[assignment]
+        structured_recorder, content='{"value": "ok"}'
+    )
+    await structured.complete_structured(
+        [ChatMessage(role="user", content="extract")],
+        _Extraction,
+        temperature=0.3,
+    )
+    assert structured_recorder.last["temperature"] == 0.3
+
+
+def test_openai_temperature_warning_is_emitted_once(caplog: pytest.LogCaptureFixture) -> None:
+    from neo4j_agent_memory.llm.adapters import openai as adapter
+
+    adapter._sampling_warning_emitted = False
+    try:
+        with caplog.at_level("WARNING", logger=adapter.__name__):
+            adapter._note_dropped_temperature(0.0, "gpt-5-mini")
+            assert not caplog.records  # the default value is not worth a warning
+            adapter._note_dropped_temperature(0.9, "gpt-5-mini")
+            adapter._note_dropped_temperature(0.9, "gpt-5-mini")
+        assert len(caplog.records) == 1
+        assert "does not accept sampling parameters" in caplog.records[0].message
+    finally:
+        adapter._sampling_warning_emitted = False
