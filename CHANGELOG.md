@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The native OpenAI provider no longer sends `temperature` or the legacy
+  `max_tokens` field to GPT-5-family and o-series reasoning models, which
+  reject both with a 400; the token budget is sent as
+  `max_completion_tokens` instead. This restores extraction and
+  conversation summaries on the default `openai/gpt-5-mini` model.
+
 ## [0.8.0] - 2026-10-22
 
 ### Changed
