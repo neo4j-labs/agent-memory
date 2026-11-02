@@ -30,7 +30,7 @@ re-run all five searches per step.
 
 == Graph expansion
 
-Entity search returns entities without their edges — a name and a
+Entity search returns entities without their edges — a name, a type and a
 description, nothing about how that entity connects to anything else. This is
 the retrieval a flat vector store cannot do: after the entity search, the
 `graphExpansionLimit` best matches (default 2) are expanded with one
@@ -73,6 +73,9 @@ image::diagrams/nams-ai-provider-retrieval.svg["The five memory sources -- curre
 The merged hits are formatted as a numbered list — `` 1. [source] content ``
 — with a trailing note explaining the `[graph]` triple notation, but only
 when a graph hit is actually present (there is nothing to explain otherwise).
+An entity's content is `name (type) — description`. The type is the one NAMS
+gave the entity, a label from the workspace's active ontology when one is set,
+so the model reads `TK-2210 (ticket)` rather than a bare name.
 That block is prepended to the *last user message's* content: for a
 plain-text message, the memory block and a blank line go in front of the
 original text in one string; for a multi-part message, a new text part

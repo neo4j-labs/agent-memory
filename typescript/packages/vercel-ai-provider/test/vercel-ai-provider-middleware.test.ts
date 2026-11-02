@@ -90,7 +90,7 @@ describe('middleware mode — memory injection', () => {
     await wrapped.doGenerate({ prompt: userPrompt('Who am I?') } as any);
 
     const text = capturedParams[0].prompt.at(-1).content.map((p: any) => p.text).join('');
-    expect(text).toContain('Alex — The user');
+    expect(text).toContain('[long-term] Alex (person) — The user');
     expect(text).not.toContain('(subject)-[RELATIONSHIP]->(object)');
   });
 

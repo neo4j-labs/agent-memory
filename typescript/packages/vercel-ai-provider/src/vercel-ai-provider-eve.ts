@@ -11,7 +11,7 @@ import {
   type MemoryTurnStartedContext,
 } from 'eve/memory';
 import { defineTool } from 'eve/tools';
-import { getLogger, interleave, makeClient, searchUserEntities, searchWithFallback } from './vercel-ai-provider-client';
+import { entityLine, getLogger, interleave, makeClient, searchUserEntities, searchWithFallback } from './vercel-ai-provider-client';
 import type { MemoryHit, NamsLogger } from './vercel-ai-provider-types';
 
 export interface NamsEveMemoryOptions {
@@ -303,7 +303,7 @@ export function namsMemory(options: NamsEveMemoryOptions = {}): MemoryProvider {
       workspaceGraph: options.workspaceGraph,
     });
     const hits = (entities: typeof own) => entities.map((e): MemoryHit => ({
-      content: e.description ? `${e.name} — ${e.description}` : e.name,
+      content: entityLine(e),
       source: 'long-term',
       type: e.type ?? 'entity',
     }));

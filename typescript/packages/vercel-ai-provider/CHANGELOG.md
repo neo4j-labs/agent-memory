@@ -3,6 +3,19 @@
 Releases before 0.3.0 predate this file; see the
 [GitHub releases](https://github.com/neo4j-labs/agent-memory/releases) for those.
 
+## Unreleased
+
+### Changed
+
+- **Recalled entities carry their type.** Each entity the model sees is now one
+  line, `name (type) — description`, with the type NAMS stored for it. With an
+  ontology active on the workspace that is the ontology's label, so the model
+  reads `TK-2210 (ticket)` instead of a bare `TK-2210`. This covers the eve
+  recall record and `nams__search`, the memory block in provider and middleware
+  modes, and the `content` of tools-mode `query_memory` hits, which keep their
+  `type` field. An entity without a type keeps the old line. Search ranking is
+  unchanged.
+
 ## 0.5.0 — 2026-10-27
 
 ### Breaking

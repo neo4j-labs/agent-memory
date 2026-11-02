@@ -77,7 +77,7 @@ describe('query_memory', () => {
     expect(out.found).toBe(true);
     expect(out.count).toBe(2);
     // Sources take turns, in bucket order: the long-term hit, then the message.
-    expect(out.memories[0]).toMatchObject({ content: 'Alex — User is named Alex', source: 'long-term' });
+    expect(out.memories[0]).toMatchObject({ content: 'Alex (person) — User is named Alex', source: 'long-term', type: 'person' });
     expect(out.memories[1]).toMatchObject({ content: 'I love terse answers', source: 'conversation' });
   });
 

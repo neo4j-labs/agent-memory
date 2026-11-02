@@ -343,7 +343,7 @@ describe('recall', () => {
 
     const text = await recallText(namsMemory({ apiKey: 'test-key' }), started(ALICE, 's1', 'op-1', 'Lisbon'));
 
-    expect(text).toContain("From this user's knowledge graph:\n- Lisbon — Where Alice is moving");
+    expect(text).toContain("From this user's knowledge graph:\n- Lisbon (LOCATION) — Where Alice is moving");
     expect(text).not.toContain('Lisbon office');
     expect(text).not.toContain('Lisbon Tower');
     expect(nams.client.longTerm.searchEntities.mock.calls.map(([, options]) => options)).toEqual([
@@ -363,9 +363,21 @@ describe('recall', () => {
       started(ALICE, 's1', 'op-1', 'Lisbon'),
     );
 
-    expect(text).toContain('Lisbon — Where Alice is moving');
-    expect(text).toContain('workspace knowledge graph (shared across the workspace, not specific to this user):\n- Lisbon Tower — Shared');
+    expect(text).toContain('Lisbon (LOCATION) — Where Alice is moving');
+    expect(text).toContain('workspace knowledge graph (shared across the workspace, not specific to this user):\n- Lisbon Tower (LOCATION) — Shared');
     expect(text).not.toContain('Lisbon office');
+  });
+
+  it('labels each entity with the type NAMS gave it, from the workspace ontology', async () => {
+    nams.entities.push(
+      { name: 'TK-2210', type: 'ticket', description: 'Replacement request for the Aurora Desk Lamp', userId: ALICE },
+      { name: 'TK-2210 follow-up', type: '', userId: ALICE },
+    );
+
+    const text = await recallText(namsMemory({ apiKey: 'test-key' }), started(ALICE, 's1', 'op-1', 'TK-2210'));
+
+    expect(text).toContain('- TK-2210 (ticket) — Replacement request for the Aurora Desk Lamp');
+    expect(text).toMatch(/^- TK-2210 follow-up$/m);
   });
 
   it('finds notes behind more newer sessions than one listing holds, looking back once', async () => {
@@ -503,7 +515,7 @@ describe('tools', () => {
 
     const result = await alice.search({ query: 'Peanut' });
 
-    expect(result.entities).toEqual(['Peanuts — Alice is allergic']);
+    expect(result.entities).toEqual(['Peanuts (ALLERGEN) — Alice is allergic']);
     expect(result).not.toHaveProperty('workspaceGraph');
   });
 });

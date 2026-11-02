@@ -45,7 +45,7 @@ export default defineEval<typeof config>({
     t.check(second.reply, includes("recalled:"));
     t.check(second.reply, includes("Prefers aisle seats"));
     t.check(second.reply, includes("From this user's knowledge graph"));
-    t.check(second.reply, includes("Aisle seat — Seat this user books"));
+    t.check(second.reply, includes("Aisle seat (PREFERENCE) — Seat this user books"));
     const leaked = (second.reply ?? "").includes("Window seat");
     t.check(leaked, equals(false));
     t.log(`recall reply: ${second.reply}`);
@@ -59,7 +59,7 @@ export default defineEval<typeof config>({
     t.calledTool("nams__search");
     t.check(third.reply, includes('"from":"saved note"'));
     t.check(third.reply, includes('"from":"earlier session"'));
-    t.check(third.reply, includes('"entities":["Aisle seat — Seat this user books"]'));
+    t.check(third.reply, includes('"entities":["Aisle seat (PREFERENCE) — Seat this user books"]'));
     t.log(`search reply: ${third.reply}`);
 
     // NAMS turned nothing away.

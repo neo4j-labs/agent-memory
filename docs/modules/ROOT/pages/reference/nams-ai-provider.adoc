@@ -326,7 +326,7 @@ the optional `eve` peer.
 | `workspaceGraph`
 | `boolean`
 | `false`
-| Also recall entities from the NAMS knowledge graph, which is shared by the whole workspace rather than partitioned by scope.
+| Also recall shared entities, the ones that belong to no user. The scope's own entities are always recalled.
 |===
 
 Behavior:
@@ -336,23 +336,26 @@ Behavior:
   `{ source: "eve", kind: "session" | "notes", slot, session?, title }`.
   Every read lists conversations with that `userId` and keeps only the ones
   whose `userId` and `slot` match, in case the server returns other users'.
-  `@neo4j-labs/agent-memory` 0.5.0 sends the filter as `user_id`, which hosted
-  NAMS ignores, so with it reads see the newest 200 conversations in the
-  workspace.
 * *Recall* returns one message with the id `nams-memory`, so each turn's
   record supersedes the last. Its content is wrapped in `<nams_memory>` tags,
   marked as data rather than instructions, with `<`, `>` and `&` escaped. It
   lists saved notes, then summaries (`getContext` reflections and observations)
   and query matches from up to `crossSessionLimit` earlier sessions, skipping
-  the current one. A replayed operation id returns the same result. eve 0.84.0
-  removed compaction recall, so the provider registers only `turn.started`.
+  the current one, then the scope's entities matching the user's message (and
+  shared ones with `workspaceGraph`), one line each as
+  `name (type) — description`. The type is the one NAMS stored, which comes
+  from the workspace's active ontology; an entity without one is written
+  without the parentheses. A replayed operation id returns the same result.
+  eve 0.84.0 removed compaction recall, so the provider registers only
+  `turn.started`.
 * *Capture* writes one bulk request per turn to the eve session's conversation,
   creating it on first use. A turn already at the end of the conversation is
   not written again, so a replay after a restart does not duplicate it.
 * *Tools.* `search({ query, limit? })` returns
-  `{ results: [{ from, role, content, at }], workspaceGraph? }` from the
-  scope's notes and earlier sessions (up to 10 conversations). `remember({ memory })`
-  adds the note to the scope's notes conversation and returns
+  `{ results: [{ from, role, content, at }], entities, workspaceGraph? }`:
+  matches from the scope's notes and earlier sessions (up to 10
+  conversations), and the scope's entities as lines in the recall format.
+  `remember({ memory })` adds the note to the scope's notes conversation and returns
   `{ remembered: true, memory }`. Both are built with eve's `defineTool` as
   plain functions over the scope key, slot and eve session id, never the API
   key.

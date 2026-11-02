@@ -188,6 +188,12 @@ function entityContent(e: { name?: string; description?: string }): string {
   return name || description || '';
 }
 
+export function entityLine(e: { name?: string; type?: string; description?: string }): string {
+  const name = e.name?.trim();
+  const type = e.type?.trim();
+  return entityContent({ name: name && type ? `${name} (${type})` : name, description: e.description });
+}
+
 /**
  * Read the relationships around the entities that matched. Search returns entities without
  * them. With `userId`, NAMS returns only relationships to that user's entities.
@@ -433,7 +439,7 @@ export async function retrieveMemories(
 
   for (const e of longHits) {
     deduplicatePush(entityHits, seen, {
-      content: entityContent(e),
+      content: entityLine(e),
       source: 'long-term',
       type: e.type ?? 'entity',
       score: e.confidence,

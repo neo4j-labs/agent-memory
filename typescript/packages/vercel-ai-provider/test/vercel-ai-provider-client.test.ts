@@ -48,7 +48,7 @@ describe('retrieveMemories — substring-search fallback', () => {
     // Both "delhi" and "Delhi" are tried.
     expect(fake.longTerm.searchEntities).toHaveBeenCalledWith('delhi', expect.anything());
     expect(fake.longTerm.searchEntities).toHaveBeenCalledWith('Delhi', expect.anything());
-    expect(hits).toContainEqual(expect.objectContaining({ content: 'Fact — User is from Delhi.' }));
+    expect(hits).toContainEqual(expect.objectContaining({ content: 'Fact (fact) — User is from Delhi.' }));
   });
 
   it('ranks noisy fallback candidates by word overlap with the original query', async () => {
@@ -64,8 +64,8 @@ describe('retrieveMemories — substring-search fallback', () => {
     const hits = await retrieveMemories(fake as any, scope, 'conv-1', 'is the user from Delhi', 5);
 
     const contents = hits.map(h => h.content);
-    expect(contents.indexOf('e2 — User is from Delhi.'))
-      .toBeLessThan(contents.indexOf("e1 — User's name is Alex."));
+    expect(contents.indexOf('e2 (fact) — User is from Delhi.'))
+      .toBeLessThan(contents.indexOf("e1 (fact) — User's name is Alex."));
   });
 
   it('does not throw when both the direct search and a fallback term reject', async () => {
@@ -99,7 +99,7 @@ describe('retrieveMemories — substring-search fallback', () => {
     expect(fallbackQueries).toContain('Alex');
     expect(fallbackQueries).toContain("O'Brien");
     expect(fallbackQueries.filter(q => /['’]s$/.test(q))).toEqual([]);
-    expect(hits).toContainEqual(expect.objectContaining({ content: 'Alex — The user.' }));
+    expect(hits).toContainEqual(expect.objectContaining({ content: 'Alex (person) — The user.' }));
   });
 
   it('lower-cases the rest of the Title Case variant, so "NEOVIM" finds Neovim', async () => {
@@ -111,7 +111,7 @@ describe('retrieveMemories — substring-search fallback', () => {
 
     const queries = fake.longTerm.searchEntities.mock.calls.map(c => c[0]);
     expect(queries).toEqual(expect.arrayContaining(['NEOVIM', 'Neovim']));
-    expect(hits).toContainEqual(expect.objectContaining({ content: 'Neovim — A text editor.' }));
+    expect(hits).toContainEqual(expect.objectContaining({ content: 'Neovim (tool) — A text editor.' }));
   });
 
   it('skips the fallback entirely when the query has no significant words', async () => {
@@ -127,24 +127,35 @@ describe('retrieveMemories — substring-search fallback', () => {
  * ("Preferred language"), so a hit must include the name.
  */
 describe('retrieveMemories — long-term hits carry the entity name', () => {
-  it('renders name and description together', async () => {
+  it('renders name, type and description together', async () => {
     fake.longTerm.searchEntities.mockResolvedValue([
       { name: 'Python', description: 'Preferred language', type: 'ProgrammingLanguage', userId: 'u1' },
     ]);
 
     const hits = await retrieveMemories(fake as any, scope, 'conv-1', 'Preferred language', 5);
 
-    expect(hits[0].content).toBe('Python — Preferred language');
+    expect(hits[0].content).toBe('Python (ProgrammingLanguage) — Preferred language');
   });
 
-  it('falls back to the bare name when the entity has no description', async () => {
+  it('falls back to name and type when the entity has no description', async () => {
     fake.longTerm.searchEntities.mockResolvedValue([
       { name: 'Bangalore', type: 'Location', userId: 'u1' },
     ]);
 
     const hits = await retrieveMemories(fake as any, scope, 'conv-1', 'Bangalore', 5);
 
-    expect(hits[0].content).toBe('Bangalore');
+    expect(hits[0].content).toBe('Bangalore (Location)');
+  });
+
+  it('leaves the type out when the entity has none', async () => {
+    fake.longTerm.searchEntities.mockResolvedValue([
+      { name: 'Python', description: 'Preferred language', userId: 'u1' },
+      { name: 'Rust', description: 'Learning it', type: ' ', userId: 'u1' },
+    ]);
+
+    const hits = await retrieveMemories(fake as any, scope, 'conv-1', 'language', 5);
+
+    expect(hits.map(h => h.content)).toEqual(['Python — Preferred language', 'Rust — Learning it']);
   });
 
   it('lets name tokens participate in fallback overlap ranking', async () => {
@@ -160,8 +171,8 @@ describe('retrieveMemories — long-term hits carry the entity name', () => {
     const hits = await retrieveMemories(fake as any, scope, 'conv-1', 'do i prefer Python', 5);
     const contents = hits.map(h => h.content);
 
-    expect(contents.indexOf('Python — A language the user prefers'))
-      .toBeLessThan(contents.indexOf('Rust — A language the user prefers'));
+    expect(contents.indexOf('Python (lang) — A language the user prefers'))
+      .toBeLessThan(contents.indexOf('Rust (lang) — A language the user prefers'));
   });
 
   it('keeps distinct entities that happen to share a description', async () => {
@@ -173,8 +184,8 @@ describe('retrieveMemories — long-term hits carry the entity name', () => {
     const hits = await retrieveMemories(fake as any, scope, 'conv-1', 'Preferred language', 5);
 
     expect(hits.map(h => h.content)).toEqual([
-      'Python — Preferred language',
-      'TypeScript — Preferred language',
+      'Python (lang) — Preferred language',
+      'TypeScript (lang) — Preferred language',
     ]);
   });
 });
@@ -312,7 +323,7 @@ describe('retrieveMemories — graph expansion', () => {
 
     expect(hits.some(h => h.source === 'graph')).toBe(false);
     expect(hits.map(h => h.content)).toEqual(
-      expect.arrayContaining(['Alex — The user', 'I use Neovim']),
+      expect.arrayContaining(['Alex (person) — The user', 'I use Neovim']),
     );
   });
 });
@@ -369,7 +380,7 @@ describe('retrieveMemories — merging the sources', () => {
       graphExpansionLimit: 0,
     });
 
-    expect(hits.map(h => h.content)).toEqual(['first', 'second']);
+    expect(hits.map(h => h.content)).toEqual(['first (fact)', 'second (fact)']);
   });
 });
 
@@ -394,7 +405,7 @@ describe("retrieveMemories — the user's own entities", () => {
     const contents = hits.map(h => h.content);
 
     expect(fake.longTerm.searchEntities.mock.calls.map(c => c[1])).toEqual([{ limit: 5, userId: 'u1' }]);
-    expect(contents).toContain('Lisbon — Where u1 is moving');
+    expect(contents).toContain('Lisbon (place) — Where u1 is moving');
     expect(contents.join('\n')).not.toMatch(/office|Tower/);
   });
 
@@ -408,7 +419,7 @@ describe("retrieveMemories — the user's own entities", () => {
     const hits = await retrieveMemories(fake as any, scope, 'conv-1', 'Lisbon', 5, { workspaceGraph: true });
     const contents = hits.map(h => h.content);
 
-    expect(contents).toEqual(expect.arrayContaining(['Lisbon — Where u1 is moving', 'Lisbon Tower — A landmark']));
+    expect(contents).toEqual(expect.arrayContaining(['Lisbon (place) — Where u1 is moving', 'Lisbon Tower (place) — A landmark']));
     expect(contents.join('\n')).not.toMatch(/office/);
     // A shared entity's edges can lead into other users' memory, so it is not expanded.
     expect(fake.longTerm.getEntity.mock.calls.map(c => c[0])).toEqual(['e-mine']);

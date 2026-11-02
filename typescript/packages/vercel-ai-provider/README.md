@@ -73,12 +73,12 @@ Requires Node.js 22+ (24+ for the eve entry point). Install the provider with
 the core SDK it calls NAMS through:
 
 ```bash
-npm install @neo4j-labs/nams-ai-provider@0.4.0 @neo4j-labs/agent-memory@0.6.0 ai@^7 zod@^4
+npm install @neo4j-labs/nams-ai-provider@0.5.0 @neo4j-labs/agent-memory@0.6.0 ai@^7 zod@^4
 ```
 
 The peer dependencies are `ai` `^7.0.0`, `zod` `^3.25.76 || ^4.1.8` and
-`@neo4j-labs/agent-memory` `~0.6.0`. This README describes the source, which
-is ahead of the 0.4.0 release: its eve provider needs eve 0.84.0 or later. SDK
+`@neo4j-labs/agent-memory` `~0.6.0`. The 0.5.0 eve provider needs eve 0.84.0
+or later; stay on 0.4.0 for eve 0.69.0 to 0.83.x. SDK
 0.5.x is not supported — 0.5.0 installs but fails against hosted NAMS: it sends
 `threshold` with every message search, which NAMS rejects with 400, and sends
 the conversation user filter as `user_id`, which NAMS ignores.
@@ -691,7 +691,7 @@ NAMS. This source needs eve 0.84.0 or later and Node.js 24, and is tested on
 eve 0.84.0.
 
 ```bash
-npm install @neo4j-labs/nams-ai-provider@0.4.0 @neo4j-labs/agent-memory@0.6.0
+npm install @neo4j-labs/nams-ai-provider@0.5.0 @neo4j-labs/agent-memory@0.6.0
 ```
 
 ```ts
@@ -709,7 +709,7 @@ export default defineMemory({
 
 | eve phase | What the provider does |
 |---|---|
-| Recall (`turn.started`) | One record, id `nams-memory`: notes saved with `remember`, the summaries NAMS wrote about earlier sessions, messages from them that match the user's message, and the entities NAMS extracted from this user's conversations. Each turn's record replaces the last. |
+| Recall (`turn.started`) | One record, id `nams-memory`: notes saved with `remember`, the summaries NAMS wrote about earlier sessions, messages from them that match the user's message, and the entities NAMS extracted from this user's conversations, one line each as `name (type) — description`. Each turn's record replaces the last. |
 | Capture (`turn.completed`) | The user's message and final answer, written to one NAMS conversation per eve session. NAMS extracts entities and writes summaries from it. |
 | Tools | `nams__search` finds messages in earlier sessions and notes, and this user's entities; `nams__remember` saves a note. Both are bound to the locked scope. |
 
@@ -887,6 +887,12 @@ user's memory. `workspaceGraph: true` adds shared entities, the ones with no use
 expanded, since their edges can lead into other users' memory. Another user's
 entities are never recalled.
 
+Each entity is one line, `name (type) — description`. The type is the one NAMS
+gave the entity: a label from the workspace's active ontology, such as
+`TK-2210 (ticket)`, or a POLE+O type when no ontology is active. Set an
+ontology once with the core SDK's `client.ontology`; this package needs no
+option for it. An entity without a type is written without the parentheses.
+
 NAMS uses vector search where the workspace has embeddings, and a text match
 otherwise. For a text match, a question that finds nothing is retried with its
 longest words.
@@ -904,7 +910,7 @@ triples:
 
 ```
 Relevant long-term memory about this user (use it to personalise your answer):
-1. [long-term] Alex — The user
+1. [long-term] Alex (person) — The user
 2. [graph] (Alex)-[WORKS_AT]->(TechCorp)
 3. [graph] (Alex)-[USES]->(Neovim)
 4. [conversation] I need something that runs in the terminal
