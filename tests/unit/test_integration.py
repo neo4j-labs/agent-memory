@@ -196,6 +196,21 @@ class TestAddEntity:
         assert result["entity_type"] == "PERSON"
 
     @pytest.mark.asyncio
+    async def test_add_entity_nams_result(self, integration, mock_client):
+        mock_entity = MagicMock()
+        mock_entity.id = "e-2"
+        mock_entity.display_name = "Acme"
+        mock_entity.type = MagicMock(value="ORGANIZATION")
+        mock_client.long_term.add_entity = AsyncMock(return_value=mock_entity)
+
+        result = await integration.add_entity("Acme", "ORGANIZATION")
+
+        assert result["stored"] is True
+        assert result["name"] == "Acme"
+        assert result["entity_type"] == "ORGANIZATION"
+        assert "deduplication" not in result
+
+    @pytest.mark.asyncio
     async def test_add_entity_error(self, integration, mock_client):
         mock_client.long_term.add_entity = AsyncMock(side_effect=Exception("duplicate"))
         result = await integration.add_entity("Test", "PERSON")

@@ -447,7 +447,7 @@ class MemoryIntegration:
             Dict with entity info and deduplication result.
         """
         try:
-            entity, dedup_result = await self.client.long_term.add_entity(
+            entity_result = await self.client.long_term.add_entity(
                 name=name,
                 entity_type=entity_type,
                 subtype=subtype,
@@ -456,6 +456,12 @@ class MemoryIntegration:
                 metadata=metadata,
                 generate_embedding=True,
             )
+            if isinstance(entity_result, tuple):
+                entity, dedup_result = entity_result
+            else:
+                entity = entity_result
+                dedup_result = None
+
             result: dict[str, Any] = {
                 "stored": True,
                 "type": "entity",
