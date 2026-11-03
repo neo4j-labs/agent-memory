@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `MemoryIntegration.add_entity()` now handles the NAMS backend's single-`Entity`
+  return shape while preserving Bolt deduplication metadata.
+
 ## [0.8.0] - 2026-10-22
 
 ### Changed
