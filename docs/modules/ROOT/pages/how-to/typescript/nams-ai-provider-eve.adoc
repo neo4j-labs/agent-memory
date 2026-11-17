@@ -16,8 +16,9 @@ context that outlives a session.
 
 Prerequisites:
 
-* An eve project on eve 0.84.0 or later, the 1.0 release candidates included.
-  On eve 0.69.0 to 0.83.x, install provider 0.4.0 instead.
+* An eve project on eve 0.84.0 or later, up to eve 1.x (not 2.0). The
+  provider is tested on eve 0.84.1, 0.91.0 and 1.0.1. On eve 0.69.0 to
+  0.83.x, install provider 0.4.0 instead.
 * Node.js 24 or newer, which eve requires.
 * A `MEMORY_API_KEY` from https://memory.neo4jlabs.com[memory.neo4jlabs.com].
 
@@ -170,6 +171,11 @@ lines, more when other memory leaves room.
 | Also recall shared entities, the ones that belong to no user. See the limits
 below before turning it on.
 
+| `maxCaptureChars`
+| `16000`
+| Max characters saved per captured message. A longer user message or answer
+is cut, ending in `…`.
+
 | `logger`
 | console
 | Receives non-fatal errors.
@@ -196,6 +202,13 @@ below before turning it on.
   belongs to this scope and its name matches; shared entities and other
   scopes' are never touched. Earlier sessions keep their transcripts, so a
   fact said in a session, not saved as a note, can still be recalled from it.
+* *Size and retention.* eve neither truncates nor expires memory, so the
+  provider sets its own bounds: each captured message is cut at
+  `maxCaptureChars`, each recalled line at 400 characters, and the recalled
+  record holds at most `maxMemories` lines. NAMS keeps memory until it is
+  deleted; nothing expires. Delete a note or an entity with `forget`, one
+  session with `client.shortTerm.deleteConversation(id)`, and a whole scope as
+  below.
 * *Erasing a scope.* To erase everything a scope has stored, earlier sessions
   included, call the NAMS endpoint `DELETE /v1/memory?userId=<scope key>`,
   where the scope key is the `userId` on the scope's conversations. It removes
@@ -210,7 +223,10 @@ is a deployment mistake. Any other NAMS error during recall is logged, and the
 turn goes on with a record that tells the model memory is unavailable. A
 capture failure is logged by eve after the response and does not change the
 completed turn. eve may replay a handler: a replayed recall returns the same
-record, and a replayed capture does not write the turn twice.
+record, and a replayed capture does not write the turn twice. Captured
+messages carry the turn's `operationId` in their metadata (`eveOperation`), so
+a replay is recognised by its own messages, also after a restart, while the
+same exchange repeated in a later turn is still saved.
 
 Recall, capture and each tool call send their NAMS requests through
 `client.withSignal(abortSignal)`, so cancelling the turn or the tool call
@@ -223,3 +239,4 @@ cancels them. With `@neo4j-labs/agent-memory` 0.6.0, which has no
 * xref:reference/nams-ai-provider.adoc#eve-memory-provider[NAMS AI provider API reference]
 * https://eve.dev/docs/memory[eve memory overview]
 * https://eve.dev/docs/memory/custom-provider[Build a memory provider (eve docs)]
+* https://github.com/neo4j-labs/neo4j-agent-integrations/tree/main/vercel-agent/vercel-eve[Industry research agent]: a complete eve agent with this slot and a cross-session recall eval

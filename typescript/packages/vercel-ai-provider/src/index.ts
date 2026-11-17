@@ -21,8 +21,9 @@ export type {
 export { createNamsProvider } from './vercel-ai-provider';
 export { createNamsHooks } from './vercel-ai-provider-hooks';
 export type {
-  NamsHooks, NamsHooksOptions, LoadSessionOptions, OnFinishScope,
-  NamsOnFinishEvent, NamsOnFinishCallback,
+  NamsHooks, NamsHooksOptions, LoadSessionOptions, OnEndScope,
+  NamsOnEndEvent, NamsOnEndCallback,
+  OnFinishScope, NamsOnFinishEvent, NamsOnFinishCallback,
   PrepareOptions, PrepareResult, NamsToolBlocked, SessionTurn,
 } from './vercel-ai-provider-hooks';
 export { compileHooks } from './vercel-ai-provider-hook-events';

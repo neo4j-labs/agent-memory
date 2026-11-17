@@ -95,7 +95,7 @@ the defaults below are shaped the way they are.
 | A `prepareStep` hook (`PrepareStepFunction`) that keeps `toolChoice: 'required'` until `query_memory` has run this loop.
 
 | `ensureMemoryStored(tools: ToolSet, options?: EnsureMemoryStoredOptions)`
-| Returns an `onFinish` callback, `+(event: FinishedTurn) => Promise<EnsureMemoryStoredResult>+`, that stores the turn if the model never called `store_memory`. Must be passed the exact tool set object `createNamsMemoryTools`/`.tools()`/`.toolsWithMcp()` returned — a spread copy (`+{ ...tools }+`) throws.
+| Returns a function to call from your `onEnd` callback, `+(event: FinishedTurn) => Promise<EnsureMemoryStoredResult>+`, that stores the turn if the model never called `store_memory`. Must be passed the exact tool set object `createNamsMemoryTools`/`.tools()`/`.toolsWithMcp()` returned — a spread copy (`+{ ...tools }+`) throws.
 
 | `NamsMemoryTools` (class)
 | `.forUser(userId, conversationId?)` returns NAMS tools only; `.forUserWithMcp(userId, mcp?, conversationId?)` returns `NamsToolsResult`.
@@ -202,7 +202,7 @@ write returns `stored: false` with `message: "Failed to store memory."`.
 | Export | Signature
 
 | `createNams(config).hooks(scope?)` / `createNamsHooks(options: NamsHooksOptions)`
-| Returns `NamsHooks`: `{ loadSession, prepare, withHooks, onFinish, end }`.
+| Returns `NamsHooks`: `{ loadSession, prepare, withHooks, onEnd, end }`, plus `onFinish`, a deprecated alias of `onEnd`.
 
 | `compileHooks(config, logger, onSystemMessage?)`
 | Compiles a `NamsHookConfig` into a `NamsHookRegistry`. Used internally by `createNamsHooks`; exported for advanced/standalone use.
@@ -245,19 +245,19 @@ write returns `stored: false` with `message: "Failed to store memory."`.
 | Restores prior `user`/`assistant` turns only (tool-audit turns are skipped). Returns `[]` for a new user and, instead of throwing, on a backend error. Throws if no `userId` is set on the call or on `createNamsHooks()`.
 
 | `prepare(options: PrepareOptions): Promise<PrepareResult>`
-| Runs `SessionStart` then `UserPromptSubmit`, then loads history. Returns `{ messages, instructions?, prompt, blocked, blockReason?, systemMessages }` — check `blocked` before calling the model, and pass `prompt` (the prompt after any `UserPromptSubmit` rewrite) on to `onFinish`.
+| Runs `SessionStart` then `UserPromptSubmit`, then loads history. Returns `{ messages, instructions?, prompt, blocked, blockReason?, systemMessages }` — check `blocked` before calling the model, and pass `prompt` (the prompt after any `UserPromptSubmit` rewrite) on to `onEnd`.
 
 | `withHooks(tools: ToolSet, scope?: Partial<NamsScope>): ToolSet`
 | Wraps a tool set so `PreToolUse`/`PostToolUse`/`PostToolUseFailure` run around each call. Returns the tools untouched when no tool hooks are registered.
 
-| `onFinish(scope?: OnFinishScope): NamsOnFinishCallback`
-| Runs `PreMemoryWrite` then `Stop`, and persists the turn exactly once via a bulk write (falling back to per-message writes on failure). The saved turns are the user prompt, one `[tool-call]` and one `[tool-result]` audit turn per tool call, any assistant text, and the final answer — so a generation with one tool call and no text beside it saves four turns. Each scope field (`userId`, `conversationId`, `prompt`, `persistUserPrompt`) is read from the AI SDK call's `runtimeContext` first, falling back to the `scope` passed to `onFinish()`.
+| `onEnd(scope?: OnEndScope): NamsOnEndCallback`
+| Runs `PreMemoryWrite` then `Stop`, and persists the turn exactly once via a bulk write (falling back to per-message writes on failure). The saved turns are the user prompt, one `[tool-call]` and one `[tool-result]` audit turn per tool call, any assistant text, and the final answer — so a generation with one tool call and no text beside it saves four turns. Each scope field (`userId`, `conversationId`, `prompt`, `persistUserPrompt`) is read from the AI SDK call's `runtimeContext` first, falling back to the `scope` passed to `onEnd()`. Named after the AI SDK 7 `onEnd` callback it is passed to; `onFinish()` is a deprecated alias that returns the same callback.
 
 | `end(scope?): Promise<void>`
 | Runs `SessionEnd`, then forgets the scope's session state and queued context, so the next `prepare()` fires `SessionStart` again. It does not create or close a NAMS conversation.
 |===
 
-`OnFinishScope`: `{ userId?, conversationId?, prompt?: string | ModelMessage[], persistUserPrompt?: boolean (default true) }`.
+`OnEndScope`: `{ userId?, conversationId?, prompt?: string | ModelMessage[], persistUserPrompt?: boolean (default true) }`.
 `LoadSessionOptions` is `{ userId?, conversationId?, limit? }`, and
 `PrepareOptions` adds `prompt: string` (required) to it. `NamsToolBlocked` —
 what a denied tool returns to the model instead of its result — is `{
@@ -328,6 +328,11 @@ the optional `eve` peer.
 | `true`
 | With `false`, `tools()` leaves out `forget`.
 
+| `maxCaptureChars`
+| `number`
+| `16000`
+| Max characters saved per captured message. A longer user message or answer is cut to this length, ending in `…`.
+
 | `workspaceGraph`
 | `boolean`
 | `false`
@@ -372,8 +377,12 @@ Behavior:
   eve 0.84.0 removed compaction recall, so the provider registers only
   `turn.started`.
 * *Capture* writes one bulk request per turn to the eve session's conversation,
-  creating it on first use. A turn already at the end of the conversation is
-  not written again, so a replay after a restart does not duplicate it.
+  creating it on first use, with each message cut to `maxCaptureChars`. Every
+  message carries the turn's `operationId` as metadata `eveOperation`; when
+  the end of the conversation already holds that operation's messages, the
+  turn is not written again, so a replay after a restart does not duplicate
+  it, while the same exchange repeated in a later turn is saved. Messages
+  without the tag (saved by provider 0.5.0 or earlier) are compared by text.
 * *Tools.* `search({ query, limit? })` returns
   `{ results: [{ from, role, content, at }], entities, relationships, workspaceGraph? }`:
   matches from the scope's notes and earlier sessions (all of them, or the 10
@@ -487,9 +496,10 @@ Every other exported name is a type that appears in the signatures above:
   timeout?, name? }`), `NamsHookHandler`, `NamsHookBase`, `NamsHookInputs`
   and `NamsHookOutputs` (maps from event name to input and output type),
   `NamsHookResult`, `NamsHookRegistry`, `NamsSystemMessageSink`,
-  `NamsOnFinishEvent`, `NamsOnFinishCallback`, `LoadSessionOptions`,
-  `PrepareOptions`, `PrepareResult`, `OnFinishScope`, `SessionTurn`, and the
-  per-event `<Event>Input`/`<Event>Output` types (for example
+  `NamsOnEndEvent`, `NamsOnEndCallback`, `LoadSessionOptions`,
+  `PrepareOptions`, `PrepareResult`, `OnEndScope`, `SessionTurn`, the
+  deprecated aliases `NamsOnFinishEvent`, `NamsOnFinishCallback` and
+  `OnFinishScope`, and the per-event `<Event>Input`/`<Event>Output` types (for example
   `PreToolUseInput` and `PreToolUseOutput`).
 
 [[hook-events]]
@@ -536,12 +546,12 @@ instructions instead.
 | `retry?: boolean` (honoured on the first failure only)
 
 | `PreMemoryWrite`
-| Inside `onFinish()`, before saving
+| Inside `onEnd()`, before saving
 | `turns: SessionTurn[]`
 | `decision?: 'block'` (nothing is saved), `blockReason?: string`, `updatedTurns?: SessionTurn[]`
 
 | `Stop`
-| Inside `onFinish()`, after the turns are saved
+| Inside `onEnd()`, after the turns are saved
 | `text?: string`, `turns: SessionTurn[]`
 | — (context/system-message only; the write has already happened)
 
@@ -630,9 +640,9 @@ and the eve provider are chosen entirely in code.
 | `^2.0.0` — only needed for `toolsWithMcp()`, loaded lazily.
 
 | `eve` _(optional)_
-| `>=0.84.0 \|\| >=1.0.0-rc.0` — only needed for the `/eve` entry point. The
-second range admits the eve 1.0 release candidates, which npm does not match
-against `>=0.84.0`.
+| `>=0.84.0 <1.0.0 \|\| ^1.0.0-rc.0` — only needed for the `/eve` entry point:
+eve 0.84.0 up to, not including, 2.0. The second range also admits the eve 1.0
+release candidates, which npm would not match against a plain `>=0.84.0`.
 |===
 
 Requires Node.js 22 or newer (`engines.node: ">=22"`); the `/eve` entry point

@@ -17,6 +17,8 @@ import {
   getLogger,
   interleave,
   makeClient,
+  MEMORY_LINE_CHARS,
+  memoryLine,
   searchUserEntities,
   searchWithFallback,
   withSignal,
@@ -34,11 +36,14 @@ export interface NamsEveMemoryOptions {
   tools?: boolean;
   forget?: boolean;
   workspaceGraph?: boolean;
+  maxCaptureChars?: number;
 }
 
 const RECORD_ID = 'nams-memory';
 
 const SOURCE = 'eve';
+
+const OPERATION_KEY = 'eveOperation';
 
 const LIMITS = {
   listed: 200,
@@ -50,7 +55,6 @@ const LIMITS = {
   scoped: 50,
   entities: 5,
   expanded: 2,
-  line: 400,
   memo: 500,
   noteHistory: 200,
   bulk: 100,
@@ -175,13 +179,6 @@ function answerText(messages: readonly ModelMessage[]): string {
   return '';
 }
 
-/** One capped line with `&` and `<` escaped, so it cannot close the tag. `>` stays for `->`. */
-function line(text: string): string {
-  const compact = text.replace(/\s+/g, ' ').trim();
-  const capped = compact.length > LIMITS.line ? `${compact.slice(0, LIMITS.line - 1)}…` : compact;
-  return capped.replace(/&/g, '&amp;').replace(/</g, '&lt;');
-}
-
 /** A note or name as compared by forget: unescaped, whitespace collapsed, lower case. */
 const plain = (text: string): string =>
   text.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim().toLowerCase();
@@ -189,7 +186,7 @@ const plain = (text: string): string =>
 /** True when `wanted` is this note as the model saw it, also when the record cut it short. */
 function sameNote(note: string, wanted: string): boolean {
   const [stored, asked] = [plain(note), plain(wanted)];
-  const cut = asked.endsWith('…') && asked.length >= LIMITS.line;
+  const cut = asked.endsWith('…') && asked.length >= MEMORY_LINE_CHARS;
   return cut ? stored.startsWith(asked.slice(0, -1).trimEnd()) : stored === asked;
 }
 
@@ -235,6 +232,7 @@ function memoize<K, V>(map: Map<K, V>, key: K, value: V): void {
 export function namsMemory(options: NamsEveMemoryOptions = {}): MemoryProvider {
   const crossSessionLimit = options.crossSessionLimit ?? 3;
   const maxMemories = options.maxMemories ?? 8;
+  const maxCaptureChars = options.maxCaptureChars ?? 16_000;
 
   let client: MemoryClient | undefined;
   /** Lazily creates the NAMS client from apiKey or MEMORY_API_KEY. */
@@ -520,18 +518,18 @@ export function namsMemory(options: NamsEveMemoryOptions = {}): MemoryProvider {
 
     const sections: string[] = [];
     if (noteLines.length) {
-      sections.push(['Notes saved for this user:', ...noteLines.map(n => `- ${line(n)}`)].join('\n'));
+      sections.push(['Notes saved for this user:', ...noteLines.map(n => `- ${memoryLine(n)}`)].join('\n'));
     }
     if (earlier.length) {
-      sections.push(['From earlier sessions:', ...earlier.map(h => `- [${h.type}] ${line(h.content)}`)].join('\n'));
+      sections.push(['From earlier sessions:', ...earlier.map(h => `- [${h.type}] ${memoryLine(h.content)}`)].join('\n'));
     }
     if (known.length) {
-      sections.push(["From this user's knowledge graph:", ...known.map(h => `- ${line(h.content)}`)].join('\n'));
+      sections.push(["From this user's knowledge graph:", ...known.map(h => `- ${memoryLine(h.content)}`)].join('\n'));
     }
     if (workspace.length) {
       sections.push([
         'From the workspace knowledge graph (shared across the workspace, not specific to this user):',
-        ...workspace.map(h => `- ${line(h.content)}`),
+        ...workspace.map(h => `- ${memoryLine(h.content)}`),
       ].join('\n'));
     }
     return record(sections.length ? sections : ['No saved memory matches this request.']);
@@ -583,15 +581,24 @@ export function namsMemory(options: NamsEveMemoryOptions = {}): MemoryProvider {
     return result;
   }
 
-  /** True when the conversation already ends with these turns, so a retry does not save twice. */
-  async function endsWith(
+  /** A captured message, cut to maxCaptureChars. */
+  const capped = (text: string): string =>
+    text.length > maxCaptureChars ? `${text.slice(0, maxCaptureChars - 1)}…` : text;
+
+  /** True when this operation's turn is already saved, so a retry does not save it twice. */
+  async function alreadySaved(
     nams: MemoryClient,
     conversationId: string,
+    operationId: string,
     turns: { role: string; content: string }[],
   ): Promise<boolean> {
     try {
       const { messages } = await nams.shortTerm.getConversation(conversationId, { limit: turns.length });
       const tail = chronological(messages ?? []).slice(-turns.length);
+      const tags = tail
+        .map(m => m.metadata?.[OPERATION_KEY])
+        .filter((tag): tag is string => typeof tag === 'string');
+      if (tags.length > 0) return tags.includes(operationId);
       return tail.length === turns.length &&
         tail.every((m, i) => m.role === turns[i].role && m.content.trim() === turns[i].content);
     } catch {
@@ -604,16 +611,17 @@ export function namsMemory(options: NamsEveMemoryOptions = {}): MemoryProvider {
     if (options.capture === false || captured.has(ctx.operationId)) return;
 
     const turns = [
-      { role: 'user' as const, content: userText(ctx.turn.input) },
-      { role: 'assistant' as const, content: answerText(ctx.messages) },
+      { role: 'user' as const, content: capped(userText(ctx.turn.input)) },
+      { role: 'assistant' as const, content: capped(answerText(ctx.messages)) },
     ].filter(turn => turn.content);
 
     if (turns.length > 0) {
       const nams = withSignal(getClient(), ctx.abortSignal);
       const where = { scopeKey: ctx.memory.scope.key, slot: ctx.memory.slot };
       const conversationId = await ensureConversation(nams, where, 'session', ctx.session.id);
-      if (!(await endsWith(nams, conversationId, turns))) {
-        await nams.shortTerm.bulkAddMessages(conversationId, turns);
+      if (!(await alreadySaved(nams, conversationId, ctx.operationId, turns))) {
+        const metadata = { [OPERATION_KEY]: ctx.operationId };
+        await nams.shortTerm.bulkAddMessages(conversationId, turns.map(turn => ({ ...turn, metadata })));
       }
     }
     memoize(captured, ctx.operationId, true);

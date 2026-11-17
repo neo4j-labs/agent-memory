@@ -533,10 +533,10 @@
       ],
       "owner": "documentation maintainers",
       "status": "exported-and-visually-reviewed",
-      "source_sha256": "67a1484184a75b9c82426defc68c401b42bded8e0e17ba9e35b5b1ef1b4b4164",
-      "output_sha256": "3446f9779933077bb596a42c6b40111ec93a7dfb2c553660e1e31c735ae0c1c3",
+      "source_sha256": "d90b91f1b0ab2198e3581cb274278b3768666088d8c395e4ea05e6920f3175ea",
+      "output_sha256": "87bd4eefef7cb6c3a30f47c03264a897036d8e8bfc07fbca2fadd67d94731026",
       "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
-      "reviewed_on": "2026-09-24",
+      "reviewed_on": "2026-11-17",
       "referring_documents": []
     },
     {
@@ -547,10 +547,10 @@
       ],
       "owner": "documentation maintainers",
       "status": "exported-and-visually-reviewed",
-      "source_sha256": "278c46592fb1967d9b7f8eff6dc8fbbbdb046862c987bf49dfc819c376a45863",
-      "output_sha256": "3257ebd00d94e2df81b53577b701e5535230af122f4ca7bf42ed1165775f5242",
+      "source_sha256": "5b3aae3eff3582d936a3653ad31292627bfd86a7f529c1652a5a5dbd4b015114",
+      "output_sha256": "dafcfb87b3f2c4f269e9de78a2a49a459d2db6bf539238e135a784970a915378",
       "exporter": "@excalidraw/excalidraw 0.18.1; scripts/export_diagrams.mjs",
-      "reviewed_on": "2026-09-23",
+      "reviewed_on": "2026-11-17",
       "referring_documents": []
     },
     {

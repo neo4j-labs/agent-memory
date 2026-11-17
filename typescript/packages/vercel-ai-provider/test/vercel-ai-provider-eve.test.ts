@@ -30,6 +30,7 @@ interface StoredMessage {
   role: string;
   content: string;
   timestamp: string;
+  metadata: Record<string, string>;
 }
 
 interface StoredEntity {
@@ -52,8 +53,13 @@ function makeFakeNams(options: { sdk?: '0.6.0' } = {}) {
   const entities: StoredEntity[] = [];
   const entityId = (e: StoredEntity) => e.id ?? `ent-${e.name}`;
 
-  const append = (conversationId: string, role: string, content: string): StoredMessage => {
-    const message = { id: `msg-${++ids}`, role, content, timestamp: tick() };
+  const append = (
+    conversationId: string,
+    role: string,
+    content: string,
+    metadata: Record<string, string> = {},
+  ): StoredMessage => {
+    const message = { id: `msg-${++ids}`, role, content, timestamp: tick(), metadata };
     messages.set(conversationId, [...(messages.get(conversationId) ?? []), message]);
     const conversation = conversations.find(c => c.id === conversationId);
     if (conversation) conversation.updatedAt = message.timestamp;
@@ -117,8 +123,11 @@ function makeFakeNams(options: { sdk?: '0.6.0' } = {}) {
         })),
         recentMessages: [],
       })),
-      bulkAddMessages: vi.fn(async (id: string, batch: { role: string; content: string }[]) =>
-        batch.map(m => append(id, m.role, m.content))),
+      // Like real NAMS: keeps each message's metadata.
+      bulkAddMessages: vi.fn(async (
+        id: string,
+        batch: { role: string; content: string; metadata?: Record<string, string> }[],
+      ) => batch.map(m => append(id, m.role, m.content, m.metadata))),
       addMessage: vi.fn(async (id: string, role: string, content: string) => append(id, role, content)),
       deleteConversation: vi.fn(async (id: string, _options?: { purge?: string }) => {
         conversations.splice(conversations.findIndex(c => c.id === id), 1);
@@ -648,6 +657,47 @@ describe('capture', () => {
 
     expect(nams.client.shortTerm.createConversation).toHaveBeenCalledTimes(1);
     expect(nams.client.shortTerm.bulkAddMessages).toHaveBeenCalledTimes(1);
+  });
+
+  it('tags each captured message with its eve operation id', async () => {
+    await capture(namsMemory({ apiKey: 'test-key' }), completed(ALICE, 'session-1', 'op-1', 'I am Alice', 'Hi!'));
+
+    const [conversation] = nams.conversations;
+    expect(nams.messages.get(conversation.id)!.map(m => m.metadata)).toEqual([
+      { eveOperation: 'op-1' },
+      { eveOperation: 'op-1' },
+    ]);
+  });
+
+  it('saves the same exchange again when a later turn repeats it', async () => {
+    const provider = namsMemory({ apiKey: 'test-key' });
+
+    await capture(provider, completed(ALICE, 'session-1', 'op-1', 'Hello', 'Hi!'));
+    await capture(provider, completed(ALICE, 'session-1', 'op-2', 'Hello', 'Hi!'));
+
+    const [conversation] = nams.conversations;
+    expect(nams.messages.get(conversation.id)!.map(m => m.content)).toEqual(['Hello', 'Hi!', 'Hello', 'Hi!']);
+  });
+
+  it('skips a replayed turn that an older provider saved without tags', async () => {
+    const old = nams.seed(ALICE, { session: 'session-1' });
+    nams.messages.set(old.id, [
+      { id: 'msg-a', role: 'user', content: 'I am Alice', timestamp: '2026-10-01T00:00:01.000Z', metadata: {} },
+      { id: 'msg-b', role: 'assistant', content: 'Hi!', timestamp: '2026-10-01T00:00:02.000Z', metadata: {} },
+    ]);
+
+    await capture(namsMemory({ apiKey: 'test-key' }), completed(ALICE, 'session-1', 'op-1', 'I am Alice', 'Hi!'));
+
+    expect(nams.client.shortTerm.bulkAddMessages).not.toHaveBeenCalled();
+  });
+
+  it('cuts a captured message to maxCaptureChars', async () => {
+    const provider = namsMemory({ apiKey: 'test-key', maxCaptureChars: 10 });
+
+    await capture(provider, completed(ALICE, 'session-1', 'op-1', 'x'.repeat(50), 'short'));
+
+    const [conversation] = nams.conversations;
+    expect(nams.messages.get(conversation.id)!.map(m => m.content)).toEqual([`${'x'.repeat(9)}…`, 'short']);
   });
 
   it("never writes into another scope's conversation for the same session", async () => {

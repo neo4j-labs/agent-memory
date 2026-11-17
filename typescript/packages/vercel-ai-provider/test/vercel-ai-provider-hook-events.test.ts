@@ -408,7 +408,7 @@ describe('PreMemoryWrite and Stop', () => {
       },
     });
 
-    await hooks.onFinish({ prompt: 'remember it' })(finishEvent);
+    await hooks.onEnd({ prompt: 'remember it' })(finishEvent);
 
     expect(fake.shortTerm.bulkAddMessages).toHaveBeenCalledWith(
       `conv-${userId}`,
@@ -426,7 +426,7 @@ describe('PreMemoryWrite and Stop', () => {
       hooks: { PreMemoryWrite: [() => ({ decision: 'block' as const, blockReason: 'no consent' })] },
     });
 
-    await hooks.onFinish({ prompt: 'remember it' })(finishEvent);
+    await hooks.onEnd({ prompt: 'remember it' })(finishEvent);
 
     expect(fake.shortTerm.bulkAddMessages).not.toHaveBeenCalled();
     expect(fake.shortTerm.addMessage).not.toHaveBeenCalled();
@@ -440,7 +440,7 @@ describe('PreMemoryWrite and Stop', () => {
       hooks: { Stop: [(input) => { seen.push(input); }] },
     });
 
-    await hooks.onFinish({ prompt: 'hi' })(finishEvent);
+    await hooks.onEnd({ prompt: 'hi' })(finishEvent);
 
     expect(seen[0].text).toBe('my card is 4111');
     expect(seen[0].turns).toHaveLength(2);

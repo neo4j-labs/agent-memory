@@ -91,7 +91,7 @@ const agent = new ToolLoopAgent({
     runtimeContext: options,
   }),
 
-  onEnd: session.onFinish(),
+  onEnd: session.onEnd(),
 
   stopWhen: isStepCount(5),
 });

@@ -26,15 +26,45 @@ Releases before 0.3.0 predate this file; see the
   requests through `client.withSignal(abortSignal)` when the SDK has it, so a
   cancelled turn or tool call cancels them; with SDK 0.6.0 they run to
   completion as before.
+- **eve: `maxCaptureChars`.** eve neither truncates nor expires memory and
+  leaves size and retention to the provider. Each captured user message and
+  answer is now cut at `maxCaptureChars` (default 16,000 characters), ending
+  in `…`. The README and the eve how-to state the bounds (captured message,
+  recalled line, recalled record) and that NAMS keeps memory until it is
+  deleted, with the three ways to delete it.
+- **Hooks mode: `onEnd()`.** `session.onEnd()` builds the callback for the AI
+  SDK 7 `onEnd` slot, with the types `OnEndScope`, `NamsOnEndEvent` and
+  `NamsOnEndCallback`. It is the same callback `onFinish()` built.
+
+### Deprecated
+
+- Hooks mode's `onFinish()`, `OnFinishScope`, `NamsOnFinishEvent` and
+  `NamsOnFinishCallback`, after AI SDK 7 renamed `onFinish` to `onEnd`. They
+  remain as aliases of `onEnd()` and the `OnEnd*` types.
 
 ### Fixed
 
-- **Installs on the eve 1.0 release candidates.** The optional `eve` peer is
-  now `>=0.84.0 || >=1.0.0-rc.0`. npm does not match a prerelease such as
-  `1.0.0-rc.10`, which is eve's `latest` tag, against `>=0.84.0`, so adding
-  0.5.0 to an eve 1.0 project failed with `ERESOLVE` unless installed with
-  `--legacy-peer-deps`. The provider code needed no change: the eve runtime
-  eval passes 17/17 on eve 0.84.1, 0.91.0 and 1.0.0-rc.10.
+- **eve peer range: 1.x in, 2.0 out.** The optional `eve` peer is now
+  `>=0.84.0 <1.0.0 || ^1.0.0-rc.0`. 0.5.0's `>=0.84.0` did not match the eve
+  1.0 release candidates (npm skips prereleases), so an eve 1.0 RC project
+  failed with `ERESOLVE`, and it had no upper bound, so it also admitted any
+  future eve 2.0, whose memory contract this release has not been tested
+  against. The eve runtime eval passes 28/28 on eve 0.84.1, 0.91.0 and 1.0.1.
+- **eve: a repeated exchange is no longer dropped as a replay.** Capture
+  recognised a replayed operation by comparing the end of the session's
+  conversation with the turn's text, so when a user sent the same message
+  again in the next turn and got the same answer, that turn was not saved.
+  Each captured message now carries the turn's `operationId` as metadata
+  (`eveOperation`), and a replay is recognised by that id, as eve's provider
+  contract asks. Messages saved by provider 0.5.0 or earlier carry no id and
+  are still compared by text.
+- **Provider and middleware modes frame recalled memory as untrusted data.**
+  The memory block put stored text straight into the user's message under
+  "use it to personalise your answer", so a stored message could read as an
+  instruction. The block is now wrapped in `<nams_memory>`, says the memory is
+  data, not instructions, and gives each memory one line of at most 400
+  characters with `&` and `<` escaped, as the eve record already did. The
+  tools-mode `query_memory` description also says results are stored data.
 - **Graph relationships keep their direction.** Provider, middleware and tools
   modes wrote every relationship as `(entity)-[TYPE]->(other)`, so an edge that
   points at the matched entity reached the model reversed (a match on TechCorp
@@ -84,6 +114,18 @@ Releases before 0.3.0 predate this file; see the
   and `nams__forget` deleting the note and the user's entity: 27/27 on eve
   1.0.1, with SDK 0.6.0 and with an SDK that has `withSignal` and
   `deleteConversation({ purge })`.
+- `examples/eve-memory-eval`: the fake NAMS server keeps message metadata
+  (string values only, as hosted NAMS) and a 28th check confirms every
+  captured message carries its eve operation id. 28/28 on eve 0.84.1, 0.91.0
+  and 1.0.1 with SDK 0.6.0; 18/28 with SDK 0.5.0. The example depends on eve
+  `~1.0.1`.
+- Development dependencies: eve `~1.0.1`, which needs `ai` 7.0.172 or later,
+  so `ai` `^7.0.173`, `@ai-sdk/openai` `^4.0.118` and `@ai-sdk/mcp` `^2.0.99`,
+  the releases that share one `@ai-sdk/provider` (4.0.38). The
+  `nextjs-memory-chat` example's lock moved to the same set, since it links
+  the provider and must resolve the same `LanguageModelV4` type.
+- The README and the provider's docs pages link the runnable examples in
+  [neo4j-agent-integrations](https://github.com/neo4j-labs/neo4j-agent-integrations/tree/main/vercel-agent).
 - **Recalled entities carry their type.** Each entity the model sees is now one
   line, `name (type) — description`, with the type NAMS stored for it. With an
   ontology active on the workspace that is the ontology's label, so the model

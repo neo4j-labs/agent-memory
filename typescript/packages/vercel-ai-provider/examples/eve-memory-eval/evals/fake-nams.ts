@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 
 interface Conversation { id: string; userId: string; metadata: Record<string, unknown>; createdAt: string; updatedAt: string }
-interface Message { id: string; role: string; content: string; createdAt: string }
+interface Message { id: string; role: string; content: string; createdAt: string; metadata: Record<string, string> }
 interface Relationship { id: string; relationshipType: string; direction: "in" | "out"; predicate?: string; targetId: string; targetName: string }
 interface Entity { id: string; name: string; type: string; description?: string; userId: string; createdAt: string; relationships?: Relationship[] }
 
@@ -35,8 +35,8 @@ export async function startFakeNams() {
   let clock = Date.UTC(2026, 9, 1);
   const now = () => new Date((clock += 1000)).toISOString();
 
-  const add = (id: string, role: string, content: string): Message => {
-    const message = { id: `msg-${++ids}`, role, content, createdAt: now() };
+  const add = (id: string, role: string, content: string, metadata: Record<string, string> = {}): Message => {
+    const message = { id: `msg-${++ids}`, role, content, createdAt: now(), metadata };
     messages.set(id, [...(messages.get(id) ?? []), message]);
     const conversation = conversations.find((c) => c.id === id);
     if (conversation) conversation.updatedAt = message.createdAt;
@@ -105,6 +105,12 @@ export async function startFakeNams() {
       rejected.push(`${req.method} ${url.pathname}: unknown field: ${unknown}`);
       return send(400, { error: `unknown field: ${unknown}` });
     }
+    // Like the real server: message metadata holds string values only.
+    const sent = sub2 === "bulk" ? body.messages ?? [] : sub === "messages" ? [body] : [];
+    if (sent.some((m: { metadata?: Record<string, unknown> }) => Object.values(m.metadata ?? {}).some((v) => typeof v !== "string"))) {
+      rejected.push(`${req.method} ${url.pathname}: metadata values must be strings`);
+      return send(400, { error: "metadata values must be strings" });
+    }
 
     if (!id && req.method === "GET") {
       const userId = url.searchParams.get("userId");
@@ -131,9 +137,9 @@ export async function startFakeNams() {
       const limit = Number(url.searchParams.get("limit") ?? 50);
       return send(200, { messages: (messages.get(id) ?? []).slice(-limit).reverse() });
     }
-    if (sub === "messages" && !sub2 && req.method === "POST") return send(201, add(id, body.role, body.content));
+    if (sub === "messages" && !sub2 && req.method === "POST") return send(201, add(id, body.role, body.content, body.metadata));
     if (sub === "messages" && sub2 === "bulk") {
-      return send(201, { messages: body.messages.map((m: Message) => add(id, m.role, m.content)) });
+      return send(201, { messages: body.messages.map((m: Message) => add(id, m.role, m.content, m.metadata)) });
     }
     if (sub === "search") {
       const found = (messages.get(id) ?? []).filter((m) => m.content.includes(body.query)).slice(0, body.limit ?? 10);

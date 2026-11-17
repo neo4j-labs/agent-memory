@@ -70,7 +70,7 @@ xref:how-to/typescript/nams-ai-provider-eve.adoc[Add NAMS memory to an eve agent
 | xref:how-to/typescript/nams-ai-provider-hooks-mode.adoc[Hooks]
 | `createNams(config).hooks(scope)`
 | Your code — `session.loadSession()` / `session.prepare()`, before every generation
-| Your code — `session.onFinish()`, exactly once per generation
+| Your code — `session.onEnd()`, exactly once per generation
 | You need deterministic, application-controlled transcript capture — for example, production session memory.
 |===
 
@@ -79,7 +79,7 @@ configuration. Middleware and tools modes can also be combined on one agent —
 injected baseline context plus explicit memory tools.
 
 .The four NAMS AI provider modes and what triggers each one's calls to the hosted workspace
-image::diagrams/nams-ai-provider-modes.svg["The four NAMS AI provider modes -- provider, middleware, tools, and hooks -- each connecting the application to the NAMS workspace, which retrieves relevant memory and stores turns with their extracted entities: automatically on every call in provider and middleware modes, when the model calls a memory tool in tools mode, and when your code calls prepare or onFinish in hooks mode",width=100%,link=self]
+image::diagrams/nams-ai-provider-modes.svg["The four NAMS AI provider modes -- provider, middleware, tools, and hooks -- each connecting the application to the NAMS workspace, which retrieves relevant memory and stores turns with their extracted entities: automatically on every call in provider and middleware modes, when the model calls a memory tool in tools mode, and when your code calls prepare or onEnd in hooks mode",width=100%,link=self]
 
 [[choose-conversation]]
 == Choose the conversation each instance writes to
@@ -155,4 +155,5 @@ lifecycle hooks.
 * xref:explanation/nams-ai-provider-retrieval.adoc[How the NAMS AI provider retrieves memory]
 * xref:how-to/typescript/vercel-ai.adoc[Integrate with the Vercel AI SDK]
 * link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/examples/nams-ai-provider[Runnable examples for all four modes]
+* link:https://github.com/neo4j-labs/neo4j-agent-integrations/tree/main/vercel-agent[More runnable examples in neo4j-agent-integrations]: Node scripts for all four modes, a Next.js chat app, and an eve agent
 * link:https://github.com/neo4j-labs/agent-memory/tree/main/typescript/packages/vercel-ai-provider[Package source and README on GitHub]

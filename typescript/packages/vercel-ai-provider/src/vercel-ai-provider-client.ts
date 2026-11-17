@@ -197,6 +197,16 @@ function entityContent(e: { name?: string; description?: string }): string {
   return name || description || '';
 }
 
+/** Max characters of one memory line shown to the model. */
+export const MEMORY_LINE_CHARS = 400;
+
+/** One capped line with `&` and `<` escaped, so stored text cannot close the memory tag. `>` stays for `->`. */
+export function memoryLine(text: string): string {
+  const compact = text.replace(/\s+/g, ' ').trim();
+  const capped = compact.length > MEMORY_LINE_CHARS ? `${compact.slice(0, MEMORY_LINE_CHARS - 1)}…` : compact;
+  return capped.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+}
+
 export function entityLine(e: { name?: string; type?: string; description?: string }): string {
   const name = e.name?.trim();
   const type = e.type?.trim();

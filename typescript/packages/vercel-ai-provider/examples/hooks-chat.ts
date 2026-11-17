@@ -1,4 +1,4 @@
-// Hooks mode: `loadSession` restores the transcript before each call, `onFinish()` saves it after.
+// Hooks mode: `loadSession` restores the transcript before each call, `onEnd()` saves it after.
 // Run: MEMORY_API_KEY=sk-nams-... OPENAI_API_KEY=sk-... npx tsx examples/hooks-chat.ts
 
 import { openai } from '@ai-sdk/openai';
@@ -9,7 +9,7 @@ import { createNams } from '../src/index';
 const userId = process.env.NAMS_DEMO_USER ?? 'demo-user-hooks-chat';
 const model = process.env.NAMS_DEMO_MODEL ?? 'gpt-5.4-mini';
 
-// One factory, so loadSession() and onFinish() use the same conversation.
+// One factory, so loadSession() and onEnd() use the same conversation.
 const nams = createNams({ apiKey: process.env.MEMORY_API_KEY! });
 const session = nams.hooks({ userId });
 
@@ -41,7 +41,7 @@ const agent = new ToolLoopAgent({
   }),
 
   // After: save every turn once.
-  onEnd: session.onFinish(),
+  onEnd: session.onEnd(),
 
   stopWhen: isStepCount(5),
 });

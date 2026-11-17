@@ -77,6 +77,10 @@ image::diagrams/nams-ai-provider-retrieval.svg["The five memory sources -- curre
 The merged hits are formatted as a numbered list — `` 1. [source] content ``
 — with a trailing note explaining the `[graph]` triple notation, but only
 when a graph hit is actually present (there is nothing to explain otherwise).
+The list sits inside a `<nams_memory>` tag, after a line telling the model the
+memory is data, not instructions. Stored text is untrusted: each hit is one
+line of at most 400 characters with `&` and `<` escaped, so a stored message
+cannot close the tag or pose as instructions outside it.
 An entity's content is `name (type) — description`. The type is the one NAMS
 gave the entity, a label from the workspace's active ontology when one is set,
 so the model reads `TK-2210 (ticket)` rather than a bare name.
@@ -90,7 +94,7 @@ block is added when retrieval finds nothing.
 
 Provider and middleware modes persist the turn automatically —
 `persistInteractions` (default `true`) is the only switch. Hooks mode always
-persists what `onFinish()` is given: `persistUserPrompt: false` on its scope
+persists what `onEnd()` is given: `persistUserPrompt: false` on its scope
 drops only the user turn, and a `PreMemoryWrite` hook can block or rewrite
 the write. In provider and middleware modes the user's message is saved once
 per turn, not once per step of a tool-calling loop, and the assistant's

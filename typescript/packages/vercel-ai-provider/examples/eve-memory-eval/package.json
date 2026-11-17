@@ -12,8 +12,8 @@
   "dependencies": {
     "@neo4j-labs/agent-memory": "file:../../../..",
     "@neo4j-labs/nams-ai-provider": "file:../..",
-    "ai": "^7.0.127",
-    "eve": "~1.0.0-rc.10",
+    "ai": "^7.0.172",
+    "eve": "~1.0.1",
     "zod": "^4.5.0"
   },
   "devDependencies": {

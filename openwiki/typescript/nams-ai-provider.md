@@ -104,7 +104,7 @@ Before a call, the middleware retrieves memory from long-term entities, current-
 Tool descriptions encourage retrieval before answering and storage of new user information, but language models may still skip a tool. The package offers two opt-in helpers for a tool-loop application:
 
 - `enforceQueryMemory()` returns a `prepareStep` hook. Until `query_memory` has run, it requires a tool call; after its grace window (default 3 steps), it forces `query_memory`. Keep the grace window at least two steps below the agent's stop budget so the query and final answer fit.
-- `ensureMemoryStored(tools)` returns an `onFinish` hook. If `store_memory` did not run, it stores a fallback memory—by default the final assistant text as an `interaction`. It needs the exact tools object returned by this package; a shallow copy loses its associated client handle and is rejected.
+- `ensureMemoryStored(tools)` returns a function to call from your `onEnd` callback. If `store_memory` did not run, it stores a fallback memory—by default the final assistant text as an `interaction`. It needs the exact tools object returned by this package; a shallow copy loses its associated client handle and is rejected.
 
 Use these helpers only for pure tools mode. A middleware-wrapped model already retrieves memory unconditionally, so forcing a second `query_memory` call would duplicate work.
 

@@ -87,7 +87,7 @@ function buildChat(): Chat {
           ],
           runtimeContext: options,
         }),
-        onEnd: session.onFinish(),
+        onEnd: session.onEnd(),
         stopWhen: isStepCount(6),
       });
       return {

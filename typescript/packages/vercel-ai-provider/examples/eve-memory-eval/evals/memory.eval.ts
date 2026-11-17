@@ -27,6 +27,12 @@ export default defineEval<typeof config>({
         c.metadata.kind === "session" &&
         (nams.messages.get(c.id) ?? []).some((m) => m.content === "remember that I prefer aisle seats")));
     t.check(captured, equals(true));
+    // Each captured message carries the eve operation that wrote it, so a replay is not saved twice.
+    const tagged = nams.conversations
+      .filter((c) => c.metadata.kind === "session")
+      .flatMap((c) => nams.messages.get(c.id) ?? [])
+      .every((m) => typeof m.metadata.eveOperation === "string" && m.metadata.eveOperation.length > 0);
+    t.check(tagged, equals(true));
     const scoped = nams.conversations.every((c) => c.userId.startsWith("memscope1_"));
     t.check(scoped, equals(true));
     t.log(`conversations: ${JSON.stringify(nams.conversations.map((c) => ({ userId: c.userId.slice(0, 18), metadata: c.metadata })))}`);
