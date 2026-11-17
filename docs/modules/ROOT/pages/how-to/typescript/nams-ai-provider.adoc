@@ -33,7 +33,7 @@ To add NAMS memory to an AI SDK application:
 
 [source,bash]
 ----
-npm install @neo4j-labs/nams-ai-provider@0.4.0 @neo4j-labs/agent-memory@0.6.0 ai@^7 zod@^4
+npm install @neo4j-labs/nams-ai-provider@0.5.1 @neo4j-labs/agent-memory@0.6.0 ai@^7 zod@^4
 ----
 
 Requires Node.js 22 or newer. The package is ESM-only, so your project needs

@@ -1,10 +1,4 @@
-/**
- * Provider surface the AI SDK expects:
- *
- *  - specificationVersion 'v4'
- *  - languageModel(id) wraps the base provider's model with memory
- *  - embeddingModel / imageModel throw NoSuchModelError
- */
+/** Provider mode: the provider surface the AI SDK expects. */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { NoSuchModelError } from 'ai';

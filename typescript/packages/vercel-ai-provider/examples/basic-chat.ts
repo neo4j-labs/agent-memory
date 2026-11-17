@@ -1,21 +1,5 @@
-/**
- * Provider mode demo. Session 1 tells the agent a fact. Session 2 is a new
- * agent for the same user, and gets the fact back from NAMS.
- *
- * Run with:
- *
- *   MEMORY_API_KEY=sk-nams-... OPENAI_API_KEY=sk-... npx tsx examples/basic-chat.ts
- *
- * Expected output (wording varies):
- *
- *   ─── Session 1 — teach it something
- *   user:      Hi! My name is Alex and I work at TechCorp on the graph platform team.
- *   assistant: Nice to meet you, Alex! How can I help you today? …
- *
- *   ─── Session 2 — fresh session, same user
- *   user:      Where do I work, and what team am I on?
- *   assistant: You work at TechCorp, on the graph platform team.
- */
+// Provider mode: a new agent for the same user recalls a fact from an earlier session.
+// Run: MEMORY_API_KEY=sk-nams-... OPENAI_API_KEY=sk-... npx tsx examples/basic-chat.ts
 
 import { openai } from '@ai-sdk/openai';
 import { ToolLoopAgent, isStepCount } from 'ai';

@@ -1,15 +1,4 @@
-/**
- * Hooks mode.
- *
- * Checks:
- *  - loadSession returns user/assistant turns, skips tool records, never
- *    creates a conversation, and returns [] on errors
- *  - onFinish saves the prompt, text, and tool records once, in one bulk write
- *  - onFinish falls back to single writes when the bulk write fails
- *  - scope from runtimeContext wins over the factory scope
- *  - a missing userId throws
- *  - the callback type fits the AI SDK's onFinish
- */
+/** Hooks mode: loadSession and onFinish. */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeFakeClient, type FakeClient } from './vercel-ai-provider-helpers';

@@ -23,7 +23,7 @@ import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { createNamsProvider, type NamsProviderOptions } from '@neo4j-labs/nams-ai-provider';
 import { openai } from '@ai-sdk/openai';
-import { ToolLoopAgent, stepCountIs } from 'ai';
+import { ToolLoopAgent, isStepCount } from 'ai';
 
 const userId = process.env.NAMS_DEMO_USER ?? 'demo-user-provider-mode';
 const modelId = process.env.NAMS_DEMO_MODEL ?? 'gpt-5.4-mini';
@@ -60,7 +60,7 @@ export async function providerModeDemo(
     const agent = new ToolLoopAgent({
       model: nams.languageModel(modelId),
       instructions: 'You are a helpful assistant.',
-      stopWhen: stepCountIs(1), // no tools needed in provider mode
+      stopWhen: isStepCount(1), // no tools needed in provider mode
     });
 
     const { text } = await agent.generate({ prompt: message });

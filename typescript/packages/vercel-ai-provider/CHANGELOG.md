@@ -3,6 +3,96 @@
 Releases before 0.3.0 predate this file; see the
 [GitHub releases](https://github.com/neo4j-labs/agent-memory/releases) for those.
 
+## 0.5.1 — unreleased
+
+### Added
+
+- **eve: `nams__forget`.** Deletes a saved note, or one of the user's entities
+  by name. Hosted NAMS cannot delete one message, so the notes conversation
+  that holds the note is rewritten without it and the old one is deleted with
+  `purge: "extracted"`; an SDK without `purge` (0.6.0) deletes the note but
+  keeps what NAMS extracted from it. Notes match word for word, ignoring case
+  and spacing, or by the shortened line the record showed. A notes
+  conversation of 200 or more notes is not rewritten, since only its newest
+  200 can be read. Note writes in one scope run one at a time, so a `remember`
+  in the same step is not lost to the rewrite. Shared and other users'
+  entities are never deleted. Turn it off with `forget: false`.
+- **eve: relationships in recall and search.** The memory record adds the
+  relationships around the user's two best-matching entities as
+  `(subject)-[RELATIONSHIP]->(object)` lines, read with the scope key as
+  `userId`, and `nams__search` returns them as `relationships`. Before, eve
+  agents got entities only.
+- **eve: cancellation.** Recall, capture and tool calls send their NAMS
+  requests through `client.withSignal(abortSignal)` when the SDK has it, so a
+  cancelled turn or tool call cancels them; with SDK 0.6.0 they run to
+  completion as before.
+
+### Fixed
+
+- **Installs on the eve 1.0 release candidates.** The optional `eve` peer is
+  now `>=0.84.0 || >=1.0.0-rc.0`. npm does not match a prerelease such as
+  `1.0.0-rc.10`, which is eve's `latest` tag, against `>=0.84.0`, so adding
+  0.5.0 to an eve 1.0 project failed with `ERESOLVE` unless installed with
+  `--legacy-peer-deps`. The provider code needed no change: the eve runtime
+  eval passes 17/17 on eve 0.84.1, 0.91.0 and 1.0.0-rc.10.
+- **Graph relationships keep their direction.** Provider, middleware and tools
+  modes wrote every relationship as `(entity)-[TYPE]->(other)`, so an edge that
+  points at the matched entity reached the model reversed (a match on TechCorp
+  produced `(TechCorp)-[WORKS_AT]->(Alex)`). Edges with `direction: "in"` are
+  now written from the other end. A relationship NAMS stored as `RELATED_TO` is
+  named by its `predicate`, the name extraction asked for, when there is one.
+- **Install commands name the current release.** The README and the provider's
+  docs pages installed 0.4.0, whose `/eve` entry point fails to import on eve
+  0.84.0 or later.
+- The examples and docs pages use AI SDK 7's `onEnd` and `isStepCount` in place
+  of the deprecated `onFinish` and the `stepCountIs` alias.
+- **eve: saved notes no longer crowd out the rest of recall.** Notes filled up
+  to `maxMemories` lines before anything else, so a user with eight notes saw
+  nothing from earlier sessions or the knowledge graph. Notes and other memory
+  now each get half the lines, and either side uses what the other leaves.
+  Recall also searches the notes for the user's message and lists the matches
+  first, so a relevant note older than the newest 20 is found.
+- **eve: memory survives a slot rename.** Recall, capture and the tools kept
+  only conversations whose stored `slot` matched the current slot name. eve's
+  scope key already hashes the memory namespace, so with an explicit
+  `namespace` a renamed slot kept its key but lost its memory. The slot name is
+  no longer compared; two slots that share a namespace share memory, as eve
+  defines it.
+
+### Changed
+
+- **eve: recall and `nams__search` search all of the user's earlier
+  sessions.** Recall searched only the `crossSessionLimit` (3) newest sessions,
+  and `nams__search` the 10 newest, one request each. With a
+  `@neo4j-labs/agent-memory` release that supports
+  `searchMessages(query, { userId })`, one request now searches every
+  conversation stored under the scope key, and each match's conversation is
+  checked to be this scope's. With SDK 0.6.0, which cannot search by user, the
+  provider searches conversation by conversation as before, without a warning.
+  `crossSessionLimit` still sets how many earlier sessions' summaries recall
+  reads; `0` still leaves earlier sessions out. A scope with nothing saved yet
+  makes no message search.
+- `examples/eve-memory-eval`: the fake NAMS server answers
+  `POST /v1/messages/search` and `GET /v1/conversations/{id}`, and an 18th
+  check confirms every search across the user's conversations carries the
+  scope key. 18/18 on eve 1.0.0-rc.13, with SDK 0.6.0 and with an SDK that
+  searches by user.
+- **eve: `>` is no longer escaped in the memory record.** `<` and `&` still
+  are, so a stored line cannot open or close a tag, and relationship lines keep
+  their `->` arrows.
+- `examples/eve-memory-eval` also checks relationships in recall and search,
+  and `nams__forget` deleting the note and the user's entity: 27/27 on eve
+  1.0.1, with SDK 0.6.0 and with an SDK that has `withSignal` and
+  `deleteConversation({ purge })`.
+- **Recalled entities carry their type.** Each entity the model sees is now one
+  line, `name (type) — description`, with the type NAMS stored for it. With an
+  ontology active on the workspace that is the ontology's label, so the model
+  reads `TK-2210 (ticket)` instead of a bare `TK-2210`. This covers the eve
+  recall record and `nams__search`, the memory block in provider and middleware
+  modes, and the `content` of tools-mode `query_memory` hits, which keep their
+  `type` field. An entity without a type keeps the old line. Search ranking is
+  unchanged.
+
 ## 0.5.0 — 2026-10-27
 
 ### Breaking

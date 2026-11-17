@@ -73,18 +73,19 @@ Requires Node.js 22+ (24+ for the eve entry point). Install the provider with
 the core SDK it calls NAMS through:
 
 ```bash
-npm install @neo4j-labs/nams-ai-provider@0.4.0 @neo4j-labs/agent-memory@0.6.0 ai@^7 zod@^4
+npm install @neo4j-labs/nams-ai-provider@0.5.1 @neo4j-labs/agent-memory@0.6.0 ai@^7 zod@^4
 ```
 
 The peer dependencies are `ai` `^7.0.0`, `zod` `^3.25.76 || ^4.1.8` and
-`@neo4j-labs/agent-memory` `~0.6.0`. This README describes the source, which
-is ahead of the 0.4.0 release: its eve provider needs eve 0.84.0 or later. SDK
+`@neo4j-labs/agent-memory` `~0.6.0`. The eve provider needs eve 0.84.0 or
+later, the 1.0 release candidates included; stay on 0.4.0 for eve 0.69.0 to
+0.83.x. SDK
 0.5.x is not supported — 0.5.0 installs but fails against hosted NAMS: it sends
 `threshold` with every message search, which NAMS rejects with 400, and sends
 the conversation user filter as `user_id`, which NAMS ignores.
 Two optional peers are needed only for one feature each:
 `@ai-sdk/mcp` `^2.0.0` for [MCP tool merging](#tools-mode-with-mcp-optional),
-and `eve` `>=0.84.0` for the [eve memory provider](#eve-memory-provider).
+and `eve` `>=0.84.0 || >=1.0.0-rc.0` for the [eve memory provider](#eve-memory-provider).
 
 **2. Get a free API key** at [memory.neo4jlabs.com](https://memory.neo4jlabs.com)
 
@@ -687,11 +688,11 @@ memory belongs to, asks the slot's provider to recall context before each turn
 and capture the turn after it, and gives the model the provider's tools.
 `@neo4j-labs/nams-ai-provider/eve` implements eve's
 [memory-provider contract](https://eve.dev/docs/memory/custom-provider) with
-NAMS. This source needs eve 0.84.0 or later and Node.js 24, and is tested on
-eve 0.84.0.
+NAMS. It needs eve 0.84.0 or later, the 1.0 release candidates included, and
+Node.js 24, and is tested on eve 0.84.1, 0.91.0 and 1.0.0-rc.10.
 
 ```bash
-npm install @neo4j-labs/nams-ai-provider@0.4.0 @neo4j-labs/agent-memory@0.6.0
+npm install @neo4j-labs/nams-ai-provider@0.5.1 @neo4j-labs/agent-memory@0.6.0
 ```
 
 ```ts
@@ -709,9 +710,15 @@ export default defineMemory({
 
 | eve phase | What the provider does |
 |---|---|
-| Recall (`turn.started`) | One record, id `nams-memory`: notes saved with `remember`, the summaries NAMS wrote about earlier sessions, messages from them that match the user's message, and the entities NAMS extracted from this user's conversations. Each turn's record replaces the last. |
+| Recall (`turn.started`) | One record, id `nams-memory`: notes saved with `remember` (those matching the user's message first), the summaries NAMS wrote about earlier sessions, messages from earlier sessions that match the user's message, the entities NAMS extracted from this user's conversations, one line each as `name (type) — description`, and the relationships around the two best of them as `(subject)-[RELATIONSHIP]->(object)`. Notes and other memory each get half of `maxMemories` lines, and either side uses what the other leaves. Each turn's record replaces the last. |
 | Capture (`turn.completed`) | The user's message and final answer, written to one NAMS conversation per eve session. NAMS extracts entities and writes summaries from it. |
-| Tools | `nams__search` finds messages in earlier sessions and notes, and this user's entities; `nams__remember` saves a note. Both are bound to the locked scope. |
+| Tools | `nams__search` finds messages in earlier sessions and notes, and this user's entities and their relationships; `nams__remember` saves a note; `nams__forget` deletes a saved note, or one of this user's entities by name. All three are bound to the locked scope. |
+
+With a `@neo4j-labs/agent-memory` release that supports
+`searchMessages(query, { userId })`, one request searches every earlier
+session for recall and `nams__search`. SDK 0.6.0 cannot search by user, so the
+provider searches the `crossSessionLimit` newest sessions (10 for
+`nams__search`) one by one instead.
 
 **Isolation.** Every conversation the provider writes carries eve's opaque
 `memory.scope.key` as its NAMS `userId`, and every read starts from that
@@ -720,6 +727,14 @@ conversations under the same `userId`, and the provider searches entities with
 it. The provider also checks the `userId` of every conversation and entity it
 reads, so a server that returns other users' data cannot leak it. The raw
 principal id never reaches NAMS.
+
+**Namespaces.** eve's scope key hashes the slot's memory `namespace` with the
+scope value, and the provider keys memory on the scope key alone. Renaming a
+slot that sets an explicit `namespace` keeps its memory; two slots that share
+a namespace share memory. Without a `namespace`, eve derives one from the slot
+name and where the agent runs (the Vercel project, environment and preview
+branch, or the app's path locally), so set one to keep memory across a slot
+rename.
 
 **Replays.** eve can replay a handler with the same `operationId`. Within one
 process a replayed recall returns the record from the first call; after a
@@ -732,9 +747,23 @@ durable state.
 
 **Limits.** Entities written without a `userId`, for example by your own
 ingestion, are shared by the whole workspace. They are recalled only with
-`workspaceGraph: true`; other users' entities never are. Hosted NAMS cannot
-delete a single message, so there is no `forget` tool yet. To erase one
-scope's memory, call NAMS `DELETE /v1/memory?userId=<scope key>`.
+`workspaceGraph: true`; other users' entities never are. To erase one
+scope's memory, earlier sessions included, call NAMS
+`DELETE /v1/memory?userId=<scope key>`.
+
+**Forgetting.** Hosted NAMS cannot delete a single message, so `nams__forget`
+rewrites the notes conversation without the note and deletes the old one with
+`purge: "extracted"`, which also removes what NAMS extracted only from it.
+`@neo4j-labs/agent-memory` 0.6.0 has no `purge` option, so there those
+entities stay; ask the model to forget the entity by name too. A notes
+conversation of 200 or more notes is too long to read whole, so `forget` then
+deletes nothing and says so. An entity is deleted only when it is this
+scope's own and its name matches. Earlier sessions keep their transcripts.
+Turn the tool off with `forget: false`.
+
+**Cancellation.** Recall, capture and each tool call send their NAMS requests
+through `client.withSignal(abortSignal)` when the SDK has it, so cancelling the
+turn or tool call cancels them; with SDK 0.6.0 they run to completion.
 
 **Requires `@neo4j-labs/agent-memory` 0.6.0 or newer.** With
 0.5.x the provider loses most of its memory against hosted NAMS: every message
@@ -751,10 +780,11 @@ namsMemory({
   workspaceId?:       string,  // Default: MEMORY_WORKSPACE_ID
   endpoint?:          string,  // Default: https://memory.neo4jlabs.com/v1
   logger?:            NamsLogger,
-  crossSessionLimit?: number,  // Earlier sessions read per recall. 0 = off. Default: 3
-  maxMemories?:       number,  // Max lines in the recalled record. Default: 8
+  crossSessionLimit?: number,  // Earlier sessions whose summaries recall reads. 0 = no earlier sessions. Default: 3
+  maxMemories?:       number,  // Max lines in the recalled record, half for notes. Default: 8
   capture?:           boolean, // Write completed turns to NAMS. Default: true
-  tools?:             boolean, // Offer search and remember. Default: true
+  tools?:             boolean, // Offer search, remember and forget. Default: true
+  forget?:            boolean, // Offer forget (with tools on). Default: true
   workspaceGraph?:    boolean, // Also recall shared entities (no user). Default: false
 });
 ```
@@ -887,6 +917,12 @@ user's memory. `workspaceGraph: true` adds shared entities, the ones with no use
 expanded, since their edges can lead into other users' memory. Another user's
 entities are never recalled.
 
+Each entity is one line, `name (type) — description`. The type is the one NAMS
+gave the entity: a label from the workspace's active ontology, such as
+`TK-2210 (ticket)`, or a POLE+O type when no ontology is active. Set an
+ontology once with the core SDK's `client.ontology`; this package needs no
+option for it. An entity without a type is written without the parentheses.
+
 NAMS uses vector search where the workspace has embeddings, and a text match
 otherwise. For a text match, a question that finds nothing is retried with its
 longest words.
@@ -904,12 +940,18 @@ triples:
 
 ```
 Relevant long-term memory about this user (use it to personalise your answer):
-1. [long-term] Alex — The user
+1. [long-term] Alex (person) — The user
 2. [graph] (Alex)-[WORKS_AT]->(TechCorp)
 3. [graph] (Alex)-[USES]->(Neovim)
 4. [conversation] I need something that runs in the terminal
 A [graph] line is a stored relationship, written (subject)-[RELATIONSHIP]->(object).
 ```
+
+Each triple keeps the direction NAMS stored it in, so an edge that points at
+the matched entity is written from the other end: a match on TechCorp still
+reads `(Alex)-[WORKS_AT]->(TechCorp)`. When NAMS stored a relationship as
+`RELATED_TO` and kept the requested name as its `predicate`, the triple is
+named by the predicate.
 
 The model is told what the notation means only when a triple is actually
 present. In tools mode the same triples come back from `query_memory` as hits

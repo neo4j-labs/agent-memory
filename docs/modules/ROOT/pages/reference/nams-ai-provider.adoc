@@ -274,7 +274,7 @@ the optional `eve` peer.
 | Export | Signature
 
 | `namsMemory(options?: NamsEveMemoryOptions)`
-| Returns an eve `MemoryProvider` for `defineMemory({ provider })`: `recall` on `turn.started`, `capture` on `turn.completed`, and `tools` returning `search` and `remember`.
+| Returns an eve `MemoryProvider` for `defineMemory({ provider })`: `recall` on `turn.started`, `capture` on `turn.completed`, and `tools` returning `search`, `remember` and `forget`.
 |===
 
 `NamsEveMemoryOptions`:
@@ -306,12 +306,12 @@ the optional `eve` peer.
 | `crossSessionLimit`
 | `number`
 | `3`
-| Earlier sessions of the scope read per recall. `0` turns cross-session recall off.
+| Earlier sessions of the scope whose summaries recall reads; with SDK 0.6.0, also the ones whose messages it searches. `0` leaves earlier sessions out of recall.
 
 | `maxMemories`
 | `number`
 | `8`
-| Max lines in the recalled record. Saved notes come first; the other sources take turns for what is left.
+| Max lines in the recalled record. Saved notes come first and get `ceil(maxMemories / 2)` lines, more when the other sources leave room; the other sources take turns for what is left.
 
 | `capture`
 | `boolean`
@@ -321,12 +321,17 @@ the optional `eve` peer.
 | `tools`
 | `boolean`
 | `true`
-| Give the model `search` and `remember`. With `false`, `tools()` returns `null`.
+| Give the model `search`, `remember` and `forget`. With `false`, `tools()` returns `null`.
+
+| `forget`
+| `boolean`
+| `true`
+| With `false`, `tools()` leaves out `forget`.
 
 | `workspaceGraph`
 | `boolean`
 | `false`
-| Also recall entities from the NAMS knowledge graph, which is shared by the whole workspace rather than partitioned by scope.
+| Also recall shared entities, the ones that belong to no user. The scope's own entities are always recalled.
 |===
 
 Behavior:
@@ -335,27 +340,61 @@ Behavior:
   `memory.scope.key` as its NAMS `userId`, and conversation metadata
   `{ source: "eve", kind: "session" | "notes", slot, session?, title }`.
   Every read lists conversations with that `userId` and keeps only the ones
-  whose `userId` and `slot` match, in case the server returns other users'.
-  `@neo4j-labs/agent-memory` 0.5.0 sends the filter as `user_id`, which hosted
-  NAMS ignores, so with it reads see the newest 200 conversations in the
-  workspace.
+  whose `userId` and `source` match, in case the server returns other users'.
+  `slot` is stored but not compared: the scope key already hashes eve's memory
+  namespace, so a slot renamed under the same `namespace` keeps its memory.
+* *Message search.* When the installed `@neo4j-labs/agent-memory` supports
+  `searchMessages(query, { userId })`, recall and `search` send one request
+  with the scope key (limit 50) and keep only matches whose conversation is
+  this scope's: listed above, or, past a full listing, confirmed with
+  `getConversationMetadata`. On SDK 0.6.0 that call fails before any request,
+  and the provider searches each notes conversation and the newest earlier
+  sessions instead, without logging. Any other failure is logged, and the
+  per-conversation search is used for the next 10 minutes. A scope with no
+  notes and no earlier session makes no message search.
 * *Recall* returns one message with the id `nams-memory`, so each turn's
   record supersedes the last. Its content is wrapped in `<nams_memory>` tags,
-  marked as data rather than instructions, with `<`, `>` and `&` escaped. It
-  lists saved notes, then summaries (`getContext` reflections and observations)
-  and query matches from up to `crossSessionLimit` earlier sessions, skipping
-  the current one. A replayed operation id returns the same result. eve 0.84.0
-  removed compaction recall, so the provider registers only `turn.started`.
+  marked as data rather than instructions, with `<` and `&` escaped (`>` is
+  kept so relationship arrows read as `->`). It
+  lists saved notes (up to 3 matching the user's message, then the newest 20),
+  then summaries (`getContext` reflections and observations) from up to
+  `crossSessionLimit` earlier sessions and up to 3 query matches from each
+  earlier session, skipping the current one, then the scope's entities
+  matching the user's message (and
+  shared ones with `workspaceGraph`), one line each as
+  `name (type) — description`. The type is the one NAMS stored, which comes
+  from the workspace's active ontology; an entity without one is written
+  without the parentheses. The relationships around the two best of the
+  scope's entities follow (`getEntity` with the scope key as `userId`), one
+  line each as `(subject)-[RELATIONSHIP]->(object)` in their stored direction,
+  named by `predicate` when NAMS stored the type as `RELATED_TO`. A replayed
+  operation id returns the same result.
+  eve 0.84.0 removed compaction recall, so the provider registers only
+  `turn.started`.
 * *Capture* writes one bulk request per turn to the eve session's conversation,
   creating it on first use. A turn already at the end of the conversation is
   not written again, so a replay after a restart does not duplicate it.
 * *Tools.* `search({ query, limit? })` returns
-  `{ results: [{ from, role, content, at }], workspaceGraph? }` from the
-  scope's notes and earlier sessions (up to 10 conversations). `remember({ memory })`
-  adds the note to the scope's notes conversation and returns
-  `{ remembered: true, memory }`. Both are built with eve's `defineTool` as
-  plain functions over the scope key, slot and eve session id, never the API
-  key.
+  `{ results: [{ from, role, content, at }], entities, relationships, workspaceGraph? }`:
+  matches from the scope's notes and earlier sessions (all of them, or the 10
+  newest on SDK 0.6.0), and the scope's entities and their relationships as
+  lines in the recall format.
+  `remember({ memory })` adds the note to the scope's notes conversation and returns
+  `{ remembered: true, memory }`.
+  `forget({ note?, entity? })` returns `{ forgotten, notes, entities }`. A note
+  matches word for word, ignoring case and spacing, or by the shortened line
+  the record showed. Each notes conversation holding a match is rewritten: the
+  other notes go to a new notes conversation (bulk writes of up to 100), then
+  the old one is deleted with `deleteConversation(id, { purge: "extracted" })`;
+  SDK 0.6.0 ignores `purge` and keeps what NAMS extracted. A notes conversation
+  of 200 or more notes is not read whole, so a match there returns
+  `{ forgotten: false, reason }` and nothing, entities included, is deleted.
+  `entity` deletes the scope's own entities with that exact name, never shared
+  or other users' ones. A scope's note writes run one at a time.
+  All three are built with eve's `defineTool` as plain functions over the scope
+  key, slot and eve session id, never the API key. Recall, capture and each
+  tool call go through `client.withSignal(abortSignal)` when the SDK has it, so
+  cancelling the turn or call cancels their requests.
 * *Errors.* An `AuthenticationError` or a missing key fails the turn. Other
   recall errors are logged and the record says memory is unavailable. Capture
   and tool errors propagate to eve.
@@ -591,7 +630,9 @@ and the eve provider are chosen entirely in code.
 | `^2.0.0` — only needed for `toolsWithMcp()`, loaded lazily.
 
 | `eve` _(optional)_
-| `>=0.84.0` — only needed for the `/eve` entry point.
+| `>=0.84.0 \|\| >=1.0.0-rc.0` — only needed for the `/eve` entry point. The
+second range admits the eve 1.0 release candidates, which npm does not match
+against `>=0.84.0`.
 |===
 
 Requires Node.js 22 or newer (`engines.node: ">=22"`); the `/eve` entry point
@@ -602,7 +643,7 @@ never loads eve.
 
 Releases are tagged `nams-ai-provider-v<X.Y.Z>` and published via
 `.github/workflows/publish-nams-ai-provider.yml`, independently of the SDK's
-`typescript-v*` tags. The current release is `0.4.0` (2026-10-22).
+`typescript-v*` tags. The current release is `0.5.1`.
 
 == See also
 

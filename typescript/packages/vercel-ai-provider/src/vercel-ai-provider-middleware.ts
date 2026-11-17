@@ -1,4 +1,4 @@
-/** Middleware mode: `wrap(model, scope)` adds memories to each turn and saves the conversation. Provider mode uses this too. */
+/** Middleware mode (also used by provider mode): adds memories to each turn and saves it. */
 
 import { wrapLanguageModel } from 'ai';
 import type { LanguageModelMiddleware } from 'ai';

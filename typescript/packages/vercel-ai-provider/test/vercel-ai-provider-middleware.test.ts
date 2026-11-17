@@ -1,14 +1,4 @@
-/**
- * Middleware mode (also used by provider mode).
- *
- *  1. memories are added to the prompt before the model runs
- *  2. the prompt is unchanged when there are no memories
- *  3. the turn is saved after generate
- *  4. a streamed turn is saved when the stream closes
- *  5. a retrieval failure doesn't stop the model
- *  6. persistInteractions=false turns saving off
- *  7. an explicit conversationId is used as-is
- */
+/** Middleware mode (also used by provider mode). */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeFakeClient, makeFakeModel, drainStream, settle, type FakeClient, ownedBySearcher } from './vercel-ai-provider-helpers';
@@ -90,7 +80,7 @@ describe('middleware mode — memory injection', () => {
     await wrapped.doGenerate({ prompt: userPrompt('Who am I?') } as any);
 
     const text = capturedParams[0].prompt.at(-1).content.map((p: any) => p.text).join('');
-    expect(text).toContain('Alex — The user');
+    expect(text).toContain('[long-term] Alex (person) — The user');
     expect(text).not.toContain('(subject)-[RELATIONSHIP]->(object)');
   });
 
@@ -269,8 +259,7 @@ describe('middleware mode — persistence', () => {
   });
 
   it('injects exactly one memory block when a step is retried', async () => {
-    // Retries reuse the prompt array and rerun transformParams. Editing it in
-    // place used to add a second memory block.
+    // Retries reuse the prompt array, so editing it in place would add a second block.
     fake.longTerm.searchEntities.mockImplementation(ownedBySearcher([
       { name: 'Alex', description: 'works at TechCorp', type: 'person', confidence: 0.9 },
     ]));

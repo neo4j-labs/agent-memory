@@ -33,7 +33,7 @@ Prerequisites:
 ----
 npm init -y   # only if the directory has no package.json yet
 npm pkg set type=module
-npm install @neo4j-labs/nams-ai-provider@0.4.0 @neo4j-labs/agent-memory@0.6.0 ai@^7 @ai-sdk/openai@^4 zod@^4
+npm install @neo4j-labs/nams-ai-provider@0.5.1 @neo4j-labs/agent-memory@0.6.0 ai@^7 @ai-sdk/openai@^4 zod@^4
 npm install --save-dev tsx
 ----
 
@@ -68,7 +68,7 @@ import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { createNams, type NamsHookConfig } from '@neo4j-labs/nams-ai-provider';
 import { openai } from '@ai-sdk/openai';
-import { ToolLoopAgent, stepCountIs, tool, type LanguageModel } from 'ai';
+import { ToolLoopAgent, isStepCount, tool, type LanguageModel } from 'ai';
 import { z } from 'zod';
 
 const userId = process.env.NAMS_DEMO_USER ?? 'demo-user-hooks-mode';
@@ -138,8 +138,8 @@ export async function hooksModeDemo(buildModel: (id: string) => LanguageModel = 
       instructions: [INSTRUCTIONS, options?.memoryContext].filter(Boolean).join('\n\n'),
       runtimeContext: options,
     }),
-    onFinish: session.onFinish(),
-    stopWhen: stepCountIs(5),
+    onEnd: session.onFinish(),
+    stopWhen: isStepCount(5),
   });
   async function turn(label: string, message: string): Promise<string> {
     console.log(`\n--- ${label}`);
@@ -236,7 +236,7 @@ image::diagrams/nams-ai-provider-hooks.svg["Sequence diagram of the eight NAMS h
   `runtimeContext` so `onFinish` can read the scope for this call. The AI
   SDK rejects system messages inside `messages`, which is why hook context
   travels through `instructions` instead.
-* `onFinish: session.onFinish()` — persists every turn once the tool loop
+* `onEnd: session.onFinish()` — persists every turn once the tool loop
   finishes.
 --
 . Define a `turn(label, message)` helper:

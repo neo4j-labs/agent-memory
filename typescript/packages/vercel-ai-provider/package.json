@@ -1,6 +1,6 @@
 {
   "name": "@neo4j-labs/nams-ai-provider",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Neo4j Agent Memory (NAMS) for the Vercel AI SDK and eve — persistent cross-session memory backed by Neo4j",
   "keywords": [
     "ai",
@@ -60,7 +60,7 @@
     "@ai-sdk/mcp": "^2.0.0",
     "@neo4j-labs/agent-memory": "~0.6.0",
     "ai": "^7.0.0",
-    "eve": ">=0.84.0",
+    "eve": ">=0.84.0 || >=1.0.0-rc.0",
     "zod": "^3.25.76 || ^4.1.8"
   },
   "peerDependenciesMeta": {
@@ -77,7 +77,7 @@
     "@neo4j-labs/agent-memory": "file:../..",
     "@types/node": "^22",
     "ai": "^7.0.148",
-    "eve": "~0.84.0",
+    "eve": "~1.0.0-rc.10",
     "tsup": "^9.0.0",
     "typescript": "^5.0.0",
     "vitest": "^4.1.12",

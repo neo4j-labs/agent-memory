@@ -1,23 +1,5 @@
-/**
- * Middleware mode demo. Keep your model and add memory with `createNams().wrap()`.
- * MEMORY_API_KEY is for NAMS. OPENAI_API_KEY is for the OpenAI model.
- *
- * Run with:
- *
- *   MEMORY_API_KEY=sk-nams-... OPENAI_API_KEY=sk-... npx tsx examples/middleware-chat.ts
- *
- * Expected output (wording varies):
- *
- *   ─── Turn 1 — teach it something
- *   user:      My favourite programming language is Rust.
- *   assistant: Great choice! Rust is loved for its safety and performance. …
- *
- *   ─── Turn 2 — fresh model instance, same user
- *   user:      What is my favourite programming language?
- *   assistant: Your favourite programming language is Rust.
- *
- * Turn 2 uses a new model instance, so the answer comes from NAMS memory.
- */
+// Middleware mode: keep your model and add memory with `createNams().wrap()`.
+// Run: MEMORY_API_KEY=sk-nams-... OPENAI_API_KEY=sk-... npx tsx examples/middleware-chat.ts
 
 import { openai } from '@ai-sdk/openai';
 import { ToolLoopAgent, isStepCount } from 'ai';

@@ -1,24 +1,5 @@
-/**
- * Hooks mode demo. The model gets no memory tools. `loadSession` restores the
- * transcript before each generation, and `onFinish()` saves every turn after.
- *
- * Run with:
- *
- *   MEMORY_API_KEY=sk-nams-... OPENAI_API_KEY=sk-... npx tsx examples/hooks-chat.ts
- *
- * Expected output (wording varies):
- *
- *   ─── Turn 1 — teach it something
- *   user:      Hi! My name is Alex and I live in Oslo.
- *   assistant: Nice to meet you, Alex! …
- *
- *   ─── Turn 2 — fresh agent call, same session
- *   user:      What is my name, and what is the weather where I live?
- *   assistant: Your name is Alex. In Oslo it is currently sunny at 21°C.
- *
- * Turn 2 knows the name from the restored transcript. The get_weather call is
- * saved to NAMS as a tool record.
- */
+// Hooks mode: `loadSession` restores the transcript before each call, `onFinish()` saves it after.
+// Run: MEMORY_API_KEY=sk-nams-... OPENAI_API_KEY=sk-... npx tsx examples/hooks-chat.ts
 
 import { openai } from '@ai-sdk/openai';
 import { ToolLoopAgent, isStepCount, tool } from 'ai';
@@ -48,8 +29,7 @@ const agent = new ToolLoopAgent({
     prompt: z.string(),
   }),
 
-  // Before: history plus the new message. The AI SDK takes prompt or
-  // messages, not both, so the incoming ones are dropped.
+  // History plus the new message. The AI SDK takes prompt or messages, not both.
   prepareCall: async ({ options, prompt: _p, messages: _m, ...settings }) => ({
     ...settings,
     messages: [

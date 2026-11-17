@@ -1,17 +1,4 @@
-/**
- * Lifecycle hooks.
- *
- * Checks:
- *  - matchers: empty/`*` match all, names match exactly, `|` lists
- *    alternatives, anything else is a regex, a bad regex never matches
- *  - a handler that throws or hangs is ignored, the rest still run
- *  - deny/block short-circuits the handlers after it
- *  - rewrites chain: each handler sees the previous one's replacement
- *  - prepare runs SessionStart once per scope, then UserPromptSubmit
- *  - withHooks denies, rewrites arguments, rewrites output, retries once
- *  - PreMemoryWrite can redact or drop a write
- *  - additionalContext from any event reaches the next prepare()
- */
+/** Lifecycle hooks: matchers, dispatch, rewrites and withHooks. */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeFakeClient, type FakeClient } from './vercel-ai-provider-helpers';

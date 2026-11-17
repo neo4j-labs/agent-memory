@@ -24,7 +24,7 @@ import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { createNams, type NamsHookConfig } from '@neo4j-labs/nams-ai-provider';
 import { openai } from '@ai-sdk/openai';
-import { ToolLoopAgent, stepCountIs, tool, type LanguageModel } from 'ai';
+import { ToolLoopAgent, isStepCount, tool, type LanguageModel } from 'ai';
 import { z } from 'zod';
 
 const userId = process.env.NAMS_DEMO_USER ?? 'demo-user-hooks-mode';
@@ -94,8 +94,8 @@ export async function hooksModeDemo(buildModel: (id: string) => LanguageModel = 
       instructions: [INSTRUCTIONS, options?.memoryContext].filter(Boolean).join('\n\n'),
       runtimeContext: options,
     }),
-    onFinish: session.onFinish(),
-    stopWhen: stepCountIs(5),
+    onEnd: session.onFinish(),
+    stopWhen: isStepCount(5),
   });
   async function turn(label: string, message: string): Promise<string> {
     console.log(`\n--- ${label}`);

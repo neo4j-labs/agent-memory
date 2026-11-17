@@ -19,6 +19,9 @@ export default defineAgent({
       if (said.startsWith("search")) {
         return { toolCalls: [{ name: "nams__search", input: { query: "aisle" } }] };
       }
+      if (said.startsWith("forget")) {
+        return { toolCalls: [{ name: "nams__forget", input: { note: "Prefers aisle seats", entity: "Aisle seat" } }] };
+      }
       const recalled = messages.find((m) => m.text.includes("<nams_memory>"));
       return recalled ? `recalled: ${recalled.text}` : "nothing recalled";
     },

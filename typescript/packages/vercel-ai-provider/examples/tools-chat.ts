@@ -1,26 +1,5 @@
-/**
- * Tools mode demo. The model decides when to query and store memory, and each
- * memory call shows up as a tool call. `enforceQueryMemory()` makes sure
- * `query_memory` runs before the final answer.
- *
- * Run with:
- *
- *   MEMORY_API_KEY=sk-nams-... OPENAI_API_KEY=sk-... npx tsx examples/tools-chat.ts
- *
- * Expected output (arguments and wording vary):
- *
- *   step 0 [enforced: some tool required]
- *     tool call: query_memory({"query":"user editor preferences","limit":5})
- *   step 1 [unconstrained]
- *     tool call: store_memory({"content":"User prefers very short answers","type":"user_preference","confidence":0.9,…
- *     tool call: store_memory({"content":"User uses Neovim as their editor","type":"fact","confidence":0.9,"tags":["e…
- *   step 2 [unconstrained]
- *
- *   ensureMemoryStored: already-stored
- *
- *   assistant: Try Telescope for fuzzy finding and Harpoon for quick file
- *   switching.
- */
+// Tools mode: the model calls query_memory / store_memory; `enforceQueryMemory()` makes it query first.
+// Run: MEMORY_API_KEY=sk-nams-... OPENAI_API_KEY=sk-... npx tsx examples/tools-chat.ts
 
 import { openai } from '@ai-sdk/openai';
 import { ToolLoopAgent, isStepCount } from 'ai';

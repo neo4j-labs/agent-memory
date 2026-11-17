@@ -16,8 +16,8 @@ context that outlives a session.
 
 Prerequisites:
 
-* An eve project on eve 0.84.0 or later, for the provider built from this
-  source. eve 0.84.0.
+* An eve project on eve 0.84.0 or later, the 1.0 release candidates included.
+  On eve 0.69.0 to 0.83.x, install provider 0.4.0 instead.
 * Node.js 24 or newer, which eve requires.
 * A `MEMORY_API_KEY` from https://memory.neo4jlabs.com[memory.neo4jlabs.com].
 
@@ -27,7 +27,7 @@ From the root of the eve project:
 
 [source,bash]
 ----
-npm install @neo4j-labs/nams-ai-provider@0.4.0 @neo4j-labs/agent-memory@0.6.0
+npm install @neo4j-labs/nams-ai-provider@0.5.1 @neo4j-labs/agent-memory@0.6.0
 ----
 
 Set the key where eve reads its environment, for example `.env` in
@@ -41,7 +41,8 @@ MEMORY_API_KEY=nams_...
 == Declare the memory slot
 
 Create `agent/memory/nams.ts`. The file name is the slot name, so the model
-sees the provider's tools as `nams__search` and `nams__remember`.
+sees the provider's tools as `nams__search`, `nams__remember` and
+`nams__forget`.
 
 .agent/memory/nams.ts
 [source,typescript]
@@ -81,18 +82,27 @@ codes. Tell the user when you save something.
 | eve phase | What the provider does
 
 | Before the turn (recall)
-| Reads this scope's saved notes, the summaries NAMS wrote about its earlier
-sessions, and messages from those sessions that match the user's message.
-Returns them as one record with a fixed id, so each turn's record replaces the
-last instead of piling up.
+| Reads this scope's saved notes (those matching the user's message first), the
+summaries NAMS wrote about its earlier sessions, messages from its earlier
+sessions that match the user's message, the entities NAMS extracted from
+this scope's conversations, and the relationships around the two best of them.
+Notes and the rest each get half the record's lines, and either side uses what
+the other leaves. Each entity is one line, `name (type) — description`, with
+the type NAMS gave it: a label from the workspace's active
+xref:reference/ontology-api.adoc[ontology], or a POLE+O type when none is
+active. Each relationship is one line, `(subject)-[RELATIONSHIP]->(object)`,
+in the direction NAMS stored it. Returns everything as one record with a fixed
+id, so each turn's record replaces the last instead of piling up.
 
 | After the turn (capture)
 | Writes the user's message and the final answer to one NAMS conversation per
 eve session. NAMS then extracts entities and writes summaries from it.
 
 | Tools
-| `search` finds messages in this scope's earlier sessions and notes.
-`remember` saves a note the user asked the agent to keep.
+| `search` finds messages in this scope's earlier sessions and notes, and this
+scope's entities and their relationships, written as in the record. `remember`
+saves a note the user asked the agent to keep. `forget` deletes a saved note,
+or one of this scope's entities by name.
 |===
 
 Every conversation the provider creates has eve's opaque scope key as its NAMS
@@ -100,6 +110,20 @@ Every conversation the provider creates has eve's opaque scope key as its NAMS
 caller's memory is never recalled for another. The raw user id never reaches
 NAMS. The tools are bound to the scope eve locked for the turn: the model has
 no user id to pass, so it cannot ask for someone else's memory.
+
+With a `@neo4j-labs/agent-memory` release that supports
+`searchMessages(query, { userId })`, one request searches all of the scope's
+earlier sessions, and the provider checks that each match comes from this
+scope's conversations. SDK 0.6.0 cannot search by user, so the provider
+searches the `crossSessionLimit` newest sessions (10 for `search`) one by one
+instead.
+
+eve's scope key hashes the slot's memory `namespace` with the scope value, and
+the provider keys memory on the scope key alone. Renaming a slot that sets an
+explicit `namespace` keeps its memory, and two slots that share a namespace
+share memory. Without a `namespace`, eve derives one from the slot name and
+where the agent runs (the Vercel project, environment and preview branch, or
+the app's path locally), so set one to keep memory across a slot rename.
 
 == Options
 
@@ -121,11 +145,13 @@ no user id to pass, so it cannot ask for someone else's memory.
 
 | `crossSessionLimit`
 | `3`
-| Earlier sessions read per recall. `0` turns cross-session recall off.
+| Earlier sessions whose summaries recall reads. `0` leaves earlier sessions
+out of recall.
 
 | `maxMemories`
 | `8`
-| Max lines in the recalled record. Saved notes come first.
+| Max lines in the recalled record. Saved notes come first and get half the
+lines, more when other memory leaves room.
 
 | `capture`
 | `true`
@@ -135,10 +161,14 @@ no user id to pass, so it cannot ask for someone else's memory.
 | `true`
 | `false` gives the model no memory tools.
 
+| `forget`
+| `true`
+| `false` leaves out the `forget` tool and keeps `search` and `remember`.
+
 | `workspaceGraph`
 | `false`
-| Also recall entities from the NAMS knowledge graph. See the limits below
-before turning it on.
+| Also recall shared entities, the ones that belong to no user. See the limits
+below before turning it on.
 
 | `logger`
 | console
@@ -147,25 +177,31 @@ before turning it on.
 
 == Limits
 
-* *The knowledge graph is per workspace.* Entities NAMS extracts from one
-  user's conversations are visible to every caller of the workspace, so the
-  provider does not read them unless `workspaceGraph` is on. Turn it on only
-  when the workspace serves a single tenant or holds no personal data, such as
-  a product catalog.
-* *Message search needs the next `@neo4j-labs/agent-memory` release.* Hosted
-  NAMS rejects unknown request fields. Version 0.5.0 sends `threshold` with
-  every message search, so recall's matching messages and `nams__search` come
-  back empty; notes and summaries still work. It also sends the user filter as
-  `user_id`, which hosted NAMS ignores, so reads see only the workspace's
-  newest 200 conversations.
-* *No `forget` tool.* Hosted NAMS cannot delete a single message, so the model
-  cannot drop one memory. To erase a scope's memory, call the NAMS endpoint
-  `DELETE /v1/memory?userId=<scope key>`, where the scope key is the `userId`
-  on the scope's conversations. It removes every conversation stored under
-  that `userId` and the entities in that user's memory; entities shared with
-  other users stay. Repeat the call while it answers `status: "incomplete"`.
-  Deleting one conversation keeps the entities extracted from it unless the
-  request adds `purge=extracted`.
+* *Shared entities are workspace-wide.* NAMS files the entities it extracts
+  from a conversation under the conversation's `userId`, so recall reads only
+  this scope's entities. Entities written without a `userId`, for example by
+  your own ingestion, belong to the whole workspace, and the provider reads
+  them only when `workspaceGraph` is on. Turn it on only when those entities
+  hold no personal data, such as a product catalog.
+* *`forget` rewrites notes, not sessions.* Hosted NAMS cannot delete a single
+  message, so `forget` copies the other notes to a new notes conversation, in
+  order, and deletes the old one with `purge: "extracted"`, which also deletes
+  what NAMS extracted only from it; NAMS then extracts the kept notes again
+  from the new conversation. With `@neo4j-labs/agent-memory` 0.6.0, which has
+  no `purge` option, the old conversation's entities stay, so ask the model to
+  forget the entity by name as well. A note is matched word for word, ignoring
+  case and spacing, or by the shortened line the record showed. A notes
+  conversation of 200 or more notes is too long to read whole, so `forget`
+  then deletes nothing and tells the model. An entity is deleted only when it
+  belongs to this scope and its name matches; shared entities and other
+  scopes' are never touched. Earlier sessions keep their transcripts, so a
+  fact said in a session, not saved as a note, can still be recalled from it.
+* *Erasing a scope.* To erase everything a scope has stored, earlier sessions
+  included, call the NAMS endpoint `DELETE /v1/memory?userId=<scope key>`,
+  where the scope key is the `userId` on the scope's conversations. It removes
+  every conversation stored under that `userId` and the entities in that
+  user's memory; entities shared with other users stay. Repeat the call while
+  it answers `status: "incomplete"`.
 
 == Failures
 
@@ -175,6 +211,11 @@ turn goes on with a record that tells the model memory is unavailable. A
 capture failure is logged by eve after the response and does not change the
 completed turn. eve may replay a handler: a replayed recall returns the same
 record, and a replayed capture does not write the turn twice.
+
+Recall, capture and each tool call send their NAMS requests through
+`client.withSignal(abortSignal)`, so cancelling the turn or the tool call
+cancels them. With `@neo4j-labs/agent-memory` 0.6.0, which has no
+`withSignal`, the requests run to completion.
 
 == See also
 
