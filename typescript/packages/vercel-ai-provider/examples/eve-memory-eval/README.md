@@ -23,7 +23,9 @@ One eval, [`evals/memory.eval.ts`](evals/memory.eval.ts), checks that:
 7. NAMS rejected no request.
 
 The provider's `eve` peer range (`>=0.84.0 <1.0.0 || ^1.0.0-rc.0`) admits every
-eve 1.x release, so run it on each new one before relying on it.
+eve 1.x release, so run it on each new one before relying on it. TypeScript CI
+does: its `eve-memory-eval` job runs this eval on the eve pinned below and on
+npm's `eve@latest`, the second leg reporting without blocking.
 
 ## Run
 
@@ -67,8 +69,9 @@ The fake accepts `purge` on a conversation delete but does not need it, so
 `?purge=extracted` only with an SDK whose `deleteConversation` takes `purge`.
 
 To try another eve version, change `eve` in `package.json`, move
-`.eve/.workflow-data` aside (another eve version refuses to read it), then run
-`npm install` and `npx eve eval` again.
+`.eve/.workflow-data` aside (another eve version refuses to read it; eve 1.1.0
+also moved it to a single SQLite file, `world.db`), then run `npm install` and
+`npx eve eval` again.
 
 After rebuilding the provider or the SDK, delete `package-lock.json` and
 `node_modules/@neo4j-labs` before `npm install`. The lock (not saved in git)

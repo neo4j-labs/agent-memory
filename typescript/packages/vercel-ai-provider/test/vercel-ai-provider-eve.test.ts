@@ -679,7 +679,41 @@ describe('capture', () => {
     expect(nams.messages.get(conversation.id)!.map(m => m.content)).toEqual(['Hello', 'Hi!', 'Hello', 'Hi!']);
   });
 
-  it('skips a replayed turn that an older provider saved without tags', async () => {
+  it('recognises a retry after a later turn was saved, also after a restart', async () => {
+    const first = namsMemory({ apiKey: 'test-key' });
+    await capture(first, completed(ALICE, 'session-1', 'op-1', 'I am Alice', 'Hi!'));
+    await capture(first, completed(ALICE, 'session-1', 'op-2', 'I like tea', 'Noted.'));
+
+    await capture(namsMemory({ apiKey: 'test-key' }), completed(ALICE, 'session-1', 'op-1', 'I am Alice', 'Hi!'));
+
+    const [conversation] = nams.conversations;
+    expect(nams.messages.get(conversation.id)!.map(m => m.content)).toEqual(['I am Alice', 'Hi!', 'I like tea', 'Noted.']);
+  });
+
+  it('writes once when the same operation is captured twice at the same time', async () => {
+    const provider = namsMemory({ apiKey: 'test-key' });
+
+    await Promise.all([
+      capture(provider, completed(ALICE, 'session-1', 'op-1', 'I am Alice', 'Hi!')),
+      capture(provider, completed(ALICE, 'session-1', 'op-1', 'I am Alice', 'Hi!')),
+    ]);
+
+    expect(nams.client.shortTerm.bulkAddMessages).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps concurrent turns of one session in call order', async () => {
+    const provider = namsMemory({ apiKey: 'test-key' });
+
+    await Promise.all([
+      capture(provider, completed(ALICE, 'session-1', 'op-1', 'I am Alice', 'Hi!')),
+      capture(provider, completed(ALICE, 'session-1', 'op-2', 'I like tea', 'Noted.')),
+    ]);
+
+    const [conversation] = nams.conversations;
+    expect(nams.messages.get(conversation.id)!.map(m => m.metadata.eveOperation)).toEqual(['op-1', 'op-1', 'op-2', 'op-2']);
+  });
+
+  it('does not take untagged messages with the same text for this operation', async () => {
     const old = nams.seed(ALICE, { session: 'session-1' });
     nams.messages.set(old.id, [
       { id: 'msg-a', role: 'user', content: 'I am Alice', timestamp: '2026-10-01T00:00:01.000Z', metadata: {} },
@@ -688,7 +722,29 @@ describe('capture', () => {
 
     await capture(namsMemory({ apiKey: 'test-key' }), completed(ALICE, 'session-1', 'op-1', 'I am Alice', 'Hi!'));
 
-    expect(nams.client.shortTerm.bulkAddMessages).not.toHaveBeenCalled();
+    expect(nams.messages.get(old.id)!.map(m => m.content)).toEqual(['I am Alice', 'Hi!', 'I am Alice', 'Hi!']);
+  });
+
+  it('saves the turn, with a warning, when the conversation cannot be read', async () => {
+    const provider = namsMemory({ apiKey: 'test-key' });
+    await capture(provider, completed(ALICE, 'session-1', 'op-1', 'I am Alice', 'Hi!'));
+    nams.client.shortTerm.getConversation.mockRejectedValueOnce(new Error('503 Service Unavailable'));
+
+    await capture(provider, completed(ALICE, 'session-1', 'op-2', 'I like tea', 'Noted.'));
+
+    expect(nams.client.shortTerm.bulkAddMessages).toHaveBeenCalledTimes(2);
+    expect(console.warn).toHaveBeenCalledWith(
+      expect.stringContaining('could not check whether this turn was already saved'), expect.anything());
+  });
+
+  it('fails the capture on a rejected API key instead of writing blind', async () => {
+    const provider = namsMemory({ apiKey: 'test-key' });
+    await capture(provider, completed(ALICE, 'session-1', 'op-1', 'I am Alice', 'Hi!'));
+    nams.client.shortTerm.getConversation.mockRejectedValueOnce(
+      Object.assign(new Error('401 Unauthorized'), { name: 'AuthenticationError', statusCode: 401 }));
+
+    await expect(capture(provider, completed(ALICE, 'session-1', 'op-2', 'I like tea', 'Noted.'))).rejects.toThrow('401');
+    expect(nams.client.shortTerm.bulkAddMessages).toHaveBeenCalledTimes(1);
   });
 
   it('cuts a captured message to maxCaptureChars', async () => {

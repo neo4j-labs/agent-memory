@@ -49,15 +49,34 @@ Releases before 0.3.0 predate this file; see the
   1.0 release candidates (npm skips prereleases), so an eve 1.0 RC project
   failed with `ERESOLVE`, and it had no upper bound, so it also admitted any
   future eve 2.0, whose memory contract this release has not been tested
-  against. The eve runtime eval passes 28/28 on eve 0.84.1, 0.91.0 and 1.0.1.
-- **eve: a repeated exchange is no longer dropped as a replay.** Capture
-  recognised a replayed operation by comparing the end of the session's
-  conversation with the turn's text, so when a user sent the same message
-  again in the next turn and got the same answer, that turn was not saved.
-  Each captured message now carries the turn's `operationId` as metadata
-  (`eveOperation`), and a replay is recognised by that id, as eve's provider
-  contract asks. Messages saved by provider 0.5.0 or earlier carry no id and
-  are still compared by text.
+  against. The eve runtime eval passes 28/28 on eve 0.84.1, 0.91.0, 1.0.2 and
+  1.1.0, with the packed package and the published SDK 0.6.0.
+- **eve: capture is keyed by `operationId`, as eve's provider contract asks.**
+  Capture recognised a replayed operation by comparing the last two messages
+  of the session's conversation with the turn's text. A user who sent the same
+  message again in the next turn and got the same answer lost that turn, and a
+  retry that ran after a later turn had been saved, or two attempts at once,
+  wrote the turn twice. Each captured message now carries the turn's
+  `operationId` as metadata (`eveOperation`); before writing, capture looks for
+  that id among the conversation's newest 50 messages and never compares text.
+  A session's captures run one at a time per process. Hosted NAMS has no
+  idempotency key for message writes, so two processes running the same
+  capture at the same instant can still both write it. When the check cannot
+  read NAMS, capture logs a warning and writes; a rejected key fails it.
+  Messages saved by provider 0.5.0 or earlier carry no id, so a 0.5.0 capture
+  retried by 0.5.1 is written again.
+- **Docs: what eve capture stores, and how to delete it.** The README and the
+  eve how-to open with what capture saves by default (the user message and
+  final answer of every completed turn, unfiltered), where it lives, the
+  retention rules (nothing expires; a workspace's managed database is deleted
+  after `managedDbInactivityDays` of inactivity, with a restorable snapshot),
+  and a table of what can be deleted how: notes and entities through
+  `nams__forget`, a session or a whole scope from your own code, and no
+  single captured message.
+- **Docs: Node.js per entry point.** `engines.node` (`>=22.23.4`) is the floor
+  for the AI SDK modes; the `/eve` entry point needs Node.js 24, which eve
+  itself declares. The README, the reference and the how-to pages now say
+  which applies where, instead of one line that read as a contradiction.
 - **Provider and middleware modes frame recalled memory as untrusted data.**
   The memory block put stored text straight into the user's message under
   "use it to personalise your answer", so a stored message could read as an
@@ -118,8 +137,11 @@ Releases before 0.3.0 predate this file; see the
   (string values only, as hosted NAMS) and a 28th check confirms every
   captured message carries its eve operation id. 28/28 on eve 0.84.1, 0.91.0
   and 1.0.1 with SDK 0.6.0; 18/28 with SDK 0.5.0. The example depends on eve
-  `~1.0.1`.
-- Development dependencies: eve `~1.0.1`, which needs `ai` 7.0.172 or later,
+  `~1.1.0`, the current release.
+- TypeScript CI runs `examples/eve-memory-eval` (job `eve-memory-eval`) on
+  the eve the example pins and on npm's `eve@latest`; the `latest` leg reports
+  without blocking.
+- Development dependencies: eve `~1.1.0`, which needs `ai` 7.0.172 or later,
   so `ai` `^7.0.173`, `@ai-sdk/openai` `^4.0.118` and `@ai-sdk/mcp` `^2.0.99`,
   the releases that share one `@ai-sdk/provider` (4.0.38). The
   `nextjs-memory-chat` example's lock moved to the same set, since it links

@@ -58,6 +58,7 @@ const LIMITS = {
   memo: 500,
   noteHistory: 200,
   bulk: 100,
+  captureLookback: 50,
 };
 
 type Kind = 'session' | 'notes';
@@ -255,6 +256,7 @@ export function namsMemory(options: NamsEveMemoryOptions = {}): MemoryProvider {
   const captured = new Map<string, true>();
   const headers = new Map<string, Promise<Conversation | null>>();
   const noteWrites = new Map<string, Promise<unknown>>();
+  const captureWrites = new Map<string, Promise<unknown>>();
   /** Skip the user-wide message search until this time (Infinity: the SDK cannot do it). */
   let scopeSearchOffUntil = 0;
 
@@ -321,16 +323,19 @@ export function namsMemory(options: NamsEveMemoryOptions = {}): MemoryProvider {
     return pending;
   }
 
-  /** Runs a scope's note writes one at a time, so forget cannot drop a note saved meanwhile. */
-  function serialNotes<T>(scopeKey: string, write: () => Promise<T>): Promise<T> {
-    const run = (noteWrites.get(scopeKey) ?? Promise.resolve()).then(write, write);
+  /** Runs the writes queued under one key one at a time, in call order. */
+  function serially<T>(queue: Map<string, Promise<unknown>>, key: string, write: () => Promise<T>): Promise<T> {
+    const run = (queue.get(key) ?? Promise.resolve()).then(write, write);
     const settled = run.catch(() => undefined);
-    noteWrites.set(scopeKey, settled);
+    queue.set(key, settled);
     void settled.then(() => {
-      if (noteWrites.get(scopeKey) === settled) noteWrites.delete(scopeKey);
+      if (queue.get(key) === settled) queue.delete(key);
     });
     return run;
   }
+
+  const serialNotes = <T>(scopeKey: string, write: () => Promise<T>): Promise<T> =>
+    serially(noteWrites, scopeKey, write);
 
   /** The latest notes from each notes conversation, newest first; unreadable ones are skipped. */
   async function readNotes(nams: MemoryClient, ids: string[]): Promise<string[]> {
@@ -585,28 +590,30 @@ export function namsMemory(options: NamsEveMemoryOptions = {}): MemoryProvider {
   const capped = (text: string): string =>
     text.length > maxCaptureChars ? `${text.slice(0, maxCaptureChars - 1)}…` : text;
 
-  /** True when this operation's turn is already saved, so a retry does not save it twice. */
+  /**
+   * True when a message among the conversation's newest LIMITS.captureLookback carries this
+   * operation id. Only the id counts, never the text, so a repeated exchange is still saved.
+   * When the conversation cannot be read the turn is saved: a duplicate costs less than a lost turn.
+   */
   async function alreadySaved(
     nams: MemoryClient,
     conversationId: string,
     operationId: string,
-    turns: { role: string; content: string }[],
+    signal: AbortSignal,
   ): Promise<boolean> {
     try {
-      const { messages } = await nams.shortTerm.getConversation(conversationId, { limit: turns.length });
-      const tail = chronological(messages ?? []).slice(-turns.length);
-      const tags = tail
-        .map(m => m.metadata?.[OPERATION_KEY])
-        .filter((tag): tag is string => typeof tag === 'string');
-      if (tags.length > 0) return tags.includes(operationId);
-      return tail.length === turns.length &&
-        tail.every((m, i) => m.role === turns[i].role && m.content.trim() === turns[i].content);
-    } catch {
+      const { messages } = await nams.shortTerm.getConversation(conversationId, { limit: LIMITS.captureLookback });
+      return (messages ?? []).some(m => m.metadata?.[OPERATION_KEY] === operationId);
+    } catch (err) {
+      if (isFatal(err) || signal.aborted) throw err;
+      getLogger(nams).warn('could not check whether this turn was already saved, saving it', err);
       return false;
     }
   }
 
-  /** Capture hook: saves the user input and final answer, once per operation. */
+  /**
+   * Capture hook: saves the user input and final answer once per operationId.
+   */
   async function capture(ctx: MemoryTurnCompletedContext): Promise<void> {
     if (options.capture === false || captured.has(ctx.operationId)) return;
 
@@ -619,10 +626,14 @@ export function namsMemory(options: NamsEveMemoryOptions = {}): MemoryProvider {
       const nams = withSignal(getClient(), ctx.abortSignal);
       const where = { scopeKey: ctx.memory.scope.key, slot: ctx.memory.slot };
       const conversationId = await ensureConversation(nams, where, 'session', ctx.session.id);
-      if (!(await alreadySaved(nams, conversationId, ctx.operationId, turns))) {
-        const metadata = { [OPERATION_KEY]: ctx.operationId };
-        await nams.shortTerm.bulkAddMessages(conversationId, turns.map(turn => ({ ...turn, metadata })));
-      }
+      await serially(captureWrites, conversationId, async () => {
+        if (captured.has(ctx.operationId)) return;
+        if (!(await alreadySaved(nams, conversationId, ctx.operationId, ctx.abortSignal))) {
+          const metadata = { [OPERATION_KEY]: ctx.operationId };
+          await nams.shortTerm.bulkAddMessages(conversationId, turns.map(turn => ({ ...turn, metadata })));
+        }
+        memoize(captured, ctx.operationId, true);
+      });
     }
     memoize(captured, ctx.operationId, true);
   }

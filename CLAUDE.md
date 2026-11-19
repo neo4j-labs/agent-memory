@@ -74,7 +74,12 @@ Plain `v*` tags do not trigger any publish.
   `npm run build --if-present` for each — including the Next.js flagship,
   `nextjs-memory-chat`. Its `vercel-ai-provider` job builds
   `typescript/packages/vercel-ai-provider` on Node 22 and 24, running
-  typecheck, test, build, and `npm pack --dry-run`.
+  typecheck, test, build, and `npm pack --dry-run`. Its `eve-memory-eval` job
+  runs `npx eve eval` in `typescript/packages/vercel-ai-provider/examples/eve-memory-eval`
+  (keyless: `mockModel` plus a local fake of hosted NAMS) on Node 24, once on
+  the eve that eval's `package.json` pins and once on npm's `eve@latest`; the
+  `latest` leg is `continue-on-error`, so a new eve release reports there
+  without blocking.
 
 If you touch a cross-cutting file (e.g. `.gitignore`, top-level
 `README.md`), expect neither workflow to fire — surface the change in

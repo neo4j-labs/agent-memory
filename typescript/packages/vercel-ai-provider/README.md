@@ -69,8 +69,18 @@ User message
 
 **1. Install the provider and its peer dependencies**
 
-Requires Node.js 22+ (24+ for the eve entry point). Install the provider with
-the core SDK it calls NAMS through:
+The two entry points need different Node.js versions:
+
+| Entry point | Node.js | Why |
+|---|---|---|
+| `@neo4j-labs/nams-ai-provider` (AI SDK modes) | 22.23.4 or newer | The package's `engines` field, the same floor as `@neo4j-labs/agent-memory`. |
+| `@neo4j-labs/nams-ai-provider/eve` | 24 or newer | eve itself declares `engines: { node: ">=24" }`. |
+
+`package.json` can declare only one `engines` range, so it declares the lower
+one, for the AI SDK modes. An eve project already runs on Node.js 24, because
+eve requires it.
+
+Install the provider with the core SDK it calls NAMS through:
 
 ```bash
 npm install @neo4j-labs/nams-ai-provider@0.5.1 @neo4j-labs/agent-memory@0.6.0 ai@^7 zod@^4
@@ -84,7 +94,7 @@ later, up to eve 1.x (not 2.0); stay on 0.4.0 for eve 0.69.0 to 0.83.x. SDK
 the conversation user filter as `user_id`, which NAMS ignores.
 Two optional peers are needed only for one feature each:
 `@ai-sdk/mcp` `^2.0.0` for [MCP tool merging](#tools-mode-with-mcp-optional),
-and `eve` `>=0.84.0 || >=1.0.0-rc.0` for the [eve memory provider](#eve-memory-provider).
+and `eve` `>=0.84.0 <1.0.0 || ^1.0.0-rc.0` for the [eve memory provider](#eve-memory-provider).
 
 **2. Get a free API key** at [memory.neo4jlabs.com](https://memory.neo4jlabs.com)
 
@@ -692,7 +702,9 @@ and capture the turn after it, and gives the model the provider's tools.
 `@neo4j-labs/nams-ai-provider/eve` implements eve's
 [memory-provider contract](https://eve.dev/docs/memory/custom-provider) with
 NAMS. It needs eve 0.84.0 or later (eve 1.x included, not 2.0) and Node.js 24,
-and is tested on eve 0.84.1, 0.91.0 and 1.0.1. For a complete agent, see the
+and is tested on eve 0.84.1, 0.91.0, 1.0.2 and 1.1.0; CI runs the
+[eve runtime eval](examples/eve-memory-eval) on every change, also against
+npm's latest eve. For a complete agent, see the
 [industry research agent](https://github.com/neo4j-labs/neo4j-agent-integrations/tree/main/vercel-agent/vercel-eve)
 in `neo4j-agent-integrations`.
 
@@ -712,6 +724,51 @@ export default defineMemory({
   scope: byPrincipal,
 });
 ```
+
+### What it stores, and how to delete it
+
+**Capture is on by default.** After every completed turn the provider saves
+the turn's user message and the agent's final answer to hosted NAMS. It saves
+text only (no tool calls, tool results or reasoning), cuts each message at
+`maxCaptureChars` (16,000 characters), and filters nothing: a password or card
+number the user types is saved with the rest. NAMS then extracts entities and
+relationships from those messages and writes summaries of the session.
+`nams__remember` adds notes. With `capture: false` the provider stores only
+the notes the model saves. Add `tools: false` and it stores nothing and only
+reads.
+
+**Where it is stored.** In your NAMS workspace, under eve's opaque scope key
+as the NAMS `userId`: one conversation per eve session, one notes conversation
+per scope, and the entities NAMS extracted from them. The raw principal id
+never reaches NAMS.
+
+**Retention.** NAMS keeps all of it until it is deleted; no message, note or
+entity expires on its own. The exception is the workspace as a whole: after
+`managedDbInactivityDays` days without activity (see `GET /v1/workspace`),
+NAMS deletes the workspace's managed database and keeps a snapshot of it until
+the snapshot's `expiresAt` (`GET /v1/workspace/archives`). `POST
+/v1/workspace/provision` with `restoreFromArchive` restores it. eve neither
+truncates nor expires memory, so the provider bounds what it writes and reads:
+each captured message at `maxCaptureChars`, each recalled line at 400
+characters, and the recalled record at `maxMemories` lines.
+
+**Deleting.** The model can delete a note or an entity. Anything larger is a
+call your own code makes:
+
+| To delete | Use | What it does |
+|---|---|---|
+| One saved note | `nams__forget` with `note` | Rewrites the notes conversation without the note; see **Forgetting** below. |
+| One of this user's entities | `nams__forget` with `entity` | Deletes this scope's entities with that name; shared entities and other users' are never touched. |
+| One captured message | Not possible | Hosted NAMS has no single-message delete, and `nams__forget` does not change sessions. A fact said in a session can still be recalled from it after its note and entity are forgotten. Delete the session or the scope instead. |
+| One session | `client.shortTerm.deleteConversation(id)` | Deletes the session's NAMS conversation (metadata `kind: "session"`, `session: <eve session id>`) with its messages and summaries. NAMS keeps the entities extracted from it unless the delete passes `purge=extracted`, which `@neo4j-labs/agent-memory` 0.6.0 cannot send. |
+| Everything for one scope | `DELETE /v1/memory?userId=<scope key>` | Deletes every conversation and entity stored under that `userId`; shared entities stay. Repeat while it answers `status: "incomplete"`. SDK 0.6.0 has no method for it. |
+
+The scope key is the `userId` on the scope's NAMS conversations, and eve
+passes it to memory providers as `memory.scope.key`. eve exports no function
+that derives it, so to erase a user from outside the agent, take the `userId`
+of a conversation whose `session` metadata is one of their eve session ids.
+
+### How it works
 
 | eve phase | What the provider does |
 |---|---|
@@ -741,31 +798,30 @@ name and where the agent runs (the Vercel project, environment and preview
 branch, or the app's path locally), so set one to keep memory across a slot
 rename.
 
-**Replays.** eve can replay a handler with the same `operationId`. Within one
-process a replayed recall returns the record from the first call; after a
-restart the record is read from NAMS again, so it differs if the scope's memory
-changed in between, and eve then fails the turn. Captured messages carry the
-turn's `operationId` in their metadata (`eveOperation`), so a replayed capture
-finds its own messages at the end of the session's conversation, also after a
-restart, and is not written twice, while the same exchange repeated in a later
-turn is still saved. Messages saved by provider 0.5.0 or earlier carry no
-operation id and are compared by text instead. Each tool's `execute` is a plain function
-over the scope key, slot and session id; the client and API key never enter
-durable state.
+**Replays.** eve can run a handler again with the same `operationId`, for
+example when an interrupted step retries. Within one process a replayed recall
+returns the record from the first call; after a restart the record is read from
+NAMS again, so it differs if the scope's memory changed in between, and eve
+then fails the turn. Each tool's `execute` is a plain function over the scope
+key, slot and session id; the client and API key never enter durable state.
+
+**Capture idempotency.** Capture uses `operationId` as its idempotency key.
+Both messages of a turn carry it as metadata `eveOperation` and go to NAMS in
+one bulk write. Before writing, capture looks for that id among the session
+conversation's newest 50 messages (25 turns), so a retry is not saved twice,
+also after a restart and after later turns were saved. Only the id counts, not
+the text, so the same exchange repeated in a later turn is saved again. A
+session's captures run one at a time in each process, in the order eve calls
+them. Hosted NAMS has no idempotency key or conditional write for messages,
+so this is a check before the write, not an atomic one: two processes running
+the same capture at the same moment can both save it. When capture cannot
+read the conversation to check, it logs a warning and saves the turn, since a
+duplicate costs less than a lost turn; a rejected API key fails the capture
+instead.
 
 **Limits.** Entities written without a `userId`, for example by your own
 ingestion, are shared by the whole workspace. They are recalled only with
-`workspaceGraph: true`; other users' entities never are. To erase one
-scope's memory, earlier sessions included, call NAMS
-`DELETE /v1/memory?userId=<scope key>`.
-
-**Size and retention.** eve neither truncates nor expires memory, so the
-provider sets its own bounds: each captured message is cut at
-`maxCaptureChars` (16,000 characters by default), each recalled line at 400
-characters, and the recalled record holds at most `maxMemories` lines. NAMS
-keeps memory until it is deleted; nothing expires. Delete a note or an entity
-with `nams__forget`, one session with `client.shortTerm.deleteConversation(id)`,
-and everything for one scope with `DELETE /v1/memory?userId=<scope key>`.
+`workspaceGraph: true`; other users' entities never are.
 
 **Forgetting.** Hosted NAMS cannot delete a single message, so `nams__forget`
 rewrites the notes conversation without the note and deletes the old one with
@@ -774,7 +830,8 @@ rewrites the notes conversation without the note and deletes the old one with
 entities stay; ask the model to forget the entity by name too. A notes
 conversation of 200 or more notes is too long to read whole, so `forget` then
 deletes nothing and says so. An entity is deleted only when it is this
-scope's own and its name matches. Earlier sessions keep their transcripts.
+scope's own and its name matches. Earlier sessions keep their transcripts
+(see [What it stores, and how to delete it](#what-it-stores-and-how-to-delete-it)).
 Turn the tool off with `forget: false`.
 
 **Cancellation.** Recall, capture and each tool call send their NAMS requests
@@ -798,7 +855,7 @@ namsMemory({
   logger?:            NamsLogger,
   crossSessionLimit?: number,  // Earlier sessions whose summaries recall reads. 0 = no earlier sessions. Default: 3
   maxMemories?:       number,  // Max lines in the recalled record, half for notes. Default: 8
-  capture?:           boolean, // Write completed turns to NAMS. Default: true
+  capture?:           boolean, // Save each completed turn's user message and answer to NAMS. Default: true
   tools?:             boolean, // Offer search, remember and forget. Default: true
   forget?:            boolean, // Offer forget (with tools on). Default: true
   workspaceGraph?:    boolean, // Also recall shared entities (no user). Default: false

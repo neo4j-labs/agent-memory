@@ -36,11 +36,12 @@ To add NAMS memory to an AI SDK application:
 npm install @neo4j-labs/nams-ai-provider@0.5.1 @neo4j-labs/agent-memory@0.6.0 ai@^7 zod@^4
 ----
 
-Requires Node.js 22 or newer. The package is ESM-only, so your project needs
-`"type": "module"` in `package.json` (`npm pkg set type=module` sets it). The
-four modes all come from the main entry point, `@neo4j-labs/nams-ai-provider`.
-A second entry point, `@neo4j-labs/nams-ai-provider/eve`, is the memory
-provider for eve agents; see
+Requires Node.js 22.23.4 or newer, the package's `engines` floor. The package
+is ESM-only, so your project needs `"type": "module"` in `package.json`
+(`npm pkg set type=module` sets it). The four modes all come from the main
+entry point, `@neo4j-labs/nams-ai-provider`. A second entry point,
+`@neo4j-labs/nams-ai-provider/eve`, is the memory provider for eve agents and
+needs Node.js 24 or newer, as eve does; see
 xref:how-to/typescript/nams-ai-provider-eve.adoc[Add NAMS memory to an eve agent].
 
 == Pick a mode
