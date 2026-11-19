@@ -1,4 +1,4 @@
-/** eve memory provider: recalls the user's memory before each turn, saves the turn, and adds search and remember tools. */
+/** eve memory provider: recall before each turn, save after it, plus search/remember/forget tools. */
 
 import type { ModelMessage } from 'ai';
 import type { Conversation, MemoryClient, Message } from '@neo4j-labs/agent-memory';
@@ -10,8 +10,19 @@ import {
   type MemoryTurnCompletedContext,
   type MemoryTurnStartedContext,
 } from 'eve/memory';
-import { defineTool } from 'eve/tools';
-import { getLogger, interleave, makeClient, searchUserEntities, searchWithFallback } from './vercel-ai-provider-client';
+import { defineTool, type ToolContext } from 'eve/tools';
+import {
+  entityLine,
+  expandEntityGraph,
+  getLogger,
+  interleave,
+  makeClient,
+  MEMORY_LINE_CHARS,
+  memoryLine,
+  searchUserEntities,
+  searchWithFallback,
+  withSignal,
+} from './vercel-ai-provider-client';
 import type { MemoryHit, NamsLogger } from './vercel-ai-provider-types';
 
 export interface NamsEveMemoryOptions {
@@ -23,12 +34,16 @@ export interface NamsEveMemoryOptions {
   maxMemories?: number;
   capture?: boolean;
   tools?: boolean;
+  forget?: boolean;
   workspaceGraph?: boolean;
+  maxCaptureChars?: number;
 }
 
 const RECORD_ID = 'nams-memory';
 
 const SOURCE = 'eve';
+
+const OPERATION_KEY = 'eveOperation';
 
 const LIMITS = {
   listed: 200,
@@ -37,9 +52,13 @@ const LIMITS = {
   notes: 20,
   perSession: 3,
   searched: 10,
+  scoped: 50,
   entities: 5,
-  line: 400,
+  expanded: 2,
   memo: 500,
+  noteHistory: 200,
+  bulk: 100,
+  captureLookback: 50,
 };
 
 type Kind = 'session' | 'notes';
@@ -62,8 +81,22 @@ interface Listing {
 
 interface Graph {
   own: MemoryHit[];
+  links: MemoryHit[];
   shared: MemoryHit[];
 }
+
+interface Found {
+  from: 'note' | 'session';
+  conversationId: string;
+  message: Message;
+}
+
+/** `purge: 'extracted'` also deletes what NAMS extracted only from that conversation. */
+interface PurgingShortTerm {
+  deleteConversation(conversationId: string, options?: { purge?: 'extracted' }): Promise<void>;
+}
+
+const NO_GRAPH: Graph = { own: [], links: [], shared: [] };
 
 const SEARCH_DESCRIPTION =
   "Search this user's earlier sessions, the notes saved for them, and the people, places and " +
@@ -91,6 +124,20 @@ const REMEMBER_INPUT = {
     memory: { type: 'string', minLength: 3, maxLength: 1000, description: 'The fact, as one sentence.' },
   },
   required: ['memory'],
+  additionalProperties: false,
+};
+
+const FORGET_DESCRIPTION =
+  'Delete something the user asked you to forget: a saved note, word for word as search or the ' +
+  "saved memory shows it, or a person, place or thing in this user's knowledge graph, by name. " +
+  'Earlier sessions are not changed.';
+
+const FORGET_INPUT = {
+  type: 'object',
+  properties: {
+    note: { type: 'string', minLength: 1, maxLength: 1000, description: 'The saved note to delete, word for word.' },
+    entity: { type: 'string', minLength: 1, maxLength: 200, description: 'The name of the entity to delete.' },
+  },
   additionalProperties: false,
 };
 
@@ -133,11 +180,15 @@ function answerText(messages: readonly ModelMessage[]): string {
   return '';
 }
 
-/** Collapses whitespace, caps the length and escapes markup so a memory fits on one line. */
-function line(text: string): string {
-  const compact = text.replace(/\s+/g, ' ').trim();
-  const capped = compact.length > LIMITS.line ? `${compact.slice(0, LIMITS.line - 1)}…` : compact;
-  return capped.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+/** A note or name as compared by forget: unescaped, whitespace collapsed, lower case. */
+const plain = (text: string): string =>
+  text.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim().toLowerCase();
+
+/** True when `wanted` is this note as the model saw it, also when the record cut it short. */
+function sameNote(note: string, wanted: string): boolean {
+  const [stored, asked] = [plain(note), plain(wanted)];
+  const cut = asked.endsWith('…') && asked.length >= MEMORY_LINE_CHARS;
+  return cut ? stored.startsWith(asked.slice(0, -1).trimEnd()) : stored === asked;
 }
 
 /** Wraps the sections in the <nams_memory> block given to the model. */
@@ -156,6 +207,22 @@ function isFatal(err: unknown): boolean {
   return statusCode === undefined ? name === 'AuthenticationError' : statusCode === 401;
 }
 
+function noUserSearch(err: unknown): boolean {
+  return /Missing required path parameter/.test(String((err as { message?: unknown } | undefined)?.message));
+}
+
+const previousSessions = (listing: Listing, sessionId: string): Conversation[] =>
+  listing.conversations.filter(c => meta(c, 'kind') === 'session' && meta(c, 'session') !== sessionId);
+
+function capPerConversation(found: Found[], cap: number): Found[] {
+  const counts = new Map<string, number>();
+  return found.filter(f => {
+    const n = (counts.get(f.conversationId) ?? 0) + 1;
+    counts.set(f.conversationId, n);
+    return n <= cap;
+  });
+}
+
 /** Sets a map entry, evicting the oldest once the map passes LIMITS.memo. */
 function memoize<K, V>(map: Map<K, V>, key: K, value: V): void {
   map.set(key, value);
@@ -166,6 +233,7 @@ function memoize<K, V>(map: Map<K, V>, key: K, value: V): void {
 export function namsMemory(options: NamsEveMemoryOptions = {}): MemoryProvider {
   const crossSessionLimit = options.crossSessionLimit ?? 3;
   const maxMemories = options.maxMemories ?? 8;
+  const maxCaptureChars = options.maxCaptureChars ?? 16_000;
 
   let client: MemoryClient | undefined;
   /** Lazily creates the NAMS client from apiKey or MEMORY_API_KEY. */
@@ -186,40 +254,59 @@ export function namsMemory(options: NamsEveMemoryOptions = {}): MemoryProvider {
   const olderNotes = new Map<string, { ids: string[]; at: number }>();
   const recalls = new Map<string, MemoryRecallResult>();
   const captured = new Map<string, true>();
+  const headers = new Map<string, Promise<Conversation | null>>();
+  const noteWrites = new Map<string, Promise<unknown>>();
+  const captureWrites = new Map<string, Promise<unknown>>();
+  /** Skip the user-wide message search until this time (Infinity: the SDK cannot do it). */
+  let scopeSearchOffUntil = 0;
 
-  /** This slot's eve conversations for the user, newest first, and whether the listing was complete. */
+  /** The scope's eve conversations, newest first. Slot names are ignored, so a renamed slot keeps its memory. */
   async function listScope(nams: MemoryClient, where: SlotScope, limit: number = LIMITS.listed): Promise<Listing> {
     const listed = await nams.shortTerm.listConversations({ userId: where.scopeKey, limit });
     return {
       conversations: listed
-        .filter(c =>
-          c.userId === where.scopeKey && meta(c, 'source') === SOURCE && meta(c, 'slot') === where.slot)
+        .filter(c => c.userId === where.scopeKey && meta(c, 'source') === SOURCE)
         .sort((a, b) => lastActive(b) - lastActive(a)),
       complete: listed.length < limit,
     };
   }
 
-  /**
-   * The scope's notes conversations, newest first. NAMS lists newest first and the listing is
-   * capped, so a user with enough newer sessions has notes older than all of it.
-   */
+  /** The scope's notes conversations. Scans further back when the first page has none. */
   async function notesIds(nams: MemoryClient, where: SlotScope, first: Listing): Promise<string[]> {
     const listed = first.conversations.filter(c => meta(c, 'kind') === 'notes').map(c => c.id);
     if (listed.length > 0 || first.complete) return listed;
 
-    const key = JSON.stringify([where.scopeKey, where.slot]);
-    const known = olderNotes.get(key);
+    const known = olderNotes.get(where.scopeKey);
     if (known && (known.ids.length > 0 || Date.now() - known.at < LIMITS.rescanMs)) return known.ids;
 
     const all = await listScope(nams, where, LIMITS.scanned);
     const ids = all.conversations.filter(c => meta(c, 'kind') === 'notes').map(c => c.id);
-    memoize(olderNotes, key, { ids, at: Date.now() });
+    memoize(olderNotes, where.scopeKey, { ids, at: Date.now() });
     return ids;
   }
 
-  /** Finds or creates the session or notes conversation, sharing one lookup across concurrent callers. */
+  /** Creates a session or notes conversation owned by the scope key. */
+  async function createConversation(nams: MemoryClient, where: SlotScope, kind: Kind, sessionId?: string): Promise<string> {
+    const created = await nams.shortTerm.createConversation({
+      userId: where.scopeKey,
+      metadata: {
+        source: SOURCE,
+        kind,
+        slot: where.slot,
+        ...(sessionId === undefined ? {} : { session: sessionId }),
+        title: `eve ${where.slot} ${kind}`,
+      },
+    });
+    return created.id;
+  }
+
+  /** The cache key of a scope's session or notes conversation. */
+  const conversationKey = (scopeKey: string, kind: Kind, sessionId?: string): string =>
+    JSON.stringify([scopeKey, kind, sessionId ?? null]);
+
+  /** Finds or creates the conversation. Concurrent callers share one lookup. */
   function ensureConversation(nams: MemoryClient, where: SlotScope, kind: Kind, sessionId?: string): Promise<string> {
-    const key = JSON.stringify([where.scopeKey, where.slot, kind, sessionId ?? null]);
+    const key = conversationKey(where.scopeKey, kind, sessionId);
     const known = conversations.get(key);
     if (known) return known;
 
@@ -228,25 +315,27 @@ export function namsMemory(options: NamsEveMemoryOptions = {}): MemoryProvider {
       const found = kind === 'notes'
         ? (await notesIds(nams, where, first))[0]
         : first.conversations.find(c => meta(c, 'kind') === kind && meta(c, 'session') === sessionId)?.id;
-      if (found) return found;
-
-      const created = await nams.shortTerm.createConversation({
-        userId: where.scopeKey,
-        metadata: {
-          source: SOURCE,
-          kind,
-          slot: where.slot,
-          ...(sessionId === undefined ? {} : { session: sessionId }),
-          title: `eve ${where.slot} ${kind}`,
-        },
-      });
-      return created.id;
+      return found ?? createConversation(nams, where, kind, sessionId);
     })();
 
     memoize(conversations, key, pending);
     pending.catch(() => conversations.delete(key));
     return pending;
   }
+
+  /** Runs the writes queued under one key one at a time, in call order. */
+  function serially<T>(queue: Map<string, Promise<unknown>>, key: string, write: () => Promise<T>): Promise<T> {
+    const run = (queue.get(key) ?? Promise.resolve()).then(write, write);
+    const settled = run.catch(() => undefined);
+    queue.set(key, settled);
+    void settled.then(() => {
+      if (queue.get(key) === settled) queue.delete(key);
+    });
+    return run;
+  }
+
+  const serialNotes = <T>(scopeKey: string, write: () => Promise<T>): Promise<T> =>
+    serially(noteWrites, scopeKey, write);
 
   /** The latest notes from each notes conversation, newest first; unreadable ones are skipped. */
   async function readNotes(nams: MemoryClient, ids: string[]): Promise<string[]> {
@@ -260,90 +349,192 @@ export function namsMemory(options: NamsEveMemoryOptions = {}): MemoryProvider {
     return read.flat();
   }
 
-  /** Summaries and query-matching messages from earlier sessions. */
-  async function readSessions(
-    nams: MemoryClient,
-    sessions: Conversation[],
-    query: string,
-  ): Promise<{ summaries: MemoryHit[]; matches: MemoryHit[] }> {
+  /** The summaries NAMS wrote about these sessions. */
+  async function readSummaries(nams: MemoryClient, sessions: Conversation[]): Promise<MemoryHit[]> {
     const log = getLogger(nams);
-    const read = await Promise.all(sessions.map(async c => {
-      const [context, found] = await Promise.all([
-        nams.shortTerm.getContext(c.id).catch((err: unknown) => {
+    const read = await Promise.all(sessions.map(c =>
+      nams.shortTerm.getContext(c.id)
+        .then(context => [...(context.reflections ?? []), ...(context.observations ?? [])]
+          .map((s): MemoryHit => ({ content: s.content, source: 'cross-session', type: 'summary' })))
+        .catch((err: unknown) => {
           log.warn('getContext failed', err);
-          return null;
-        }),
-        query
-          ? searchWithFallback(
-            query,
-            q => nams.shortTerm.searchMessages(q, { sessionId: c.id, limit: LIMITS.perSession }),
-            m => m.content,
-            log,
-            'searchMessages',
-          )
-          : Promise.resolve([] as Message[]),
-      ]);
-      return {
-        summaries: [...(context?.reflections ?? []), ...(context?.observations ?? [])]
-          .map((s): MemoryHit => ({ content: s.content, source: 'cross-session', type: 'summary' })),
-        matches: found.slice(0, LIMITS.perSession)
-          .map((m): MemoryHit => ({ content: m.content, source: 'cross-session', type: m.role })),
-      };
-    }));
-    return {
-      summaries: read.flatMap(r => r.summaries),
-      matches: read.flatMap(r => r.matches),
-    };
+          return [] as MemoryHit[];
+        })));
+    return read.flat();
   }
 
-  /** The user's entities (and workspace entities, if enabled) matching the query. */
+  /** One search across all the scope's messages, or null when the SDK or NAMS cannot do it. */
+  async function searchScope(nams: MemoryClient, scopeKey: string, query: string): Promise<Message[] | null> {
+    if (Date.now() < scopeSearchOffUntil) return null;
+    // A variable, not a literal: SDK 0.6.0's SearchMessagesOptions has no `userId`.
+    const options = { userId: scopeKey, limit: LIMITS.scoped };
+    const run = (q: string) => nams.shortTerm.searchMessages(q, options);
+
+    let direct: Message[];
+    try {
+      direct = await run(query);
+    } catch (err) {
+      if (isFatal(err)) throw err;
+      if (noUserSearch(err)) {
+        scopeSearchOffUntil = Infinity;
+      } else {
+        getLogger(nams).warn("searching all of the user's messages failed, searching each conversation instead", err);
+        scopeSearchOffUntil = Date.now() + LIMITS.rescanMs;
+      }
+      return null;
+    }
+    if (direct.length > 0) return direct;
+    // Nothing for the whole query: try its longest words, as the per-conversation search does.
+    return searchWithFallback(
+      query,
+      q => (q === query ? Promise.resolve(direct) : run(q)),
+      m => m.content,
+      getLogger(nams),
+      'searchMessages',
+    );
+  }
+
+  /** A conversation's header, cached; null when it cannot be read. */
+  function header(nams: MemoryClient, id: string): Promise<Conversation | null> {
+    const known = headers.get(id);
+    if (known) return known;
+    const pending = nams.shortTerm.getConversationMetadata(id).catch((err: unknown) => {
+      headers.delete(id);
+      if (isFatal(err)) throw err;
+      getLogger(nams).warn('reading a conversation failed', err);
+      return null;
+    });
+    memoize(headers, id, pending);
+    return pending;
+  }
+
+  /** Keeps hits from this scope's notes and earlier sessions; drops the current session and the rest. */
+  async function placeHits(
+    nams: MemoryClient,
+    scopeKey: string,
+    sessionId: string,
+    first: Listing,
+    hits: Message[],
+  ): Promise<Found[]> {
+    const listed = new Map(first.conversations.map(c => [c.id, c] as const));
+    const ids = [...new Set(hits.map(h => h.conversationId).filter((id): id is string => Boolean(id)))];
+    const owners = new Map(await Promise.all(ids.map(async id => {
+      // A conversation missing from a complete listing is not this scope's.
+      const c = listed.get(id) ?? (first.complete ? null : await header(nams, id));
+      return [id, c && c.userId === scopeKey && meta(c, 'source') === SOURCE ? c : null] as const;
+    })));
+
+    return hits.flatMap((message): Found[] => {
+      const c = message.conversationId ? owners.get(message.conversationId) : null;
+      if (!c) return [];
+      if (meta(c, 'kind') === 'notes') return [{ from: 'note', conversationId: c.id, message }];
+      if (meta(c, 'kind') === 'session' && meta(c, 'session') !== sessionId) {
+        return [{ from: 'session', conversationId: c.id, message }];
+      }
+      return [];
+    });
+  }
+
+  /** One search per conversation, for an SDK that cannot search by user. */
+  async function searchEach(
+    nams: MemoryClient,
+    query: string,
+    targets: { id: string; from: Found['from'] }[],
+    limit: number,
+  ): Promise<Found[]> {
+    const log = getLogger(nams);
+    const found = await Promise.all(targets.map(async ({ id, from }) => {
+      const messages = await searchWithFallback(
+        query,
+        q => nams.shortTerm.searchMessages(q, { sessionId: id, limit }),
+        m => m.content,
+        log,
+        'searchMessages',
+      );
+      return messages.map((message): Found => ({ from, conversationId: id, message }));
+    }));
+    return found.flat();
+  }
+
+  /** Matching messages from notes and earlier sessions (not the current one). `sessions: 0`: notes only. */
+  async function findMessages(
+    nams: MemoryClient,
+    where: SlotScope,
+    sessionId: string,
+    query: string,
+    known: { first: Listing; noteIds: string[] },
+    limits: { sessions: number; perConversation: number },
+  ): Promise<Found[]> {
+    const hasSessions = limits.sessions > 0 && previousSessions(known.first, sessionId).length > 0;
+    // Nothing saved yet (a new user's first turns): no request at all.
+    if (!query || (known.noteIds.length === 0 && !hasSessions)) return [];
+    const scoped = await searchScope(nams, where.scopeKey, query);
+    const found = scoped
+      ? await placeHits(nams, where.scopeKey, sessionId, known.first, scoped)
+      : await searchEach(nams, query, [
+        ...known.noteIds.map(id => ({ id, from: 'note' as const })),
+        ...previousSessions(known.first, sessionId)
+          .slice(0, limits.sessions)
+          .map(c => ({ id: c.id, from: 'session' as const })),
+      ], limits.perConversation);
+    return capPerConversation(
+      limits.sessions > 0 ? found : found.filter(f => f.from === 'note'),
+      limits.perConversation,
+    );
+  }
+
+  /** The user's matching entities, their relationships, and shared entities if enabled. */
   async function readGraph(nams: MemoryClient, scopeKey: string, query: string): Promise<Graph> {
     const { own, shared } = await searchUserEntities(nams, query, scopeKey, {
       limit: LIMITS.entities,
       workspaceGraph: options.workspaceGraph,
     });
+    const links = await expandEntityGraph(nams, own, LIMITS.expanded, scopeKey);
     const hits = (entities: typeof own) => entities.map((e): MemoryHit => ({
-      content: e.description ? `${e.name} — ${e.description}` : e.name,
+      content: entityLine(e),
       source: 'long-term',
       type: e.type ?? 'entity',
     }));
-    return { own: hits(own), shared: hits(shared) };
+    return { own: hits(own), links, shared: hits(shared) };
   }
 
-  /** Dedupes and caps notes, session hits and entities into the memory record. */
+  /** Builds the memory record. Notes come first but leave room for other memory. */
   function compose(notes: string[], matches: MemoryHit[], summaries: MemoryHit[], graph: Graph): string {
-    const seen = new Set<string>();
-    const fresh = <T>(items: T[], text: (item: T) => string): T[] =>
+    const keyOf = (text: string) => text.replace(/\s+/g, ' ').trim().toLowerCase();
+    const fresh = <T>(seen: Set<string>, items: T[], text: (item: T) => string): T[] =>
       items.filter(item => {
-        const key = text(item).replace(/\s+/g, ' ').trim().toLowerCase();
+        const key = keyOf(text(item));
         if (!key || seen.has(key)) return false;
         seen.add(key);
         return true;
       });
+    const others = (seen: Set<string>) =>
+      [matches, summaries, graph.own, graph.links, graph.shared].map(hits => fresh(seen, hits, h => h.content));
 
-    const noteLines = fresh(notes, n => n).slice(0, maxMemories);
-    const [said, summarized, own, shared] = [matches, summaries, graph.own, graph.shared]
-      .map(hits => fresh(hits, h => h.content));
-    const rest = interleave([said, summarized, own, shared], maxMemories - noteLines.length);
+    const candidates = fresh(new Set(), notes, n => n);
+    const otherCount = others(new Set(candidates.map(keyOf))).reduce((n, hits) => n + hits.length, 0);
+    const noteLines = candidates.slice(0, Math.max(Math.ceil(maxMemories / 2), maxMemories - otherCount));
+    const [said, summarized, own, links, shared] = others(new Set(noteLines.map(keyOf)));
+    const rest = interleave([said, summarized, own, links, shared], maxMemories - noteLines.length);
     const kept = (...from: MemoryHit[][]) => rest.filter(h => from.some(hits => hits.includes(h)));
     const earlier = kept(said, summarized);
-    const known = kept(own);
+    const known = kept(own, links);
     const workspace = kept(shared);
 
     const sections: string[] = [];
     if (noteLines.length) {
-      sections.push(['Notes saved for this user:', ...noteLines.map(n => `- ${line(n)}`)].join('\n'));
+      sections.push(['Notes saved for this user:', ...noteLines.map(n => `- ${memoryLine(n)}`)].join('\n'));
     }
     if (earlier.length) {
-      sections.push(['From earlier sessions:', ...earlier.map(h => `- [${h.type}] ${line(h.content)}`)].join('\n'));
+      sections.push(['From earlier sessions:', ...earlier.map(h => `- [${h.type}] ${memoryLine(h.content)}`)].join('\n'));
     }
     if (known.length) {
-      sections.push(["From this user's knowledge graph:", ...known.map(h => `- ${line(h.content)}`)].join('\n'));
+      sections.push(["From this user's knowledge graph:", ...known.map(h => `- ${memoryLine(h.content)}`)].join('\n'));
     }
     if (workspace.length) {
       sections.push([
         'From the workspace knowledge graph (shared across the workspace, not specific to this user):',
-        ...workspace.map(h => `- ${line(h.content)}`),
+        ...workspace.map(h => `- ${memoryLine(h.content)}`),
       ].join('\n'));
     }
     return record(sections.length ? sections : ['No saved memory matches this request.']);
@@ -352,24 +543,32 @@ export function namsMemory(options: NamsEveMemoryOptions = {}): MemoryProvider {
   /** Gathers notes, earlier sessions and graph hits for one turn and composes the record. */
   async function readMemory(nams: MemoryClient, where: SlotScope, sessionId: string, query: string): Promise<string> {
     const first = await listScope(nams, where);
-    const sessions = first.conversations
-      .filter(c => meta(c, 'kind') === 'session' && meta(c, 'session') !== sessionId)
-      .slice(0, crossSessionLimit);
+    const noteIds = await notesIds(nams, where, first);
 
-    const [noteTexts, { summaries, matches }, graph] = await Promise.all([
-      notesIds(nams, where, first).then(ids => readNotes(nams, ids)),
-      readSessions(nams, sessions, query),
-      query ? readGraph(nams, where.scopeKey, query) : Promise.resolve({ own: [], shared: [] }),
+    const [latestNotes, found, summaries, graph] = await Promise.all([
+      readNotes(nams, noteIds),
+      findMessages(nams, where, sessionId, query, { first, noteIds }, {
+        sessions: crossSessionLimit,
+        perConversation: LIMITS.perSession,
+      }),
+      readSummaries(nams, previousSessions(first, sessionId).slice(0, crossSessionLimit)),
+      query ? readGraph(nams, where.scopeKey, query) : Promise.resolve(NO_GRAPH),
     ]);
-    return compose(noteTexts, matches, summaries, graph);
+
+    // Notes that match the message first, then the latest ones.
+    const notes = [...found.filter(f => f.from === 'note').map(f => f.message.content), ...latestNotes];
+    const matches = found
+      .filter(f => f.from === 'session')
+      .map((f): MemoryHit => ({ content: f.message.content, source: 'cross-session', type: f.message.role }));
+    return compose(notes, matches, summaries, graph);
   }
 
-  /** Recall hook: the memory record for a turn, cached per operation; non-fatal errors degrade to a placeholder. */
+  /** Recall hook, cached per operation. Non-fatal errors give a placeholder record. */
   async function recall(ctx: MemoryTurnStartedContext): Promise<MemoryRecallResult> {
     const replayed = recalls.get(ctx.operationId);
     if (replayed) return replayed;
 
-    const nams = getClient();
+    const nams = withSignal(getClient(), ctx.abortSignal);
     const where = { scopeKey: ctx.memory.scope.key, slot: ctx.memory.slot };
     const query = userText(ctx.turn.input);
 
@@ -387,75 +586,80 @@ export function namsMemory(options: NamsEveMemoryOptions = {}): MemoryProvider {
     return result;
   }
 
-  /** Whether the conversation already ends with these turns, so a retried capture does not write twice. */
-  async function endsWith(
+  /** A captured message, cut to maxCaptureChars. */
+  const capped = (text: string): string =>
+    text.length > maxCaptureChars ? `${text.slice(0, maxCaptureChars - 1)}…` : text;
+
+  /**
+   * True when a message among the conversation's newest LIMITS.captureLookback carries this
+   * operation id. Only the id counts, never the text, so a repeated exchange is still saved.
+   * When the conversation cannot be read the turn is saved: a duplicate costs less than a lost turn.
+   */
+  async function alreadySaved(
     nams: MemoryClient,
     conversationId: string,
-    turns: { role: string; content: string }[],
+    operationId: string,
+    signal: AbortSignal,
   ): Promise<boolean> {
     try {
-      const { messages } = await nams.shortTerm.getConversation(conversationId, { limit: turns.length });
-      const tail = chronological(messages ?? []).slice(-turns.length);
-      return tail.length === turns.length &&
-        tail.every((m, i) => m.role === turns[i].role && m.content.trim() === turns[i].content);
-    } catch {
+      const { messages } = await nams.shortTerm.getConversation(conversationId, { limit: LIMITS.captureLookback });
+      return (messages ?? []).some(m => m.metadata?.[OPERATION_KEY] === operationId);
+    } catch (err) {
+      if (isFatal(err) || signal.aborted) throw err;
+      getLogger(nams).warn('could not check whether this turn was already saved, saving it', err);
       return false;
     }
   }
 
-  /** Capture hook: saves the user input and final answer to this session's conversation, once per operation. */
+  /**
+   * Capture hook: saves the user input and final answer once per operationId.
+   */
   async function capture(ctx: MemoryTurnCompletedContext): Promise<void> {
     if (options.capture === false || captured.has(ctx.operationId)) return;
 
     const turns = [
-      { role: 'user' as const, content: userText(ctx.turn.input) },
-      { role: 'assistant' as const, content: answerText(ctx.messages) },
+      { role: 'user' as const, content: capped(userText(ctx.turn.input)) },
+      { role: 'assistant' as const, content: capped(answerText(ctx.messages)) },
     ].filter(turn => turn.content);
 
     if (turns.length > 0) {
-      const nams = getClient();
+      const nams = withSignal(getClient(), ctx.abortSignal);
       const where = { scopeKey: ctx.memory.scope.key, slot: ctx.memory.slot };
       const conversationId = await ensureConversation(nams, where, 'session', ctx.session.id);
-      if (!(await endsWith(nams, conversationId, turns))) {
-        await nams.shortTerm.bulkAddMessages(conversationId, turns);
-      }
+      await serially(captureWrites, conversationId, async () => {
+        if (captured.has(ctx.operationId)) return;
+        if (!(await alreadySaved(nams, conversationId, ctx.operationId, ctx.abortSignal))) {
+          const metadata = { [OPERATION_KEY]: ctx.operationId };
+          await nams.shortTerm.bulkAddMessages(conversationId, turns.map(turn => ({ ...turn, metadata })));
+        }
+        memoize(captured, ctx.operationId, true);
+      });
     }
     memoize(captured, ctx.operationId, true);
   }
 
   /** The search tool: searches notes and earlier sessions plus the knowledge graph, deduped. */
-  async function search(scope: ToolScope, input: Record<string, unknown>) {
+  async function search(nams: MemoryClient, scope: ToolScope, input: Record<string, unknown>) {
     const query = String(input.query ?? '').trim();
     const limit = typeof input.limit === 'number' ? input.limit : 8;
-    const nams = getClient();
-    const log = getLogger(nams);
 
     const first = await listScope(nams, scope);
-    const notes = await notesIds(nams, scope, first);
-    const sessions = first.conversations
-      .filter(c => meta(c, 'kind') === 'session' && meta(c, 'session') !== scope.sessionId)
-      .slice(0, LIMITS.searched);
-    const targets = [
-      ...notes.map(id => ({ id, from: 'saved note' })),
-      ...sessions.map(c => ({ id: c.id, from: 'earlier session' })),
-    ];
-
-    const [perConversation, graph] = await Promise.all([
-      Promise.all(targets.map(async ({ id, from }) => {
-        const found = await searchWithFallback(
-          query,
-          q => nams.shortTerm.searchMessages(q, { sessionId: id, limit }),
-          m => m.content,
-          log,
-          'searchMessages',
-        );
-        return found.map(m => ({ from, role: m.role, content: m.content, at: m.timestamp }));
-      })),
+    const noteIds = await notesIds(nams, scope, first);
+    const [found, graph] = await Promise.all([
+      findMessages(nams, scope, scope.sessionId, query, { first, noteIds }, {
+        sessions: LIMITS.searched,
+        perConversation: limit,
+      }),
       readGraph(nams, scope.scopeKey, query),
     ]);
 
     const seen = new Set<string>();
-    const results = perConversation.flat().filter(r => {
+    const results = found.map(({ from, message: m }) => ({
+      from: from === 'note' ? 'saved note' : 'earlier session',
+      role: m.role,
+      content: m.content,
+      at: m.timestamp,
+    })).filter(r => {
       const key = r.content.trim().toLowerCase();
       if (!key || seen.has(key)) return false;
       seen.add(key);
@@ -465,39 +669,109 @@ export function namsMemory(options: NamsEveMemoryOptions = {}): MemoryProvider {
     return {
       results,
       entities: graph.own.map(h => h.content),
+      relationships: graph.links.map(h => h.content),
       ...(options.workspaceGraph ? { workspaceGraph: graph.shared.map(h => h.content) } : {}),
     };
   }
 
   /** The remember tool: appends a note to the user's notes conversation. */
-  async function rememberNote(scope: ToolScope, input: Record<string, unknown>) {
+  async function rememberNote(nams: MemoryClient, scope: ToolScope, input: Record<string, unknown>) {
     const memory = String(input.memory ?? '').trim();
-    const nams = getClient();
-    const conversationId = await ensureConversation(nams, scope, 'notes');
-    await nams.shortTerm.addMessage(conversationId, 'user', memory);
+    await serialNotes(scope.scopeKey, async () => {
+      const conversationId = await ensureConversation(nams, scope, 'notes');
+      await nams.shortTerm.addMessage(conversationId, 'user', memory);
+    });
     return { remembered: true, memory };
   }
 
-  /** The search and remember tools bound to this scope, or null when tools are off. */
+  /** NAMS cannot delete one message, so the kept notes move to a new conversation. Null: too long to read. */
+  async function forgetNote(nams: MemoryClient, scope: ToolScope, wanted: string): Promise<number | null> {
+    const first = await listScope(nams, scope);
+    const ids = await notesIds(nams, scope, first);
+    const read = await Promise.all(ids.map(async id => {
+      const { messages } = await nams.shortTerm.getConversation(id, { limit: LIMITS.noteHistory });
+      return { id, notes: chronological(messages ?? []) };
+    }));
+    if (read.some(r => r.notes.length >= LIMITS.noteHistory && r.notes.some(n => sameNote(n.content, wanted)))) {
+      return null;
+    }
+
+    const notesKey = conversationKey(scope.scopeKey, 'notes');
+    let forgotten = 0;
+    for (const { id, notes } of read) {
+      const kept = notes.filter(n => !sameNote(n.content, wanted));
+      if (kept.length === notes.length) continue;
+      forgotten += notes.length - kept.length;
+
+      conversations.delete(notesKey);
+      olderNotes.delete(scope.scopeKey);
+      if (kept.length > 0) {
+        const replacement = await createConversation(nams, scope, 'notes');
+        for (let i = 0; i < kept.length; i += LIMITS.bulk) {
+          const batch = kept.slice(i, i + LIMITS.bulk).map(n => ({ role: n.role, content: n.content }));
+          await nams.shortTerm.bulkAddMessages(replacement, batch);
+        }
+        memoize(conversations, notesKey, Promise.resolve(replacement));
+      }
+      await (nams.shortTerm as unknown as PurgingShortTerm).deleteConversation(id, { purge: 'extracted' });
+    }
+    return forgotten;
+  }
+
+  /** Deletes this user's entities with this name, never another user's or shared ones. */
+  async function forgetEntity(nams: MemoryClient, scope: ToolScope, name: string): Promise<string[]> {
+    const { own } = await searchUserEntities(nams, name, scope.scopeKey, { limit: LIMITS.entities });
+    const named = own.filter(e => plain(e.name) === plain(name));
+    await Promise.all(named.map(e => nams.longTerm.deleteEntity(e.id)));
+    return named.map(e => e.name);
+  }
+
+  /** The forget tool: deletes a saved note, an entity of this user's, or both. */
+  async function forget(nams: MemoryClient, scope: ToolScope, input: Record<string, unknown>) {
+    const note = String(input.note ?? '').trim();
+    const entity = String(input.entity ?? '').trim();
+    if (!note && !entity) return { forgotten: false, reason: 'Give the note or the entity name to forget.' };
+
+    // The note first: when it is refused, nothing at all may have been deleted.
+    const notes = note ? await serialNotes(scope.scopeKey, () => forgetNote(nams, scope, note)) : 0;
+    if (notes === null) {
+      return {
+        forgotten: false,
+        reason: `This user has ${LIMITS.noteHistory} or more saved notes, too many to rewrite safely; nothing was deleted.`,
+      };
+    }
+    const entities = entity ? await forgetEntity(nams, scope, entity) : [];
+    return { forgotten: notes > 0 || entities.length > 0, notes, entities };
+  }
+
+  /** The search, remember and forget tools bound to this scope, or null when tools are off. */
   async function tools(ctx: MemoryToolsContext) {
     if (options.tools === false) return null;
 
-    const closure: ToolScope = {
+    const scope: ToolScope = {
       scopeKey: ctx.memory.scope.key,
       slot: ctx.memory.slot,
       sessionId: ctx.session.id,
     };
+    const client = (call: ToolContext | undefined) => withSignal(getClient(), call?.abortSignal);
 
     return {
       search: defineTool({
         description: SEARCH_DESCRIPTION,
         inputSchema: SEARCH_INPUT,
-        execute: (input: Record<string, unknown>) => search(closure, input),
+        execute: async (input: Record<string, unknown>, call: ToolContext) => search(client(call), scope, input),
       }),
       remember: defineTool({
         description: REMEMBER_DESCRIPTION,
         inputSchema: REMEMBER_INPUT,
-        execute: (input: Record<string, unknown>) => rememberNote(closure, input),
+        execute: async (input: Record<string, unknown>, call: ToolContext) => rememberNote(client(call), scope, input),
+      }),
+      ...(options.forget === false ? {} : {
+        forget: defineTool({
+          description: FORGET_DESCRIPTION,
+          inputSchema: FORGET_INPUT,
+          execute: async (input: Record<string, unknown>, call: ToolContext) => forget(client(call), scope, input),
+        }),
       }),
     };
   }

@@ -1,7 +1,4 @@
-/**
- * Neo4j Agent Memory (NAMS) for the Vercel AI SDK. Four ways to add memory:
- * a provider, middleware, tools the model calls, or hooks your code drives.
- */
+/** Neo4j Agent Memory (NAMS) for the Vercel AI SDK: provider, middleware, tools or hooks mode. */
 
 export type { NamsConfig, NamsScope, NamsLogger, MemoryHit, StoreInput, GraphExtractor } from './vercel-ai-provider-client';
 export type { NamsMemoryConfig } from './vercel-ai-provider-middleware';
@@ -24,8 +21,9 @@ export type {
 export { createNamsProvider } from './vercel-ai-provider';
 export { createNamsHooks } from './vercel-ai-provider-hooks';
 export type {
-  NamsHooks, NamsHooksOptions, LoadSessionOptions, OnFinishScope,
-  NamsOnFinishEvent, NamsOnFinishCallback,
+  NamsHooks, NamsHooksOptions, LoadSessionOptions, OnEndScope,
+  NamsOnEndEvent, NamsOnEndCallback,
+  OnFinishScope, NamsOnFinishEvent, NamsOnFinishCallback,
   PrepareOptions, PrepareResult, NamsToolBlocked, SessionTurn,
 } from './vercel-ai-provider-hooks';
 export { compileHooks } from './vercel-ai-provider-hook-events';

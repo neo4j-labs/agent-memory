@@ -32,7 +32,7 @@ Prerequisites:
 ----
 npm init -y   # only if the directory has no package.json yet
 npm pkg set type=module
-npm install @neo4j-labs/nams-ai-provider@0.4.0 @neo4j-labs/agent-memory@0.6.0 ai@^7 @ai-sdk/openai@^4 zod@^4
+npm install @neo4j-labs/nams-ai-provider@0.5.1 @neo4j-labs/agent-memory@0.6.0 ai@^7 @ai-sdk/openai@^4 zod@^4
 npm install --save-dev tsx
 ----
 
@@ -66,7 +66,7 @@ import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { createNams, type NamsProviderOptions } from '@neo4j-labs/nams-ai-provider';
 import { openai } from '@ai-sdk/openai';
-import { ToolLoopAgent, stepCountIs } from 'ai';
+import { ToolLoopAgent, isStepCount } from 'ai';
 
 const userId = process.env.NAMS_DEMO_USER ?? 'demo-user-middleware-mode';
 const modelId = process.env.NAMS_DEMO_MODEL ?? 'gpt-5.4-mini';
@@ -98,7 +98,7 @@ export async function middlewareModeDemo(
     const agent = new ToolLoopAgent({
       model: wrappedModel,
       instructions: 'You are a helpful assistant.',
-      stopWhen: stepCountIs(1), // no tools needed in middleware mode
+      stopWhen: isStepCount(1), // no tools needed in middleware mode
     });
 
     const { text } = await agent.generate({ prompt: message });
@@ -151,7 +151,7 @@ if (entry && import.meta.url === pathToFileURL(realpathSync(entry)).href) {
   defaults to `openai` but is a parameter so the test suite can substitute a
   mock model.
 * `new ToolLoopAgent({ model: wrappedModel, instructions, stopWhen:
-  stepCountIs(1) })` — `stepCountIs(1)` because middleware mode needs no
+  isStepCount(1) })` — `isStepCount(1)` because middleware mode needs no
   tool-calling loop; retrieval and persistence happen inside the wrapped
   model itself.
 * `agent.generate({ prompt: message })` runs the call. The wrapped model

@@ -1,14 +1,8 @@
-/**
- * Next.js App Router chat route with NAMS memory.
- *
- * Copy to `app/api/chat/route.ts` and use `useChat()` from `@ai-sdk/react`.
- * Memory is automatic for each user.
- */
+// Next.js chat route with memory. Copy to `app/api/chat/route.ts` and use `useChat()` from `@ai-sdk/react`.
 
 import { openai } from '@ai-sdk/openai';
 import { ToolLoopAgent, createAgentUIStreamResponse, isStepCount, type UIMessage } from 'ai';
-// In your app, import from the published package instead:
-//   import { createNamsProvider } from '@neo4j-labs/nams-ai-provider';
+// In your app: import { createNamsProvider } from '@neo4j-labs/nams-ai-provider';
 import { createNamsProvider } from '../src/index';
 
 export const maxDuration = 30;

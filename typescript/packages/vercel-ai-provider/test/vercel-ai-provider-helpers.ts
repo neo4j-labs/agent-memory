@@ -1,7 +1,4 @@
-/**
- * Shared test doubles: a controllable fake MemoryClient and a minimal
- * LanguageModelV4 stub that records the params it was called with.
- */
+/** Shared test doubles: a fake MemoryClient and a LanguageModelV4 stub. */
 
 import { vi } from 'vitest';
 import type { WrappableModel as LanguageModelV4 } from '../src/vercel-ai-provider-middleware';
@@ -55,11 +52,7 @@ export function makeFakeClient(): FakeClient {
   };
 }
 
-/**
- * A `searchEntities` implementation that answers like hosted NAMS: a search filtered on
- * `userId` returns entities in that user's memory, so each one carries the `userId`.
- * Without the filter they come back shared, with none.
- */
+/** `searchEntities` like hosted NAMS: results carry the `userId` filter, or none when unfiltered. */
 export const ownedBySearcher = (entities: object[]) =>
   async (_query: string, options?: { userId?: string }) =>
     entities.map(e => ({ ...e, ...(options?.userId ? { userId: options.userId } : {}) }));

@@ -1,15 +1,4 @@
-/**
- * Hooks mode.
- *
- * Checks:
- *  - loadSession returns user/assistant turns, skips tool records, never
- *    creates a conversation, and returns [] on errors
- *  - onFinish saves the prompt, text, and tool records once, in one bulk write
- *  - onFinish falls back to single writes when the bulk write fails
- *  - scope from runtimeContext wins over the factory scope
- *  - a missing userId throws
- *  - the callback type fits the AI SDK's onFinish
- */
+/** Hooks mode: loadSession and onEnd. */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeFakeClient, type FakeClient } from './vercel-ai-provider-helpers';
@@ -93,12 +82,12 @@ describe('loadSession', () => {
   });
 });
 
-describe('onFinish — closure mode', () => {
+describe('onEnd — closure mode', () => {
   it('persists prompt, assistant text, and tool turns in order via bulkAddMessages', async () => {
     const userId = freshUser();
     const hooks = createNamsHooks({ ...config, userId, conversationId: 'conv-1' });
 
-    const callback = hooks.onFinish({ prompt: 'What is the weather?' });
+    const callback = hooks.onEnd({ prompt: 'What is the weather?' });
     await callback({
       text: 'It is sunny.',
       responseMessages: [
@@ -141,7 +130,7 @@ describe('onFinish — closure mode', () => {
   it('collapses interleaved text around a tool call in part order', async () => {
     const hooks = createNamsHooks({ ...config, userId: freshUser(), conversationId: 'conv-1' });
 
-    await hooks.onFinish({ persistUserPrompt: false })({
+    await hooks.onEnd({ persistUserPrompt: false })({
       responseMessages: [
         {
           role: 'assistant',
@@ -165,7 +154,7 @@ describe('onFinish — closure mode', () => {
   it('falls back to event.text when responseMessages is absent', async () => {
     const hooks = createNamsHooks({ ...config, userId: freshUser(), conversationId: 'conv-1' });
 
-    await hooks.onFinish({ prompt: 'Hi' })({ text: 'Hello!' });
+    await hooks.onEnd({ prompt: 'Hi' })({ text: 'Hello!' });
 
     const [, turns] = fake.shortTerm.bulkAddMessages.mock.calls[0];
     expect(turns).toEqual([
@@ -177,7 +166,7 @@ describe('onFinish — closure mode', () => {
   it('extracts user text from a ModelMessage[] prompt', async () => {
     const hooks = createNamsHooks({ ...config, userId: freshUser(), conversationId: 'conv-1' });
 
-    await hooks.onFinish({
+    await hooks.onEnd({
       prompt: [
         { role: 'system', content: 'be nice' },
         { role: 'user', content: [{ type: 'text', text: 'part one' }] },
@@ -192,7 +181,7 @@ describe('onFinish — closure mode', () => {
   it('skips the user turn when persistUserPrompt is false', async () => {
     const hooks = createNamsHooks({ ...config, userId: freshUser(), conversationId: 'conv-1' });
 
-    await hooks.onFinish({ prompt: 'Hi', persistUserPrompt: false })({ text: 'Hello!' });
+    await hooks.onEnd({ prompt: 'Hi', persistUserPrompt: false })({ text: 'Hello!' });
 
     const [, turns] = fake.shortTerm.bulkAddMessages.mock.calls[0];
     expect(turns).toEqual([{ role: 'assistant', content: 'Hello!', metadata: undefined }]);
@@ -202,7 +191,7 @@ describe('onFinish — closure mode', () => {
     const hooks = createNamsHooks({ ...config, userId: freshUser(), conversationId: 'conv-1' });
     fake.shortTerm.bulkAddMessages.mockRejectedValue(new Error('bulk unsupported'));
 
-    await hooks.onFinish({ prompt: 'Hi' })({ text: 'Hello!' });
+    await hooks.onEnd({ prompt: 'Hi' })({ text: 'Hello!' });
 
     expect(fake.shortTerm.addMessage).toHaveBeenCalledTimes(2);
     expect(fake.shortTerm.addMessage).toHaveBeenNthCalledWith(1, 'conv-1', 'user', 'Hi', undefined);
@@ -213,7 +202,7 @@ describe('onFinish — closure mode', () => {
     const userId = freshUser();
     const hooks = createNamsHooks({ ...config, userId });
 
-    await hooks.onFinish({ prompt: 'Hi' })({ text: 'Hello!' });
+    await hooks.onEnd({ prompt: 'Hi' })({ text: 'Hello!' });
 
     expect(fake.shortTerm.createConversation).toHaveBeenCalledWith({ userId });
     const [convId] = fake.shortTerm.bulkAddMessages.mock.calls[0];
@@ -225,15 +214,15 @@ describe('onFinish — closure mode', () => {
     fake.shortTerm.bulkAddMessages.mockRejectedValue(new Error('down'));
     fake.shortTerm.addMessage.mockRejectedValue(new Error('down'));
 
-    await expect(hooks.onFinish({ prompt: 'Hi' })({ text: 'Hello!' })).resolves.toBeUndefined();
+    await expect(hooks.onEnd({ prompt: 'Hi' })({ text: 'Hello!' })).resolves.toBeUndefined();
   });
 });
 
-describe('onFinish — context mode', () => {
+describe('onEnd — context mode', () => {
   it('reads scope from runtimeContext and it wins over closure scope', async () => {
     const hooks = createNamsHooks({ ...config, userId: 'factory-user', conversationId: 'conv-factory' });
 
-    await hooks.onFinish({ prompt: 'closure prompt' })({
+    await hooks.onEnd({ prompt: 'closure prompt' })({
       text: 'Hello!',
       runtimeContext: { userId: 'ctx-user', conversationId: 'conv-ctx', prompt: 'ctx prompt' },
     });
@@ -246,7 +235,7 @@ describe('onFinish — context mode', () => {
   it('prefers finalStep.runtimeContext over the deprecated top-level field', async () => {
     const hooks = createNamsHooks(config);
 
-    await hooks.onFinish()({
+    await hooks.onEnd()({
       text: 'Hello!',
       runtimeContext: { userId: 'old', conversationId: 'conv-old', prompt: 'p' },
       finalStep: { runtimeContext: { userId: 'new', conversationId: 'conv-new', prompt: 'p' } },
@@ -258,7 +247,7 @@ describe('onFinish — context mode', () => {
 
   it('throws when neither closure scope nor context carries a userId', async () => {
     const hooks = createNamsHooks(config);
-    await expect(hooks.onFinish()({ text: 'Hello!' })).rejects.toThrow(/userId/);
+    await expect(hooks.onEnd()({ text: 'Hello!' })).rejects.toThrow(/userId/);
   });
 });
 
@@ -268,7 +257,7 @@ describe('createNams().hooks()', () => {
     const nams = createNams({ apiKey: 'test-key' });
     const session = nams.hooks({ userId, conversationId: 'conv-1' });
 
-    await session.onFinish({ prompt: 'Hi' })({ text: 'Hello!' });
+    await session.onEnd({ prompt: 'Hi' })({ text: 'Hello!' });
 
     const [convId] = fake.shortTerm.bulkAddMessages.mock.calls[0];
     expect(convId).toBe('conv-1');
@@ -277,11 +266,20 @@ describe('createNams().hooks()', () => {
 });
 
 describe('type compatibility', () => {
-  it('the built callback is assignable to the AI SDK onFinish slots', () => {
+  it('the built callback is assignable to the AI SDK onEnd slots', () => {
     const hooks = createNamsHooks({ ...config, userId: 'u' });
-    // Type check: fails to compile if our event type drifts from GenerateTextEndEvent.
-    type GenerateTextArgs = NonNullable<Parameters<typeof import('ai').generateText>[0]['onFinish']>;
-    const asGenerateTextOnFinish: GenerateTextArgs = hooks.onFinish();
-    expect(asGenerateTextOnFinish).toBeTypeOf('function');
+    // Type check: fails to compile if our event type drifts from the AI SDK end events.
+    type GenerateTextOnEnd = NonNullable<Parameters<typeof import('ai').generateText>[0]['onEnd']>;
+    type StreamTextOnEnd = NonNullable<Parameters<typeof import('ai').streamText>[0]['onEnd']>;
+    type AgentOnEnd = NonNullable<import('ai').ToolLoopAgentSettings['onEnd']>;
+    const asGenerateText: GenerateTextOnEnd = hooks.onEnd();
+    const asStreamText: StreamTextOnEnd = hooks.onEnd();
+    const asAgent: AgentOnEnd = hooks.onEnd();
+    expect([asGenerateText, asStreamText, asAgent].every(f => typeof f === 'function')).toBe(true);
+  });
+
+  it('keeps onFinish as a deprecated alias of onEnd', () => {
+    const hooks = createNamsHooks({ ...config, userId: 'u' });
+    expect(hooks.onFinish).toBe(hooks.onEnd);
   });
 });

@@ -26,7 +26,7 @@ program is also embedded verbatim on a documentation page; see
 | `src/provider-mode.ts` | Provider | `createNamsProvider`, `scope`, `maxMemories`, `persistInteractions` — swap the model, memory is transparent |
 | `src/middleware-mode.ts` | Middleware | `createNams().wrap(model, scope)` — wrap a model you already configured |
 | `src/tools-mode.ts` | Tools | `createNams().tools`, `enforceQueryMemory`, `ensureMemoryStored` — the model decides when to read/write memory |
-| `src/hooks-mode.ts` | Hooks | `createNams().hooks({ hooks })` — your code drives `prepare`/`onFinish`; lifecycle hooks cover all eight events |
+| `src/hooks-mode.ts` | Hooks | `createNams().hooks({ hooks })` — your code drives `prepare`/`onEnd`; lifecycle hooks cover all eight events |
 
 Each program reads `MEMORY_API_KEY` and throws a clear error if it is unset,
 reads the model id from `NAMS_DEMO_MODEL` (default `gpt-5.4-mini`), and prints

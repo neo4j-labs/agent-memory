@@ -209,3 +209,57 @@ jobs:
 
       - name: Verify packed artifact
         run: npm pack --dry-run
+
+  eve-memory-eval:
+    # Runs @neo4j-labs/nams-ai-provider/eve inside eve's own runtime.
+    name: eve memory eval (eve ${{ matrix.eve }})
+    runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.eve == 'latest' }}
+    defaults:
+      run:
+        working-directory: typescript/packages/vercel-ai-provider/examples/eve-memory-eval
+    strategy:
+      fail-fast: false
+      matrix:
+        eve: ['pinned', 'latest']
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          # eve requires Node.js 24 or newer.
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: |
+            typescript/package-lock.json
+            typescript/packages/vercel-ai-provider/package-lock.json
+
+      # The eval app installs the SDK and the provider from this checkout
+      # (file: links, packed by its .npmrc), so build both first.
+      - name: Build SDK
+        working-directory: typescript
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build provider
+        working-directory: typescript/packages/vercel-ai-provider
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install the eval app
+        run: npm install --no-audit --no-fund
+
+      - name: Switch to the latest eve release
+        if: matrix.eve == 'latest'
+        run: npm install --no-audit --no-fund --no-save eve@latest
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Run the eval
+        run: |
+          echo "eve $(node -p "require('./node_modules/eve/package.json').version")"
+          npx eve eval

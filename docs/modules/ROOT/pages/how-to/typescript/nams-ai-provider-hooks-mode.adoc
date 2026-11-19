@@ -10,7 +10,7 @@ equivalent for a self-managed Neo4j database.
 
 Hooks mode takes the model out of the memory loop entirely: your code loads
 the session transcript before every generation and saves it after
-(`prepare`/`onFinish`), so nothing memory-related appears in the tool schema
+(`prepare`/`onEnd`), so nothing memory-related appears in the tool schema
 and every turn is captured exactly once, regardless of what the model
 decides. Lifecycle hooks add control around that cycle — block a prompt, deny
 a tool call, rewrite a result, redact a write, retry a flaky tool, add
@@ -33,7 +33,7 @@ Prerequisites:
 ----
 npm init -y   # only if the directory has no package.json yet
 npm pkg set type=module
-npm install @neo4j-labs/nams-ai-provider@0.4.0 @neo4j-labs/agent-memory@0.6.0 ai@^7 @ai-sdk/openai@^4 zod@^4
+npm install @neo4j-labs/nams-ai-provider@0.5.1 @neo4j-labs/agent-memory@0.6.0 ai@^7 @ai-sdk/openai@^4 zod@^4
 npm install --save-dev tsx
 ----
 
@@ -44,7 +44,7 @@ npm install --save-dev tsx
 ----
 /**
  * Lifecycle hooks mode: your code loads and saves the session transcript
- * around every generation (`prepare` / `onFinish`); nothing memory-related is
+ * around every generation (`prepare` / `onEnd`); nothing memory-related is
  * shown to the model. Lifecycle hooks add control around that. The four turns
  * below exercise all eight events. SessionStart and SessionEnd run once per
  * session; UserPromptSubmit, PreMemoryWrite and Stop run on every turn; the
@@ -68,7 +68,7 @@ import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { createNams, type NamsHookConfig } from '@neo4j-labs/nams-ai-provider';
 import { openai } from '@ai-sdk/openai';
-import { ToolLoopAgent, stepCountIs, tool, type LanguageModel } from 'ai';
+import { ToolLoopAgent, isStepCount, tool, type LanguageModel } from 'ai';
 import { z } from 'zod';
 
 const userId = process.env.NAMS_DEMO_USER ?? 'demo-user-hooks-mode';
@@ -106,7 +106,7 @@ export async function hooksModeDemo(buildModel: (id: string) => LanguageModel = 
     SessionEnd: [({ reason }) => { console.log(`   [hook] session ended (${reason})`); }],
   };
   const nams = createNams({ apiKey, endpoint: process.env.MEMORY_ENDPOINT, workspaceId: process.env.MEMORY_WORKSPACE_ID });
-  const session = nams.hooks({ userId, hooks }); // one instance: prepare + onFinish share a client
+  const session = nams.hooks({ userId, hooks }); // one instance: prepare + onEnd share a client
   const get_weather = tool({
     description: 'Current weather for a city',
     inputSchema: z.object({ city: z.string() }),
@@ -138,8 +138,8 @@ export async function hooksModeDemo(buildModel: (id: string) => LanguageModel = 
       instructions: [INSTRUCTIONS, options?.memoryContext].filter(Boolean).join('\n\n'),
       runtimeContext: options,
     }),
-    onFinish: session.onFinish(),
-    stopWhen: stepCountIs(5),
+    onEnd: session.onEnd(),
+    stopWhen: isStepCount(5),
   });
   async function turn(label: string, message: string): Promise<string> {
     console.log(`\n--- ${label}`);
@@ -184,7 +184,7 @@ reference] lists every event's input and output fields and the matcher,
 timeout, and failure rules.
 
 .The eight NAMS hook lifecycle events around one generation, and which ones have no matcher.
-image::diagrams/nams-ai-provider-hooks.svg["Sequence diagram of the eight NAMS hook lifecycle events around one generation: prepare() triggers SessionStart then the matcherless UserPromptSubmit, which can block or rewrite the prompt; the app calls the model; withHooks() wraps each tool call with PreToolUse (allow or deny, rewrite the input) and, after it settles, PostToolUse or PostToolUseFailure (rewrite the output, or retry once on attempt 1); onFinish() runs the matcherless PreMemoryWrite (block or rewrite the turns) before persisting, then the matcherless Stop; SessionEnd fires when the app calls end(). A footer notes a hook that throws or times out is logged and skipped, never breaking the generation.",width=100%,link=self]
+image::diagrams/nams-ai-provider-hooks.svg["Sequence diagram of the eight NAMS hook lifecycle events around one generation: prepare() triggers SessionStart then the matcherless UserPromptSubmit, which can block or rewrite the prompt; the app calls the model; withHooks() wraps each tool call with PreToolUse (allow or deny, rewrite the input) and, after it settles, PostToolUse or PostToolUseFailure (rewrite the output, or retry once on attempt 1); onEnd() runs the matcherless PreMemoryWrite (block or rewrite the turns) before persisting, then the matcherless Stop; SessionEnd fires when the app calls end(). A footer notes a hook that throws or times out is logged and skipped, never breaking the generation.",width=100%,link=self]
 
 . `redact(text)` replaces anything that looks like a 13–16 digit card number
   with `[redacted card]`; two different hooks call it below.
@@ -216,7 +216,7 @@ image::diagrams/nams-ai-provider-hooks.svg["Sequence diagram of the eight NAMS h
 --
 . `createNams({ apiKey, endpoint, workspaceId })` builds the memory client,
   then `nams.hooks({ userId, hooks })` returns one session handle — `prepare`
-  and `onFinish` below share it, so they share the same pending-context
+  and `onEnd` below share it, so they share the same pending-context
   queue and session-started bookkeeping. No `conversationId` is passed, so
   the handle continues the user's most recent NAMS conversation and creates
   one only if the user has none.
@@ -233,11 +233,12 @@ image::diagrams/nams-ai-provider-hooks.svg["Sequence diagram of the eight NAMS h
   per-call options shape.
 * `prepareCall` folds `options.memoryContext` (the hooks'
   `additionalContext`) into `instructions`, and copies `options` onto
-  `runtimeContext` so `onFinish` can read the scope for this call. The AI
+  `runtimeContext` so `onEnd` can read the scope for this call. The AI
   SDK rejects system messages inside `messages`, which is why hook context
   travels through `instructions` instead.
-* `onFinish: session.onFinish()` — persists every turn once the tool loop
-  finishes.
+* `onEnd: session.onEnd()` — persists every turn once the tool loop
+  finishes. `onEnd()` is named after the AI SDK 7 callback; the pre-0.5.1
+  `onFinish()` still works as a deprecated alias.
 --
 . Define a `turn(label, message)` helper:
 +
@@ -312,7 +313,7 @@ Check three things:
   turn 4 has no tool call, so it saves two.
 * The card number typed in turn 4 never reaches NAMS unredacted.
   `UserPromptSubmit` rewrote the prompt before the model saw it, and that
-  rewritten prompt is the one `onFinish` saves.
+  rewritten prompt is the one `onEnd` saves.
 
 == See also
 

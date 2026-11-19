@@ -1,16 +1,4 @@
-/**
- * retrieveMemories search fallback. NAMS search is a case-sensitive substring
- * match, so a full question rarely matches.
- *
- * Checks:
- *  - a direct search with results is used as-is
- *  - an empty direct search retries each word, as typed and in Title Case,
- *    without end punctuation or a possessive 's
- *  - fallback results are sorted by word overlap with the query
- *  - fallback errors are swallowed
- *  - entities come from the user's own memory, shared ones only when asked,
- *    and other users' never
- */
+/** retrieveMemories. NAMS search is a case-sensitive substring match, hence the word-by-word fallback. */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeFakeClient, type FakeClient } from './vercel-ai-provider-helpers';
@@ -48,7 +36,7 @@ describe('retrieveMemories — substring-search fallback', () => {
     // Both "delhi" and "Delhi" are tried.
     expect(fake.longTerm.searchEntities).toHaveBeenCalledWith('delhi', expect.anything());
     expect(fake.longTerm.searchEntities).toHaveBeenCalledWith('Delhi', expect.anything());
-    expect(hits).toContainEqual(expect.objectContaining({ content: 'Fact — User is from Delhi.' }));
+    expect(hits).toContainEqual(expect.objectContaining({ content: 'Fact (fact) — User is from Delhi.' }));
   });
 
   it('ranks noisy fallback candidates by word overlap with the original query', async () => {
@@ -64,8 +52,8 @@ describe('retrieveMemories — substring-search fallback', () => {
     const hits = await retrieveMemories(fake as any, scope, 'conv-1', 'is the user from Delhi', 5);
 
     const contents = hits.map(h => h.content);
-    expect(contents.indexOf('e2 — User is from Delhi.'))
-      .toBeLessThan(contents.indexOf("e1 — User's name is Alex."));
+    expect(contents.indexOf('e2 (fact) — User is from Delhi.'))
+      .toBeLessThan(contents.indexOf("e1 (fact) — User's name is Alex."));
   });
 
   it('does not throw when both the direct search and a fallback term reject', async () => {
@@ -99,7 +87,7 @@ describe('retrieveMemories — substring-search fallback', () => {
     expect(fallbackQueries).toContain('Alex');
     expect(fallbackQueries).toContain("O'Brien");
     expect(fallbackQueries.filter(q => /['’]s$/.test(q))).toEqual([]);
-    expect(hits).toContainEqual(expect.objectContaining({ content: 'Alex — The user.' }));
+    expect(hits).toContainEqual(expect.objectContaining({ content: 'Alex (person) — The user.' }));
   });
 
   it('lower-cases the rest of the Title Case variant, so "NEOVIM" finds Neovim', async () => {
@@ -111,7 +99,7 @@ describe('retrieveMemories — substring-search fallback', () => {
 
     const queries = fake.longTerm.searchEntities.mock.calls.map(c => c[0]);
     expect(queries).toEqual(expect.arrayContaining(['NEOVIM', 'Neovim']));
-    expect(hits).toContainEqual(expect.objectContaining({ content: 'Neovim — A text editor.' }));
+    expect(hits).toContainEqual(expect.objectContaining({ content: 'Neovim (tool) — A text editor.' }));
   });
 
   it('skips the fallback entirely when the query has no significant words', async () => {
@@ -122,29 +110,37 @@ describe('retrieveMemories — substring-search fallback', () => {
   });
 });
 
-/**
- * An entity's name holds the fact. Its description is only its role
- * ("Preferred language"), so a hit must include the name.
- */
+/** The name holds the fact and the description only its role, so a hit must include the name. */
 describe('retrieveMemories — long-term hits carry the entity name', () => {
-  it('renders name and description together', async () => {
+  it('renders name, type and description together', async () => {
     fake.longTerm.searchEntities.mockResolvedValue([
       { name: 'Python', description: 'Preferred language', type: 'ProgrammingLanguage', userId: 'u1' },
     ]);
 
     const hits = await retrieveMemories(fake as any, scope, 'conv-1', 'Preferred language', 5);
 
-    expect(hits[0].content).toBe('Python — Preferred language');
+    expect(hits[0].content).toBe('Python (ProgrammingLanguage) — Preferred language');
   });
 
-  it('falls back to the bare name when the entity has no description', async () => {
+  it('falls back to name and type when the entity has no description', async () => {
     fake.longTerm.searchEntities.mockResolvedValue([
       { name: 'Bangalore', type: 'Location', userId: 'u1' },
     ]);
 
     const hits = await retrieveMemories(fake as any, scope, 'conv-1', 'Bangalore', 5);
 
-    expect(hits[0].content).toBe('Bangalore');
+    expect(hits[0].content).toBe('Bangalore (Location)');
+  });
+
+  it('leaves the type out when the entity has none', async () => {
+    fake.longTerm.searchEntities.mockResolvedValue([
+      { name: 'Python', description: 'Preferred language', userId: 'u1' },
+      { name: 'Rust', description: 'Learning it', type: ' ', userId: 'u1' },
+    ]);
+
+    const hits = await retrieveMemories(fake as any, scope, 'conv-1', 'language', 5);
+
+    expect(hits.map(h => h.content)).toEqual(['Python — Preferred language', 'Rust — Learning it']);
   });
 
   it('lets name tokens participate in fallback overlap ranking', async () => {
@@ -160,8 +156,8 @@ describe('retrieveMemories — long-term hits carry the entity name', () => {
     const hits = await retrieveMemories(fake as any, scope, 'conv-1', 'do i prefer Python', 5);
     const contents = hits.map(h => h.content);
 
-    expect(contents.indexOf('Python — A language the user prefers'))
-      .toBeLessThan(contents.indexOf('Rust — A language the user prefers'));
+    expect(contents.indexOf('Python (lang) — A language the user prefers'))
+      .toBeLessThan(contents.indexOf('Rust (lang) — A language the user prefers'));
   });
 
   it('keeps distinct entities that happen to share a description', async () => {
@@ -173,8 +169,8 @@ describe('retrieveMemories — long-term hits carry the entity name', () => {
     const hits = await retrieveMemories(fake as any, scope, 'conv-1', 'Preferred language', 5);
 
     expect(hits.map(h => h.content)).toEqual([
-      'Python — Preferred language',
-      'TypeScript — Preferred language',
+      'Python (lang) — Preferred language',
+      'TypeScript (lang) — Preferred language',
     ]);
   });
 });
@@ -214,10 +210,7 @@ describe('retrieveMemories — cross-session search', () => {
   });
 });
 
-/**
- * Entity search returns entities without their edges, so the relationships
- * NAMS stored are only in the prompt if they are read back.
- */
+/** Search returns entities without edges, so stored relationships must be read back. */
 describe('retrieveMemories — graph expansion', () => {
   const alex = { id: 'ent-alex', name: 'Alex', description: 'The user', type: 'person', userId: 'u1' };
 
@@ -240,6 +233,37 @@ describe('retrieveMemories — graph expansion', () => {
     expect(hits).toContainEqual(
       expect.objectContaining({ content: '(Alex)-[USES]->(Neovim)' }),
     );
+  });
+
+  it('writes an inbound relationship from the other entity, as NAMS stored it', async () => {
+    fake.longTerm.searchEntities.mockResolvedValue([{ ...alex, id: 'ent-techcorp', name: 'TechCorp' }]);
+    fake.longTerm.getEntity.mockResolvedValue({
+      id: 'ent-techcorp',
+      name: 'TechCorp',
+      relationships: [
+        { id: 'r0', type: 'WORKS_AT', direction: 'in', targetId: 'ent-alex', targetName: 'Alex' },
+        { id: 'r1', type: 'LOCATED_IN', direction: 'out', targetId: 'ent-oslo', targetName: 'Oslo' },
+      ],
+    });
+
+    const hits = await retrieveMemories(fake as any, scope, 'conv-1', 'TechCorp', 5);
+
+    expect(hits).toContainEqual(expect.objectContaining({ content: '(Alex)-[WORKS_AT]->(TechCorp)' }));
+    expect(hits).toContainEqual(expect.objectContaining({ content: '(TechCorp)-[LOCATED_IN]->(Oslo)' }));
+  });
+
+  it('names a relationship by its predicate when NAMS stored the type as RELATED_TO', async () => {
+    fake.longTerm.searchEntities.mockResolvedValue([alex]);
+    fake.longTerm.getEntity.mockResolvedValue({
+      ...alex,
+      relationships: [
+        { id: 'r0', type: 'RELATED_TO', predicate: 'MENTORS', targetId: 't0', targetName: 'Sam' },
+      ],
+    });
+
+    const hits = await retrieveMemories(fake as any, scope, 'conv-1', 'Alex', 5);
+
+    expect(hits).toContainEqual({ content: '(Alex)-[MENTORS]->(Sam)', source: 'graph', type: 'MENTORS' });
   });
 
   it('names the subject by its canonical name, so both spellings share one graph', async () => {
@@ -312,16 +336,12 @@ describe('retrieveMemories — graph expansion', () => {
 
     expect(hits.some(h => h.source === 'graph')).toBe(false);
     expect(hits.map(h => h.content)).toEqual(
-      expect.arrayContaining(['Alex — The user', 'I use Neovim']),
+      expect.arrayContaining(['Alex (person) — The user', 'I use Neovim']),
     );
   });
 });
 
-/**
- * Sources are merged by taking turns. Entities used to be ordered ahead of
- * everything else by their stored confidence — which measures extraction, not
- * relevance — and crowded the current conversation out of a small budget.
- */
+/** Sources take turns, so high-confidence entities cannot crowd out the conversation. */
 describe('retrieveMemories — merging the sources', () => {
   const entities = (n: number, confidence?: number) =>
     Array.from({ length: n }, (_, i) => ({
@@ -369,15 +389,11 @@ describe('retrieveMemories — merging the sources', () => {
       graphExpansionLimit: 0,
     });
 
-    expect(hits.map(h => h.content)).toEqual(['first', 'second']);
+    expect(hits.map(h => h.content)).toEqual(['first (fact)', 'second (fact)']);
   });
 });
 
-/**
- * NAMS files the entities it extracts from a conversation under the conversation's
- * userId. The fake below returns every user's entities (the worst case), so these
- * checks hold even when the server-side filter is missing.
- */
+/** The fake returns every user's entities (worst case), so these hold without a server-side filter. */
 describe("retrieveMemories — the user's own entities", () => {
   const everyones = [
     { id: 'e-mine', name: 'Lisbon', description: 'Where u1 is moving', type: 'place', userId: 'u1' },
@@ -394,7 +410,7 @@ describe("retrieveMemories — the user's own entities", () => {
     const contents = hits.map(h => h.content);
 
     expect(fake.longTerm.searchEntities.mock.calls.map(c => c[1])).toEqual([{ limit: 5, userId: 'u1' }]);
-    expect(contents).toContain('Lisbon — Where u1 is moving');
+    expect(contents).toContain('Lisbon (place) — Where u1 is moving');
     expect(contents.join('\n')).not.toMatch(/office|Tower/);
   });
 
@@ -408,7 +424,7 @@ describe("retrieveMemories — the user's own entities", () => {
     const hits = await retrieveMemories(fake as any, scope, 'conv-1', 'Lisbon', 5, { workspaceGraph: true });
     const contents = hits.map(h => h.content);
 
-    expect(contents).toEqual(expect.arrayContaining(['Lisbon — Where u1 is moving', 'Lisbon Tower — A landmark']));
+    expect(contents).toEqual(expect.arrayContaining(['Lisbon (place) — Where u1 is moving', 'Lisbon Tower (place) — A landmark']));
     expect(contents.join('\n')).not.toMatch(/office/);
     // A shared entity's edges can lead into other users' memory, so it is not expanded.
     expect(fake.longTerm.getEntity.mock.calls.map(c => c[0])).toEqual(['e-mine']);

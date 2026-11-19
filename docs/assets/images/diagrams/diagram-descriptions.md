@@ -231,10 +231,10 @@ application box, one per entry call:
 createNamsProvider createNams()  createNams()  createNams()
 (...)               .wrap(model,  .tools(scope)  .hooks(...)
 wraps                scope)       query_memory,  prepare, withHooks,
-languageModel                     store_memory    onFinish, end
+languageModel                     store_memory    onEnd, end
    |          |           |              |
 Automatic,  Automatic,  When the model   When your code calls
-every call  every call  calls a memory   prepare / onFinish
+every call  every call  calls a memory   prepare / onEnd
                         tool
    |          |           |              |
    +----------+-----+-----+--------------+
@@ -266,7 +266,7 @@ generation, in order, and which ones have nothing to match on
 ### Layout
 A vertical flow spine on the left (plain outlined boxes: `prepare() called`,
 `prepare() resolves messages`, `Your app calls the model`, `withHooks() wraps
-the tool call`, `Tool executes`, `Tool call settles`, `onFinish() builds the
+the tool call`, `Tool executes`, `Tool call settles`, `onEnd() builds the
 turns`, `Turns persisted to NAMS` [storage blue], `Generation finishes`,
 `Your app calls end()`), each linked top-to-bottom by a vertical arrow. A
 side column of eight neutral-grey hook boxes sits to the right, one per

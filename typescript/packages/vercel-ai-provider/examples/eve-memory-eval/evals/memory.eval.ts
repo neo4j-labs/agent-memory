@@ -10,7 +10,7 @@ const until = async (check: () => boolean, ms = 10_000) => {
 };
 
 export default defineEval<typeof config>({
-  description: "NAMS eve memory provider: remember, recall in a new session, search, capture.",
+  description: "NAMS eve memory provider: remember, recall in a new session, search, capture, forget.",
   timeoutMs: 180_000,
   async test(t) {
     const nams = t.context.nams;
@@ -27,16 +27,24 @@ export default defineEval<typeof config>({
         c.metadata.kind === "session" &&
         (nams.messages.get(c.id) ?? []).some((m) => m.content === "remember that I prefer aisle seats")));
     t.check(captured, equals(true));
+    // Each captured message carries the eve operation that wrote it, so a replay is not saved twice.
+    const tagged = nams.conversations
+      .filter((c) => c.metadata.kind === "session")
+      .flatMap((c) => nams.messages.get(c.id) ?? [])
+      .every((m) => typeof m.metadata.eveOperation === "string" && m.metadata.eveOperation.length > 0);
+    t.check(tagged, equals(true));
     const scoped = nams.conversations.every((c) => c.userId.startsWith("memscope1_"));
     t.check(scoped, equals(true));
     t.log(`conversations: ${JSON.stringify(nams.conversations.map((c) => ({ userId: c.userId.slice(0, 18), metadata: c.metadata })))}`);
 
-    // NAMS files what it extracts from a chat under the chat's userId. Stand in
-    // for that: one entity for this user, one for someone else.
+    // Stand in for NAMS extraction: one entity for this user, one for someone else.
     const scopeKey = nams.conversations[0]!.userId;
     const at = new Date().toISOString();
     nams.entities.push(
-      { id: "ent-1", name: "Aisle seat", type: "PREFERENCE", description: "Seat this user books", userId: scopeKey, createdAt: at },
+      {
+        id: "ent-1", name: "Aisle seat", type: "PREFERENCE", description: "Seat this user books", userId: scopeKey, createdAt: at,
+        relationships: [{ id: "rel-1", relationshipType: "RELATED_TO", predicate: "PREFERS", direction: "in", targetId: "ent-0", targetName: "Eval user" }],
+      },
       { id: "ent-2", name: "Window seat", type: "PREFERENCE", description: "Another user's seat", userId: "memscope1_someone-else", createdAt: at },
     );
 
@@ -45,22 +53,43 @@ export default defineEval<typeof config>({
     t.check(second.reply, includes("recalled:"));
     t.check(second.reply, includes("Prefers aisle seats"));
     t.check(second.reply, includes("From this user's knowledge graph"));
-    t.check(second.reply, includes("Aisle seat — Seat this user books"));
+    t.check(second.reply, includes("Aisle seat (PREFERENCE) — Seat this user books"));
+    // The relationships around the user's entity come too, in their stored direction.
+    t.check(second.reply, includes("(Eval user)-[PREFERS]->(Aisle seat)"));
     const leaked = (second.reply ?? "").includes("Window seat");
     t.check(leaked, equals(false));
     t.log(`recall reply: ${second.reply}`);
-
-    // Every entity search was scoped to this user.
     t.check(nams.entitySearches.length > 0, equals(true));
     t.check(nams.entitySearches.every((b) => b.userId === scopeKey), equals(true));
+    t.check(nams.messageSearches.every((b) => b.userId === scopeKey), equals(true));
+    t.log(`searches across the user's conversations: ${nams.messageSearches.length}`);
 
     // Search finds the note and the earlier chat.
     const third = await second.session.send("search my memory");
     t.calledTool("nams__search");
     t.check(third.reply, includes('"from":"saved note"'));
     t.check(third.reply, includes('"from":"earlier session"'));
-    t.check(third.reply, includes('"entities":["Aisle seat — Seat this user books"]'));
+    t.check(third.reply, includes('"entities":["Aisle seat (PREFERENCE) — Seat this user books"]'));
+    t.check(third.reply, includes('"relationships":["(Eval user)-[PREFERS]->(Aisle seat)"]'));
     t.log(`search reply: ${third.reply}`);
+
+    // Forget deletes the note and the user's entity, and nothing of anyone else's.
+    const fourth = await t.send("forget my seat preference");
+    t.calledTool("nams__forget");
+    t.check(fourth.reply, includes('"forgotten":true'));
+    const keptNote = nams.conversations.some((c) =>
+      c.metadata.kind === "notes" && (nams.messages.get(c.id) ?? []).some((m) => m.content === "Prefers aisle seats"));
+    t.check(keptNote, equals(false));
+    t.check(nams.entities.map((e) => e.id), equals(["ent-2"]));
+    t.log(`forget reply: ${fourth.reply}`);
+    t.log(`forget requests: ${JSON.stringify(nams.requests.filter((r) => r.startsWith("DELETE")))}`);
+
+    // A new session no longer recalls them. Earlier sessions keep their transcripts.
+    const fifth = await t.send("what do you know about me now?");
+    t.check(fifth.reply, includes("recalled:"));
+    t.check(/^Notes saved for this user:/m.test(fifth.reply ?? ""), equals(false));
+    t.check(/^- Aisle seat \(PREFERENCE\)/m.test(fifth.reply ?? ""), equals(false));
+    t.log(`after forget: ${fifth.reply}`);
 
     // NAMS turned nothing away.
     t.check(nams.rejected, equals([]));

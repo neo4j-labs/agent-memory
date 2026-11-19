@@ -1,6 +1,6 @@
 /**
  * Lifecycle hooks mode: your code loads and saves the session transcript
- * around every generation (`prepare` / `onFinish`); nothing memory-related is
+ * around every generation (`prepare` / `onEnd`); nothing memory-related is
  * shown to the model. Lifecycle hooks add control around that. The four turns
  * below exercise all eight events. SessionStart and SessionEnd run once per
  * session; UserPromptSubmit, PreMemoryWrite and Stop run on every turn; the
@@ -24,7 +24,7 @@ import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { createNams, type NamsHookConfig } from '@neo4j-labs/nams-ai-provider';
 import { openai } from '@ai-sdk/openai';
-import { ToolLoopAgent, stepCountIs, tool, type LanguageModel } from 'ai';
+import { ToolLoopAgent, isStepCount, tool, type LanguageModel } from 'ai';
 import { z } from 'zod';
 
 const userId = process.env.NAMS_DEMO_USER ?? 'demo-user-hooks-mode';
@@ -62,7 +62,7 @@ export async function hooksModeDemo(buildModel: (id: string) => LanguageModel = 
     SessionEnd: [({ reason }) => { console.log(`   [hook] session ended (${reason})`); }],
   };
   const nams = createNams({ apiKey, endpoint: process.env.MEMORY_ENDPOINT, workspaceId: process.env.MEMORY_WORKSPACE_ID });
-  const session = nams.hooks({ userId, hooks }); // one instance: prepare + onFinish share a client
+  const session = nams.hooks({ userId, hooks }); // one instance: prepare + onEnd share a client
   const get_weather = tool({
     description: 'Current weather for a city',
     inputSchema: z.object({ city: z.string() }),
@@ -94,8 +94,8 @@ export async function hooksModeDemo(buildModel: (id: string) => LanguageModel = 
       instructions: [INSTRUCTIONS, options?.memoryContext].filter(Boolean).join('\n\n'),
       runtimeContext: options,
     }),
-    onFinish: session.onFinish(),
-    stopWhen: stepCountIs(5),
+    onEnd: session.onEnd(),
+    stopWhen: isStepCount(5),
   });
   async function turn(label: string, message: string): Promise<string> {
     console.log(`\n--- ${label}`);

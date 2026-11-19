@@ -2,8 +2,9 @@ import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 
 interface Conversation { id: string; userId: string; metadata: Record<string, unknown>; createdAt: string; updatedAt: string }
-interface Message { id: string; role: string; content: string; createdAt: string }
-interface Entity { id: string; name: string; type: string; description?: string; userId: string; createdAt: string }
+interface Message { id: string; role: string; content: string; createdAt: string; metadata: Record<string, string> }
+interface Relationship { id: string; relationshipType: string; direction: "in" | "out"; predicate?: string; targetId: string; targetName: string }
+interface Entity { id: string; name: string; type: string; description?: string; userId: string; createdAt: string; relationships?: Relationship[] }
 
 async function readJson(req: IncomingMessage): Promise<any> {
   let raw = "";
@@ -17,29 +18,25 @@ const ACCEPTS: Record<string, string[]> = {
   messages: ["role", "content", "metadata"],
   bulk: ["messages"],
   search: ["query", "limit"],
+  messageSearch: ["query", "limit", "userId", "conversationId"],
   entitySearch: ["query", "type", "limit", "userId"],
 };
 
-/**
- * A small stand-in for the NAMS server, kept in memory.
- * Like the real one, it filters chats and entities by `userId` and rejects
- * unknown fields. It extracts nothing: a test adds entities to `entities`.
- */
+/** In-memory NAMS: filters by `userId`, rejects unknown fields, extracts nothing (tests add `entities`). */
 export async function startFakeNams() {
   const conversations: Conversation[] = [];
   const messages = new Map<string, Message[]>();
   const entities: Entity[] = [];
   const requests: string[] = [];
-  /** The body of every entity search. */
   const entitySearches: Record<string, unknown>[] = [];
-  /** Requests turned away for an unknown field. Should stay empty. */
+  const messageSearches: Record<string, unknown>[] = [];
   const rejected: string[] = [];
   let ids = 0;
   let clock = Date.UTC(2026, 9, 1);
   const now = () => new Date((clock += 1000)).toISOString();
 
-  const add = (id: string, role: string, content: string): Message => {
-    const message = { id: `msg-${++ids}`, role, content, createdAt: now() };
+  const add = (id: string, role: string, content: string, metadata: Record<string, string> = {}): Message => {
+    const message = { id: `msg-${++ids}`, role, content, createdAt: now(), metadata };
     messages.set(id, [...(messages.get(id) ?? []), message]);
     const conversation = conversations.find((c) => c.id === id);
     if (conversation) conversation.updatedAt = message.createdAt;
@@ -62,9 +59,37 @@ export async function startFakeNams() {
         return send(400, { error: `unknown field: ${unknown}` });
       }
       entitySearches.push(body);
-      // Like vector search, every entity in scope is a candidate.
-      const found = entities.filter((e) => !body.userId || e.userId === body.userId).slice(0, body.limit ?? 20);
+      // Like vector search, every entity in scope is a candidate. Search leaves relationships out.
+      const found = entities
+        .filter((e) => !body.userId || e.userId === body.userId)
+        .slice(0, body.limit ?? 20)
+        .map(({ relationships: _, ...e }) => e);
       return send(200, { entities: found, searchType: "vector" });
+    }
+    if (v1 === "v1" && collection === "entities" && id && !sub) {
+      const index = entities.findIndex((e) => e.id === id);
+      // Like the real server: with userId, another user's entity does not exist.
+      const userId = url.searchParams.get("userId");
+      if (index < 0 || (userId && entities[index].userId !== userId)) return send(404, { error: "no such entity" });
+      if (req.method === "GET") return send(200, { ...entities[index], relationships: entities[index].relationships ?? [] });
+      if (req.method === "DELETE") {
+        entities.splice(index, 1);
+        return send(200, { deleted: true });
+      }
+    }
+    if (v1 === "v1" && collection === "messages" && id === "search" && req.method === "POST") {
+      const unknown = Object.keys(body).find((f) => !ACCEPTS.messageSearch.includes(f));
+      if (unknown) {
+        rejected.push(`${req.method} ${url.pathname}: unknown field: ${unknown}`);
+        return send(400, { error: `unknown field: ${unknown}` });
+      }
+      messageSearches.push(body);
+      const found = conversations
+        .filter((c) => (!body.userId || c.userId === body.userId) && (!body.conversationId || c.id === body.conversationId))
+        .flatMap((c) => (messages.get(c.id) ?? []).map((m) => ({ ...m, conversationId: c.id })))
+        .filter((m) => m.content.includes(body.query))
+        .slice(0, body.limit ?? 20);
+      return send(200, { messages: found, searchType: "text" });
     }
     if (v1 !== "v1" || collection !== "conversations") return send(404, { error: "not found" });
 
@@ -80,6 +105,12 @@ export async function startFakeNams() {
       rejected.push(`${req.method} ${url.pathname}: unknown field: ${unknown}`);
       return send(400, { error: `unknown field: ${unknown}` });
     }
+    // Like the real server: message metadata holds string values only.
+    const sent = sub2 === "bulk" ? body.messages ?? [] : sub === "messages" ? [body] : [];
+    if (sent.some((m: { metadata?: Record<string, unknown> }) => Object.values(m.metadata ?? {}).some((v) => typeof v !== "string"))) {
+      rejected.push(`${req.method} ${url.pathname}: metadata values must be strings`);
+      return send(400, { error: "metadata values must be strings" });
+    }
 
     if (!id && req.method === "GET") {
       const userId = url.searchParams.get("userId");
@@ -92,14 +123,23 @@ export async function startFakeNams() {
       conversations.push(conversation);
       return send(201, { ...conversation, workspaceId: "ws-e2e" });
     }
-    if (!conversations.some((c) => c.id === id)) return send(404, { error: "no such conversation" });
+    const conversation = conversations.find((c) => c.id === id);
+    if (!conversation) return send(404, { error: "no such conversation" });
+    if (!sub && req.method === "GET") return send(200, { ...conversation, workspaceId: "ws-e2e" });
+    if (!sub && req.method === "DELETE") {
+      const purge = url.searchParams.get("purge");
+      if (purge !== null && purge !== "extracted") return send(400, { error: "invalid purge" });
+      conversations.splice(conversations.indexOf(conversation), 1);
+      messages.delete(id);
+      return send(200, { deleted: true });
+    }
     if (sub === "messages" && !sub2 && req.method === "GET") {
       const limit = Number(url.searchParams.get("limit") ?? 50);
       return send(200, { messages: (messages.get(id) ?? []).slice(-limit).reverse() });
     }
-    if (sub === "messages" && !sub2 && req.method === "POST") return send(201, add(id, body.role, body.content));
+    if (sub === "messages" && !sub2 && req.method === "POST") return send(201, add(id, body.role, body.content, body.metadata));
     if (sub === "messages" && sub2 === "bulk") {
-      return send(201, { messages: body.messages.map((m: Message) => add(id, m.role, m.content)) });
+      return send(201, { messages: body.messages.map((m: Message) => add(id, m.role, m.content, m.metadata)) });
     }
     if (sub === "search") {
       const found = (messages.get(id) ?? []).filter((m) => m.content.includes(body.query)).slice(0, body.limit ?? 10);
@@ -116,6 +156,7 @@ export async function startFakeNams() {
     messages,
     entities,
     entitySearches,
+    messageSearches,
     requests,
     rejected,
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),

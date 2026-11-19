@@ -1,13 +1,4 @@
-/**
- * Tools mode: the query_memory and store_memory tools.
- *
- * Checks:
- *  - query_memory returns found=true with hits, found=false when empty
- *  - store_memory(interaction) → short-term message
- *  - store_memory(fact) → long-term entity + confidence feedback
- *  - existing entities are reused, not duplicated
- *  - a storage failure returns stored=false instead of throwing
- */
+/** Tools mode: query_memory and store_memory. */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeFakeClient, type FakeClient, ownedBySearcher } from './vercel-ai-provider-helpers';
@@ -77,7 +68,7 @@ describe('query_memory', () => {
     expect(out.found).toBe(true);
     expect(out.count).toBe(2);
     // Sources take turns, in bucket order: the long-term hit, then the message.
-    expect(out.memories[0]).toMatchObject({ content: 'Alex — User is named Alex', source: 'long-term' });
+    expect(out.memories[0]).toMatchObject({ content: 'Alex (person) — User is named Alex', source: 'long-term', type: 'person' });
     expect(out.memories[1]).toMatchObject({ content: 'I love terse answers', source: 'conversation' });
   });
 
@@ -235,8 +226,7 @@ describe('store_memory', () => {
 });
 
 describe('enforceQueryMemory', () => {
-  // enforceQueryMemory only reads stepNumber and steps, so cast once instead
-  // of filling in every other prepareStep field.
+  // Only stepNumber and steps are read, so cast instead of filling in every field.
   type StepOptions = Parameters<ReturnType<typeof enforceQueryMemory>>[0];
 
   const stepOptions = (stepNumber: number, toolNames: string[][] = []) => ({

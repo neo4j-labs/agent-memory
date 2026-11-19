@@ -11,7 +11,7 @@
  *   MEMORY_API_KEY=nams_... OPENAI_API_KEY=sk-... npx tsx src/tools-mode.ts
  *
  * Expected output (arguments, steps and wording vary with the model). Each
- * ensureMemoryStored line is printed by onFinish inside agent.generate(), so
+ * ensureMemoryStored line is printed by onEnd inside agent.generate(), so
  * it appears above the header of its turn:
  *
  *   ensureMemoryStored: already-stored
@@ -36,7 +36,7 @@ import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { createNams, enforceQueryMemory, ensureMemoryStored } from '@neo4j-labs/nams-ai-provider';
 import { openai } from '@ai-sdk/openai';
-import { ToolLoopAgent, stepCountIs, type LanguageModel } from 'ai';
+import { ToolLoopAgent, isStepCount, type LanguageModel } from 'ai';
 
 const userId = process.env.NAMS_DEMO_USER ?? 'demo-user-tools-mode';
 const modelId = process.env.NAMS_DEMO_MODEL ?? 'gpt-5.4-mini';
@@ -71,12 +71,12 @@ export async function toolsModeDemo(
       instructions,
       tools,
       prepareStep: enforceQueryMemory(), // holds the model at query_memory until it has queried
-      onFinish: async event => {
+      onEnd: async event => {
         // Falls back to persisting the answer if store_memory was never called.
         const outcome = await ensureMemoryStored(tools)(event);
         console.log(`ensureMemoryStored: ${outcome.stored ? 'persisted the turn' : outcome.reason}`);
       },
-      stopWhen: stepCountIs(6),
+      stopWhen: isStepCount(6),
     });
 
     const result = await agent.generate({ prompt });

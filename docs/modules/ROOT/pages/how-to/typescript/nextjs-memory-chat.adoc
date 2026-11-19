@@ -42,7 +42,7 @@ Install from npm:
 
 [source,bash]
 ----
-npm install @neo4j-labs/nams-ai-provider@0.4.0 @neo4j-labs/agent-memory@0.6.0 \
+npm install @neo4j-labs/nams-ai-provider@0.5.1 @neo4j-labs/agent-memory@0.6.0 \
   ai@^7.0 @ai-sdk/openai@^4.0 @ai-sdk/react@^4.0 zod@^4.6.0 @neo4j-nvl/react@^1.2.1
 ----
 

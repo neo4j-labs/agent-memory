@@ -1,17 +1,4 @@
-/**
- * Lifecycle hooks.
- *
- * Checks:
- *  - matchers: empty/`*` match all, names match exactly, `|` lists
- *    alternatives, anything else is a regex, a bad regex never matches
- *  - a handler that throws or hangs is ignored, the rest still run
- *  - deny/block short-circuits the handlers after it
- *  - rewrites chain: each handler sees the previous one's replacement
- *  - prepare runs SessionStart once per scope, then UserPromptSubmit
- *  - withHooks denies, rewrites arguments, rewrites output, retries once
- *  - PreMemoryWrite can redact or drop a write
- *  - additionalContext from any event reaches the next prepare()
- */
+/** Lifecycle hooks: matchers, dispatch, rewrites and withHooks. */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeFakeClient, type FakeClient } from './vercel-ai-provider-helpers';
@@ -421,7 +408,7 @@ describe('PreMemoryWrite and Stop', () => {
       },
     });
 
-    await hooks.onFinish({ prompt: 'remember it' })(finishEvent);
+    await hooks.onEnd({ prompt: 'remember it' })(finishEvent);
 
     expect(fake.shortTerm.bulkAddMessages).toHaveBeenCalledWith(
       `conv-${userId}`,
@@ -439,7 +426,7 @@ describe('PreMemoryWrite and Stop', () => {
       hooks: { PreMemoryWrite: [() => ({ decision: 'block' as const, blockReason: 'no consent' })] },
     });
 
-    await hooks.onFinish({ prompt: 'remember it' })(finishEvent);
+    await hooks.onEnd({ prompt: 'remember it' })(finishEvent);
 
     expect(fake.shortTerm.bulkAddMessages).not.toHaveBeenCalled();
     expect(fake.shortTerm.addMessage).not.toHaveBeenCalled();
@@ -453,7 +440,7 @@ describe('PreMemoryWrite and Stop', () => {
       hooks: { Stop: [(input) => { seen.push(input); }] },
     });
 
-    await hooks.onFinish({ prompt: 'hi' })(finishEvent);
+    await hooks.onEnd({ prompt: 'hi' })(finishEvent);
 
     expect(seen[0].text).toBe('my card is 4111');
     expect(seen[0].turns).toHaveLength(2);

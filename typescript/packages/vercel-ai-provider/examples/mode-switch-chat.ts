@@ -1,19 +1,5 @@
-/**
- * Mode switch demo. NAMS_MODE picks how memory is added:
- *
- *   NAMS_MODE=provider    wraps the provider                 (automatic)
- *   NAMS_MODE=middleware  wraps the model                    (automatic)
- *   NAMS_MODE=tools       query_memory / store_memory tools  (model decides)
- *   NAMS_MODE=hooks       load before, save after            (your code decides)
- *
- * Run with:
- *
- *   NAMS_MODE=hooks MEMORY_API_KEY=sk-nams-... OPENAI_API_KEY=sk-... \
- *     npx tsx examples/mode-switch-chat.ts
- *
- * Each mode teaches a fact, then recalls it. All modes share one backend, so
- * memories carry over when you switch.
- */
+// One chat, four modes: NAMS_MODE=provider|middleware|tools|hooks. Memories carry over between modes.
+// Run: NAMS_MODE=hooks MEMORY_API_KEY=sk-nams-... OPENAI_API_KEY=sk-... npx tsx examples/mode-switch-chat.ts
 
 import { openai } from '@ai-sdk/openai';
 import { ToolLoopAgent, isStepCount } from 'ai';
@@ -101,7 +87,7 @@ function buildChat(): Chat {
           ],
           runtimeContext: options,
         }),
-        onEnd: session.onFinish(),
+        onEnd: session.onEnd(),
         stopWhen: isStepCount(6),
       });
       return {

@@ -33,7 +33,7 @@ Prerequisites:
 ----
 npm init -y   # only if the directory has no package.json yet
 npm pkg set type=module
-npm install @neo4j-labs/nams-ai-provider@0.4.0 @neo4j-labs/agent-memory@0.6.0 ai@^7 @ai-sdk/openai@^4 zod@^4
+npm install @neo4j-labs/nams-ai-provider@0.5.1 @neo4j-labs/agent-memory@0.6.0 ai@^7 @ai-sdk/openai@^4 zod@^4
 npm install --save-dev tsx
 ----
 
@@ -55,7 +55,7 @@ npm install --save-dev tsx
  *   MEMORY_API_KEY=nams_... OPENAI_API_KEY=sk-... npx tsx src/tools-mode.ts
  *
  * Expected output (arguments, steps and wording vary with the model). Each
- * ensureMemoryStored line is printed by onFinish inside agent.generate(), so
+ * ensureMemoryStored line is printed by onEnd inside agent.generate(), so
  * it appears above the header of its turn:
  *
  *   ensureMemoryStored: already-stored
@@ -80,7 +80,7 @@ import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { createNams, enforceQueryMemory, ensureMemoryStored } from '@neo4j-labs/nams-ai-provider';
 import { openai } from '@ai-sdk/openai';
-import { ToolLoopAgent, stepCountIs, type LanguageModel } from 'ai';
+import { ToolLoopAgent, isStepCount, type LanguageModel } from 'ai';
 
 const userId = process.env.NAMS_DEMO_USER ?? 'demo-user-tools-mode';
 const modelId = process.env.NAMS_DEMO_MODEL ?? 'gpt-5.4-mini';
@@ -115,12 +115,12 @@ export async function toolsModeDemo(
       instructions,
       tools,
       prepareStep: enforceQueryMemory(), // holds the model at query_memory until it has queried
-      onFinish: async event => {
+      onEnd: async event => {
         // Falls back to persisting the answer if store_memory was never called.
         const outcome = await ensureMemoryStored(tools)(event);
         console.log(`ensureMemoryStored: ${outcome.stored ? 'persisted the turn' : outcome.reason}`);
       },
-      stopWhen: stepCountIs(6),
+      stopWhen: isStepCount(6),
     });
 
     const result = await agent.generate({ prompt });
@@ -182,17 +182,17 @@ if (entry && import.meta.url === pathToFileURL(realpathSync(entry)).href) {
 --
 * `nams.tools({ userId })` returns `{ query_memory, store_memory }`.
 * `new ToolLoopAgent({ model, instructions, tools, prepareStep:
-  enforceQueryMemory(), onFinish, stopWhen: stepCountIs(6) })`.
+  enforceQueryMemory(), onEnd, stopWhen: isStepCount(6) })`.
   `enforceQueryMemory()` is passed with no options, so it uses its default
   `graceSteps: 3`: it holds the model at `toolChoice: 'required'` until
   `query_memory` has run, then forces `query_memory` directly if it still
   hasn't run by step 3.
-* `onFinish` calls `ensureMemoryStored(tools)(event)` and logs whether it
+* `onEnd` calls `ensureMemoryStored(tools)(event)` and logs whether it
   persisted the turn or why it did not — the fallback for when the model
   answered without ever calling `store_memory`. By default it saves the
   final answer as an `interaction`. It must receive the exact `tools` object
   `nams.tools()` returned; a spread copy (`+{ ...tools }+`) throws.
-* `agent.generate({ prompt })` runs the loop, and `onFinish` runs inside it.
+* `agent.generate({ prompt })` runs the loop, and `onEnd` runs inside it.
   The program then logs each step, labelled with whether `query_memory` had
   already run before that step (`enforced: some tool required` until it has,
   `unconstrained` after), and the step's tool calls, and finally the
@@ -250,7 +250,7 @@ step 1 [unconstrained]
 assistant: You use Neovim, and you like short answers.
 ----
 
-Each `ensureMemoryStored` line is printed by `onFinish`, which runs inside
+Each `ensureMemoryStored` line is printed by `onEnd`, which runs inside
 `agent.generate()`, so it appears above the header of the turn it belongs
 to. In turn 1 the model called `store_memory` itself (`already-stored`). In
 turn 2 it only queried, so `ensureMemoryStored` saved the answer

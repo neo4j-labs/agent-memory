@@ -1,7 +1,4 @@
-/**
- * Graph extraction. Extracted entities and relationships are saved with
- * addEntity(name, type, options) and addRelationship(sourceId, targetId, type).
- */
+/** Graph extraction: entities via addEntity, edges via addRelationship. */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeFakeClient, type FakeClient } from './vercel-ai-provider-helpers';
@@ -73,10 +70,7 @@ describe('createGraphExtractor', () => {
     expect(fake.longTerm.addRelationship).not.toHaveBeenCalled();
   });
 
-  /**
-   * With @neo4j-labs/agent-memory 0.4.x, relationships have no REST route, so
-   * every edge fails the same way. It should log once, not once per edge.
-   */
+  /** SDK 0.4.x has no relationship route, so every edge fails the same way. */
   it('logs an unsupported relationship backend once, not once per edge', async () => {
     const warn = vi.fn();
     const notSupported = Object.assign(new Error('no equivalent in the hosted API'), {
@@ -316,11 +310,7 @@ describe('createGraphExtractor — self-referential guard', () => {
   });
 });
 
-/**
- * Hosted NAMS has no get_entity_by_name route, so an already-stored entity is
- * found through search instead. Search is nearest-neighbour, so only an exact
- * name counts — a near match is a different entity, not a duplicate.
- */
+/** Hosted NAMS has no get_entity_by_name, so search is used, and only an exact name counts. */
 describe('createGraphExtractor — finding a stored entity without get_entity_by_name', () => {
   beforeEach(() => {
     fake.longTerm.getEntityByName.mockRejectedValue(new Error('unsupported on this backend'));

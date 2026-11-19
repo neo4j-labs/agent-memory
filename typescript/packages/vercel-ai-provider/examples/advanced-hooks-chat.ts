@@ -1,18 +1,5 @@
-/**
- * Lifecycle hooks demo. Each stage of the turn runs a hook:
- *
- *   SessionStart       adds a note about the user
- *   UserPromptSubmit   redacts card numbers before the model sees them
- *   PreToolUse         denies the destructive tool
- *   PostToolUse        carries a note into the next turn
- *   PreMemoryWrite     redacts again, before anything reaches the graph
- *   Stop               logs what was saved
- *   SessionEnd         runs on shutdown
- *
- * Run from the package root, with MEMORY_API_KEY and OPENAI_API_KEY set:
- *
- *   npx tsx --env-file=.env examples/advanced-hooks-chat.ts
- */
+// Lifecycle hooks: redact card numbers, deny a tool, add context, log saves.
+// Run (MEMORY_API_KEY and OPENAI_API_KEY in .env): npx tsx --env-file=.env examples/advanced-hooks-chat.ts
 
 import { openai } from '@ai-sdk/openai';
 import { ToolLoopAgent, isStepCount, tool } from 'ai';
@@ -104,7 +91,7 @@ const agent = new ToolLoopAgent({
     runtimeContext: options,
   }),
 
-  onEnd: session.onFinish(),
+  onEnd: session.onEnd(),
 
   stopWhen: isStepCount(5),
 });

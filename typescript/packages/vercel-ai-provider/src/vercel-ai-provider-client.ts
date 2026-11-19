@@ -95,13 +95,22 @@ export function makeClient(config: NamsConfig): MemoryClient {
   return client;
 }
 
+/** The client with requests cancelled by `signal`. SDK 0.6.0 has no `withSignal` and gets the client as-is. */
+export function withSignal(client: MemoryClient, signal: AbortSignal | undefined): MemoryClient {
+  const bind = (client as { withSignal?: (signal: AbortSignal) => MemoryClient }).withSignal;
+  if (!signal || typeof bind !== 'function') return client;
+  const bound = bind.call(client, signal);
+  stateByClient.set(bound, getState(client));
+  return bound;
+}
+
 // Conversation resolution
 
 function cacheKey(config: NamsConfig, userId: string): string {
   return `${config.workspaceId ?? 'default'}:${userId}`;
 }
 
-/** The conversation id */
+/** The user's conversation id: the given one, else the latest, else a new one. */
 export async function resolveConversation(
   client: MemoryClient,
   config: NamsConfig,
@@ -133,7 +142,7 @@ export async function resolveConversation(
   return conv.id;
 }
 
-/** Like `resolveConversation`, but never creates one.*/
+/** Like `resolveConversation`, but never creates one. */
 export async function findExistingConversation(
   client: MemoryClient,
   config: NamsConfig,
@@ -188,11 +197,24 @@ function entityContent(e: { name?: string; description?: string }): string {
   return name || description || '';
 }
 
-/**
- * Read the relationships around the entities that matched. Search returns entities without
- * them. With `userId`, NAMS returns only relationships to that user's entities.
- */
-async function expandEntityGraph(
+/** Max characters of one memory line shown to the model. */
+export const MEMORY_LINE_CHARS = 400;
+
+/** One capped line with `&` and `<` escaped, so stored text cannot close the memory tag. `>` stays for `->`. */
+export function memoryLine(text: string): string {
+  const compact = text.replace(/\s+/g, ' ').trim();
+  const capped = compact.length > MEMORY_LINE_CHARS ? `${compact.slice(0, MEMORY_LINE_CHARS - 1)}…` : compact;
+  return capped.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+}
+
+export function entityLine(e: { name?: string; type?: string; description?: string }): string {
+  const name = e.name?.trim();
+  const type = e.type?.trim();
+  return entityContent({ name: name && type ? `${name} (${type})` : name, description: e.description });
+}
+
+/** The relationships around the matched entities, as triples. Search returns entities without them. */
+export async function expandEntityGraph(
   client: MemoryClient,
   entities: Entity[],
   maxEntities: number,
@@ -213,13 +235,14 @@ async function expandEntityGraph(
       if (!from) return [];
 
       return (detail?.relationships ?? [])
-        .filter(ref => ref.type?.trim() && ref.targetName?.trim())
+        .filter(ref => (ref.predicate?.trim() || ref.type?.trim()) && ref.targetName?.trim())
         .slice(0, RETRIEVAL.maxTriples)
-        .map((ref): MemoryHit => ({
-          content: `(${from})-[${ref.type.trim()}]->(${ref.targetName!.trim()})`,
-          source: 'graph',
-          type: ref.type.trim(),
-        }));
+        .map((ref): MemoryHit => {
+          const label = ref.predicate?.trim() || ref.type.trim();
+          const other = ref.targetName!.trim();
+          const [head, tail] = ref.direction === 'in' ? [other, from] : [from, other];
+          return { content: `(${head})-[${label}]->(${tail})`, source: 'graph', type: label };
+        });
     }),
   );
 
@@ -317,11 +340,7 @@ export async function searchWithFallback<T>(
   return rankByOverlap(merged, query, contentOf);
 }
 
-/**
- * Entities matching `query` from the user's memory: the ones NAMS extracted from their
- * conversations, and the ones stored for them. With `workspaceGraph`, also the shared ones,
- * which belong to no user. Another user's entities are never returned.
- */
+/** The user's matching entities, plus shared ones with `workspaceGraph`. Never another user's. */
 export async function searchUserEntities(
   client: MemoryClient,
   query: string,
@@ -433,7 +452,7 @@ export async function retrieveMemories(
 
   for (const e of longHits) {
     deduplicatePush(entityHits, seen, {
-      content: entityContent(e),
+      content: entityLine(e),
       source: 'long-term',
       type: e.type ?? 'entity',
       score: e.confidence,
@@ -468,9 +487,7 @@ function entityName(content: string, max = 60): string {
 const sameText = (a: string | undefined, b: string): boolean =>
   a?.trim().toLowerCase() === b.trim().toLowerCase();
 
-/**
- * The stored entity with this name and type, or null.
- */
+/** The stored entity with this name and type, or null. */
 export async function findEntity(
   client: MemoryClient,
   name: string,
@@ -492,10 +509,7 @@ export async function findEntity(
   return candidates.find(matchesWanted) ?? null;
 }
 
-/**
- * Save a memory: an `interaction` to the conversation, anything else to the graph. With
- * `userId`, graph entities go in that user's memory; without it they are shared.
- */
+/** Save an `interaction` as a message, anything else as an entity (shared when there is no `userId`). */
 export async function storeMemory(
   client: MemoryClient,
   convId: string,

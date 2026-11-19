@@ -58,12 +58,14 @@ export interface NamsToolBlocked {
   reason: string;
 }
 
-export interface OnFinishScope {
+export interface OnEndScope {
   userId?: string;
   conversationId?: string;
   prompt?: string | ModelMessage[];
   persistUserPrompt?: boolean;
 }
+
+export type OnFinishScope = OnEndScope;
 
 // Plain shapes, so one callback works with ToolLoopAgent, generateText and streamText.
 
@@ -72,15 +74,21 @@ interface ResponseMessageLike {
   content: unknown;
 }
 
-export interface NamsOnFinishEvent {
+export interface NamsOnEndEvent {
   readonly text?: string;
   readonly responseMessages?: ReadonlyArray<ResponseMessageLike>;
   readonly runtimeContext?: unknown;
   readonly finalStep?: { readonly runtimeContext?: unknown };
 }
 
-/** The callback built by `onFinish()`. */
-export type NamsOnFinishCallback = (event: NamsOnFinishEvent) => Promise<void>;
+/** The callback built by `onEnd()`. */
+export type NamsOnEndCallback = (event: NamsOnEndEvent) => Promise<void>;
+
+/** @deprecated Use `NamsOnEndEvent`. */
+export type NamsOnFinishEvent = NamsOnEndEvent;
+
+/** @deprecated Use `NamsOnEndCallback`. */
+export type NamsOnFinishCallback = NamsOnEndCallback;
 
 // Turn extraction
 const AUDIT_KIND_KEY = 'namsKind';
@@ -204,7 +212,7 @@ export function createNamsHooks(options: NamsHooksOptions) {
     if (!userId) {
       throw new Error(
         `${hookName} needs a userId — pass it per call, set it on createNamsHooks(), ` +
-        `or (for onFinish) provide it via runtimeContext`,
+        `or (for onEnd) provide it via runtimeContext`,
       );
     }
     return { userId, conversationId: call.conversationId ?? options.conversationId };
@@ -384,16 +392,17 @@ export function createNamsHooks(options: NamsHooksOptions) {
     return wrapped as unknown as T;
   };
 
-  const onFinish = (scope: OnFinishScope = {}): NamsOnFinishCallback => {
+  /** The `onEnd` callback that saves the finished turn. */
+  const onEnd = (scope: OnEndScope = {}): NamsOnEndCallback => {
     return async (event) => {
-      const context = (event.finalStep?.runtimeContext ?? event.runtimeContext ?? {}) as OnFinishScope;
-      const merged: OnFinishScope = {
+      const context = (event.finalStep?.runtimeContext ?? event.runtimeContext ?? {}) as OnEndScope;
+      const merged: OnEndScope = {
         userId: context.userId ?? scope.userId,
         conversationId: context.conversationId ?? scope.conversationId,
         prompt: context.prompt ?? scope.prompt,
         persistUserPrompt: context.persistUserPrompt ?? scope.persistUserPrompt,
       };
-      const resolved = resolveScope(merged, 'onFinish');
+      const resolved = resolveScope(merged, 'onEnd');
 
       const turns: SessionTurn[] = [];
       if (merged.persistUserPrompt !== false && merged.prompt !== undefined) {
@@ -427,7 +436,7 @@ export function createNamsHooks(options: NamsHooksOptions) {
         const convId = await resolveConversation(client, options, resolved);
         await persistTurns(client, convId, toPersist);
       } catch (err) {
-        log.error('onFinish failed to persist the generation', err);
+        log.error('onEnd failed to persist the generation', err);
       }
 
       if (registry.has('Stop')) {
@@ -458,7 +467,14 @@ export function createNamsHooks(options: NamsHooksOptions) {
     pendingContext.delete(key);
   };
 
-  return { loadSession, prepare, withHooks, onFinish, end };
+  return {
+    loadSession,
+    prepare,
+    withHooks,
+    onEnd,
+    onFinish: onEnd,
+    end,
+  };
 }
 
 export type NamsHooks = ReturnType<typeof createNamsHooks>;
