@@ -1112,11 +1112,11 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         Args:
             session_id: Session identifier
             conversation_id: Optional specific conversation ID
-            limit: Maximum number of messages
+            limit: Maximum number of messages; the most recent ones are kept
             since: Only get messages after this time
 
         Returns:
-            Conversation with messages
+            Conversation with messages, oldest first
         """
         # Get conversation
         if conversation_id:

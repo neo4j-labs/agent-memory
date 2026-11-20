@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `short_term.get_conversation(limit=N)` on the bolt backend now returns the
+  **most recent** N messages, oldest first. It returned the first N messages
+  of the conversation, so every bounded read of a long history saw its
+  beginning and never its end. This also corrects the "Recent Conversation"
+  block of `get_context()`, the session history loaded by the LangChain,
+  LlamaIndex, OpenAI Agents, Microsoft Agent, AgentCore and Strands
+  integrations, and the MCP `memory_get_conversation` tool, all of which pass
+  a limit. The NAMS backend already bounded a conversation this way.
+  Conversations shorter than the limit are unaffected.
+
 ## [0.8.0] - 2026-10-22
 
 ### Changed

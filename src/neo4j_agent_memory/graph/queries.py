@@ -207,11 +207,17 @@ RETURN m.id AS id, m.content AS content
 ORDER BY m.timestamp ASC
 """
 
+# The limit keeps the *newest* messages and they are returned oldest first.
+# Ordering ascending and then limiting would return the start of the
+# conversation instead, which is never what a bounded read of a chat history
+# wants; the NAMS backend bounds a conversation the same way.
 GET_CONVERSATION_MESSAGES = """
 MATCH (c:Conversation {id: $conversation_id})-[:HAS_MESSAGE]->(m:Message)
+WITH m
+ORDER BY m.timestamp DESC, m.id DESC
+LIMIT $limit
 RETURN m
 ORDER BY m.timestamp ASC, m.id ASC
-LIMIT $limit
 """
 
 SEARCH_MESSAGES_BY_EMBEDDING = """

@@ -94,6 +94,61 @@ class TestShortTermMemoryBasicOperations:
         conv = await memory_client.short_term.get_conversation(session_id, limit=5)
 
         assert len(conv.messages) == 5
+        # The limit keeps the newest messages and returns them oldest first.
+        assert [m.content for m in conv.messages] == [f"Message {i}" for i in range(5, 10)]
+
+    @pytest.mark.asyncio
+    async def test_get_conversation_limit_after_batch_load(self, memory_client, session_id):
+        """A bounded read of a batch-loaded conversation ends at its last message."""
+        await memory_client.short_term.add_messages_batch(
+            session_id,
+            [
+                {"role": "user" if i % 2 == 0 else "assistant", "content": f"Batch {i}"}
+                for i in range(30)
+            ],
+            batch_size=7,
+            generate_embeddings=False,
+        )
+
+        conv = await memory_client.short_term.get_conversation(session_id, limit=4)
+
+        assert [m.content for m in conv.messages] == [f"Batch {i}" for i in range(26, 30)]
+
+    @pytest.mark.asyncio
+    async def test_get_conversation_limit_larger_than_conversation(self, memory_client, session_id):
+        """A limit above the conversation's length returns all of it, in order."""
+        for i in range(3):
+            await memory_client.short_term.add_message(
+                session_id,
+                MessageRole.USER,
+                f"Message {i}",
+                extract_entities=False,
+                generate_embedding=False,
+            )
+
+        conv = await memory_client.short_term.get_conversation(session_id, limit=50)
+
+        assert [m.content for m in conv.messages] == [f"Message {i}" for i in range(3)]
+
+    @pytest.mark.asyncio
+    async def test_get_context_recent_conversation_is_the_end(self, memory_client, session_id):
+        """get_context's recent conversation holds the last messages, not the first."""
+        for i in range(8):
+            await memory_client.short_term.add_message(
+                session_id,
+                MessageRole.USER if i % 2 == 0 else MessageRole.ASSISTANT,
+                f"Message {i}",
+                extract_entities=False,
+                generate_embedding=False,
+            )
+
+        context = await memory_client.short_term.get_context(
+            "anything", session_id=session_id, max_messages=3
+        )
+
+        recent = context.split("### Relevant Past Messages")[0]
+        assert [f"Message {i}" in recent for i in range(8)] == [False] * 5 + [True] * 3
+        assert recent.index("Message 5") < recent.index("Message 6") < recent.index("Message 7")
 
     @pytest.mark.asyncio
     async def test_get_nonexistent_conversation(self, memory_client):

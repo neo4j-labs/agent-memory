@@ -90,8 +90,9 @@ class ShortTermProtocol(Protocol):
     ) -> Conversation:
         """Return the conversation (header + messages) for a session.
 
-        ``limit`` bounds the number of messages returned; ``since``
-        restricts to messages after a given time.
+        ``limit`` bounds the number of messages returned, keeping the most
+        recent ones; ``since`` restricts to messages after a given time.
+        Messages come back oldest first.
         """
         ...
 
