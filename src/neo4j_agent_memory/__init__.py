@@ -60,6 +60,8 @@ if TYPE_CHECKING:
     from neo4j_agent_memory.extraction.base import EntityExtractor
     from neo4j_agent_memory.memory.buffered import BufferedWriteError, BufferedWriter
     from neo4j_agent_memory.memory.consolidation import ConsolidationMemory
+    from neo4j_agent_memory.memory.context import AssembledContext, ContextAssembler
+    from neo4j_agent_memory.memory.distillation import DistillationMemory
     from neo4j_agent_memory.memory.eval import EvalMemory
     from neo4j_agent_memory.memory.users import UserMemory
     from neo4j_agent_memory.nams.client import NamsBackend
@@ -484,6 +486,8 @@ class MemoryClient(Generic[_ST, _LT, _RT]):
         self._users: UserMemory | Any = None
         self._buffered: BufferedWriter | Any = None
         self._consolidation: ConsolidationMemory | Any = None
+        self._distillation: DistillationMemory | Any = None
+        self._context_assembler: ContextAssembler | None = None
         self._eval: EvalMemory | None = None
 
     async def __aenter__(self) -> Self:
@@ -651,6 +655,16 @@ class MemoryClient(Generic[_ST, _LT, _RT]):
 
         self._consolidation = ConsolidationMemory(self._client)
 
+        # Session distillation (facts, preferences, summaries) and the
+        # context assembler that reads what it writes.
+        from neo4j_agent_memory.memory.context import ContextAssembler
+        from neo4j_agent_memory.memory.distillation import DistillationMemory
+
+        self._distillation = DistillationMemory(
+            self._client, self._embedder, self._resolve_llm_provider()
+        )
+        self._context_assembler = ContextAssembler(self._client, self._embedder)
+
         # Evaluation harness.
         from neo4j_agent_memory.memory.eval import EvalMemory
 
@@ -724,6 +738,20 @@ class MemoryClient(Generic[_ST, _LT, _RT]):
                 document = load_ontology(override)
             else:
                 document = override
+
+        # An ontology handed in directly has been through no store or compiler,
+        # so nothing has looked at it yet. A label that collides with one of
+        # the library's own node labels corrupts the graph silently; refuse it.
+        if document is not None:
+            reserved = document.reserved_labels()
+            if reserved:
+                raise ValueError(
+                    f"Ontology {document.domain.name!r} declares entity label(s) "
+                    f"{', '.join(repr(label) for label in reserved)} that the library "
+                    "uses for its own nodes. Rename them."
+                )
+            for problem in document.validate_structure():
+                logger.warning("Ontology %r: %s", document.domain.name, problem)
 
         # 2. + 3. file paths from settings
         if document is None:
@@ -883,6 +911,10 @@ class MemoryClient(Generic[_ST, _LT, _RT]):
             message="Consolidation hygiene jobs are bolt-only. NAMS handles "
             "deduplication and archival server-side.",
         )
+        self._distillation = _NamsUnsupported(
+            accessor="distillation",
+            message="Session distillation is bolt-only.",
+        )
 
         # Evaluation harness works on both backends — it uses the public
         # protocol surface only.
@@ -944,6 +976,8 @@ class MemoryClient(Generic[_ST, _LT, _RT]):
             self._users = None
             self._buffered = None
             self._consolidation = None
+            self._distillation = None
+            self._context_assembler = None
             return
 
         # Bolt path — preserved unchanged.
@@ -1075,6 +1109,53 @@ class MemoryClient(Generic[_ST, _LT, _RT]):
         if self._consolidation is None:
             raise NotConnectedError("Client not connected. Use 'async with' or call connect().")
         return self._consolidation
+
+    @property
+    def distillation(self) -> DistillationMemory:
+        """
+        Access session distillation: turn a stored conversation into
+        long-term memory.
+
+        * ``extract_statements()`` — the facts, preferences and standing
+          instructions the user stated, linked to their source messages.
+        * ``reconcile()`` — which facts replace or contradict earlier ones.
+        * ``summarize_session()`` — the outline of the conversation.
+        * ``distill_session()`` — all three.
+
+        Needs an LLM (``MemorySettings.llm``). Bolt only.
+        """
+        if self._distillation is None:
+            raise NotConnectedError("Client not connected. Use 'async with' or call connect().")
+        return self._distillation
+
+    def _resolve_llm_provider(self) -> Any:
+        """The LLM provider behind ``settings.llm``, or None when there is none.
+
+        ``settings.llm`` is either a provider instance or a legacy
+        :class:`LLMConfig`; the latter is resolved the way the extraction
+        factory resolves it.
+        """
+        from neo4j_agent_memory.config.settings import LLMConfig
+        from neo4j_agent_memory.llm.protocol import LLMProvider as _LLMProvider
+
+        llm = self._settings.llm
+        if llm is None:
+            return None
+        if isinstance(llm, LLMConfig):
+            from neo4j_agent_memory.llm import from_provider
+
+            prefix = llm.provider.value
+            model_id = (
+                llm.model if prefix == "custom" or "/" in llm.model else f"{prefix}/{llm.model}"
+            )
+            kwargs: dict[str, Any] = {}
+            if llm.api_key is not None:
+                kwargs["api_key"] = llm.api_key.get_secret_value()
+            try:
+                return from_provider(model_id, kind="llm", **kwargs)
+            except ImportError:
+                return None
+        return llm if isinstance(llm, _LLMProvider) else None
 
     @property
     def buffered(self) -> BufferedWriter:
@@ -1295,6 +1376,9 @@ class MemoryClient(Generic[_ST, _LT, _RT]):
         include_long_term: bool = True,
         include_reasoning: bool = True,
         max_items: int = 10,
+        strategy: Literal["sections", "hybrid"] = "sections",
+        token_budget: int = 16000,
+        **assembly_options: Any,
     ) -> str:
         """
         Get combined context from all memory types for an LLM prompt.
@@ -1309,10 +1393,28 @@ class MemoryClient(Generic[_ST, _LT, _RT]):
             include_long_term: Whether to include facts and preferences
             include_reasoning: Whether to include similar task traces
             max_items: Maximum items per memory type
+            strategy: ``"sections"`` (the default) searches each memory type
+                separately and concatenates the results. ``"hybrid"`` builds
+                the context for one session with
+                :meth:`assemble_context`: fused vector, entity and statement
+                rankings, standing instructions, replaced and conflicting
+                statements, a timeline and the conversation outline, within
+                ``token_budget``. It needs ``session_id``.
+            token_budget: Size limit for ``strategy="hybrid"``.
+            **assembly_options: Further options for ``strategy="hybrid"``; see
+                :meth:`~neo4j_agent_memory.memory.context.ContextAssembler.assemble`.
 
         Returns:
             Formatted context string suitable for LLM prompts
         """
+        if strategy == "hybrid":
+            if session_id is None:
+                raise ValueError("get_context(strategy='hybrid') needs a session_id")
+            assembled = await self.assemble_context(
+                query, session_id=session_id, token_budget=token_budget, **assembly_options
+            )
+            return assembled.text
+
         parts = []
 
         if include_short_term:
@@ -1341,6 +1443,21 @@ class MemoryClient(Generic[_ST, _LT, _RT]):
                 parts.append(f"## Similar Past Tasks\n{reasoning_context}")
 
         return "\n\n".join(parts)
+
+    async def assemble_context(
+        self, query: str, *, session_id: str, **options: Any
+    ) -> AssembledContext:
+        """Build the context for a question about one session.
+
+        Returns the context text together with a record of what went into it
+        (which exchanges, by which ranking; how many statements, conflicts and
+        summaries). Options are those of
+        :meth:`~neo4j_agent_memory.memory.context.ContextAssembler.assemble`.
+        Bolt only.
+        """
+        if self._context_assembler is None:
+            raise NotConnectedError("Client not connected. Use 'async with' or call connect().")
+        return await self._context_assembler.assemble(query, session_id=session_id, **options)
 
     async def get_stats(self) -> dict[str, Any]:
         """

@@ -110,6 +110,8 @@ class SchemaManager:
             ("entity_id", "Entity", "id"),
             ("preference_id", "Preference", "id"),
             ("fact_id", "Fact", "id"),
+            # Session distillation: the outline of a conversation
+            ("summary_id", "Summary", "id"),
             # Reasoning memory
             ("reasoning_trace_id", "ReasoningTrace", "id"),
             ("reasoning_step_id", "ReasoningStep", "id"),

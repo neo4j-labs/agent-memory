@@ -29,6 +29,31 @@ from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, ValidationEr
 #: The five POLE+O top-level types an ``EntityTypeDef.pole_type`` may name.
 POLEO_TYPES: frozenset[str] = frozenset({"PERSON", "ORGANIZATION", "LOCATION", "EVENT", "OBJECT"})
 
+#: Node labels the library uses for its own nodes. An ontology label becomes a
+#: node label on the entity, so one of these on an entity would put it under
+#: that label's uniqueness constraint and vector index, and make it count as a
+#: fact, a preference, a tool and so on.
+RESERVED_NODE_LABELS: frozenset[str] = frozenset(
+    {
+        "Conversation",
+        "Message",
+        "Entity",
+        "Preference",
+        "Fact",
+        "Summary",
+        "ReasoningTrace",
+        "ReasoningStep",
+        "Tool",
+        "ToolCall",
+        "User",
+        "ConsolidationRun",
+        "MemoryReadAudit",
+        "Ontology",
+        "OntologyVersion",
+        "OntologyLock",
+    }
+)
+
 #: The spelling a relationship type name must use: UPPER_SNAKE, letter-initial.
 _UPPER_SNAKE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
@@ -334,6 +359,18 @@ class OntologyDocument(_Lenient):
         )
 
     # -- validation -----------------------------------------------------------
+
+    def reserved_labels(self) -> list[str]:
+        """Entity labels that collide with the library's own node labels.
+
+        Not part of :meth:`validate_structure`: the built-in ``scientific``
+        template declares ``tool``, which collides with ``:Tool``, and making
+        this a structural problem would stop that template from compiling.
+        :class:`~neo4j_agent_memory.MemoryClient` refuses a colliding ontology
+        that is passed to it directly.
+        """
+        reserved = {label.lower() for label in RESERVED_NODE_LABELS}
+        return [et.label for et in self.entity_types if et.label.lower() in reserved]
 
     def validate_structure(self) -> list[str]:
         """Return human-readable structural problems (empty list when sound).

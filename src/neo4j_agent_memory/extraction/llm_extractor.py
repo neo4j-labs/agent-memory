@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
+
+from pydantic import BaseModel, Field, create_model
 
 from neo4j_agent_memory.core.exceptions import ExtractionError
 from neo4j_agent_memory.extraction._payloads import ExtractionPayload
@@ -115,6 +117,78 @@ SYSTEM_MESSAGE = (
     "You are an expert at extracting structured information from text. "
     "You follow the configured entity-type schema. Always respond with valid JSON."
 )
+
+# Prompt for the labelled path: a custom ontology and a provider with
+# structured output. The model picks one of the ontology's own labels for each
+# entity (the response schema allows nothing else), so nothing depends on it
+# reproducing a POLE+O type *and* the right subtype, and the POLE+O guidelines
+# of the default prompt, which do not describe a custom ontology, are left out.
+LABELLED_EXTRACTION_PROMPT = """Extract entities, relationships, and preferences from the text below.
+
+The graph is governed by this ontology.
+
+{fragment}
+
+## Entities
+Give each entity the label of the entity type that fits it best, exactly as the
+type is named above (the part before the parentheses). Use a general type only
+when none of the more specific ones applies. Use the name as it appears in the text.
+
+## Relationships
+Use only the relationship types listed above, and only between entities you
+extracted, in the direction and for the pair of entity types the ontology declares.
+{relation_note}
+## Preferences
+The user's likes, dislikes and opinions, each with a short category.
+
+Confidence: 0.0-1.0 based on how certain the extraction is.
+
+## Text to Analyze
+{text}"""
+
+
+def _labelled_payload_model(ontology: OntologyDocument) -> type[BaseModel] | None:
+    """A response schema whose entity labels and relation types are the ontology's.
+
+    Returns None for the built-in POLE+O ontology (its labels are the POLE+O
+    types the default path already asks for) and for an ontology without entity
+    types. Every field is required, as OpenAI's strict mode demands.
+    """
+    labels = tuple(dict.fromkeys(et.label for et in ontology.entity_types))
+    if not labels or ontology.domain.id == "poleo":
+        return None
+    relation_types = tuple(dict.fromkeys(r.type.upper() for r in ontology.relationships))
+
+    label_type: Any = Literal[labels]
+    relation_type: Any = Literal[relation_types] if relation_types else str
+    entity: Any = create_model(
+        "LabelledEntity",
+        name=(str, Field(description="Entity name, as it appears in the text.")),
+        label=(label_type, Field(description="The ontology label that fits best.")),
+        confidence=(float, Field(description="Confidence, 0.0 to 1.0.")),
+    )
+    relation: Any = create_model(
+        "LabelledRelation",
+        source=(str, Field(description="Source entity name; must be an extracted entity.")),
+        target=(str, Field(description="Target entity name; must be an extracted entity.")),
+        relation_type=(relation_type, Field(description="A relationship type of the ontology.")),
+        confidence=(float, Field(description="Confidence, 0.0 to 1.0.")),
+    )
+    preference: Any = create_model(
+        "LabelledPreference",
+        category=(str, Field(description="Preference category.")),
+        preference=(str, Field(description="The preference.")),
+        context=(str | None, Field(description="When or where it applies, or null.")),
+        confidence=(float, Field(description="Confidence, 0.0 to 1.0.")),
+    )
+    model: type[BaseModel] = create_model(
+        "LabelledExtraction",
+        entities=(list[entity], Field(description="Entities found in the text.")),
+        relations=(list[relation], Field(description="Relationships between them.")),
+        preferences=(list[preference], Field(description="Preferences stated.")),
+    )
+    return model
+
 
 # Wrapper for the ontology-derived guidance, which replaces the hardcoded
 # POLE+O subtype list in the prompt's ``{subtype_info}`` slot.
@@ -233,6 +307,13 @@ class LLMEntityExtractor(EntityExtractor):
             self._entity_types = entity_types or list(DEFAULT_ENTITY_TYPES)
             self._subtypes = subtypes if subtypes is not None else dict(POLEO_SUBTYPES)
         self._prompt = extraction_prompt or DEFAULT_EXTRACTION_PROMPT
+        # With a custom ontology (and no caller-supplied prompt) the structured
+        # path asks for the ontology's labels directly.
+        self._labelled_model = (
+            _labelled_payload_model(ontology)
+            if ontology is not None and extraction_prompt is None
+            else None
+        )
         self._temperature = temperature
         self._extract_relations = extract_relations
         self._extract_preferences = extract_preferences
@@ -338,6 +419,11 @@ class LLMEntityExtractor(EntityExtractor):
         assert isinstance(self._provider, StructuredExtractor)
         provider = self._provider
 
+        if self._labelled_model is not None and self._ontology is not None:
+            return await self._extract_labelled(
+                provider, text, include_relations, include_preferences
+            )
+
         prompt = self._build_prompt(text, types_to_use)
         messages = [
             ChatMessage(role="system", content=SYSTEM_MESSAGE),
@@ -353,6 +439,75 @@ class LLMEntityExtractor(EntityExtractor):
         )
         return self._payload_to_result(
             payload, text, types_to_use, include_relations, include_preferences
+        )
+
+    async def _extract_labelled(
+        self,
+        provider: Any,
+        text: str,
+        include_relations: bool,
+        include_preferences: bool,
+    ) -> ExtractionResult:
+        """Structured extraction against a custom ontology's own labels."""
+        from neo4j_agent_memory.llm.types import ChatMessage
+        from neo4j_agent_memory.ontology.compile import prompt_fragment
+
+        assert self._ontology is not None and self._labelled_model is not None
+        ontology = self._ontology
+        prompt = LABELLED_EXTRACTION_PROMPT.format(
+            fragment=prompt_fragment(ontology, include_relations=include_relations),
+            relation_note="" if include_relations else "Return no relationships.\n",
+            text=text,
+        )
+        payload: Any = await provider.complete_structured(
+            [
+                ChatMessage(role="system", content=SYSTEM_MESSAGE),
+                ChatMessage(role="user", content=prompt),
+            ],
+            self._labelled_model,
+            temperature=self._temperature,
+        )
+
+        types = ontology.label_map()
+        entities = [
+            ExtractedEntity(
+                name=ent.name,
+                type=types[ent.label.lower()][0],
+                subtype=types[ent.label.lower()][1],
+                confidence=max(0.0, min(1.0, ent.confidence)),
+                extractor="llm",
+            )
+            for ent in payload.entities
+            if ent.name.strip() and ent.label.lower() in types
+        ]
+        relations: list[ExtractedRelation] = []
+        if include_relations:
+            names = {e.name.lower() for e in entities}
+            relations = [
+                ExtractedRelation(
+                    source=rel.source,
+                    target=rel.target,
+                    relation_type=str(rel.relation_type).upper(),
+                    confidence=max(0.0, min(1.0, rel.confidence)),
+                )
+                for rel in payload.relations
+                if rel.source.lower() in names and rel.target.lower() in names
+            ]
+        preferences = (
+            [
+                ExtractedPreference(
+                    category=pref.category,
+                    preference=pref.preference,
+                    context=pref.context,
+                    confidence=max(0.0, min(1.0, pref.confidence)),
+                )
+                for pref in payload.preferences
+            ]
+            if include_preferences
+            else []
+        )
+        return ExtractionResult(
+            entities=entities, relations=relations, preferences=preferences, source_text=text
         )
 
     async def _extract_with_complete(
