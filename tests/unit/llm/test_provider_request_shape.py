@@ -306,3 +306,98 @@ async def test_openai_embedding_request_keywords_exist_in_installed_sdk() -> Non
     sent = recorder.last
     assert sent["dimensions"] == 256
     _assert_kwargs_accepted(sent, openai.AsyncOpenAI(api_key="x").embeddings.create)
+
+
+async def test_openai_reasoning_model_takes_no_temperature() -> None:
+    """A reasoning model rejects a temperature and ``max_tokens`` outright."""
+    openai = pytest.importorskip("openai")
+    from neo4j_agent_memory.llm.adapters.openai import OpenAIProvider, is_reasoning_model
+
+    assert is_reasoning_model("openai/gpt-5") and is_reasoning_model("o3-mini")
+    assert not is_reasoning_model("openai/gpt-4o-mini")
+
+    recorder = _Recorder()
+    provider = OpenAIProvider("openai/gpt-5", api_key="x")
+    provider._client = _FakeOpenAIClient(recorder)  # type: ignore[assignment]
+    await provider.complete(
+        [ChatMessage(role="user", content="hi")], temperature=0.0, max_tokens=260
+    )
+    sent = recorder.last
+    assert "temperature" not in sent and "max_tokens" not in sent
+    # The limit covers the reasoning too, so it is raised above the answer's.
+    assert sent["max_completion_tokens"] > 260
+    _assert_kwargs_accepted(sent, openai.AsyncOpenAI(api_key="x").chat.completions.create)
+    assert provider._timeout >= 600
+
+    structured_recorder = _Recorder()
+    structured = OpenAIProvider("openai/gpt-5", api_key="x")
+    structured._client = _FakeOpenAIClient(  # type: ignore[assignment]
+        structured_recorder, content='{"value": "ok"}'
+    )
+    await structured.complete_structured(
+        [ChatMessage(role="user", content="extract")], _Extraction, temperature=0.0
+    )
+    assert "temperature" not in structured_recorder.last
+
+
+async def test_openai_other_models_keep_their_sampling_arguments() -> None:
+    pytest.importorskip("openai")
+    from neo4j_agent_memory.llm.adapters.openai import OpenAIProvider
+
+    recorder = _Recorder()
+    provider = OpenAIProvider("openai/gpt-4o-mini", api_key="x")
+    provider._client = _FakeOpenAIClient(recorder)  # type: ignore[assignment]
+    await provider.complete(
+        [ChatMessage(role="user", content="hi")], temperature=0.0, max_tokens=260
+    )
+    assert recorder.last["temperature"] == 0.0
+    assert recorder.last["max_tokens"] == 260
+    assert provider._timeout == 60.0
+
+
+async def test_openai_requests_are_counted_by_model() -> None:
+    pytest.importorskip("openai")
+    from neo4j_agent_memory.llm import usage
+    from neo4j_agent_memory.llm.adapters.openai import OpenAIEmbeddingProvider, OpenAIProvider
+
+    before = usage.snapshot()
+    provider = OpenAIProvider("openai/gpt-5-mini", api_key="x")
+    provider._client = _FakeOpenAIClient(_Recorder())  # type: ignore[assignment]
+    await provider.complete([ChatMessage(role="user", content="hi")])
+    await provider.complete([ChatMessage(role="user", content="hi")])
+    embedder = OpenAIEmbeddingProvider("openai/text-embedding-3-small")
+    embedder._client = _FakeOpenAIClient(_Recorder())  # type: ignore[assignment]
+    await embedder.embed(["a"])
+
+    spent = usage.since(before)
+    assert spent["gpt-5-mini"] == {
+        "requests": 2,
+        "input_tokens": 10,
+        "cached_tokens": 0,
+        "output_tokens": 6,
+        "reasoning_tokens": 0,
+    }
+    # A response without usage still counts as a request.
+    assert spent["text-embedding-3-small"]["requests"] == 1
+
+
+def test_usage_counts_reasoning_tokens_within_the_output() -> None:
+    from neo4j_agent_memory.llm import usage
+
+    reported = _Block(
+        "usage",
+        prompt_tokens=100,
+        completion_tokens=80,
+        prompt_tokens_details=_Block("details", cached_tokens=40),
+        completion_tokens_details=_Block("details", reasoning_tokens=64),
+    )
+    before = usage.snapshot()
+    usage.record_response("some-model", reported)
+    assert usage.since(before)["some-model"] == {
+        "requests": 1,
+        "input_tokens": 100,
+        "cached_tokens": 40,
+        "output_tokens": 80,
+        "reasoning_tokens": 64,
+    }
+    assert usage.since(usage.snapshot()) == {}

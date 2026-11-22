@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
+from neo4j_agent_memory.llm import usage as usage_ledger
 from neo4j_agent_memory.llm.defaults import lookup_embedding_dimensions
 from neo4j_agent_memory.llm.errors import (
     ProviderAuthError,
@@ -51,6 +52,25 @@ def _strip_provider_prefix(model: str) -> str:
     if model.startswith("openai/"):
         return model[len("openai/") :]
     return model
+
+
+#: Model families that reason before they answer. They take no sampling
+#: temperature, and their output limit covers the reasoning as well.
+_REASONING_PREFIXES = ("gpt-5", "o1", "o3", "o4")
+
+#: Output tokens allowed on top of a caller's limit for a reasoning model, so
+#: that a limit sized for the visible answer does not cut the reasoning short
+#: and leave the answer empty.
+_REASONING_HEADROOM = 8192
+
+#: Seconds allowed per request to a reasoning model unless the caller asks for
+#: more: these models can take minutes over one answer.
+_REASONING_TIMEOUT = 600.0
+
+
+def is_reasoning_model(model: str) -> bool:
+    """Whether ``model`` (with or without the ``openai/`` prefix) is a reasoning model."""
+    return _strip_provider_prefix(model).startswith(_REASONING_PREFIXES)
 
 
 def _translate_usage(usage: Any) -> Usage | None:
@@ -187,10 +207,27 @@ class OpenAIProvider(_OpenAISDKMixin):
         self._api_key = api_key
         self._api_base = api_base
         self._organization = organization
-        self._timeout = timeout
+        self._reasoning = is_reasoning_model(bare)
+        self._timeout = max(timeout, _REASONING_TIMEOUT) if self._reasoning else timeout
         self._max_retries = max_retries
         self._default_headers = default_headers
         self._return_raw = return_raw
+
+    def _sampling(self, temperature: float, max_tokens: int | None = None) -> dict[str, Any]:
+        """Request arguments for the temperature and output limit asked for.
+
+        A reasoning model accepts only its default temperature, so none is
+        sent, and its limit is ``max_completion_tokens``, raised to leave room
+        for the reasoning.
+        """
+        if not self._reasoning:
+            arguments: dict[str, Any] = {"temperature": temperature}
+            if max_tokens is not None:
+                arguments["max_tokens"] = max_tokens
+            return arguments
+        if max_tokens is None:
+            return {}
+        return {"max_completion_tokens": max_tokens + _REASONING_HEADROOM}
 
     async def complete(
         self,
@@ -205,10 +242,8 @@ class OpenAIProvider(_OpenAISDKMixin):
         kwargs: dict[str, Any] = {
             "model": self._bare_model,
             "messages": [m.model_dump(exclude_none=True) for m in messages],
-            "temperature": temperature,
+            **self._sampling(temperature, max_tokens),
         }
-        if max_tokens is not None:
-            kwargs["max_tokens"] = max_tokens
         if stop is not None:
             kwargs["stop"] = list(stop)
         if timeout is not None:
@@ -222,6 +257,9 @@ class OpenAIProvider(_OpenAISDKMixin):
                 raise
             raise translated from exc
 
+        usage_ledger.record_response(
+            getattr(response, "model", None) or self._bare_model, getattr(response, "usage", None)
+        )
         choice = response.choices[0]
         return Completion(
             content=choice.message.content or "",
@@ -287,7 +325,7 @@ class OpenAIProvider(_OpenAISDKMixin):
         kwargs: dict[str, Any] = {
             "model": self._bare_model,
             "messages": [m.model_dump(exclude_none=True) for m in messages],
-            "temperature": temperature,
+            **self._sampling(temperature),
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {
@@ -308,6 +346,9 @@ class OpenAIProvider(_OpenAISDKMixin):
                 raise
             raise translated from exc
 
+        usage_ledger.record_response(
+            getattr(response, "model", None) or self._bare_model, getattr(response, "usage", None)
+        )
         content = response.choices[0].message.content or ""
         try:
             payload = json.loads(content)
@@ -400,6 +441,10 @@ class OpenAIEmbeddingProvider(_OpenAISDKMixin):
                 if translated is exc:
                     raise
                 raise translated from exc
+            usage_ledger.record_response(
+                getattr(response, "model", None) or self._bare_model,
+                getattr(response, "usage", None),
+            )
             # OpenAI does not guarantee response order, so sort by index.
             sorted_data = sorted(response.data, key=lambda d: d.index)
             all_embeddings.extend(d.embedding for d in sorted_data)
@@ -412,6 +457,7 @@ class OpenAIEmbeddingProvider(_OpenAISDKMixin):
 
 
 __all__ = [
+    "is_reasoning_model",
     "OpenAIProvider",
     "OpenAIEmbeddingProvider",
 ]

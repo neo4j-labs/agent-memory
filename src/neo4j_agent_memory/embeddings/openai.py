@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from neo4j_agent_memory.core.exceptions import EmbeddingError
 from neo4j_agent_memory.embeddings.base import BaseEmbedder
+from neo4j_agent_memory.llm import usage as usage_ledger
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
@@ -87,6 +88,9 @@ class OpenAIEmbedder(BaseEmbedder):
                 kwargs["dimensions"] = self._requested_dimensions
 
             response = await client.embeddings.create(**kwargs)
+            usage_ledger.record_response(
+                getattr(response, "model", None) or self._model, getattr(response, "usage", None)
+            )
             return response.data[0].embedding
         except Exception as e:
             raise EmbeddingError(f"Failed to generate embedding: {e}") from e
@@ -108,6 +112,10 @@ class OpenAIEmbedder(BaseEmbedder):
                     kwargs["dimensions"] = self._requested_dimensions
 
                 response = await client.embeddings.create(**kwargs)
+                usage_ledger.record_response(
+                    getattr(response, "model", None) or self._model,
+                    getattr(response, "usage", None),
+                )
                 # Sort by index to maintain order
                 sorted_data = sorted(response.data, key=lambda x: x.index)
                 all_embeddings.extend([d.embedding for d in sorted_data])
