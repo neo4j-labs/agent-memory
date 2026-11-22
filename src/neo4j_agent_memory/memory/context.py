@@ -666,9 +666,9 @@ class ContextAssembler:
             route: Ask what shape the question has. A question about the order
                 of things, or for a summary, is given ``broad_top_k`` exchanges
                 with each message cut to ``broad_message_chars`` characters, in
-                place of fewer exchanges in full. Off by default: on the BEAM
-                benchmark the wider layout found more of the evidence for such
-                questions without improving the answers.
+                place of fewer exchanges in full. Off by default: in testing
+                the wider layout found more of the evidence for such questions
+                without improving the answers.
 
         Four further options change how the entity graph is used:
 

@@ -32,6 +32,7 @@ async def add_message(
     extraction_mode: Literal['auto', 'skip', 'explicit']='auto',
     explicit_mentions: list[Any] | None=None,
     user_identifier: str | None=None,
+    timestamp: datetime | str | None=None,
 ) -> Message: ...
 ----
 
@@ -49,6 +50,7 @@ async def add_message(
 | `extraction_mode` | How to populate `:MENTIONS` edges for this message. `'auto'` (default): run the configured extractor pipeline. `'skip'`: do not run extraction, do not write `:MENTIONS` edges. `'explicit'`: do not run extraction, write `:MENTIONS` edges only for the entities supplied via `explicit_mentions`.
 | `explicit_mentions` | When `extraction_mode='explicit'`, a list of xref:reference/api/reasoning-models.adoc#_entityref[EntityRef] (element type `~neo4j_agent_memory.schema.models.EntityRef`) describing the entities to link. An `id` links that entity; a typed reference is stored the way an extracted mention is (strict-mode check, ingest-time resolution, then a MERGE on name and type); a name alone links the one existing entity with that surface form and never creates one.
 | `user_identifier` | When provided, scopes the conversation to a :User node via `(:User)-[:HAS_CONVERSATION]->(:Conversation)`. Required when `MemorySettings.memory.multi_tenant=True`.
+| `timestamp` | When the message was said, as a `datetime` or an ISO-format string. Defaults to the time of the call. Set it when loading a conversation that happened earlier, so that dates in the memory are those of the conversation.
 |===
 
 anchor:_add_messages[]
@@ -71,6 +73,7 @@ async def add_messages_batch(
     on_progress: Callable[[int, int], None] | None=None,
     on_batch_complete: Callable[[int, list[Message]], None] | None=None,
     user_identifier: str | None=None,
+    max_concurrency: int=1,
 ) -> list[Message]: ...
 ----
 
@@ -86,6 +89,7 @@ async def add_messages_batch(
 | `on_progress` | Callback for progress updates (completed_count, total_count)
 | `on_batch_complete` | Callback after each batch completes (batch_num, batch_messages)
 | `user_identifier` | When provided, scopes the conversation to a :User node via `(:User)-[:HAS_CONVERSATION]->(:Conversation)`. Required when `MemorySettings.memory.multi_tenant=True`.
+| `max_concurrency` | With `extract_entities=True`, how many messages the extractor works on at once. Results are written one message at a time, in order.
 |===
 
 There is no `add_messages` method. For the portable batch name, see `bulk_add_messages` below; its honored options differ by backend.

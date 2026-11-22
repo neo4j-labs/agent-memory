@@ -161,6 +161,7 @@ async def extract_entities_from_session(
     extract_relations: bool=True,
     on_progress: Callable[[int, int], None] | None=None,
     user_identifier: str | None=None,
+    max_concurrency: int=1,
 ) -> dict[str, int]: ...
 ----
 
@@ -173,6 +174,7 @@ async def extract_entities_from_session(
 | `extract_relations` | Whether to also extract and store relations between entities
 | `on_progress` | Progress callback (processed_count, total_count)
 | `user_identifier` | Tenant the messages belong to; scopes resolution candidates when `resolution.scope="user"`
+| `max_concurrency` | How many messages the extractor works on at once. Results are written one message at a time, in order.
 |===
 
 Returns a dict with `messages_processed`, `entities_extracted`, `entities_created`, `entities_merged` and `relations_extracted`. `entities_extracted` counts mentions; with ingest-time resolution on, several mentions can resolve onto one node, so `entities_created` and `entities_merged` report what was written.

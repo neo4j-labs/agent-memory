@@ -7,7 +7,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Session distillation** (`client.distillation`, `memory/distillation.py`).
+  After a conversation is stored, `distill_session()` reads the user's
+  messages and writes what they state as long-term memory, each item linked
+  to the message it came from:
+  - `extract_statements()` stores `:Fact` and `:Preference` nodes (a
+    preference of `kind="instruction"` is a standing instruction), with the
+    message's position and date. A fact about a dated event carries the date
+    it refers to. `decisions=True` also stores `:Decision` nodes: what was
+    chosen, what was passed over, why, whether it is settled, and when it
+    takes effect. `reply_context=True` shows the extractor the message being
+    replied to.
+  - `reconcile()` links a fact to the earlier one it replaces
+    (`SUPERSEDED_BY`, and `valid_until` on the earlier fact), to one it
+    repeats (`RESTATES`), and a denial ("has never ...") to earlier
+    statements it conflicts with (`CONTRADICTS`). Decisions are linked to the
+    earlier decision they replace.
+  - `summarize_session()` stores an outline of the conversation as `:Summary`
+    nodes.
+  - `link_statements_to_entities()` adds `ABOUT` from a statement to each
+    entity of the session it names.
+- **Context assembly** (`client.assemble_context`, `memory/context.py`).
+  `get_context(strategy="hybrid")` builds a context for one session within a
+  token budget: message excerpts chosen by fusing vector, entity and
+  statement rankings, then the outline, the statements that match the query
+  with what replaced them, the user's decisions, a timeline of dated
+  statements, standing instructions and preferences, and detected
+  contradictions. The default strategy is unchanged.
+- **Judges** (`neo4j_agent_memory.judge`, `MemorySettings.judge`). A `Judge`
+  answers closed questions (`YesNo`, `OneOf`) about a piece of state with a
+  probability. `LLMJudge` asks the configured LLM through structured output;
+  `TypeSafeJudge` asks TypeSafe's Jev decision model (new `[typesafe]`
+  extra). With a judge configured, distillation checks each statement
+  against its message, recovers numbers and dates the first reading missed,
+  and stores a `probability` on the links it draws; context assembly judges
+  which contradictions, instructions and decisions bear on the query, ranks
+  candidate exchanges by relevance, and resolves the two events of an
+  elapsed-time question so the span is computed in code. Without a judge
+  nothing changes. `JudgeUnavailable` (a refused key, an account without
+  credits) stops distillation instead of leaving a memory in which nothing
+  was judged.
+- **Messages:** `Message.index`, the position of a message in its
+  conversation; `add_message(timestamp=)` for when a message was said;
+  `max_concurrency` on `add_messages_batch()` and
+  `extract_entities_from_session()`, which runs extraction concurrently while
+  writes stay in order.
+- **Extraction:** with a custom ontology and a structured-output provider the
+  LLM picks one of the ontology's labels (an enum in the response schema)
+  instead of a POLE+O type plus a free-text subtype.
+  `ShortTermMemory.extraction_drops` counts the entities and relations the
+  ontology dropped. `MemoryClient` refuses an ontology whose labels collide
+  with the library's own node labels; `OntologyDocument.reserved_labels()`
+  reports them.
+- **Entity-graph options for context assembly**, all off by default:
+  `graph_walk="walk"`, `entity_statements`, `enumerate_entities` and
+  `judge_entities` on `ContextAssembler.assemble()`.
+- **OpenAI reasoning models** (the gpt-5 family, o-series) are accepted by
+  `OpenAIProvider`: no sampling temperature is sent, an output limit becomes
+  `max_completion_tokens` with room for reasoning, and a request is allowed
+  ten minutes.
+- **`neo4j_agent_memory.llm.usage`**: a process-wide count of requests and
+  tokens by model, fed by the OpenAI chat and embedding adapters
+  (`snapshot()`, `since()`).
+- Schema: a uniqueness constraint and a vector index
+  (`decision_embedding_idx`) for `:Decision`.
+
 ### Fixed
+
+- `search_messages()` honours `session_id`, which it accepted and ignored, and
+  `ShortTermMemory.get_context()` searches within the session it is given.
 
 - `short_term.get_conversation(limit=N)` on the bolt backend now returns the
   **most recent** N messages, oldest first. It returned the first N messages

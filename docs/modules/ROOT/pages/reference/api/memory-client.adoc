@@ -173,6 +173,9 @@ async def get_context(
     include_long_term: bool=True,
     include_reasoning: bool=True,
     max_items: int=10,
+    strategy: Literal['sections', 'hybrid']='sections',
+    token_budget: int=16000,
+    **assembly_options: Any,
 ) -> str: ...
 ----
 
@@ -185,6 +188,9 @@ async def get_context(
 | `include_long_term` | Whether to include matching entities and preferences on bolt (facts are not included). On NAMS, long-term context is an empty string.
 | `include_reasoning` | Whether to include similar task traces
 | `max_items` | Maximum items per memory type
+| `strategy` | `'sections'` (default) searches each memory type separately and concatenates the results. `'hybrid'` builds the context for one session with `assemble_context()`: message excerpts chosen by fusing vector, entity and statement rankings, then the conversation outline, matching statements with what replaced them, decisions, a timeline, standing instructions and preferences, and detected contradictions, within `token_budget`. It needs `session_id` and reads what `client.distillation` stored for that session. Bolt only.
+| `token_budget` | Size limit of the context for `strategy='hybrid'`, in estimated tokens.
+| `**assembly_options` | Further options for `strategy='hybrid'`, passed to `ContextAssembler.assemble()`.
 |===
 
 `session_id` is passed to short-term context retrieval, which also appends global semantic matches on bolt when an embedder is configured. It does not scope long-term or reasoning retrieval. This method is not an authorization boundary. On NAMS, a conversation ID is required when short-term context is enabled; the server-provided short-term context does not use `query` to filter its contents.
