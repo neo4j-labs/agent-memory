@@ -467,6 +467,7 @@ class ContextAssembler:
         max_entities: int = 10,
         max_statements: int = 25,
         max_preferences: int = 20,
+        max_instructions: int = 40,
         max_relations: int = 15,
         max_decisions: int = 10,
         conflict_depth: int = 8,
@@ -500,8 +501,10 @@ class ContextAssembler:
             recent_pairs: Most recent exchanges added on top.
             max_entities: Entities taken from entity vector search.
             max_statements: Statements matched to the question.
-            max_preferences: Preferences shown, by similarity. Standing
-                instructions are all shown.
+            max_preferences: Preferences shown, by similarity.
+            max_instructions: Standing instructions shown. A session rarely
+                has more, and then all are shown; beyond that the nearest to
+                the question are kept.
             max_relations: Relationships between the question's entities shown.
             max_decisions: Decisions of the user shown.
             conflict_depth: Without a judge, a contradiction is reported when
@@ -563,7 +566,10 @@ class ContextAssembler:
         preference_rows = await self._client.execute_read(
             _PREFERENCES, {"session_id": session_id, "embedding": embedding}
         )
-        instructions = [p for p in preference_rows if p["kind"] == "instruction"]
+        instructions = sorted(
+            (p for p in preference_rows if p["kind"] == "instruction"),
+            key=lambda p: -p["score"],
+        )[:max_instructions]
         preferences = sorted(
             (p for p in preference_rows if p["kind"] != "instruction"),
             key=lambda p: -p["score"],
@@ -868,7 +874,16 @@ class ContextAssembler:
         # to the question: what must not be missed goes last.
         sections = [
             self._render_entities(session, question_entities, relations),
-            self._render_outline(summaries, count, max_chars=0.25 * token_budget * chars_per_token),
+            self._render_outline(
+                summaries,
+                count,
+                max_chars=0.25 * token_budget * chars_per_token,
+                # In a conversation too long to outline in full, the stretches
+                # shown are those around what the rankings point at.
+                near=[p for entry in ranked[:CANDIDATES] for p in entry["pair"]]
+                + [f["message_index"] for f in shown_facts.values()]
+                + [d["message_index"] for d in decisions],
+            ),
             self._render_statements(shown_facts, replaced_by),
             self._render_decisions(decisions),
             self._render_timeline(timeline_facts, replaced_by, span, between=elapsed),
@@ -1365,15 +1380,56 @@ class ContextAssembler:
         return "\n".join(lines) if len(lines) > 1 else ""
 
     @staticmethod
-    def _render_outline(summaries: list[dict[str, Any]], count: int, *, max_chars: float) -> str:
+    def _render_outline(
+        summaries: list[dict[str, Any]],
+        count: int,
+        *,
+        max_chars: float,
+        near: list[int] | None = None,
+        shortest: int = 200,
+    ) -> str:
+        """The outline of the conversation, within ``max_chars``.
+
+        Each stretch gets an equal share of the space. When that share would
+        fall under ``shortest`` characters the conversation is too long to
+        outline in full: only as many stretches as fit are shown, those that
+        hold the most of the ``near`` message positions first and the rest
+        spread evenly over the conversation, always in order.
+        """
         if not summaries:
             return ""
-        lines = [
-            "## Outline of the conversation",
-            f"The whole conversation ({count} messages), stretch by stretch, in order.",
-        ]
-        per_summary = max(200, int(max_chars / len(summaries)))
-        for summary in summaries:
+        room = max(1, int(max_chars / (shortest + 60)))  # 60: the header line
+        shown = summaries
+        if len(summaries) > room:
+            hits = [0] * len(summaries)
+            for position in near or []:
+                for index, summary in enumerate(summaries):
+                    if summary["start_index"] <= position <= summary["end_index"]:
+                        hits[index] += 1
+                        break
+            by_hits = sorted(range(len(summaries)), key=lambda i: (-hits[i], i))
+            keep = {i for i in by_hits[:room] if hits[i] > 0}
+            # What is left of the room is spread evenly, so the outline still
+            # spans the whole conversation.
+            rest = [i for i in range(len(summaries)) if i not in keep]
+            spare = min(room - len(keep), len(rest))
+            if spare > 0:
+                step = len(rest) / spare
+                keep.update(rest[int(k * step)] for k in range(spare))
+            shown = [summaries[i] for i in sorted(keep)]
+        lines = ["## Outline of the conversation"]
+        if len(shown) == len(summaries):
+            lines.append(
+                f"The whole conversation ({count} messages), stretch by stretch, in order."
+            )
+        else:
+            lines.append(
+                f"The conversation has {count} messages in {len(summaries)} stretches. "
+                f"These {len(shown)} are the ones nearest the question, with others at "
+                "even distances, in order."
+            )
+        per_summary = max(shortest, int(max_chars / len(shown)) - 60)
+        for summary in shown:
             header = f"Messages #{summary['start_index'] + 1}-{summary['end_index'] + 1}"
             if summary.get("start_time"):
                 header += f" ({summary['start_time'][:10]})"

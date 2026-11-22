@@ -453,8 +453,21 @@ MATCH (d:Decision {session_id: $session_id})
 RETURN d.id AS id, d.text AS text, d.chosen AS chosen, d.alternatives AS alternatives,
        d.reason AS reason, d.status AS status, d.message_index AS message_index,
        d.decided_on AS decided_on, d.effective_date AS effective_date,
-       d.embedding AS embedding, coalesce(d.reconciled, false) AS reconciled
+       coalesce(d.reconciled, false) AS reconciled
 ORDER BY d.message_index ASC, d.id ASC
+"""
+
+# The decision index covers every session, hence the over-fetch.
+_EARLIER_SIMILAR_DECISIONS = """
+MATCH (d:Decision {id: $id})
+CALL db.index.vector.queryNodes('decision_embedding_idx', $fetch, d.embedding)
+YIELD node, score
+WHERE node.session_id = $session_id
+  AND node.message_index < d.message_index
+  AND score >= $min_score
+RETURN node.id AS id, score
+ORDER BY score DESC
+LIMIT $limit
 """
 
 _SESSION_ENTITY_NAMES = """
@@ -788,15 +801,6 @@ def topic_spans(
         tail = spans.pop()
         spans[-1] = (spans[-1][0], tail[1])
     return spans
-
-
-def _cosine(a: Sequence[float] | None, b: Sequence[float] | None) -> float:
-    """Cosine similarity of two embeddings; 0.0 when either is missing."""
-    if not a or not b or len(a) != len(b):
-        return 0.0
-    dot = sum(x * y for x, y in zip(a, b, strict=True))
-    norm = (sum(x * x for x in a) * sum(y * y for y in b)) ** 0.5
-    return dot / norm if norm else 0.0
 
 
 def _date_of(timestamp: str | None) -> str | None:
@@ -1276,7 +1280,11 @@ class DistillationMemory:
             _SESSION_ENTITY_NAMES, {"session_id": session_id}
         )
         patterns = [
-            (e["id"], re.compile(rf"(?<!\w){re.escape(e['name'].strip().lower())}(?!\w)"))
+            (
+                e["id"],
+                e["name"].strip().lower(),
+                re.compile(rf"(?<!\w){re.escape(e['name'].strip().lower())}(?!\w)"),
+            )
             for e in entities
             if e.get("name") and len(e["name"].strip()) >= 3
         ]
@@ -1284,10 +1292,11 @@ class DistillationMemory:
         for decision in decisions:
             chosen = (decision.get("chosen") or "").lower()
             passed_over = " | ".join(decision.get("alternatives") or []).lower()
-            for entity_id, pattern in patterns:
-                if chosen and pattern.search(chosen):
+            for entity_id, name, pattern in patterns:
+                # The substring test is cheap and rules out nearly every entity.
+                if name in chosen and pattern.search(chosen):
                     rows.append({"decision": decision["id"], "entity": entity_id, "chosen": True})
-                elif passed_over and pattern.search(passed_over):
+                elif name in passed_over and pattern.search(passed_over):
                     rows.append({"decision": decision["id"], "entity": entity_id, "chosen": False})
         if rows:
             await self._client.execute_write(_LINK_DECISION_ENTITIES, {"rows": rows})
@@ -1829,17 +1838,18 @@ class DistillationMemory:
         session_id: str,
         *,
         candidates: int = 8,
-        min_similarity: float = 0.5,
+        min_similarity: float = 0.75,
         store_floor: float,
         close_above: float,
         max_concurrency: int,
     ) -> dict[str, int]:
         """Find the decisions that replace earlier ones.
 
-        A decision is compared with the earlier decisions whose embedding is
-        within ``min_similarity`` (plain cosine) and with every earlier decision
-        that named its choice among the alternatives, or whose choice it names
-        among its own. Without a judge the LLM answers the same questions.
+        A decision is compared with the earlier decisions whose embedding
+        similarity is at least ``min_similarity`` (Neo4j's cosine score) and
+        with every earlier decision that named its choice among the
+        alternatives, or whose choice it names among its own. Without a judge
+        the LLM answers the same questions.
         """
         stats = {"decisions_checked": 0, "decisions_reversed": 0}
         decisions = await self._client.execute_read(_SESSION_DECISIONS, {"session_id": session_id})
@@ -1854,6 +1864,18 @@ class DistillationMemory:
                 {a.strip().lower() for a in decision.get("alternatives") or [] if a.strip()},
             )
 
+        # Who chose what and who passed over what, to find reversals by name
+        # without comparing every decision with every other.
+        by_id = {d["id"]: d for d in decisions}
+        chose: dict[str, list[str]] = {}
+        passed: dict[str, list[str]] = {}
+        for decision in decisions:
+            chosen_name, passed_names = named(decision)
+            if chosen_name:
+                chose.setdefault(chosen_name, []).append(decision["id"])
+            for name in passed_names:
+                passed.setdefault(name, []).append(decision["id"])
+
         def shown(decision: dict[str, Any]) -> dict[str, Any]:
             return {
                 "decision": decision["text"],
@@ -1864,18 +1886,31 @@ class DistillationMemory:
 
         async def one(decision: dict[str, Any]) -> None:
             chosen, passed_over = named(decision)
-            scored: list[tuple[float, dict[str, Any]]] = []
-            for other in decisions:
-                if other["message_index"] >= decision["message_index"]:
-                    continue
-                other_chosen, other_passed_over = named(other)
-                flagged = bool(chosen and chosen in other_passed_over) or bool(
-                    other_chosen and other_chosen in passed_over
-                )
-                similarity = _cosine(decision.get("embedding"), other.get("embedding"))
-                if flagged or similarity >= min_similarity:
-                    scored.append((2.0 if flagged else similarity, other))
-            earlier = [other for _, other in sorted(scored, key=lambda x: -x[0])[:candidates]]
+            # Earlier decisions that passed over this choice, or chose what
+            # this one passes over, come first; then the ones that resemble it.
+            flagged = [*passed.get(chosen, [])] if chosen else []
+            for name in passed_over:
+                flagged += chose.get(name, [])
+            similar = await self._client.execute_read(
+                _EARLIER_SIMILAR_DECISIONS,
+                {
+                    "id": decision["id"],
+                    "session_id": session_id,
+                    "fetch": candidates * 8,
+                    "limit": candidates,
+                    "min_score": min_similarity,
+                },
+            )
+            order: list[str] = []
+            for other_id in [*flagged, *(row["id"] for row in similar)]:
+                other = by_id.get(other_id)
+                if (
+                    other is not None
+                    and other["message_index"] < decision["message_index"]
+                    and other_id not in order
+                ):
+                    order.append(other_id)
+            earlier = [by_id[other_id] for other_id in order[:candidates]]
             if earlier:
                 answers = await judge_safely(
                     judge,

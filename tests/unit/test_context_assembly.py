@@ -262,6 +262,67 @@ def _session_rows() -> dict[str, list[dict[str, Any]]]:
     }
 
 
+class TestLongConversations:
+    @staticmethod
+    def summaries(count: int) -> list[dict[str, Any]]:
+        return [
+            {
+                "start_index": 10 * i,
+                "end_index": 10 * i + 9,
+                "text": f"- stretch {i} " + "x" * 300,
+                "start_time": "2024-03-15T00:00:00Z",
+            }
+            for i in range(count)
+        ]
+
+    def test_a_short_conversation_is_outlined_in_full(self) -> None:
+        text = ContextAssembler._render_outline(self.summaries(5), 50, max_chars=4000)
+        assert "The whole conversation (50 messages)" in text
+        assert text.count("Messages #") == 5
+
+    def test_a_long_one_shows_the_stretches_near_the_question(self) -> None:
+        # Room for 10 of the 100 stretches; the rankings point into two of them.
+        text = ContextAssembler._render_outline(
+            self.summaries(100), 1000, max_chars=2600, near=[455, 457, 871]
+        )
+        assert "1000 messages in 100 stretches. These 10 are" in text
+        assert text.count("Messages #") == 10
+        assert "Messages #451-460" in text and "Messages #871-880" in text
+        # The rest are spread over the conversation, in order, from its start.
+        starts = [int(line.split("#")[1].split("-")[0]) for line in text.splitlines()[2::2]]
+        assert starts == sorted(starts) and starts[0] == 1
+        assert len(text) <= 2600 * 1.2
+
+    def test_without_hints_the_stretches_are_spread_evenly(self) -> None:
+        text = ContextAssembler._render_outline(self.summaries(100), 1000, max_chars=1300)
+        assert [line for line in text.splitlines() if line.startswith("Messages #")] == [
+            "Messages #1-10 (2024-03-15):",
+            "Messages #201-210 (2024-03-15):",
+            "Messages #401-410 (2024-03-15):",
+            "Messages #601-610 (2024-03-15):",
+            "Messages #801-810 (2024-03-15):",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_only_the_nearest_instructions_are_kept_beyond_the_limit(self) -> None:
+        rows = _session_rows()
+        rows["MATCH (p:Preference"] = [
+            {
+                "id": f"p{i}",
+                "text": f"Instruction {i}.",
+                "kind": "instruction",
+                "message_index": i,
+                "score": i / 10,
+            }
+            for i in range(6)
+        ]
+        assembler = ContextAssembler(FakeClient(rows), FakeEmbedder())  # type: ignore[arg-type]
+        result = await assembler.assemble("Have I used Docker?", session_id="s", max_instructions=2)
+        assert result.details["instructions"] == 2
+        assert "Instruction 5." in result.text and "Instruction 4." in result.text
+        assert "Instruction 3." not in result.text
+
+
 class TestAssemble:
     @pytest.mark.asyncio
     async def test_the_distilled_memory_follows_the_excerpts(self) -> None:
