@@ -32,6 +32,8 @@ file for the complete current inventory used in deployments.
 | `entity_id`             | `Entity`             | `id`         | Unique entity identifier across all subtypes.
 | `preference_id`         | `Preference`         | `id`         | Unique preference identifier.
 | `fact_id`               | `Fact`               | `id`         | Unique fact identifier.
+| `summary_id`            | `Summary`            | `id`         | Unique identifier of a conversation-outline summary (session distillation).
+| `decision_id`           | `Decision`           | `id`         | Unique decision identifier (session distillation).
 | `reasoning_trace_id`    | `ReasoningTrace`     | `id`         | Unique reasoning-trace identifier.
 | `reasoning_step_id`     | `ReasoningStep`      | `id`         | Unique reasoning-step identifier.
 | `tool_name`             | `Tool`               | `name`       | One `Tool` node per unique tool name (used for aggregated stats).
@@ -99,6 +101,7 @@ After setup, MemoryClient validates the dimensions of existing managed vector in
 | `entity_embedding_idx`      | `Entity`          | `embedding`      | Semantic search over entity descriptions.
 | `preference_embedding_idx`  | `Preference`      | `embedding`      | Semantic search over preferences.
 | `fact_embedding_idx`        | `Fact`            | `embedding`      | Semantic search over facts.
+| `decision_embedding_idx`    | `Decision`        | `embedding`      | Semantic search over decisions.
 | `task_embedding_idx`        | `ReasoningTrace`  | `task_embedding` | Search past reasoning traces by task similarity.
 | `step_embedding_idx`        | `ReasoningStep`   | `embedding`      | Semantic search over individual reasoning steps (used by `search_steps`).
 |===

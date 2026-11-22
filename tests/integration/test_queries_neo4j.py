@@ -86,6 +86,8 @@ class TestMessageQueries:
                 "content": "Hello, world!",
                 "embedding": None,
                 "metadata": None,
+                # When the message was said; None stamps it at write time.
+                "timestamp": None,
             },
         )
 
@@ -125,6 +127,7 @@ class TestMessageQueries:
                 "content": "To be deleted",
                 "embedding": None,
                 "metadata": None,
+                "timestamp": None,
             },
         )
 
@@ -228,6 +231,7 @@ class TestEntityQueries:
                 "content": "I met John yesterday",
                 "embedding": None,
                 "metadata": None,
+                "timestamp": None,
             },
         )
 
@@ -664,6 +668,7 @@ class TestSessionQueries:
                 "content": "Test message",
                 "embedding": None,
                 "metadata": None,
+                "timestamp": None,
             },
         )
 
@@ -704,6 +709,7 @@ class TestEntityExtractionQueries:
                 "content": "Message 1",
                 "embedding": None,
                 "metadata": None,
+                "timestamp": None,
             },
         )
         await neo4j_client.execute_write(
@@ -715,6 +721,7 @@ class TestEntityExtractionQueries:
                 "content": "Message 2",
                 "embedding": None,
                 "metadata": None,
+                "timestamp": None,
             },
         )
 
@@ -776,6 +783,7 @@ class TestEntityExtractionQueries:
                     "content": f"Message {i}",
                     "embedding": None,
                     "metadata": None,
+                    "timestamp": None,
                 },
             )
 

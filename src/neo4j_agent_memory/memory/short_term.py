@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import Awaitable, Callable
@@ -496,6 +497,22 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         self._validation_mode = validation_mode
         self._resolver = resolver
         self._resolution_config = resolution_config
+        # What ontology enforcement has dropped since this client connected.
+        self._dropped = {"entities": 0, "relations": 0}
+        self._dropped_relation_patterns: dict[str, int] = {}
+
+    @property
+    def extraction_drops(self) -> dict[str, Any]:
+        """What ontology enforcement has dropped since this client connected.
+
+        ``entities`` (strict mode only) and ``relations`` are counts;
+        ``relation_patterns`` maps ``Source -[TYPE]-> Target`` (by entity type)
+        to how often it was dropped, most frequent first. A pattern the
+        ontology was meant to allow shows up here, where a debug log line per
+        message goes unread.
+        """
+        patterns = sorted(self._dropped_relation_patterns.items(), key=lambda kv: -kv[1])
+        return {**self._dropped, "relation_patterns": dict(patterns)}
 
     def _node_label(self, entity_type: str | None, subtype: str | None) -> str | None:
         """The ontology label an entity node gets, for an exact declaration only.
@@ -542,6 +559,7 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
                     undeclared_types.add(entity.full_type)
             dropped = len(result.entities) - len(kept)
             if dropped:
+                self._dropped["entities"] += dropped
                 undeclared = sorted(undeclared_types)
                 logger.warning(
                     "Dropping %d extracted entity/entities with types not declared by "
@@ -559,6 +577,18 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
 
         result, violations = result.validate_relations(ontology, mode="drop")
         if violations:
+            self._dropped["relations"] += len(violations)
+            types = {e.name.lower(): e for e in result.entities}
+            for relation in violations:
+                source = types.get(relation.source.lower())
+                target = types.get(relation.target.lower())
+                pattern = (
+                    f"{self._label_of(source)} -[{relation.relation_type}]-> "
+                    f"{self._label_of(target)}"
+                )
+                self._dropped_relation_patterns[pattern] = (
+                    self._dropped_relation_patterns.get(pattern, 0) + 1
+                )
             from_gliner2 = any(e.extractor == "gliner2" for e in result.entities)
             message = "Dropped %d extracted relation(s) not permitted by ontology %r: %s"
             summary = ", ".join(
@@ -575,6 +605,13 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
             else:
                 logger.debug(message, len(violations), ontology.domain.name, summary)
         return result
+
+    def _label_of(self, entity: ExtractedEntity | None) -> str:
+        """The ontology label of an extracted entity, for reporting."""
+        if entity is None:
+            return "?"
+        label = self._ontology.label_for(entity.type, entity.subtype) if self._ontology else None
+        return label or entity.full_type
 
     def _enforce_multi_tenant(self, user_identifier: str | None) -> None:
         """Raise if multi-tenant is on and ``user_identifier`` is missing."""
@@ -603,6 +640,7 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         on_progress: Callable[[int, int], None] | None = None,
         on_batch_complete: Callable[[int, list[Message]], None] | None = None,
         user_identifier: str | None = None,
+        max_concurrency: int = 1,
     ) -> list[Message]:
         """
         Bulk load messages with transaction batching for better performance.
@@ -638,6 +676,11 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
             user_identifier: When provided, scopes the conversation to a
                 :User node via ``(:User)-[:HAS_CONVERSATION]->(:Conversation)``.
                 Required when ``MemorySettings.memory.multi_tenant=True``.
+            max_concurrency: With ``extract_entities=True``, how many messages
+                the extractor works on at once. Extraction is the slow step and
+                is independent per message; the results are still written one
+                message at a time, in conversation order, so entity resolution
+                sees them in the order a sequential ingest would.
 
         Returns:
             List of created Message objects
@@ -724,15 +767,36 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
 
         # Extract entities if enabled (done separately for performance)
         if extract_entities and self._extractor is not None:
-            for msg in all_created:
-                await self._extract_and_link_entities(
-                    msg,
-                    extract_relations=extract_relations,
-                    user_identifier=user_identifier,
-                    embed_entities=generate_embeddings,
+            window = max(1, max_concurrency) * 4
+            for start in range(0, len(all_created), window):
+                chunk = all_created[start : start + window]
+                extractions = await self._extract_concurrently(
+                    [msg.content for msg in chunk], max_concurrency
                 )
+                for msg, extraction in zip(chunk, extractions, strict=True):
+                    await self._extract_and_link_entities(
+                        msg,
+                        extract_relations=extract_relations,
+                        user_identifier=user_identifier,
+                        embed_entities=generate_embeddings,
+                        extraction=extraction,
+                    )
 
         return all_created
+
+    async def _extract_concurrently(
+        self, contents: list[str], max_concurrency: int
+    ) -> list[ExtractionResult]:
+        """Run the extractor over several texts, at most ``max_concurrency`` at once."""
+        assert self._extractor is not None
+        extractor = self._extractor
+        semaphore = asyncio.Semaphore(max(1, max_concurrency))
+
+        async def one(content: str) -> ExtractionResult:
+            async with semaphore:
+                return await extractor.extract(content)
+
+        return list(await asyncio.gather(*(one(content) for content in contents)))
 
     # ── Gold tier: explicit conversation lifecycle ──────────────────────
     #
@@ -905,6 +969,7 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         extraction_mode: Literal["auto", "skip", "explicit"] = "auto",
         explicit_mentions: list[Any] | None = None,
         user_identifier: str | None = None,
+        timestamp: datetime | str | None = None,
     ) -> Message:
         """
         Add a message to a conversation.
@@ -936,6 +1001,12 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
             user_identifier: When provided, scopes the conversation to a
                 :User node via ``(:User)-[:HAS_CONVERSATION]->(:Conversation)``.
                 Required when ``MemorySettings.memory.multi_tenant=True``.
+            timestamp: When the message was said, as a datetime or an ISO 8601
+                string. Defaults to the time it is stored. Supply it when
+                importing a conversation that happened earlier: dates in the
+                message ("next Friday") are resolved against it. The message's
+                position in the conversation (``index``) is the order of the
+                calls, whatever timestamps are supplied.
 
         Returns:
             The created message
@@ -977,6 +1048,9 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
                 "content": message.content,
                 "embedding": message.embedding,
                 "metadata": _serialize_metadata(message.metadata),
+                "timestamp": (
+                    timestamp.isoformat() if isinstance(timestamp, datetime) else timestamp
+                ),
             },
         )
 
@@ -1112,11 +1186,11 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         Args:
             session_id: Session identifier
             conversation_id: Optional specific conversation ID
-            limit: Maximum number of messages
+            limit: Maximum number of messages; the most recent ones are kept
             since: Only get messages after this time
 
         Returns:
-            Conversation with messages
+            Conversation with messages, oldest first
         """
         # Get conversation
         if conversation_id:
@@ -1207,23 +1281,39 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
             metadata_filters or {}, metadata_prop="m.metadata"
         )
 
+        # The vector index spans every session. A session-scoped search reads
+        # more candidates from it and keeps those that belong to the session.
+        scope: dict[str, Any] = (
+            {"session_id": session_id, "fetch": max(limit * 5, 50)}
+            if session_id is not None
+            else {}
+        )
+
         # Build the query with optional metadata filtering
         if metadata_clause:
             # Use a modified query that includes metadata filtering
             # Metadata is stored as JSON string - we use CONTAINS for filtering
-            cypher_query = queries.build_metadata_search_query(metadata_clause)
+            cypher_query = queries.build_metadata_search_query(
+                metadata_clause, session_scoped=session_id is not None
+            )
             params = {
                 "embedding": query_embedding,
                 "limit": limit,
                 "threshold": threshold,
                 **metadata_params,
+                **scope,
             }
         else:
-            cypher_query = queries.SEARCH_MESSAGES_BY_EMBEDDING
+            cypher_query = (
+                queries.SEARCH_SESSION_MESSAGES_BY_EMBEDDING
+                if session_id is not None
+                else queries.SEARCH_MESSAGES_BY_EMBEDDING
+            )
             params = {
                 "embedding": query_embedding,
                 "limit": limit,
                 "threshold": threshold,
+                **scope,
             }
 
         results = await self._client.execute_read(cypher_query, params)
@@ -1274,7 +1364,7 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
 
         # Search for relevant messages
         if self._embedder is not None:
-            relevant = await self.search_messages(query, limit=5)
+            relevant = await self.search_messages(query, session_id=session_id, limit=5)
             if relevant:
                 parts.append("\n### Relevant Past Messages")
                 for msg in relevant:
@@ -1415,6 +1505,7 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         extract_relations: bool = True,
         on_progress: Callable[[int, int], None] | None = None,
         user_identifier: str | None = None,
+        max_concurrency: int = 1,
     ) -> dict[str, int]:
         """
         Extract entities and relations from all messages in a session.
@@ -1430,6 +1521,8 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
             on_progress: Progress callback (processed_count, total_count)
             user_identifier: Tenant these messages belong to, used to scope
                 resolution candidates when ``resolution.scope="user"``.
+            max_concurrency: How many messages the extractor works on at once.
+                Results are written one message at a time, in order.
 
         Returns:
             Stats dict with ``messages_processed``, ``entities_extracted``
@@ -1462,13 +1555,13 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         # Process in batches
         for i in range(0, total, batch_size):
             batch = results[i : i + batch_size]
+            extractions = await self._extract_concurrently(
+                [row["content"] for row in batch], max_concurrency
+            )
 
-            for row in batch:
+            for row, extraction_result in zip(batch, extractions, strict=True):
                 message_id = row["id"]
                 content = row["content"]
-
-                # Extract entities
-                extraction_result = await self._extractor.extract(content)
 
                 # Filter out invalid entities (stopwords, numbers, etc.)
                 extraction_result = extraction_result.filter_invalid_entities(self._ontology)
@@ -1901,6 +1994,7 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
         extract_relations: bool = True,
         user_identifier: str | None = None,
         embed_entities: bool = True,
+        extraction: ExtractionResult | None = None,
     ) -> None:
         """Extract entities from message and link them.
 
@@ -1916,11 +2010,15 @@ class ShortTermMemory(BaseMemory[Message], ShortTermProtocol):
                 (the caller turned embeddings off) never calls the embedder and
                 stores new entities without an embedding; an existing entity
                 keeps the embedding it has.
+            extraction: What the extractor returned for this message, when the
+                caller has already run it (batch ingest extracts concurrently).
         """
         if self._extractor is None:
             return
 
-        result = await self._extractor.extract(message.content)
+        result = (
+            extraction if extraction is not None else await self._extractor.extract(message.content)
+        )
 
         # Filter out invalid entities (stopwords, numbers, etc.)
         result = result.filter_invalid_entities(self._ontology)

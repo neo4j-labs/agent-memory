@@ -126,12 +126,21 @@ CREATE (m:Message {
     role: $role,
     content: $content,
     embedding: $embedding,
-    // Never sort before the tail: an append that waited on the lock took its
-    // statement clock before the append it waited for committed.
-    timestamp: CASE WHEN last IS NOT NULL AND last.timestamp >= datetime()
+    // A caller-supplied timestamp is when the message was said, which for an
+    // imported conversation is not when it is written. Otherwise never sort
+    // before the tail: an append that waited on the lock took its statement
+    // clock before the append it waited for committed.
+    timestamp: CASE WHEN $timestamp IS NOT NULL THEN datetime($timestamp)
+                    WHEN last IS NOT NULL AND last.timestamp >= datetime()
                     THEN last.timestamp + duration({microseconds: 1})
                     ELSE datetime()
                END,
+    // Position in the conversation, from 0. Unlike the timestamp it is the
+    // order the messages were appended in, whatever times the caller supplied.
+    index: CASE WHEN last IS NULL THEN 0
+                ELSE coalesce(last.index + 1,
+                              COUNT { (c)-[:HAS_MESSAGE]->(:Message) })
+           END,
     metadata: $metadata
 })
 CREATE (c)-[:HAS_MESSAGE]->(m)
@@ -163,9 +172,12 @@ WITH c, last,
      CASE WHEN last IS NOT NULL AND last.timestamp >= datetime()
           THEN last.timestamp + duration({microseconds: 1})
           ELSE datetime()
-     END AS base
+     END AS base,
+     CASE WHEN last IS NULL THEN 0
+          ELSE coalesce(last.index + 1, COUNT { (c)-[:HAS_MESSAGE]->(:Message) })
+     END AS base_index
 UNWIND range(0, size($messages) - 1) AS i
-WITH c, last, base, i, $messages[i] AS msg
+WITH c, last, base, base_index, i, $messages[i] AS msg
 CREATE (m:Message {
     id: msg.id,
     role: msg.role,
@@ -175,6 +187,8 @@ CREATE (m:Message {
                     THEN datetime(msg.timestamp)
                     ELSE base + duration({microseconds: i})
                END,
+    // Position in the conversation, in input order (see CREATE_MESSAGE).
+    index: base_index + i,
     metadata: msg.metadata
 })
 CREATE (c)-[:HAS_MESSAGE]->(m)
@@ -207,11 +221,17 @@ RETURN m.id AS id, m.content AS content
 ORDER BY m.timestamp ASC
 """
 
+# The limit keeps the *newest* messages and they are returned oldest first.
+# Ordering ascending and then limiting would return the start of the
+# conversation instead, which is never what a bounded read of a chat history
+# wants; the NAMS backend bounds a conversation the same way.
 GET_CONVERSATION_MESSAGES = """
 MATCH (c:Conversation {id: $conversation_id})-[:HAS_MESSAGE]->(m:Message)
+WITH m
+ORDER BY m.timestamp DESC, m.id DESC
+LIMIT $limit
 RETURN m
 ORDER BY m.timestamp ASC, m.id ASC
-LIMIT $limit
 """
 
 SEARCH_MESSAGES_BY_EMBEDDING = """
@@ -220,6 +240,18 @@ YIELD node, score
 WHERE score >= $threshold
 RETURN node AS m, score
 ORDER BY score DESC
+"""
+
+# The vector index covers every session, so a session-scoped search over-fetches
+# ($fetch) and keeps the hits that belong to the session.
+SEARCH_SESSION_MESSAGES_BY_EMBEDDING = """
+CALL db.index.vector.queryNodes('message_embedding_idx', $fetch, $embedding)
+YIELD node, score
+WHERE score >= $threshold
+MATCH (c:Conversation {session_id: $session_id})-[:HAS_MESSAGE]->(node)
+RETURN node AS m, score
+ORDER BY score DESC
+LIMIT $limit
 """
 
 DELETE_MESSAGE = """
@@ -1861,14 +1893,14 @@ GET_MESSAGES_FOR_ENTITY_EXTRACTION = """
 MATCH (c:Conversation {session_id: $session_id})-[:HAS_MESSAGE]->(m:Message)
 WHERE NOT (m)-[:MENTIONS]->(:Entity)
 RETURN m.id AS id, m.content AS content
-ORDER BY m.timestamp ASC
+ORDER BY m.index ASC, m.timestamp ASC
 """
 
 # Get all messages for a session (for re-extraction)
 GET_ALL_MESSAGES_FOR_SESSION = """
 MATCH (c:Conversation {session_id: $session_id})-[:HAS_MESSAGE]->(m:Message)
 RETURN m.id AS id, m.content AS content
-ORDER BY m.timestamp ASC
+ORDER BY m.index ASC, m.timestamp ASC
 """
 
 # Get key entities mentioned in a session (for summaries)
@@ -1883,28 +1915,38 @@ RETURN name, type, mention_count
 # Template for vector search with metadata filtering
 # Use build_metadata_search_query() to generate the full query
 SEARCH_MESSAGES_WITH_METADATA_TEMPLATE = """
-CALL db.index.vector.queryNodes('message_embedding_idx', $limit * 2, $embedding)
+CALL db.index.vector.queryNodes('message_embedding_idx', {fetch}, $embedding)
 YIELD node, score
 WHERE score >= $threshold
 WITH node AS m, score
 WHERE m.metadata IS NOT NULL AND {metadata_clause}
-RETURN m, score
+{session_clause}RETURN m, score
 ORDER BY score DESC
 LIMIT $limit
 """
 
 
-def build_metadata_search_query(metadata_clause: str) -> str:
+def build_metadata_search_query(metadata_clause: str, *, session_scoped: bool = False) -> str:
     """Build vector search query with metadata filtering.
 
     Args:
         metadata_clause: The WHERE clause for metadata filtering
                         (e.g., "m.metadata CONTAINS 'speaker'")
+        session_scoped: Keep only messages of the session ``$session_id``. The
+            query then reads ``$fetch`` candidates from the index.
 
     Returns:
         Complete Cypher query string for vector search with metadata filter
     """
-    return SEARCH_MESSAGES_WITH_METADATA_TEMPLATE.format(metadata_clause=metadata_clause)
+    return SEARCH_MESSAGES_WITH_METADATA_TEMPLATE.format(
+        metadata_clause=metadata_clause,
+        fetch="$fetch" if session_scoped else "$limit * 2",
+        session_clause=(
+            "MATCH (:Conversation {session_id: $session_id})-[:HAS_MESSAGE]->(m)\n"
+            if session_scoped
+            else ""
+        ),
+    )
 
 
 # =============================================================================

@@ -38,6 +38,7 @@ Import configuration classes from `neo4j_agent_memory.config.settings`; `MemoryS
 | `search` | SearchConfig or dictionary | Declared search values; see xref:reference/configuration-operations.adoc#search[Search configuration].
 | `geocoding` | GeocodingConfig or dictionary | Disabled.
 | `enrichment` | EnrichmentConfig or dictionary | Disabled.
+| `judge` | `Judge` instance, `"llm"`, `"typesafe"`, `"typesafe/<model>"`, or None | None. A judge answers the closed questions of session distillation and hybrid context assembly with a probability. `"llm"` asks the configured `llm` through structured output; `"typesafe"` asks TypeSafe's Jev decision model (needs the `typesafe` extra and `TYPESAFE_API_KEY`). Bolt only.
 |===
 
 `MemorySettings.from_dict(config)` is equivalent to passing the dictionary as keyword arguments. The field is `schema_config`, not `schema`. All child config models reject unknown fields, as does direct MemorySettings construction.

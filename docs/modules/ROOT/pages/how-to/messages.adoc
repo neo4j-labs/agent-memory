@@ -74,7 +74,7 @@ anchor:_filter_by_session[]anchor:_search_messages[]anchor:_semantic_search[]anc
 `short_term.search_messages` accepts a `session_id` keyword, but on the current Bolt implementation the underlying Cypher (`SEARCH_MESSAGES_BY_EMBEDDING`) never filters on it, so results can cross sessions. Do not use it to enforce user isolation. Authorize the caller's session ID yourself before passing it to `get_conversation`. The example's semantic search is explicitly database-wide and runs only on the disposable example data.
 ====
 
-`get_conversation` accepts `limit` and `since`; `limit=None` currently fetches at most 1,000 messages, then applies the timestamp filter in Python. For larger histories, specify the intended bound or implement a scoped Cypher pagination query. See xref:reference/api/short-term.adoc[exact message contracts].
+`get_conversation` accepts `limit` and `since`; `limit` keeps the most recent messages and returns them oldest first. `limit=None` currently fetches at most the newest 1,000 messages, then applies the timestamp filter in Python. For larger histories, specify the intended bound or implement a scoped Cypher pagination query. See xref:reference/api/short-term.adoc[exact message contracts].
 
 == Choose the related operation
 

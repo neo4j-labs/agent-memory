@@ -1892,9 +1892,10 @@ requires-dist = [
     { name = "spacy", marker = "extra == 'extraction'", specifier = ">=3.7.0" },
     { name = "spacy", marker = "extra == 'spacy'", specifier = ">=3.7.0" },
     { name = "strands-agents", marker = "extra == 'strands'", specifier = ">=1.52,<2" },
+    { name = "typesafe-sdk", marker = "extra == 'typesafe'", specifier = ">=0.7,<1" },
     { name = "typing-extensions", specifier = ">=4.4" },
 ]
-provides-extras = ["openai", "anthropic", "sentence-transformers", "vertex-ai", "bedrock", "litellm", "instructor", "google", "aws", "strands", "spacy", "gliner2", "gliner", "extraction", "fuzzy", "cli", "opentelemetry", "opik", "observability", "langchain", "langchain-agents", "llamaindex", "pydantic-ai", "crewai", "openai-agents", "microsoft-agent", "mcp", "google-adk", "nams", "all", "full"]
+provides-extras = ["openai", "anthropic", "sentence-transformers", "vertex-ai", "bedrock", "litellm", "instructor", "google", "aws", "strands", "spacy", "gliner2", "gliner", "typesafe", "extraction", "fuzzy", "cli", "opentelemetry", "opik", "observability", "langchain", "langchain-agents", "llamaindex", "pydantic-ai", "crewai", "openai-agents", "microsoft-agent", "mcp", "google-adk", "nams", "all", "full"]
 
 [package.metadata.requires-dev]
 dev = [
