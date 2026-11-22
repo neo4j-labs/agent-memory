@@ -21,6 +21,7 @@ from neo4j_agent_memory.memory.distillation import (
     MessageStatementsAndDecisions,
     PreferenceStatement,
     _with_value,
+    entities_named_in_texts,
     mentions_detail,
     stated_details,
     topic_spans,
@@ -616,3 +617,66 @@ class TestTopics:
             {"rows": [{"id": "m4", "probability": 0.8}]}
         ]
         assert judge.calls[0][0] == {"previous_message": "message 2", "message": "message 4"}
+
+
+class TestEntityLinks:
+    def test_whole_names_are_matched_whatever_the_case(self) -> None:
+        pairs = entities_named_in_texts(
+            {
+                "a": "The user integrated Flask-Login into the flask app.",
+                "b": "The user likes SQLite.",
+            },
+            {"e1": "Flask-Login", "e2": "SQL", "e3": "Flask App", "e4": "the user", "e5": "io"},
+        )
+        assert sorted(pairs) == [("a", "e1"), ("a", "e3")]
+
+    @pytest.mark.asyncio
+    async def test_statements_are_linked_to_the_entities_they_name(self) -> None:
+        client = FakeClient(
+            {
+                "RETURN id, label, text": [
+                    {"id": "f1", "label": "Fact", "text": "The user deployed with Docker."},
+                    {"id": "d1", "label": "Decision", "text": "The user chose Docker over Podman."},
+                    {"id": "p1", "label": "Preference", "text": "The user prefers short answers."},
+                ],
+                "RETURN DISTINCT e.id AS id, e.name AS name": [
+                    {"id": "e1", "name": "Docker"},
+                    {"id": "e2", "name": "Podman"},
+                ],
+            }
+        )
+        memory = DistillationMemory(client, FakeEmbedder(), FakeLLM())  # type: ignore[arg-type]
+        assert await memory.link_statements_to_entities("s") == 3
+        written = {
+            query.split("MATCH (s:")[1].split(" ")[0]: params["rows"]
+            for query, params in client.writes
+            if "MERGE (s)-[:ABOUT]->(e)" in query
+        }
+        assert written == {
+            "Fact": [{"statement": "f1", "entity": "e1"}],
+            "Decision": [
+                {"statement": "d1", "entity": "e1"},
+                {"statement": "d1", "entity": "e2"},
+            ],
+        }
+
+
+class TestJudgeUnavailable:
+    @pytest.mark.asyncio
+    async def test_an_ingest_stops_when_the_judge_is_unavailable(self) -> None:
+        from neo4j_agent_memory.judge import JudgeUnavailable
+
+        class NoCredits:
+            name = "down"
+
+            async def judge(self, state: Any, questions: Any) -> dict[str, Judgement]:
+                raise JudgeUnavailable("no credits")
+
+        found = MessageStatements(facts=[_fact("The user uses Flask.")], preferences=[])
+        client = FakeClient({"statements_extracted": _messages(2)})
+        memory = DistillationMemory(  # type: ignore[arg-type]
+            client, FakeEmbedder(), FakeLLM({MessageStatements: found}), NoCredits()
+        )
+        with pytest.raises(JudgeUnavailable):
+            await memory.extract_statements("s")
+        assert client.written("CREATE (f:Fact") == []

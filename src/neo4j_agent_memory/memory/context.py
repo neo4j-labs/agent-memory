@@ -136,6 +136,70 @@ def graph_message_scores(
     return scores
 
 
+def walk_message_scores(
+    seeds: dict[str, float],
+    entity_mentions: dict[str, set[int]],
+    related: dict[str, set[str]],
+    *,
+    restart: float = 0.5,
+    steps: int = 6,
+) -> dict[int, float]:
+    """Score each message by a random walk that keeps returning to the seeds.
+
+    The walk moves over the session's graph: from an entity to a message that
+    mentions it or to an entity it is related to, and from a message to an
+    entity it mentions. With probability ``restart`` it goes back to a seed
+    entity (in proportion to the seed's weight). A message scores by how much
+    of the walk passes through it, so it can score without mentioning any seed,
+    by mentioning things that the seeds' messages mention too.
+
+    This is personalized PageRank with the question's entities as the
+    personalization. An entity mentioned everywhere spreads its share thin,
+    which does here what the inverse-frequency weight does for a single hop.
+    """
+    total = sum(weight for weight in seeds.values() if weight > 0)
+    if total <= 0:
+        return {}
+    start = {entity: weight / total for entity, weight in seeds.items() if weight > 0}
+    message_entities: dict[int, list[str]] = {}
+    for entity, positions in entity_mentions.items():
+        for position in positions:
+            message_entities.setdefault(position, []).append(entity)
+    at_entities = dict(start)
+    at_messages: dict[int, float] = {}
+    for _ in range(steps):
+        to_entities: dict[str, float] = {}
+        to_messages: dict[int, float] = {}
+        for entity, mass in at_entities.items():
+            mentions = entity_mentions.get(entity, set())
+            neighbours = related.get(entity, set())
+            degree = len(mentions) + len(neighbours)
+            if degree == 0:
+                continue
+            share = mass / degree
+            for position in mentions:
+                to_messages[position] = to_messages.get(position, 0.0) + share
+            for other in neighbours:
+                to_entities[other] = to_entities.get(other, 0.0) + share
+        for position, mass in at_messages.items():
+            entities = message_entities.get(position, [])
+            if not entities:
+                continue
+            share = mass / len(entities)
+            for entity in entities:
+                to_entities[entity] = to_entities.get(entity, 0.0) + share
+        at_entities = {e: (1 - restart) * mass for e, mass in to_entities.items()}
+        for entity, weight in start.items():
+            at_entities[entity] = at_entities.get(entity, 0.0) + restart * weight
+        at_messages = {m: (1 - restart) * mass for m, mass in to_messages.items()}
+    return at_messages
+
+
+def kind_of(label: str) -> str:
+    """The name a reader would use for an entity type: ``OBJECT:TECHNOLOGY`` is ``technology``."""
+    return label.rsplit(":", 1)[-1].replace("_", " ").lower()
+
+
 def pair_of(position: int, roles: list[str]) -> tuple[int, int]:
     """The user/assistant exchange a message belongs to, as (first, last)."""
     role = roles[position]
@@ -246,6 +310,26 @@ _ELAPSED = re.compile(
 def asks_for_elapsed_time(question: str) -> bool:
     """Whether the question asks how much time lies between two things."""
     return bool(_ELAPSED.search(question))
+
+
+_COUNTING = re.compile(
+    r"\bhow many\b"
+    r"|\blist (?:all|the|every|each)\b"
+    r"|\bwhich (?:\w+ ){0,4}(?:have|did|do|am|was|were) i\b"
+    r"|\bwhat (?:are|were) (?:all )?(?:the|my)\b"
+    r"|\ball (?:of )?the (?:\w+ ){0,3}(?:i|that i)\b",
+    re.IGNORECASE,
+)
+
+
+def asks_to_count_or_list(question: str) -> bool:
+    """Whether the question wants things counted or listed, and not time measured.
+
+    A wide net on purpose: it only decides whether the judge is asked at all.
+    "How many days between ..." is a question about elapsed time, not a count
+    of things.
+    """
+    return bool(_COUNTING.search(question)) and not asks_for_elapsed_time(question)
 
 
 def describe_span(days: int) -> str:
@@ -386,10 +470,38 @@ ORDER BY both_named DESC, support DESC, source ASC, target ASC
 LIMIT $limit
 """
 
+_SESSION_RELATIONS = """
+MATCH (c:Conversation {session_id: $session_id})-[:HAS_MESSAGE]->(:Message)
+      -[:MENTIONS]->(a:Entity)-[:RELATED_TO]-(b:Entity)
+RETURN DISTINCT a.id AS a, b.id AS b
+"""
+
+# What the user said about given entities, each statement with how near it is
+# to the question and, when a later statement replaced it, where.
+_ENTITY_STATEMENTS = """
+MATCH (e:Entity)<-[:ABOUT]-(f:Fact {session_id: $session_id})
+WHERE e.id IN $ids
+OPTIONAL MATCH (f)-[r:SUPERSEDED_BY]->(n:Fact)
+WITH e, f, max(CASE WHEN coalesce(r.probability, 1.0) >= $min_probability
+                    THEN n.message_index END) AS changed_at
+RETURN e.id AS entity, f.id AS id, f.text AS text, f.message_index AS message_index,
+       f.said_at AS said_at, f.event_date AS event_date, changed_at,
+       CASE WHEN f.embedding IS NULL THEN 0.0
+            ELSE vector.similarity.cosine(f.embedding, $embedding) END AS score
+"""
+
 _MESSAGE_CONTENT = """
 MATCH (m:Message) WHERE m.id IN $ids
 RETURN m.id AS id, m.content AS content
 """
+
+
+async def _ask(
+    judge: Judge, state: Any, questions: Any, *, what: str, retries: int = 2
+) -> dict[str, Any] | None:
+    """Ask the judge for a context. Assembly does without a judge that is unavailable."""
+    answers = await judge_safely(judge, state, questions, what=what, retries=retries, degrade=True)
+    return dict(answers) if answers is not None else None
 
 
 async def _nothing() -> None:
@@ -405,6 +517,7 @@ class _Session:
     position: dict[str, int]
     roles: list[str]
     entities: dict[str, dict[str, Any]]
+    related: dict[str, set[str]] = field(default_factory=dict)
 
 
 class ContextAssembler:
@@ -438,11 +551,17 @@ class ContextAssembler:
                 "type": label,
                 "mentions": {position[mid] for mid in row["message_ids"] if mid in position},
             }
+        related: dict[str, set[str]] = {}
+        for row in await self._client.execute_read(_SESSION_RELATIONS, {"session_id": session_id}):
+            if row["a"] in entities and row["b"] in entities:
+                related.setdefault(row["a"], set()).add(row["b"])
+                related.setdefault(row["b"], set()).add(row["a"])
         session = _Session(
             messages=messages,
             position=position,
             roles=[row["role"] for row in messages],
             entities=entities,
+            related=related,
         )
         self._sessions[session_id] = session
         return session
@@ -488,6 +607,11 @@ class ContextAssembler:
         route: bool = False,
         broad_top_k: int = 24,
         broad_message_chars: int = 700,
+        graph_walk: str = "hop",
+        entity_statements: int = 0,
+        judge_entities: bool = False,
+        enumerate_entities: bool = False,
+        max_enumerated: int = 60,
     ) -> AssembledContext:
         """Assemble the context for ``query`` from the memory of ``session_id``.
 
@@ -545,6 +669,28 @@ class ContextAssembler:
                 place of fewer exchanges in full. Off by default: on the BEAM
                 benchmark the wider layout found more of the evidence for such
                 questions without improving the answers.
+
+        Four further options change how the entity graph is used:
+
+        Args:
+            graph_walk: How messages are ranked from the question's entities.
+                ``"hop"`` scores the messages that mention them. ``"walk"``
+                runs a random walk with restart over mentions and
+                relationships (:func:`walk_message_scores`), which also
+                reaches messages that mention none of them.
+            entity_statements: When positive, go from the entities the question
+                names to what the user said about them (``ABOUT``) and show up
+                to this many statements per entity that the statement search
+                did not already find, nearest to the question first.
+            judge_entities: With a judge, ask which of the candidate entities
+                the question is about, and keep only those.
+            enumerate_entities: With a judge, and for a question worded as a
+                count or a list (:func:`asks_to_count_or_list`), ask whether it
+                wants things of one kind counted or listed, and of which kind
+                (the entity types of the session). The entities of that kind which
+                the user mentioned are then judged one by one, up to
+                ``max_enumerated``, and those that fit are listed with where
+                they came up.
 
         Returns:
             The context text and a record of what went into it.
@@ -690,6 +836,38 @@ class ContextAssembler:
         for entity_id in entities_named_in(query, names):
             source = "name+vector" if entity_id in question_entities else "name"
             question_entities[entity_id] = {"relevance": 1.0, "source": source}
+        if judge_entities and judge is not None and question_entities:
+            question_entities = await self._judge_entities(query, session, question_entities)
+
+        # What the user said about those entities, beyond what resembles the
+        # question: the statements are reached through the graph.
+        entity_facts: dict[str, list[dict[str, Any]]] = {}
+        if entity_statements > 0 and any("name" in e["source"] for e in question_entities.values()):
+            # Only the entities the question names, the least mentioned first:
+            # an entity that is merely near the question in embedding space
+            # leads to statements that have nothing to do with it.
+            seeds = sorted(
+                (eid for eid, e in question_entities.items() if "name" in e["source"]),
+                key=lambda eid: (len(session.entities[eid]["mentions"]), eid),
+            )[:5]
+            rows = await self._client.execute_read(
+                _ENTITY_STATEMENTS,
+                {
+                    "ids": seeds,
+                    "session_id": session_id,
+                    "embedding": embedding,
+                    "min_probability": min_update_probability,
+                },
+            )
+            taken: set[str] = set(shown_facts)
+            for seed in seeds:
+                about = sorted(
+                    (r for r in rows if r["entity"] == seed and r["id"] not in taken),
+                    key=lambda r: -r["score"],
+                )[:entity_statements]
+                if about:
+                    entity_facts[seed] = sorted(about, key=lambda r: (r["message_index"], r["id"]))
+                    taken.update(r["id"] for r in about)
         relations = (
             await self._client.execute_read(
                 _RELATIONS, {"ids": list(question_entities), "limit": max_relations}
@@ -711,16 +889,32 @@ class ContextAssembler:
         vector_positions = [
             session.position[r["id"]] for r in vector_rows if r["id"] in session.position
         ]
-        graph_scores = graph_message_scores(
-            {eid: e["relevance"] for eid, e in question_entities.items()},
-            {eid: session.entities[eid]["mentions"] for eid in question_entities},
-            count,
-        )
+        if graph_walk == "walk":
+            graph_scores = walk_message_scores(
+                {eid: e["relevance"] for eid, e in question_entities.items()},
+                {eid: e["mentions"] for eid, e in session.entities.items()},
+                session.related,
+            )
+        else:
+            graph_scores = graph_message_scores(
+                {eid: e["relevance"] for eid, e in question_entities.items()},
+                {eid: session.entities[eid]["mentions"] for eid in question_entities},
+                count,
+            )
         graph_positions = sorted(graph_scores, key=lambda p: (-graph_scores[p], p))[:CANDIDATES]
         statement_positions = [
             f["message_index"]
             for f in fact_hits[:CANDIDATES]
             if f["message_index"] is not None and 0 <= f["message_index"] < count
+        ]
+        # Statements reached through the question's entities rank their
+        # messages too, nearest to the question first.
+        entity_statement_positions = [
+            f["message_index"]
+            for f in sorted(
+                (f for facts in entity_facts.values() for f in facts), key=lambda f: -f["score"]
+            )
+            if 0 <= f["message_index"] < count
         ]
         # Decisions are few, so only those that resemble the question rank.
         decision_positions = [
@@ -734,6 +928,7 @@ class ContextAssembler:
             "graph": to_pair_ranking(graph_positions, session.roles),
             "statements": to_pair_ranking(statement_positions, session.roles),
             "decisions": to_pair_ranking(decision_positions, session.roles),
+            "entity_statements": to_pair_ranking(entity_statement_positions, session.roles),
         }
         rankings = {name: r for name, r in rankings.items() if r}
         ranked = fuse_rankings(rankings)
@@ -782,6 +977,9 @@ class ContextAssembler:
                 else [],
                 candidate_decisions if gate else [],
                 route=route,
+                kinds=self._kinds(session)
+                if enumerate_entities and asks_to_count_or_list(query)
+                else {},
             ),
             self._judge_pairs(
                 query, session, [e["pair"] for e in ranked[:rerank_candidates]], rerank_chars
@@ -796,6 +994,15 @@ class ContextAssembler:
         shape = "lookup"
         if judged_gate is not None and "shape" in judged_gate:
             shape = judged_gate["shape"].choice or "lookup"
+
+        # Things of one kind that the question wants counted or listed.
+        enumerated: dict[str, Any] | None = None
+        if judged_gate is not None and "kind" in judged_gate:
+            answer = judged_gate["kind"]
+            if (answer.choice or "none") != "none" and answer.probability >= gate_threshold:
+                enumerated = await self._enumerate(
+                    query, session, str(answer.choice), max_enumerated, gate_threshold
+                )
         broad = shape in ("order", "summary")
 
         # Contradictions: with a judge, those it says the question is about;
@@ -874,6 +1081,7 @@ class ContextAssembler:
         # to the question: what must not be missed goes last.
         sections = [
             self._render_entities(session, question_entities, relations),
+            self._render_enumeration(enumerated),
             self._render_outline(
                 summaries,
                 count,
@@ -885,6 +1093,7 @@ class ContextAssembler:
                 + [d["message_index"] for d in decisions],
             ),
             self._render_statements(shown_facts, replaced_by),
+            self._render_entity_statements(session, entity_facts),
             self._render_decisions(decisions),
             self._render_timeline(timeline_facts, replaced_by, span, between=elapsed),
             self._render_preferences(instructions, preferences),
@@ -950,6 +1159,19 @@ class ContextAssembler:
                 for eid, e in sorted(question_entities.items(), key=lambda kv: -kv[1]["relevance"])
             ],
             "relations": len(relations),
+            "graph_walk": graph_walk,
+            "entity_statements": {
+                session.entities[eid]["name"]: len(facts) for eid, facts in entity_facts.items()
+            },
+            "enumerated": (
+                {
+                    "kind": enumerated["kind"],
+                    "judged": enumerated["judged"],
+                    "listed": [item["name"] for item in enumerated["items"]],
+                }
+                if enumerated is not None
+                else None
+            ),
             "pairs": [
                 {
                     "messages": [p["pair"][0] + 1, p["pair"][1] + 1],
@@ -994,11 +1216,13 @@ class ContextAssembler:
         decisions: list[dict[str, Any]],
         *,
         route: bool,
+        kinds: dict[str, str] | None = None,
     ) -> dict[str, Any] | None:
         """One request: what bears on the question, and what shape it has.
 
         Question names: ``i<k>`` per instruction, ``c<k>`` per contradiction,
-        ``d<k>`` per decision, and ``shape``.
+        ``d<k>`` per decision, ``shape``, and ``kind`` (which of ``kinds``, a
+        mapping of kind to description, the question wants counted or listed).
         """
         if self._judge is None:
             return None
@@ -1035,9 +1259,134 @@ class ContextAssembler:
                 )
         if route:
             questions["shape"] = OneOf("What does `question` ask for?", QUESTION_SHAPES)
+        if kinds:
+            questions["kind"] = OneOf(
+                "Does `question` ask to count or list things of one kind that came up in "
+                "the conversation, and if so, things of which kind?",
+                {
+                    "none": "It does not ask to count or list things, or the things are "
+                    "of none of these kinds.",
+                    **kinds,
+                },
+            )
         if not questions:
             return None
-        return await judge_safely(self._judge, state, questions, what="context gate")
+        return await _ask(self._judge, state, questions, what="context gate")
+
+    @staticmethod
+    def _user_mentions(session: _Session, entity: dict[str, Any]) -> list[int]:
+        """Where the user, not the assistant, mentioned an entity."""
+        return sorted(p for p in entity["mentions"] if session.roles[p] == "user")
+
+    def _kinds(self, session: _Session, *, limit: int = 24) -> dict[str, str]:
+        """The kinds of thing the user mentioned in a session, each with examples."""
+        members: dict[str, list[tuple[int, str]]] = {}
+        for entity in session.entities.values():
+            mentions = len(self._user_mentions(session, entity))
+            if mentions:
+                members.setdefault(kind_of(entity["type"]), []).append((mentions, entity["name"]))
+        kinds = sorted(members.items(), key=lambda kv: -len(kv[1]))[:limit]
+        return {
+            kind: f"{len(found)} in the conversation, such as "
+            + ", ".join(name for _, name in sorted(found, key=lambda x: -x[0])[:4])
+            for kind, found in kinds
+            if len(found) >= 2 and kind != "none"
+        }
+
+    async def _enumerate(
+        self,
+        query: str,
+        session: _Session,
+        kind: str,
+        limit: int,
+        threshold: float,
+    ) -> dict[str, Any] | None:
+        """The entities of one kind that the question asks to count or list.
+
+        The candidates are the entities of that kind the user mentioned, most
+        mentioned first; the judge says of each whether it is one of the things
+        asked for.
+        """
+        if self._judge is None:
+            return None
+        candidates = sorted(
+            (
+                {"name": e["name"], "mentions": self._user_mentions(session, e)}
+                for e in session.entities.values()
+                if kind_of(e["type"]) == kind
+            ),
+            key=lambda c: (-len(c["mentions"]), c["name"]),
+        )
+        candidates = [c for c in candidates if c["mentions"]][:limit]
+        if not candidates:
+            return None
+        answers = await _ask(
+            self._judge,
+            {"question": query, "things": [c["name"] for c in candidates]},
+            {
+                f"t{i}": YesNo(
+                    f"Is `things[{i}]` one of the things that `question` asks to count or list?",
+                    yes="It is a thing of the sort asked for, within what the question is about.",
+                    no="It is of another sort, or outside what the question is about.",
+                )
+                for i in range(len(candidates))
+            },
+            what="enumeration",
+        )
+        if answers is None:
+            return None
+        items = [
+            {**c, "probability": answers[f"t{i}"].probability}
+            for i, c in enumerate(candidates)
+            if answers[f"t{i}"].probability >= threshold
+        ]
+        return {"kind": kind, "judged": len(candidates), "items": items}
+
+    async def _judge_entities(
+        self,
+        query: str,
+        session: _Session,
+        candidates: dict[str, dict[str, Any]],
+        *,
+        threshold: float = 0.5,
+    ) -> dict[str, dict[str, Any]]:
+        """Of the candidate entities, those the judge says the question is about.
+
+        When the judge keeps none, or cannot be asked, the candidates stand.
+        """
+        if self._judge is None:
+            return candidates
+        ids = list(candidates)
+        answers = await _ask(
+            self._judge,
+            {
+                "question": query,
+                "entities": [
+                    {
+                        "name": session.entities[i]["name"],
+                        "kind": kind_of(session.entities[i]["type"]),
+                    }
+                    for i in ids
+                ],
+            },
+            {
+                f"e{k}": YesNo(
+                    f"Is `entities[{k}]` something that `question` is about?",
+                    yes="The question names it, or asks about it.",
+                    no="The question is about other things, even if on a related subject.",
+                )
+                for k in range(len(ids))
+            },
+            what="question entities",
+        )
+        if answers is None:
+            return candidates
+        kept = {
+            entity_id: {**candidates[entity_id], "judged": answers[f"e{k}"].probability}
+            for k, entity_id in enumerate(ids)
+            if answers[f"e{k}"].probability >= threshold
+        }
+        return kept or candidates
 
     async def _judge_pairs(
         self,
@@ -1070,7 +1419,7 @@ class ContextAssembler:
                 session.messages[p]["role"]: (content.get(p) or "")[:max_chars]
                 for p in range(pair[0], pair[1] + 1)
             }
-            answers = await judge_safely(
+            answers = await _ask(
                 judge,
                 {"question": query, "exchange": exchange},
                 {"needed": question},
@@ -1134,7 +1483,7 @@ class ContextAssembler:
                 yes="The entry is that event or deadline itself.",
                 no="The entry is something else, or the first of the two.",
             )
-        return await judge_safely(
+        return await _ask(
             self._judge,
             {
                 "question": query,
@@ -1271,6 +1620,41 @@ class ContextAssembler:
                 older = facts[replaces[fact["id"]]]
                 line += f" (changes what was said at #{older['message_index'] + 1})"
             lines.append(line)
+        return "\n".join(lines)
+
+    @staticmethod
+    def _render_enumeration(enumerated: dict[str, Any] | None, *, places: int = 5) -> str:
+        if enumerated is None or not enumerated["items"]:
+            return ""
+        lines = [
+            f"## Things of the kind the question asks about ({enumerated['kind']})",
+            "From the memory's index of everything the conversation mentions: the "
+            f"{enumerated['kind']} entries the user brought up that fit the question, with the "
+            "messages where the user mentioned each. The index can miss a thing or split "
+            "one thing under two names, so check it against the rest before counting.",
+        ]
+        for item in sorted(enumerated["items"], key=lambda i: i["mentions"][0]):
+            where = ", ".join(f"#{p + 1}" for p in item["mentions"][:places])
+            more = len(item["mentions"]) - places
+            lines.append(f"- {item['name']}: {where}" + (f" and {more} more" if more > 0 else ""))
+        return "\n".join(lines)
+
+    def _render_entity_statements(
+        self, session: _Session, entity_facts: dict[str, list[dict[str, Any]]]
+    ) -> str:
+        if not entity_facts:
+            return ""
+        lines = [
+            "## What else the user has said about the things in the question",
+            "Statements found through the things the question names, in the order they were made.",
+        ]
+        for entity_id, facts in entity_facts.items():
+            lines.append(f"About {session.entities[entity_id]['name']}:")
+            for fact in facts:
+                line = f"- [{self._where(fact)}] {fact['text']}"
+                if fact.get("changed_at") is not None:
+                    line += f" (later changed: see #{fact['changed_at'] + 1})"
+                lines.append(line)
         return "\n".join(lines)
 
     def _render_decisions(self, decisions: list[dict[str, Any]]) -> str:

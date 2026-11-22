@@ -718,3 +718,216 @@ class TestAssembleWithAJudge:
             "Have I used Docker?", session_id="s"
         )
         assert result.text == plain.text
+
+
+# --- the entity graph ---------------------------------------------------------
+
+
+class TestWalk:
+    def test_the_walk_reaches_messages_that_mention_no_seed(self) -> None:
+        # "argon2" is mentioned in messages 0 and 2; message 2 also mentions
+        # "login", which message 5 mentions too. Message 7 shares nothing.
+        mentions = {"argon2": {0, 2}, "login": {2, 5}, "docker": {7}}
+        scores = ctx.walk_message_scores({"argon2": 1.0}, mentions, {})
+        assert scores[0] > scores[5] > 0
+        assert 7 not in scores
+
+    def test_a_relationship_carries_the_walk_to_another_entity(self) -> None:
+        mentions = {"flask": {0}, "gunicorn": {4}}
+        without = ctx.walk_message_scores({"flask": 1.0}, mentions, {})
+        with_relation = ctx.walk_message_scores(
+            {"flask": 1.0}, mentions, {"flask": {"gunicorn"}, "gunicorn": {"flask"}}
+        )
+        assert 4 not in without and with_relation[4] > 0
+
+    def test_an_entity_mentioned_everywhere_spreads_thin(self) -> None:
+        mentions = {"rare": {0}, "common": set(range(20))}
+        scores = ctx.walk_message_scores({"rare": 1.0, "common": 1.0}, mentions, {})
+        assert scores[0] > 5 * scores[10]
+
+    def test_no_seeds_no_scores(self) -> None:
+        assert ctx.walk_message_scores({}, {"a": {0}}, {}) == {}
+
+    def test_kind_of_a_typed_entity(self) -> None:
+        assert ctx.kind_of("OBJECT:CODE_ARTIFACT") == "code artifact"
+        assert ctx.kind_of("PERSON") == "person"
+
+
+def _typed_rows() -> dict[str, list[dict[str, Any]]]:
+    """A session whose entities carry domain types, mentioned by the user."""
+    rows = _session_rows()
+    rows["MENTIONS]->(e:Entity)"] = [
+        {
+            "id": "e1",
+            "name": "Todoist",
+            "type": "OBJECT",
+            "subtype": "SOFTWARE",
+            "message_ids": ["m0", "m4"],
+        },
+        {
+            "id": "e2",
+            "name": "Asana",
+            "type": "OBJECT",
+            "subtype": "SOFTWARE",
+            "message_ids": ["m2"],
+        },
+        {
+            "id": "e3",
+            "name": "Excel",
+            "type": "OBJECT",
+            "subtype": "SOFTWARE",
+            "message_ids": ["m1"],
+        },
+        {
+            "id": "e4",
+            "name": "Joshua",
+            "type": "PERSON",
+            "subtype": None,
+            "message_ids": ["m0", "m2"],
+        },
+        {"id": "e5", "name": "Linda", "type": "PERSON", "subtype": None, "message_ids": ["m6"]},
+    ]
+    rows["entity_embedding_idx"] = [{"id": "e1", "score": 0.9}, {"id": "e4", "score": 0.6}]
+    return rows
+
+
+class TestEntityOptions:
+    @pytest.mark.asyncio
+    async def test_statements_are_reached_through_the_questions_entities(self) -> None:
+        rows = _typed_rows()
+        rows["<-[:ABOUT]-(f:Fact"] = [
+            {
+                "entity": "e1",
+                "id": "f9",
+                "text": "The user moved weekend plans into Todoist.",
+                "message_index": 6,
+                "said_at": "2024-03-15",
+                "event_date": None,
+                "changed_at": None,
+                "score": 0.4,
+            },
+            {
+                "entity": "e1",
+                "id": "f1",  # already among the statements that match the question
+                "text": "The user has never used Docker.",
+                "message_index": 4,
+                "said_at": "2024-03-15",
+                "event_date": None,
+                "changed_at": None,
+                "score": 0.9,
+            },
+        ]
+        assembler = ContextAssembler(FakeClient(rows), FakeEmbedder())  # type: ignore[arg-type]
+        result = await assembler.assemble(
+            "What do I use Todoist for?", session_id="s", entity_statements=4
+        )
+        section = result.text.split("## What else the user has said")[1].split("\n## ")[0]
+        assert "About Todoist:" in section
+        assert "- [#7, 2024-03-15] The user moved weekend plans into Todoist." in section
+        assert "never used Docker" not in section
+        assert result.details["entity_statements"] == {"Todoist": 1}
+        # The statement's exchange is ranked through it.
+        assert any("entity_statements" in p["ranks"] for p in result.details["pairs"])
+
+    @pytest.mark.asyncio
+    async def test_the_option_is_off_by_default(self) -> None:
+        assembler = ContextAssembler(FakeClient(_typed_rows()), FakeEmbedder())  # type: ignore[arg-type]
+        result = await assembler.assemble("What do I use Todoist for?", session_id="s")
+        assert "## What else the user has said" not in result.text
+        assert result.details["graph_walk"] == "hop"
+
+    @pytest.mark.asyncio
+    async def test_things_of_one_kind_are_listed_when_the_question_counts_them(self) -> None:
+        def answer(name: str, question: Any, state: Any) -> Any:
+            if name == "kind":
+                return {"none": 0.1, "software": 0.85, "person": 0.05}
+            if name.startswith("t"):
+                return 0.9 if state["things"][int(name[1:])] in ("Todoist", "Asana") else 0.1
+            return None
+
+        judge = FakeJudge(answer)
+        assembler = ContextAssembler(FakeClient(_typed_rows()), FakeEmbedder(), judge)  # type: ignore[arg-type]
+        result = await assembler.assemble(
+            "How many different tools have I mentioned for planning?",
+            session_id="s",
+            enumerate_entities=True,
+            rerank=False,
+        )
+        section = result.text.split("## Things of the kind the question asks about (software)")[1]
+        section = section.split("\n## ")[0]
+        assert "- Todoist: #1, #5" in section and "- Asana: #3" in section
+        # Excel was only mentioned by the assistant (#2), so it was never a candidate.
+        assert "Excel" not in section
+        assert result.details["enumerated"] == {
+            "kind": "software",
+            "judged": 2,
+            "listed": ["Todoist", "Asana"],
+        }
+        kinds = next(q["kind"] for _, q in judge.calls if "kind" in q).options
+        assert list(kinds) == ["none", "software", "person"]
+        assert kinds["software"].startswith("2 in the conversation, such as Todoist")
+
+    @pytest.mark.asyncio
+    async def test_nothing_is_listed_when_the_question_counts_nothing(self) -> None:
+        judge = FakeJudge(
+            lambda name, *_: {"none": 0.9, "software": 0.1} if name == "kind" else None
+        )
+        assembler = ContextAssembler(FakeClient(_typed_rows()), FakeEmbedder(), judge)  # type: ignore[arg-type]
+        result = await assembler.assemble(
+            "Which tools have I mentioned?", session_id="s", enumerate_entities=True, rerank=False
+        )
+        assert "## Things of the kind" not in result.text
+        assert result.details["enumerated"] is None
+
+    @pytest.mark.asyncio
+    async def test_a_question_that_counts_nothing_is_not_put_to_the_judge(self) -> None:
+        judge = FakeJudge()
+        assembler = ContextAssembler(FakeClient(_typed_rows()), FakeEmbedder(), judge)  # type: ignore[arg-type]
+        await assembler.assemble(
+            "What do I use Todoist for?", session_id="s", enumerate_entities=True, rerank=False
+        )
+        assert not any("kind" in questions for _, questions in judge.calls)
+
+    @pytest.mark.parametrize(
+        ("question", "expected"),
+        [
+            ("How many different tools have I mentioned for planning?", True),
+            ("Which libraries have I used in this project?", True),
+            ("List all the movies I planned to watch.", True),
+            ("How many days passed between the kickoff and the launch?", False),
+            ("Have I ever used Docker?", False),
+            ("When does my first sprint end?", False),
+        ],
+    )
+    def test_counting_questions_are_recognised(self, question: str, expected: bool) -> None:
+        assert ctx.asks_to_count_or_list(question) is expected
+
+    @pytest.mark.asyncio
+    async def test_the_judge_narrows_the_questions_entities(self) -> None:
+        def answer(name: str, question: Any, state: Any) -> Any:
+            if name.startswith("e") and name[1:].isdigit():
+                return 0.9 if state["entities"][int(name[1:])]["name"] == "Todoist" else 0.1
+            return None
+
+        assembler = ContextAssembler(FakeClient(_typed_rows()), FakeEmbedder(), FakeJudge(answer))  # type: ignore[arg-type]
+        result = await assembler.assemble(
+            "What do I use Todoist for?", session_id="s", judge_entities=True, rerank=False
+        )
+        assert [e["name"] for e in result.details["question_entities"]] == ["Todoist"]
+
+    @pytest.mark.asyncio
+    async def test_an_unavailable_judge_does_not_stop_the_assembly(self) -> None:
+        from neo4j_agent_memory.judge import JudgeUnavailable
+
+        class NoCredits:
+            name = "down"
+
+            async def judge(self, state: Any, questions: Any) -> dict[str, Any]:
+                raise JudgeUnavailable("no credits")
+
+        assembler = ContextAssembler(FakeClient(_typed_rows()), FakeEmbedder(), NoCredits())  # type: ignore[arg-type]
+        result = await assembler.assemble(
+            "How many tools?", session_id="s", enumerate_entities=True, judge_entities=True
+        )
+        assert "## Conversation excerpts" in result.text
+        assert result.details["enumerated"] is None

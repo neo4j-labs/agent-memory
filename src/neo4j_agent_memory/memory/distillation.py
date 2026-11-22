@@ -476,6 +476,27 @@ MATCH (c:Conversation {session_id: $session_id})-[:HAS_MESSAGE]->(:Message)
 RETURN DISTINCT e.id AS id, e.name AS name
 """
 
+_SESSION_STATEMENT_TEXTS = """
+CALL {
+    MATCH (s:Fact {session_id: $session_id}) RETURN s.id AS id, 'Fact' AS label, s.text AS text
+    UNION ALL
+    MATCH (s:Decision {session_id: $session_id})
+    RETURN s.id AS id, 'Decision' AS label, s.text AS text
+    UNION ALL
+    MATCH (s:Preference {session_id: $session_id})
+    RETURN s.id AS id, 'Preference' AS label, s.preference AS text
+}
+RETURN id, label, text
+"""
+
+# One query per label, so that each statement is found through its id constraint.
+_LINK_STATEMENT_ENTITIES = """
+UNWIND $rows AS row
+MATCH (s:{label} {{id: row.statement}})
+MATCH (e:Entity {{id: row.entity}})
+MERGE (s)-[:ABOUT]->(e)
+"""
+
 _LINK_DECISION_ENTITIES = """
 UNWIND $rows AS row
 MATCH (d:Decision {id: row.decision})
@@ -762,6 +783,37 @@ def mentions_detail(text: str, detail: str) -> bool:
     numbers = set(re.findall(r"\d+(?:\.\d+)?", text.replace(",", "")))
     wanted = digits_of(detail)
     return bool(wanted) and all(number in numbers for number in wanted)
+
+
+#: Names that every statement contains and that therefore say nothing.
+_UNINFORMATIVE_NAMES = frozenset({"user", "the user", "assistant", "the assistant"})
+
+
+def entities_named_in_texts(
+    texts: dict[str, str], names: dict[str, str], *, min_chars: int = 3
+) -> list[tuple[str, str]]:
+    """Which entities each text names: ``(text id, entity id)`` pairs.
+
+    An entity is named where its name appears as whole words, ignoring case.
+    Names are indexed by their first word, so each text is compared only with
+    the names that could start at one of its words.
+    """
+    by_first_word: dict[str, list[tuple[str, str, re.Pattern[str]]]] = {}
+    for entity_id, name in names.items():
+        name = name.strip().lower()
+        words = re.findall(r"\w+", name)
+        if len(name) < min_chars or not words or name in _UNINFORMATIVE_NAMES:
+            continue
+        pattern = re.compile(rf"(?<!\w){re.escape(name)}(?!\w)")
+        by_first_word.setdefault(words[0], []).append((entity_id, name, pattern))
+    pairs: list[tuple[str, str]] = []
+    for text_id, text in texts.items():
+        lowered = text.lower()
+        for word in sorted(set(re.findall(r"\w+", lowered))):
+            for entity_id, name, pattern in by_first_word.get(word, ()):
+                if name in lowered and pattern.search(lowered):
+                    pairs.append((text_id, entity_id))
+    return pairs
 
 
 def topic_spans(
@@ -1105,6 +1157,7 @@ class DistillationMemory:
             "decisions": 0,
             "dropped": 0,
             "details_recovered": 0,
+            "entity_links": 0,
             "failures": 0,
         }
         system = STATEMENTS_PROMPT
@@ -1266,7 +1319,45 @@ class DistillationMemory:
         await self._gather([partial(one, m) for m in messages], max_concurrency, on_progress)
         if stats["decisions"]:
             await self._link_decisions_to_entities(session_id)
+        if stats["facts"] or stats["preferences"] or stats["decisions"]:
+            stats["entity_links"] = await self.link_statements_to_entities(session_id)
         return stats
+
+    async def link_statements_to_entities(self, session_id: str) -> int:
+        """Link each statement of a session to the entities it names (``ABOUT``).
+
+        A fact, preference or decision is linked to every entity the session
+        mentions whose name appears in its text as whole words. That is what
+        lets a reader go from an entity to everything the user said about it,
+        whatever the wording of the question. Names shorter than three
+        characters are ignored. Running it again adds only what is missing.
+
+        Returns:
+            The number of links between statements and entities.
+        """
+        statements = await self._client.execute_read(
+            _SESSION_STATEMENT_TEXTS, {"session_id": session_id}
+        )
+        entities = await self._client.execute_read(
+            _SESSION_ENTITY_NAMES, {"session_id": session_id}
+        )
+        pairs = entities_named_in_texts(
+            {row["id"]: row["text"] or "" for row in statements},
+            {row["id"]: row["name"] or "" for row in entities},
+        )
+        label_of = {row["id"]: row["label"] for row in statements}
+        for label in ("Fact", "Decision", "Preference"):
+            rows = [
+                {"statement": statement, "entity": entity}
+                for statement, entity in pairs
+                if label_of[statement] == label
+            ]
+            for start in range(0, len(rows), 2000):
+                await self._client.execute_write(
+                    _LINK_STATEMENT_ENTITIES.format(label=label),
+                    {"rows": rows[start : start + 2000]},
+                )
+        return len(pairs)
 
     async def _link_decisions_to_entities(self, session_id: str) -> int:
         """Link each decision to the session's entities it chose or passed over.

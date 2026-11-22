@@ -85,6 +85,15 @@ class Judgement:
         return float(self.probabilities.get(option, 0.0))
 
 
+class JudgeUnavailable(RuntimeError):  # noqa: N818 - reads as a state, like StopIteration
+    """The judge cannot answer and will not until someone acts.
+
+    Raised for failures that retrying does not cure: a missing or refused key,
+    an account without credits. A job that depends on judgements should stop on
+    it. Carrying on would quietly produce a memory in which nothing was judged.
+    """
+
+
 @runtime_checkable
 class Judge(Protocol):
     """Answers closed questions about a state."""
@@ -162,7 +171,13 @@ class TypeSafeJudge:
                 }
             payload[name] = item
         async with self._semaphore:
-            response = await self._client.system_one(state=state, questions=payload)
+            try:
+                response = await self._client.system_one(state=state, questions=payload)
+            except Exception as exc:
+                # Not authorized, or out of credits: no retry will help.
+                if getattr(exc, "status", None) in (401, 402, 403):
+                    raise JudgeUnavailable(str(exc)) from exc
+                raise
         self.usage["requests"] += 1
         self.usage["questions"] += len(payload)
         if response.usage is not None and response.usage.input_tokens:
@@ -275,15 +290,23 @@ async def judge_safely(
     *,
     what: str,
     retries: int = 2,
+    degrade: bool = False,
 ) -> dict[str, Judgement] | None:
     """Ask ``judge``, retrying failures. None when it never answers.
 
-    The memory keeps working without a judgement, so a failed request is logged
-    and reported as None instead of raised.
+    The memory keeps working without one judgement, so a failed request is
+    logged and reported as None instead of raised. A judge that is unavailable
+    altogether (:class:`JudgeUnavailable`) is different: that is raised, unless
+    ``degrade`` is set, in which case it too is reported as None, once logged.
     """
     for attempt in range(1, retries + 2):
         try:
             return await judge.judge(state, questions)
+        except JudgeUnavailable as exc:
+            if not degrade:
+                raise
+            logger.warning("Judgement %s skipped, the judge is unavailable: %s", what, exc)
+            return None
         except Exception as exc:  # noqa: BLE001 - provider errors vary
             if attempt > retries:
                 logger.warning("Judgement %s failed after %d attempts: %s", what, attempt, exc)

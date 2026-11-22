@@ -148,6 +148,7 @@ class TestExtractStatements:
             "decisions": 0,
             "dropped": 0,
             "details_recovered": 0,
+            "entity_links": 0,
             "failures": 0,
         }
         stored = client.written("CREATE (f:Fact")

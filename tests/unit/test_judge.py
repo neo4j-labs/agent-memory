@@ -15,6 +15,7 @@ import pytest
 from neo4j_agent_memory.judge import (
     Judge,
     Judgement,
+    JudgeUnavailable,
     LLMJudge,
     OneOf,
     TypeSafeJudge,
@@ -248,3 +249,36 @@ class TestClientResolution:
             self.resolve("oracle")
         with pytest.raises(ValueError, match="Judge instance or a string"):
             self.resolve(42)
+
+
+class NoCredits(Exception):
+    status = 402
+
+
+class TestUnavailable:
+    @pytest.mark.asyncio
+    async def test_an_account_without_credits_is_unavailable(self, typesafe_sdk: None) -> None:
+        judge = TypeSafeJudge(api_key="k")
+
+        async def refuse(**_: Any) -> Any:
+            raise NoCredits("no available credits")
+
+        judge._client.system_one = refuse  # type: ignore[method-assign]
+        with pytest.raises(JudgeUnavailable, match="no available credits"):
+            await judge.judge({}, QUESTIONS)
+
+    @pytest.mark.asyncio
+    async def test_unavailable_is_raised_at_once(self) -> None:
+        class Unavailable:
+            name = "down"
+            calls = 0
+
+            async def judge(self, state: Any, questions: Any) -> dict[str, Judgement]:
+                self.calls += 1
+                raise JudgeUnavailable("no credits")
+
+        judge = Unavailable()
+        with pytest.raises(JudgeUnavailable):
+            await judge_safely(judge, {}, {"q": YesNo("?")}, what="test")
+        assert judge.calls == 1  # not retried
+        assert await judge_safely(judge, {}, {"q": YesNo("?")}, what="test", degrade=True) is None
