@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from pydantic import BaseModel, Field, create_model
 
@@ -159,8 +159,11 @@ def _labelled_payload_model(ontology: OntologyDocument) -> type[BaseModel] | Non
         return None
     relation_types = tuple(dict.fromkeys(r.type.upper() for r in ontology.relationships))
 
-    label_type: Any = Literal[labels]
-    relation_type: Any = Literal[relation_types] if relation_types else str
+    # Types built at run time from the ontology, which no type checker can
+    # follow: Literal and list are subscripted through Any.
+    literal, list_of = cast("Any", Literal), cast("Any", list)
+    label_type: Any = literal[labels]
+    relation_type: Any = literal[relation_types] if relation_types else str
     entity: Any = create_model(
         "LabelledEntity",
         name=(str, Field(description="Entity name, as it appears in the text.")),
@@ -183,9 +186,9 @@ def _labelled_payload_model(ontology: OntologyDocument) -> type[BaseModel] | Non
     )
     model: type[BaseModel] = create_model(
         "LabelledExtraction",
-        entities=(list[entity], Field(description="Entities found in the text.")),
-        relations=(list[relation], Field(description="Relationships between them.")),
-        preferences=(list[preference], Field(description="Preferences stated.")),
+        entities=(list_of[entity], Field(description="Entities found in the text.")),
+        relations=(list_of[relation], Field(description="Relationships between them.")),
+        preferences=(list_of[preference], Field(description="Preferences stated.")),
     )
     return model
 

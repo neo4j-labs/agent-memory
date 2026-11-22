@@ -29,7 +29,7 @@ import logging
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, runtime_checkable
 
 if TYPE_CHECKING:
     from neo4j_agent_memory.llm.protocol import LLMProvider
@@ -184,11 +184,15 @@ class TypeSafeJudge:
             self.usage["input_tokens"] += int(response.usage.input_tokens)
         answers: dict[str, Judgement] = {}
         for name, question in questions.items():
-            answer: Any = response.answers[name]
+            # The SDK types an answer as a union of every primitive's answer;
+            # which one it is follows from the question that was asked.
+            answer = cast("Any", response.answers[name])
             if isinstance(question, YesNo):
                 answers[name] = Judgement(probability=float(answer.noul))
             else:
-                probabilities = {k: float(v) for k, v in answer.probabilities.items()}
+                probabilities: dict[str, float] = {
+                    str(k): float(v) for k, v in answer.probabilities.items()
+                }
                 answers[name] = Judgement(
                     probability=probabilities.get(answer.choice, 0.0),
                     choice=answer.choice,
@@ -247,7 +251,8 @@ class LLMJudge:
                     line += f"\n   false: {question.no}"
             else:
                 options = tuple(question.options)
-                fields[f"q{number}"] = (Literal[options], ...)
+                # A Literal of this question's options, built at run time.
+                fields[f"q{number}"] = (cast("Any", Literal)[options], ...)
                 line = f"Q{number} (one of {', '.join(options)}): {question.question}"
                 for option, described in question.options.items():
                     if described:

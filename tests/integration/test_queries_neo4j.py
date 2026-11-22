@@ -86,6 +86,8 @@ class TestMessageQueries:
                 "content": "Hello, world!",
                 "embedding": None,
                 "metadata": None,
+                # When the message was said; None stamps it at write time.
+                "timestamp": None,
             },
         )
 
