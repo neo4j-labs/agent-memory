@@ -22,22 +22,40 @@ rarely mentioned entity counts for more; and the source messages of the
 statements that match the question. The best vector hits are always kept, so a
 direct hit cannot be displaced by exchanges that are middling in every ranking.
 
-Statements, preferences and summaries exist once
+Statements, preferences, decisions and summaries exist once
 :meth:`~neo4j_agent_memory.memory.distillation.DistillationMemory.distill_session`
 has run; without them the context is the excerpts and the entities.
+
+With a :class:`~neo4j_agent_memory.judge.Judge` configured, the assembler asks
+it a few closed questions per query, in parallel with one another:
+
+* which contradictions, standing instructions and decisions bear on the
+  question, so that a contradiction is reported only when the question is
+  about it and only the instructions that apply are repeated at the end;
+* for each candidate exchange, whether it holds information the answer needs,
+  which joins the fusion as a fourth ranking;
+* for a question about the time between two things, which dated statements they
+  are. The days between them are then computed here, not left to the reader.
+
+A judgement that fails is done without: the context falls back to what it
+would have been with no judge.
 """
 
 from __future__ import annotations
 
+import asyncio
 import math
 import re
 from dataclasses import dataclass, field
 from datetime import date
 from typing import TYPE_CHECKING, Any
 
+from neo4j_agent_memory.judge import OneOf, Question, YesNo, judge_safely
+
 if TYPE_CHECKING:
     from neo4j_agent_memory.embeddings.base import Embedder
     from neo4j_agent_memory.graph.client import Neo4jClient
+    from neo4j_agent_memory.judge import Judge
 
 #: Constant of reciprocal rank fusion (Cormack et al., 2009).
 RRF_K = 60
@@ -56,8 +74,12 @@ information, repeat both statements, and ask which one is correct.
 - Where a statement is marked as later changed, the later value is the current one.
 - For a question about dates or durations, find the two dates on the timeline, \
 subtract their day numbers, and answer with the result and both dates ("18 days, \
-from March 12 to March 30").
-- When asked in what order things came up, go by message position, earliest first.
+from March 12 to March 30"). Where the timeline ends with a span worked out for \
+this question and it is about the two things asked for, answer with that span; \
+where it ends with the days between its dates, take the number from there.
+- When asked in what order things came up, go by message position, earliest \
+first, and draw the items from the whole length of the conversation, not only \
+from its start.
 - When asked to summarize, cover the whole course of the topic in order, with its \
 specifics; the outline shows that course.
 - If the question asks about something from the conversation that the memory does \
@@ -136,13 +158,21 @@ def to_pair_ranking(positions: list[int], roles: list[str]) -> list[tuple[int, i
     return ranking
 
 
-def fuse_rankings(rankings: dict[str, list[tuple[int, int]]]) -> list[dict[str, Any]]:
-    """Reciprocal rank fusion; best first, with each exchange's rank per source."""
+def fuse_rankings(
+    rankings: dict[str, list[tuple[int, int]]],
+    weights: dict[str, float] | None = None,
+) -> list[dict[str, Any]]:
+    """Reciprocal rank fusion; best first, with each exchange's rank per source.
+
+    ``weights`` counts a source more than once: a ranking with weight 2 adds
+    twice what the others add at the same rank.
+    """
     fused: dict[tuple[int, int], dict[str, Any]] = {}
     for source, ranking in rankings.items():
+        weight = (weights or {}).get(source, 1.0)
         for rank, pair in enumerate(ranking, start=1):
             entry = fused.setdefault(pair, {"pair": pair, "score": 0.0, "ranks": {}})
-            entry["score"] += 1.0 / (RRF_K + rank)
+            entry["score"] += weight / (RRF_K + rank)
             entry["ranks"][source] = rank
     # Ties fall to the earlier exchange, which keeps the order deterministic.
     return sorted(fused.values(), key=lambda e: (-e["score"], e["pair"]))
@@ -205,6 +235,41 @@ def clauses_of(question: str, *, limit: int = 3) -> list[str]:
     return kept[:limit] if len(kept) > 1 else []
 
 
+_ELAPSED = re.compile(
+    r"\bhow (?:long|much time|many (?:day|week|month|year)s?)\b"
+    r"|\b(?:day|week|month|year)s? (?:between|from|after|before|until|since|passed|elapsed)\b"
+    r"|\btime (?:between|from)\b",
+    re.IGNORECASE,
+)
+
+
+def asks_for_elapsed_time(question: str) -> bool:
+    """Whether the question asks how much time lies between two things."""
+    return bool(_ELAPSED.search(question))
+
+
+def describe_span(days: int) -> str:
+    """A number of days in the units a person would use for it."""
+    days = abs(days)
+    text = f"{days} day{'s' if days != 1 else ''}"
+    if days >= 14:
+        weeks, rest = divmod(days, 7)
+        text += f" ({weeks} weeks" + (
+            f" and {rest} day{'s' if rest != 1 else ''})" if rest else ")"
+        )
+    return text
+
+
+#: The shapes a question can have, as offered to the judge. "lookup" is first:
+#: it is the layout that changes nothing.
+QUESTION_SHAPES: dict[str, str] = {
+    "lookup": "It asks for a particular fact, detail, value or piece of advice.",
+    "elapsed": "It asks how much time lies between two things, or when something is.",
+    "order": "It asks in what order things were brought up or happened.",
+    "summary": "It asks for a summary or recap of how something went over time.",
+}
+
+
 def _days_between(earlier: str, later: str) -> int | None:
     try:
         return (date.fromisoformat(later) - date.fromisoformat(earlier)).days
@@ -262,12 +327,36 @@ ORDER BY score DESC
 LIMIT $limit
 """
 
+_VECTOR_DATED_FACTS = """
+CALL db.index.vector.queryNodes('fact_embedding_idx', $fetch, $embedding)
+YIELD node, score
+WHERE node.session_id = $session_id AND node.event_date IS NOT NULL
+RETURN node.id AS id, node.text AS text, node.message_index AS message_index,
+       node.said_at AS said_at, node.event_date AS event_date, score
+ORDER BY score DESC
+LIMIT $limit
+"""
+
+# A relationship without a probability was decided outright and counts as 1.0.
 _FACT_LINKS = """
 MATCH (f:Fact) WHERE f.id IN $ids
 MATCH (f)-[r:SUPERSEDED_BY|CONTRADICTS]-(o:Fact)
 RETURN type(r) AS type, startNode(r).id AS source, endNode(r).id AS target,
+       coalesce(r.probability, 1.0) AS probability,
        o.id AS id, o.text AS text, o.message_index AS message_index,
        o.said_at AS said_at, o.event_date AS event_date
+"""
+
+_DECISIONS = """
+MATCH (d:Decision {session_id: $session_id})
+OPTIONAL MATCH (d)-[r:SUPERSEDED_BY]->(n:Decision)
+WITH d, max(CASE WHEN coalesce(r.probability, 1.0) >= $min_probability
+                 THEN n.message_index END) AS changed_at
+RETURN d.id AS id, d.text AS text, d.chosen AS chosen, d.alternatives AS alternatives,
+       d.reason AS reason, d.status AS status, d.message_index AS message_index,
+       d.decided_on AS said_at, d.effective_date AS event_date, changed_at,
+       CASE WHEN d.embedding IS NULL THEN 0.0
+            ELSE vector.similarity.cosine(d.embedding, $embedding) END AS score
 """
 
 _PREFERENCES = """
@@ -303,6 +392,11 @@ RETURN m.id AS id, m.content AS content
 """
 
 
+async def _nothing() -> None:
+    """Stands in for a judgement that was not asked for."""
+    return None
+
+
 @dataclass
 class _Session:
     """The skeleton of one session: order, roles, sizes, dates, entities."""
@@ -316,9 +410,12 @@ class _Session:
 class ContextAssembler:
     """Builds the context for a question about one session."""
 
-    def __init__(self, client: Neo4jClient, embedder: Embedder | None) -> None:
+    def __init__(
+        self, client: Neo4jClient, embedder: Embedder | None, judge: Judge | None = None
+    ) -> None:
         self._client = client
         self._embedder = embedder
+        self._judge = judge
         self._sessions: dict[str, _Session] = {}
 
     async def _session(self, session_id: str) -> _Session:
@@ -371,11 +468,25 @@ class ContextAssembler:
         max_statements: int = 25,
         max_preferences: int = 20,
         max_relations: int = 15,
+        max_decisions: int = 10,
         conflict_depth: int = 8,
         max_timeline: int = 8,
         relevant_instructions: int = 3,
+        min_update_probability: float = 0.75,
+        min_conflict_probability: float = 0.5,
         include_guidance: bool = True,
         include_outline: bool = True,
+        gate: bool = True,
+        gate_threshold: float = 0.5,
+        rerank: bool = True,
+        rerank_candidates: int = 40,
+        rerank_weight: float = 3.0,
+        rerank_chars: int = 3000,
+        resolve_dates: bool = True,
+        date_threshold: float = 0.5,
+        route: bool = False,
+        broad_top_k: int = 24,
+        broad_message_chars: int = 700,
     ) -> AssembledContext:
         """Assemble the context for ``query`` from the memory of ``session_id``.
 
@@ -392,16 +503,45 @@ class ContextAssembler:
             max_preferences: Preferences shown, by similarity. Standing
                 instructions are all shown.
             max_relations: Relationships between the question's entities shown.
-            conflict_depth: A contradiction is reported when one of its two
-                statements is among this many best-matching statements.
+            max_decisions: Decisions of the user shown.
+            conflict_depth: Without a judge, a contradiction is reported when
+                one of its two statements is among this many best-matching
+                statements.
             max_timeline: Dated statements on the timeline: the closest ones
                 to the question, also from beyond the ``max_statements`` shown.
-            relevant_instructions: Standing instructions closest to the
-                question that are repeated at the very end of the context.
-            include_guidance: Open with a short note on how to use the memory
+            relevant_instructions: Without a judge, the standing instructions
+                closest to the question that are repeated at the very end.
+            min_update_probability: A statement counts as replaced when the
+                relationship that says so has at least this probability.
+            min_conflict_probability: The same for contradictions.
+            include_guidance: Close with a short note on how to use the memory
                 (follow instructions, surface contradictions, prefer the latest
                 value, say when nothing is known).
             include_outline: Include the outline of the whole conversation.
+
+        The remaining options take effect only with a judge
+        (:class:`~neo4j_agent_memory.judge.Judge`), which is asked a few closed
+        questions per query:
+
+        Args:
+            gate: Ask which contradictions, standing instructions and decisions
+                bear on the question; only those at ``gate_threshold`` or more
+                are reported as contradictions, repeated as applicable
+                instructions, and listed as decisions.
+            rerank: Ask, for each of the ``rerank_candidates`` best exchanges
+                (their messages cut to ``rerank_chars``), whether it holds
+                information the answer needs, and fuse that ranking with the
+                others at ``rerank_weight`` times their weight.
+            resolve_dates: For a question about the time between two things,
+                ask which dated statements they are; when both are found with
+                probability ``date_threshold`` or more, the span is computed
+                and stated under the timeline.
+            route: Ask what shape the question has. A question about the order
+                of things, or for a summary, is given ``broad_top_k`` exchanges
+                with each message cut to ``broad_message_chars`` characters, in
+                place of fewer exchanges in full. Off by default: on the BEAM
+                benchmark the wider layout found more of the evidence for such
+                questions without improving the answers.
 
         Returns:
             The context text and a record of what went into it.
@@ -410,6 +550,7 @@ class ContextAssembler:
         count = len(session.messages)
         if count == 0 or self._embedder is None:
             return AssembledContext(text="", details={"strategy": "hybrid", "messages": count})
+        judge = self._judge
 
         def tokens(text: str) -> float:
             return len(text) / chars_per_token
@@ -463,15 +604,28 @@ class ContextAssembler:
                     )
             fact_hits = sorted(by_id.values(), key=lambda f: -fused_score[f["id"]])
         shown_facts = {f["id"]: dict(f) for f in fact_hits[:max_statements]}
+        fact_rank = {f["id"]: rank for rank, f in enumerate(fact_hits)}
+
+        decision_rows = sorted(
+            await self._client.execute_read(
+                _DECISIONS,
+                {
+                    "session_id": session_id,
+                    "embedding": embedding,
+                    "min_probability": min_update_probability,
+                },
+            ),
+            key=lambda d: -d["score"],
+        )
+
         # The timeline also takes dated statements from further down the
         # ranking: a question about the time between two events rarely
         # resembles both of them equally.
         # It is kept short: the closest few dated statements, whichever part
         # of the ranking they come from. Every extra entry is one more date
         # the reader can pick by mistake.
-        timeline_facts = [dict(f) for f in fact_hits if f.get("event_date")][:max_timeline]
-        # Contradictions are reported only for what the question is closest to.
-        near_question = {f["id"] for f in fact_hits[:conflict_depth]}
+        dated_hits = [dict(f) for f in fact_hits if f.get("event_date")]
+        timeline_facts = dated_hits[:max_timeline]
         links = (
             await self._client.execute_read(_FACT_LINKS, {"ids": list(shown_facts)})
             if shown_facts
@@ -480,7 +634,15 @@ class ContextAssembler:
         replaced_by: dict[str, str] = {}
         # A denial ("has never ...") and the statements it conflicts with.
         conflicts: dict[str, list[str]] = {}
+        conflict_probability: dict[str, float] = {}
         for link in links:
+            threshold = (
+                min_update_probability
+                if link["type"] == "SUPERSEDED_BY"
+                else min_conflict_probability
+            )
+            if link.get("probability", 1.0) < threshold:
+                continue
             shown_facts.setdefault(
                 link["id"],
                 {
@@ -496,6 +658,10 @@ class ContextAssembler:
                 replaced_by[link["source"]] = link["target"]
             elif link["target"] not in conflicts.setdefault(link["source"], []):
                 conflicts[link["source"]].append(link["target"])
+                # How sure the conflict is ranks the statements shown for a denial.
+                conflict_probability[link["target"]] = max(
+                    conflict_probability.get(link["target"], 0.0), link.get("probability", 1.0)
+                )
 
         summaries = (
             await self._client.execute_read(_SUMMARIES, {"session_id": session_id})
@@ -550,47 +716,180 @@ class ContextAssembler:
             for f in fact_hits[:CANDIDATES]
             if f["message_index"] is not None and 0 <= f["message_index"] < count
         ]
+        # Decisions are few, so only those that resemble the question rank.
+        decision_positions = [
+            d["message_index"]
+            for d in decision_rows[:CANDIDATES]
+            if d["score"] >= 0.72 and 0 <= d["message_index"] < count
+        ]
         vector_ranking = to_pair_ranking(vector_positions, session.roles)
         rankings = {
             "vector": vector_ranking,
             "graph": to_pair_ranking(graph_positions, session.roles),
             "statements": to_pair_ranking(statement_positions, session.roles),
+            "decisions": to_pair_ranking(decision_positions, session.roles),
         }
-        ranked = fuse_rankings({name: r for name, r in rankings.items() if r})
+        rankings = {name: r for name, r in rankings.items() if r}
+        ranked = fuse_rankings(rankings)
+
+        # --- ask the judge ----------------------------------------------------
+        # Contradictions that could be reported: those with a statement among
+        # the ones shown, nearest the question first.
+        def nearness(denial: str) -> int:
+            ids = [denial, *conflicts[denial]]
+            return min(fact_rank.get(i, len(fact_hits)) for i in ids)
+
+        candidate_conflicts = sorted(
+            (d for d, others in conflicts.items() if d in shown_facts and others), key=nearness
+        )[:conflict_depth]
+        candidate_decisions = decision_rows[: max(max_decisions, 15)]
+        elapsed = asks_for_elapsed_time(query)
+        date_candidates: list[dict[str, Any]] = []
+        if elapsed:
+            # The two things asked about are searched for among the dated
+            # statements only, one search per part of the question: in the
+            # ranking of all statements a dated one is easily crowded out.
+            dated_rankings = [
+                await self._client.execute_read(
+                    _VECTOR_DATED_FACTS,
+                    {
+                        "embedding": part,
+                        "session_id": session_id,
+                        "fetch": 400,
+                        "limit": 8,
+                    },
+                )
+                for part in (embeddings[1:] or [embedding])
+            ]
+            date_candidates = self._date_candidates([*dated_rankings, dated_hits], decision_rows)
+            # The timeline shows the same statements the judge chooses among.
+            timeline_facts = date_candidates[:max_timeline]
+        judged_gate, judged_pairs, judged_dates = await asyncio.gather(
+            self._judge_gate(
+                query,
+                instructions if gate else [],
+                [
+                    (shown_facts[d], [shown_facts[o] for o in conflicts[d]])
+                    for d in candidate_conflicts
+                ]
+                if gate
+                else [],
+                candidate_decisions if gate else [],
+                route=route,
+            ),
+            self._judge_pairs(
+                query, session, [e["pair"] for e in ranked[:rerank_candidates]], rerank_chars
+            )
+            if rerank
+            else _nothing(),
+            self._judge_dates(query, date_candidates)
+            if resolve_dates and len(date_candidates) >= 2
+            else _nothing(),
+        )
+
+        shape = "lookup"
+        if judged_gate is not None and "shape" in judged_gate:
+            shape = judged_gate["shape"].choice or "lookup"
+        broad = shape in ("order", "summary")
+
+        # Contradictions: with a judge, those it says the question is about;
+        # without, those next to the question in the statement ranking.
+        if judged_gate is not None and gate:
+            reported_denials = [
+                d
+                for k, d in enumerate(candidate_conflicts)
+                if judged_gate[f"c{k}"].probability >= gate_threshold
+            ]
+        else:
+            near_question = {f["id"] for f in fact_hits[:conflict_depth]}
+            reported_denials = [
+                d
+                for d in candidate_conflicts
+                if d in near_question or near_question & set(conflicts[d])
+            ]
+        reported = {d: [o for o in conflicts[d] if o in shown_facts] for d in reported_denials}
+        for fact_id, probability in conflict_probability.items():
+            if fact_id in shown_facts:
+                shown_facts[fact_id]["conflict_probability"] = probability
+
+        # Instructions repeated at the end: those that apply, or the closest.
+        if judged_gate is not None and gate:
+            applicable = sorted(
+                (
+                    (judged_gate[f"i{k}"].probability, item)
+                    for k, item in enumerate(instructions)
+                    if judged_gate[f"i{k}"].probability >= gate_threshold
+                ),
+                key=lambda x: -x[0],
+            )
+            closest = [item for _, item in applicable]
+            closing = (
+                "The user's standing instructions that apply to this question. "
+                "Follow each of them in the answer:"
+            )
+        else:
+            closest = sorted(instructions, key=lambda p: -p["score"])[:relevant_instructions]
+            closing = (
+                "The user's standing instructions closest to this question. "
+                "Apply each one that fits it:"
+            )
+
+        # Decisions: those that bear on the question.
+        if judged_gate is not None and gate:
+            decisions = [
+                d
+                for k, d in enumerate(candidate_decisions)
+                if judged_gate[f"d{k}"].probability >= gate_threshold
+            ][:max_decisions]
+        else:
+            decisions = [d for d in candidate_decisions if d["score"] >= 0.72][:max_decisions]
+
+        # Exchanges the judge finds useful join the fusion as a ranking.
+        pair_probability: dict[tuple[int, int], float] = judged_pairs or {}
+        if pair_probability:
+            rankings["judge"] = [
+                pair
+                for pair, probability in sorted(
+                    pair_probability.items(), key=lambda kv: (-kv[1], kv[0])
+                )
+                if probability >= 0.3
+            ]
+            if rankings["judge"]:
+                ranked = fuse_rankings(rankings, {"judge": rerank_weight})
+
+        # The span between the two events a question asks about.
+        span = self._span(date_candidates, judged_dates, date_threshold)
+        if span is not None:
+            on_timeline = {f["id"] for f in timeline_facts}
+            timeline_facts += [e for e in span["events"] if e["id"] not in on_timeline]
 
         # --- render what is fixed, then spend the rest on excerpts ------------
         # The excerpts come first and the distilled memory after them, closest
         # to the question: what must not be missed goes last.
-        reported = {
-            denial: [o for o in others if o in shown_facts]
-            for denial, others in conflicts.items()
-            if denial in shown_facts and (denial in near_question or near_question & set(others))
-        }
         sections = [
             self._render_entities(session, question_entities, relations),
             self._render_outline(summaries, count, max_chars=0.25 * token_budget * chars_per_token),
             self._render_statements(shown_facts, replaced_by),
-            self._render_timeline(timeline_facts, replaced_by),
+            self._render_decisions(decisions),
+            self._render_timeline(timeline_facts, replaced_by, span, between=elapsed),
             self._render_preferences(instructions, preferences),
             self._render_conflicts(shown_facts, reported),
         ]
         if include_guidance:
             sections.append(GUIDANCE)
-        closest = sorted(instructions, key=lambda p: -p["score"])[:relevant_instructions]
         if closest:
-            sections.append(
-                "\n".join(
-                    [
-                        "The user's standing instructions closest to this question. "
-                        "Apply each one that fits it:"
-                    ]
-                    + [f"- {item['text']}" for item in closest]
-                )
-            )
+            sections.append("\n".join([closing] + [f"- {item['text']}" for item in closest]))
         fixed = "\n\n".join(s for s in sections if s)
 
+        # A question about the order of things, or for a summary, is better
+        # served by many exchanges cut short than by a few in full.
+        message_chars = broad_message_chars if broad else None
+
         def pair_tokens(pair: tuple[int, int]) -> float:
-            chars = sum(session.messages[p]["chars"] for p in range(pair[0], pair[1] + 1))
+            chars = sum(
+                min(session.messages[p]["chars"], message_chars or session.messages[p]["chars"])
+                for p in range(pair[0], pair[1] + 1)
+            )
             return float((chars + 120) / chars_per_token)  # header and role labels
 
         recent: list[tuple[int, int]] = []
@@ -605,51 +904,275 @@ class ContextAssembler:
             vector_ranking[:vector_floor],
             recent,
             pair_tokens,
-            top_k=top_k,
+            top_k=max(top_k, broad_top_k) if broad else top_k,
             budget=token_budget - tokens(fixed) - 200,
         )
-        excerpts = await self._render_excerpts(session, chosen)
+        excerpts = await self._render_excerpts(session, chosen, message_chars)
         text = "\n\n".join(part for part in (excerpts, fixed) if part)
 
-        return AssembledContext(
-            text=text,
-            details={
-                "strategy": "hybrid",
-                "top_k": top_k,
-                "estimated_tokens": round(tokens(text)),
-                "instructions": len(instructions),
-                "preferences": len(preferences),
-                "clauses": clauses,
-                "statements": len(shown_facts),
-                "statement_messages": sorted(
-                    {f["message_index"] + 1 for f in shown_facts.values()}
+        details: dict[str, Any] = {
+            "strategy": "hybrid",
+            "top_k": top_k,
+            "estimated_tokens": round(tokens(text)),
+            "instructions": len(instructions),
+            "preferences": len(preferences),
+            "clauses": clauses,
+            "statements": len(shown_facts),
+            "statement_messages": sorted({f["message_index"] + 1 for f in shown_facts.values()}),
+            "replaced": len(replaced_by),
+            "conflicts": sum(1 for others in reported.values() if others),
+            "decisions": len(decisions),
+            "decision_messages": sorted({d["message_index"] + 1 for d in decisions}),
+            "summaries": len(summaries),
+            "question_entities": [
+                {
+                    "name": session.entities[eid]["name"],
+                    "type": session.entities[eid]["type"],
+                    "source": e["source"],
+                    "relevance": round(e["relevance"], 4),
+                    "mentions": len(session.entities[eid]["mentions"]),
+                }
+                for eid, e in sorted(question_entities.items(), key=lambda kv: -kv[1]["relevance"])
+            ],
+            "relations": len(relations),
+            "pairs": [
+                {
+                    "messages": [p["pair"][0] + 1, p["pair"][1] + 1],
+                    "ranks": p["ranks"],
+                    "recent": p["recent"],
+                    **(
+                        {"judged": round(pair_probability[p["pair"]], 3)}
+                        if p["pair"] in pair_probability
+                        else {}
+                    ),
+                }
+                for p in chosen
+            ],
+        }
+        if judge is not None:
+            details["judge"] = {
+                "name": judge.name,
+                "shape": shape,
+                "candidate_conflicts": len(candidate_conflicts),
+                "applicable_instructions": len(closest) if judged_gate is not None else None,
+                "pairs_judged": len(pair_probability),
+                "span": (
+                    {
+                        "days": span["days"],
+                        "from": span["events"][0]["event_date"],
+                        "to": span["events"][1]["event_date"],
+                        "probabilities": span["probabilities"],
+                    }
+                    if span is not None
+                    else None
                 ),
-                "replaced": len(replaced_by),
-                "conflicts": sum(1 for others in reported.values() if others),
-                "summaries": len(summaries),
-                "question_entities": [
-                    {
-                        "name": session.entities[eid]["name"],
-                        "type": session.entities[eid]["type"],
-                        "source": e["source"],
-                        "relevance": round(e["relevance"], 4),
-                        "mentions": len(session.entities[eid]["mentions"]),
-                    }
-                    for eid, e in sorted(
-                        question_entities.items(), key=lambda kv: -kv[1]["relevance"]
-                    )
-                ],
-                "relations": len(relations),
-                "pairs": [
-                    {
-                        "messages": [p["pair"][0] + 1, p["pair"][1] + 1],
-                        "ranks": p["ranks"],
-                        "recent": p["recent"],
-                    }
-                    for p in chosen
-                ],
-            },
+            }
+        return AssembledContext(text=text, details=details)
+
+    # -- judging --------------------------------------------------------------
+
+    async def _judge_gate(
+        self,
+        query: str,
+        instructions: list[dict[str, Any]],
+        contradictions: list[tuple[dict[str, Any], list[dict[str, Any]]]],
+        decisions: list[dict[str, Any]],
+        *,
+        route: bool,
+    ) -> dict[str, Any] | None:
+        """One request: what bears on the question, and what shape it has.
+
+        Question names: ``i<k>`` per instruction, ``c<k>`` per contradiction,
+        ``d<k>`` per decision, and ``shape``.
+        """
+        if self._judge is None:
+            return None
+        questions: dict[str, Question] = {}
+        state: dict[str, Any] = {"question": query}
+        if instructions:
+            state["instructions"] = [item["text"] for item in instructions]
+            for k in range(len(instructions)):
+                questions[f"i{k}"] = YesNo(
+                    f"Should the assistant apply `instructions[{k}]` when it answers `question`?",
+                    yes="The instruction covers this kind of question or the kind of "
+                    "content its answer will have.",
+                    no="The instruction is about another kind of question or content.",
+                )
+        if contradictions:
+            state["contradictions"] = [
+                {"user_said": denial["text"], "but_also_said": [o["text"] for o in others[:2]]}
+                for denial, others in contradictions
+            ]
+            for k in range(len(contradictions)):
+                questions[f"c{k}"] = YesNo(
+                    "Does `question` ask whether the user has done, used or had the thing "
+                    f"that `contradictions[{k}].user_said` says they never did?",
+                    yes="The question asks about the user's own experience with that very thing.",
+                    no="The question asks for something else, even if on a related subject.",
+                )
+        if decisions:
+            state["decisions"] = [d["text"] for d in decisions]
+            for k in range(len(decisions)):
+                questions[f"d{k}"] = YesNo(
+                    f"Does the choice in `decisions[{k}]` matter for answering `question`?",
+                    yes="The answer depends on it, or should take it into account.",
+                    no="It is about something the question does not touch.",
+                )
+        if route:
+            questions["shape"] = OneOf("What does `question` ask for?", QUESTION_SHAPES)
+        if not questions:
+            return None
+        return await judge_safely(self._judge, state, questions, what="context gate")
+
+    async def _judge_pairs(
+        self,
+        query: str,
+        session: _Session,
+        pairs: list[tuple[int, int]],
+        max_chars: int,
+    ) -> dict[tuple[int, int], float] | None:
+        """For each exchange, the probability that the answer needs it.
+
+        One request per exchange, so that each is judged against a small state.
+        """
+        if self._judge is None or not pairs:
+            return None
+        judge = self._judge
+        positions = sorted({p for first, last in pairs for p in range(first, last + 1)})
+        rows = await self._client.execute_read(
+            _MESSAGE_CONTENT, {"ids": [session.messages[p]["id"] for p in positions]}
         )
+        content = {session.position[r["id"]]: r["content"] for r in rows}
+        question = YesNo(
+            "Does `exchange` contain information that an answer to `question` needs?",
+            yes="It states a fact, figure, date, choice, instruction or event that the "
+            "answer depends on or should mention.",
+            no="It is about something else, or only shares a subject with the question.",
+        )
+
+        async def one(pair: tuple[int, int]) -> float | None:
+            exchange = {
+                session.messages[p]["role"]: (content.get(p) or "")[:max_chars]
+                for p in range(pair[0], pair[1] + 1)
+            }
+            answers = await judge_safely(
+                judge,
+                {"question": query, "exchange": exchange},
+                {"needed": question},
+                what="exchange relevance",
+                retries=1,
+            )
+            return answers["needed"].probability if answers is not None else None
+
+        probabilities = await asyncio.gather(*(one(pair) for pair in pairs))
+        return {pair: p for pair, p in zip(pairs, probabilities, strict=True) if p is not None}
+
+    @staticmethod
+    def _date_candidates(
+        rankings: list[list[dict[str, Any]]],
+        decisions: list[dict[str, Any]],
+        *,
+        limit: int = 12,
+    ) -> list[dict[str, Any]]:
+        """Dated statements a question about elapsed time may be about.
+
+        The rankings are read in turn, one statement from each, so that every
+        part of the question contributes its best matches. A statement that
+        was later replaced stays a candidate: what it reports did happen, or
+        was the plan, at its time.
+        """
+        candidates: dict[str, dict[str, Any]] = {}
+        depth = max((len(r) for r in rankings), default=0)
+        for rank in range(depth):
+            for ranking in rankings:
+                if rank < len(ranking) and len(candidates) < limit - 2:
+                    fact = ranking[rank]
+                    candidates.setdefault(fact["id"], dict(fact))
+        for decision in decisions:
+            dated = decision.get("event_date") and decision.get("changed_at") is None
+            if dated and decision["score"] >= 0.72 and len(candidates) < limit:
+                candidates.setdefault(decision["id"], dict(decision))
+        return list(candidates.values())
+
+    async def _judge_dates(
+        self, query: str, candidates: list[dict[str, Any]]
+    ) -> dict[str, Any] | None:
+        """Which dated statements a question about elapsed time refers to.
+
+        Each entry is asked about on its own, twice (``a<i>``: is it the first
+        thing, ``b<i>``: is it the second), so that the judge can say no to
+        all of them when the thing asked about is not among the entries.
+        """
+        if self._judge is None:
+            return None
+        questions: dict[str, Question] = {}
+        for i in range(len(candidates)):
+            questions[f"a{i}"] = YesNo(
+                "`question` asks about the time between two things. Is "
+                f"`entries[{i}]` the first of the two things it names?",
+                yes="The entry is that event or deadline itself.",
+                no="The entry is something else, or the second of the two.",
+            )
+            questions[f"b{i}"] = YesNo(
+                "`question` asks about the time between two things. Is "
+                f"`entries[{i}]` the second of the two things it names?",
+                yes="The entry is that event or deadline itself.",
+                no="The entry is something else, or the first of the two.",
+            )
+        return await judge_safely(
+            self._judge,
+            {
+                "question": query,
+                "entries": [{"what": c["text"], "date": c["event_date"]} for c in candidates],
+            },
+            questions,
+            what="date resolution",
+        )
+
+    @staticmethod
+    def _span(
+        candidates: list[dict[str, Any]],
+        judged: dict[str, Any] | None,
+        threshold: float,
+    ) -> dict[str, Any] | None:
+        """The days between the two entries the judge is sure of.
+
+        The pair with the highest joint probability is taken, among entries
+        that are each at ``threshold`` or more and carry different dates.
+        """
+        if judged is None:
+            return None
+        firsts = [
+            (judged[f"a{i}"].probability, i)
+            for i in range(len(candidates))
+            if judged[f"a{i}"].probability >= threshold
+        ]
+        seconds = [
+            (judged[f"b{i}"].probability, i)
+            for i in range(len(candidates))
+            if judged[f"b{i}"].probability >= threshold
+        ]
+        best: tuple[float, int, int] | None = None
+        for p_first, i in firsts:
+            for p_second, j in seconds:
+                if i == j or candidates[i]["event_date"] == candidates[j]["event_date"]:
+                    continue
+                if best is None or p_first * p_second > best[0]:
+                    best = (p_first * p_second, i, j)
+        if best is None:
+            return None
+        _, i, j = best
+        days = _days_between(candidates[i]["event_date"], candidates[j]["event_date"])
+        if days is None:
+            return None
+        return {
+            "events": [candidates[i], candidates[j]],
+            "days": days,
+            "probabilities": [
+                round(judged[f"a{i}"].probability, 3),
+                round(judged[f"b{j}"].probability, 3),
+            ],
+        }
 
     # -- rendering ------------------------------------------------------------
 
@@ -680,10 +1203,16 @@ class ContextAssembler:
         facts: dict[str, dict[str, Any]],
         conflicts: dict[str, list[str]],
         *,
-        per_denial: int = 2,
+        per_denial: int = 3,
     ) -> str:
         entries = [
-            (facts[denial], sorted((facts[o] for o in others), key=lambda f: -f.get("score", 0.0)))
+            (
+                facts[denial],
+                sorted(
+                    (facts[o] for o in others),
+                    key=lambda f: (-f.get("conflict_probability", 1.0), -f.get("score", 0.0)),
+                ),
+            )
             for denial, others in conflicts.items()
             if others
         ]
@@ -729,10 +1258,51 @@ class ContextAssembler:
             lines.append(line)
         return "\n".join(lines)
 
+    def _render_decisions(self, decisions: list[dict[str, Any]]) -> str:
+        if not decisions:
+            return ""
+        lines = [
+            "## What the user has decided",
+            "Choices the user made that bear on the question, in the order they were "
+            "made. A choice marked as later changed is no longer the current one.",
+        ]
+        for decision in sorted(decisions, key=lambda d: (d["message_index"], d["id"])):
+            line = f"- [{self._where(decision)}] {decision['text']}"
+            notes = []
+            if decision.get("alternatives"):
+                notes.append("passed over: " + ", ".join(decision["alternatives"][:4]))
+            if decision.get("reason"):
+                notes.append(f"because: {decision['reason']}")
+            if decision.get("event_date"):
+                notes.append(f"takes effect {decision['event_date']}")
+            if notes:
+                line += f" ({'; '.join(notes)})"
+            if decision.get("changed_at") is not None:
+                line += f" (later changed: see #{decision['changed_at'] + 1})"
+            elif decision.get("status") == "considering":
+                line += " (still being considered, not settled)"
+            lines.append(line)
+        return "\n".join(lines)
+
     @staticmethod
-    def _render_timeline(facts: list[dict[str, Any]], replaced_by: dict[str, str]) -> str:
+    def _render_timeline(
+        facts: list[dict[str, Any]],
+        replaced_by: dict[str, str],
+        span: dict[str, Any] | None = None,
+        *,
+        between: bool = False,
+        max_dates: int = 6,
+    ) -> str:
+        """The dated statements in date order, with day numbers.
+
+        A statement that was later replaced is kept and marked. ``span`` is
+        stated below them as the answer worked out for the
+        question. With ``between`` and no span, the days between every two of
+        the first ``max_dates`` dates are listed, so that no subtraction is
+        left to the reader.
+        """
         dated = sorted(
-            (f for f in facts if f.get("event_date") and f["id"] not in replaced_by),
+            (f for f in facts if f.get("event_date")),
             key=lambda f: (f["event_date"], f["message_index"]),
         )
         if len(dated) < 2:
@@ -747,9 +1317,29 @@ class ContextAssembler:
         for fact in dated:
             days = _days_between(first, fact["event_date"])
             day = f" (day {days})" if days is not None else ""
+            # A replaced statement stays: it is what was true, or planned, then.
+            changed = " (a later statement changed this)" if fact["id"] in replaced_by else ""
             lines.append(
-                f"- {fact['event_date']}{day}: {fact['text']} (#{fact['message_index'] + 1})"
+                f"- {fact['event_date']}{day}: {fact['text']} "
+                f"(#{fact['message_index'] + 1}){changed}"
             )
+        if span is not None:
+            first, second = span["events"]
+            lines.append(
+                "Worked out for this question: from "
+                f'{first["event_date"]} ("{first["text"]}") to '
+                f'{second["event_date"]} ("{second["text"]}") is {describe_span(span["days"])}.'
+            )
+        elif between:
+            dates = sorted({f["event_date"] for f in dated})[:max_dates]
+            pairs = [
+                f"{a} to {b}: {describe_span(days)}"
+                for i, a in enumerate(dates)
+                for b in dates[i + 1 :]
+                if (days := _days_between(a, b)) is not None
+            ]
+            if pairs:
+                lines.append("Days between these dates, worked out: " + "; ".join(pairs) + ".")
         return "\n".join(lines)
 
     @staticmethod
@@ -791,7 +1381,12 @@ class ContextAssembler:
             lines.append(summary["text"][:per_summary])
         return "\n".join(lines)
 
-    async def _render_excerpts(self, session: _Session, chosen: list[dict[str, Any]]) -> str:
+    async def _render_excerpts(
+        self,
+        session: _Session,
+        chosen: list[dict[str, Any]],
+        message_chars: int | None = None,
+    ) -> str:
         if not chosen:
             return ""
         positions = [p for entry in chosen for p in range(entry["pair"][0], entry["pair"][1] + 1)]
@@ -807,6 +1402,8 @@ class ContextAssembler:
             "they were said. Those marked 'most recent' are where the conversation "
             "currently ends.",
         ]
+        if message_chars is not None:
+            lines[-1] += " Long messages are cut short, marked [...]."
         for entry in chosen:
             first, last = entry["pair"]
             where = f"#{first + 1}" if first == last else f"#{first + 1}-{last + 1}"
@@ -819,5 +1416,8 @@ class ContextAssembler:
             lines += ["", header + "]"]
             for position in range(first, last + 1):
                 role = session.messages[position]["role"].upper()
-                lines.append(f"{role}: {content.get(position, '')}")
+                said = content.get(position, "")
+                if message_chars is not None and len(said) > message_chars:
+                    said = said[:message_chars].rstrip() + " [...]"
+                lines.append(f"{role}: {said}")
         return "\n".join(lines)

@@ -660,10 +660,12 @@ class MemoryClient(Generic[_ST, _LT, _RT]):
         from neo4j_agent_memory.memory.context import ContextAssembler
         from neo4j_agent_memory.memory.distillation import DistillationMemory
 
+        llm_provider = self._resolve_llm_provider()
+        self._judge = self._resolve_judge(llm_provider)
         self._distillation = DistillationMemory(
-            self._client, self._embedder, self._resolve_llm_provider()
+            self._client, self._embedder, llm_provider, self._judge
         )
-        self._context_assembler = ContextAssembler(self._client, self._embedder)
+        self._context_assembler = ContextAssembler(self._client, self._embedder, self._judge)
 
         # Evaluation harness.
         from neo4j_agent_memory.memory.eval import EvalMemory
@@ -1127,6 +1129,40 @@ class MemoryClient(Generic[_ST, _LT, _RT]):
         if self._distillation is None:
             raise NotConnectedError("Client not connected. Use 'async with' or call connect().")
         return self._distillation
+
+    @property
+    def judge(self) -> Any:
+        """The configured :class:`~neo4j_agent_memory.judge.Judge`, or None."""
+        return getattr(self, "_judge", None)
+
+    def _resolve_judge(self, llm_provider: Any) -> Any:
+        """The judge behind ``settings.judge``, or None when there is none.
+
+        ``settings.judge`` is a :class:`~neo4j_agent_memory.judge.Judge`
+        instance, or a string: ``"typesafe"`` (optionally with a model,
+        ``"typesafe/jev-1.14.0"``) for TypeSafe's Jev, or ``"llm"`` to have the
+        configured LLM provider answer the same questions.
+        """
+        from neo4j_agent_memory.judge import Judge, LLMJudge, TypeSafeJudge
+
+        judge = getattr(self._settings, "judge", None)
+        if judge is None or judge == "":
+            return None
+        if isinstance(judge, str):
+            kind, _, model = judge.partition("/")
+            if kind == "typesafe":
+                return TypeSafeJudge(model=model) if model else TypeSafeJudge()
+            if kind == "llm":
+                if llm_provider is None:
+                    raise ValueError("MemorySettings.judge='llm' needs MemorySettings.llm.")
+                return LLMJudge(llm_provider)
+            raise ValueError(
+                f"Unknown judge {judge!r}: use 'typesafe', 'typesafe/<model>', 'llm' "
+                "or a Judge instance."
+            )
+        if isinstance(judge, Judge):
+            return judge
+        raise ValueError("MemorySettings.judge must be a Judge instance or a string.")
 
     def _resolve_llm_provider(self) -> Any:
         """The LLM provider behind ``settings.llm``, or None when there is none.

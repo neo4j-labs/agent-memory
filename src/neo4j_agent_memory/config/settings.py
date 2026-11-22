@@ -852,6 +852,11 @@ class MemorySettings(BaseSettings):
     # malformed inputs with a clear error message.
     embedding: Any = Field(default_factory=EmbeddingConfig)
     llm: Any = Field(default=None)
+    # A judge answers the closed questions of distillation and context assembly
+    # (does this replace that, does this apply here). A
+    # ``neo4j_agent_memory.judge.Judge`` instance, or "typesafe",
+    # "typesafe/<model>" or "llm". None: the LLM decides, without probabilities.
+    judge: Any = Field(default=None)
     schema_config: SchemaConfig = Field(default_factory=SchemaConfig)
     extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
     resolution: ResolutionConfig = Field(default_factory=ResolutionConfig)

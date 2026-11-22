@@ -126,6 +126,10 @@ gliner2 = ["gliner2[local]>=2.0,<3", "sentencepiece>=0.2", "protobuf>=5"]
 # commands keep working. Removed in 0.8.
 gliner = ["gliner2[local]>=2.0,<3", "sentencepiece>=0.2", "protobuf>=5"]
 
+# A judge for the closed questions of distillation and context assembly:
+# TypeSafe's Jev decision model (neo4j_agent_memory.judge.TypeSafeJudge).
+typesafe = ["typesafe-sdk>=0.7,<1"]
+
 # Extraction pipeline (spaCy + GLiNER2.5)
 extraction = [
     "spacy>=3.7.0",

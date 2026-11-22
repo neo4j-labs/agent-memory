@@ -112,6 +112,8 @@ class SchemaManager:
             ("fact_id", "Fact", "id"),
             # Session distillation: the outline of a conversation
             ("summary_id", "Summary", "id"),
+            # Session distillation: the choices the user made
+            ("decision_id", "Decision", "id"),
             # Reasoning memory
             ("reasoning_trace_id", "ReasoningTrace", "id"),
             ("reasoning_step_id", "ReasoningStep", "id"),
@@ -180,6 +182,7 @@ class SchemaManager:
         ("entity_embedding_idx", "Entity", "embedding"),
         ("preference_embedding_idx", "Preference", "embedding"),
         ("fact_embedding_idx", "Fact", "embedding"),
+        ("decision_embedding_idx", "Decision", "embedding"),
         ("task_embedding_idx", "ReasoningTrace", "task_embedding"),
         ("step_embedding_idx", "ReasoningStep", "embedding"),
     )

@@ -145,6 +145,9 @@ class TestExtractStatements:
             "facts": 4,
             "preferences": 2,
             "instructions": 2,
+            "decisions": 0,
+            "dropped": 0,
+            "details_recovered": 0,
             "failures": 0,
         }
         stored = client.written("CREATE (f:Fact")
@@ -335,7 +338,7 @@ class TestReconcile:
         assert "S1. The user set up Flask 2.3.1." in prompt
         assert "M1. I'm implementing the homepage route with Flask." in prompt
         assert "M2." not in prompt  # the later message was not offered
-        created = client.written("MERGE (d)-[:CONTRADICTS]->(f)")
+        created = client.written("MERGE (d)-[r:CONTRADICTS]->(f)")
         assert len(created) == 1
         assert created[0]["text"] == "The user implemented a homepage route with Flask."
         assert created[0]["message_index"] == 2 and created[0]["denial"] == "denial"
@@ -374,7 +377,7 @@ class TestReconcile:
         assert client.written("MERGE (d)-[:CONTRADICTS]->(o)") == [
             {"denial": "denial", "ids": ["used"]}
         ]
-        assert client.written("MERGE (d)-[:CONTRADICTS]->(f)") == []
+        assert client.written("MERGE (d)-[r:CONTRADICTS]->(f)") == []
 
 
 class TestSummaries:

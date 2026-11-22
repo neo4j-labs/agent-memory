@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from neo4j_agent_memory.judge import Judgement, YesNo
 from neo4j_agent_memory.memory import context as ctx
 from neo4j_agent_memory.memory.context import (
     ContextAssembler,
@@ -116,14 +117,15 @@ class TestRendering:
         facts = [{"id": "a", "text": "x", "event_date": "2024-03-12", "message_index": 1}]
         assert ContextAssembler._render_timeline(facts, {}) == ""
 
-    def test_a_replaced_statement_is_left_off_the_timeline(self) -> None:
+    def test_a_replaced_statement_stays_on_the_timeline_marked(self) -> None:
         facts = [
             {"id": "old", "text": "Due March 29.", "event_date": "2024-03-29", "message_index": 1},
             {"id": "new", "text": "Due March 31.", "event_date": "2024-03-31", "message_index": 5},
             {"id": "x", "text": "Kickoff.", "event_date": "2024-03-01", "message_index": 0},
         ]
         text = ContextAssembler._render_timeline(facts, {"old": "new"})
-        assert "March 29" not in text and "March 31" in text
+        assert "Due March 29. (#2) (a later statement changed this)" in text
+        assert "Due March 31. (#6)" in text and "Due March 31. (#6) (a later" not in text
 
     def test_statements_point_from_an_old_value_to_the_new_one(self) -> None:
         facts = {
@@ -319,3 +321,339 @@ class TestAssemble:
 
 def test_rrf_constant_is_the_published_one() -> None:
     assert ctx.RRF_K == 60
+
+
+# --- with a judge -------------------------------------------------------------
+
+
+class FakeJudge:
+    """Answers each question through ``answer(name, question, state)``."""
+
+    name = "fake-judge"
+
+    def __init__(self, answer: Any = None) -> None:
+        self.answer = answer or (lambda *_: None)
+        self.calls: list[tuple[Any, dict[str, Any]]] = []
+
+    async def judge(self, state: Any, questions: dict[str, Any]) -> dict[str, Judgement]:
+        self.calls.append((state, dict(questions)))
+        answers: dict[str, Judgement] = {}
+        for name, question in questions.items():
+            given = self.answer(name, question, state)
+            if isinstance(question, YesNo):
+                answers[name] = Judgement(float(given or 0.0))
+            else:
+                probabilities = given or {next(iter(question.options)): 1.0}
+                choice = max(probabilities, key=probabilities.get)
+                answers[name] = Judgement(probabilities[choice], choice, probabilities)
+        return answers
+
+
+def _decision_rows() -> list[dict[str, Any]]:
+    return [
+        {
+            "id": "d1",
+            "text": "The user decided to hash passwords with Argon2.",
+            "chosen": "Argon2",
+            "alternatives": ["bcrypt"],
+            "reason": "faster logins",
+            "status": "decided",
+            "message_index": 2,
+            "said_at": "2024-03-15",
+            "event_date": None,
+            "changed_at": None,
+            "score": 0.8,
+        },
+        {
+            "id": "d2",
+            "text": "The user decided to use Bootstrap.",
+            "chosen": "Bootstrap",
+            "alternatives": [],
+            "reason": None,
+            "status": "considering",
+            "message_index": 4,
+            "said_at": "2024-03-15",
+            "event_date": None,
+            "changed_at": 6,
+            "score": 0.6,
+        },
+    ]
+
+
+class TestFusionWeights:
+    def test_a_weighted_ranking_counts_for_more(self) -> None:
+        rankings = {"vector": [(0, 1), (2, 3)], "judge": [(2, 3), (0, 1)]}
+        assert fuse_rankings(rankings)[0]["pair"] == (0, 1)  # a tie, earlier first
+        assert fuse_rankings(rankings, {"judge": 3.0})[0]["pair"] == (2, 3)
+
+
+class TestElapsedTime:
+    @pytest.mark.parametrize(
+        "question",
+        [
+            "How many days passed between the kickoff and the launch?",
+            "How long after the review did I file the patent?",
+            "How much time do I have from the sprint end to the deadline?",
+        ],
+    )
+    def test_questions_about_elapsed_time_are_recognised(self, question: str) -> None:
+        assert ctx.asks_for_elapsed_time(question)
+
+    def test_other_questions_are_not(self) -> None:
+        assert not ctx.asks_for_elapsed_time("Which libraries does my project use?")
+
+    def test_a_span_is_described_in_days_and_weeks(self) -> None:
+        assert ctx.describe_span(1) == "1 day"
+        assert ctx.describe_span(18) == "18 days (2 weeks and 4 days)"
+        assert ctx.describe_span(-21) == "21 days (3 weeks)"
+
+
+class TestDecisionsAndProbabilities:
+    def test_decisions_show_what_was_passed_over_and_what_changed(self) -> None:
+        text = ContextAssembler(None, None)._render_decisions(_decision_rows())  # type: ignore[arg-type]
+        assert "## What the user has decided" in text
+        assert (
+            "- [#3, 2024-03-15] The user decided to hash passwords with Argon2. "
+            "(passed over: bcrypt; because: faster logins)" in text
+        )
+        assert "The user decided to use Bootstrap. (later changed: see #7)" in text
+
+    @pytest.mark.asyncio
+    async def test_without_a_judge_only_decisions_near_the_question_are_shown(self) -> None:
+        rows = _session_rows()
+        rows["MATCH (d:Decision"] = _decision_rows()
+        assembler = ContextAssembler(FakeClient(rows), FakeEmbedder())  # type: ignore[arg-type]
+        result = await assembler.assemble("Which hashing did I pick?", session_id="s")
+        assert "hash passwords with Argon2" in result.text
+        assert "Bootstrap" not in result.text
+        assert result.details["decisions"] == 1
+
+    @pytest.mark.asyncio
+    async def test_a_weak_relationship_is_not_reported(self) -> None:
+        rows = _session_rows()
+        rows["SUPERSEDED_BY|CONTRADICTS"][0]["probability"] = 0.35
+        assembler = ContextAssembler(FakeClient(rows), FakeEmbedder())  # type: ignore[arg-type]
+        result = await assembler.assemble("Have I used Docker?", session_id="s")
+        assert "## Contradictions in what the user has said" not in result.text
+        assert result.details["conflicts"] == 0
+
+    def test_the_surest_conflict_is_shown_first(self) -> None:
+        facts = {
+            "d": {"id": "d", "text": "Never used Docker.", "message_index": 9, "said_at": None},
+            "a": {
+                "id": "a",
+                "text": "Asked about Docker.",
+                "message_index": 1,
+                "said_at": None,
+                "score": 0.9,
+                "conflict_probability": 0.55,
+            },
+            "b": {
+                "id": "b",
+                "text": "Deployed with Docker.",
+                "message_index": 3,
+                "said_at": None,
+                "score": 0.2,
+                "conflict_probability": 0.97,
+            },
+        }
+        text = ContextAssembler(None, None)._render_conflicts(  # type: ignore[arg-type]
+            facts, {"d": ["a", "b"]}, per_denial=1
+        )
+        assert "Deployed with Docker." in text and "Asked about Docker." not in text
+
+
+class TestAssembleWithAJudge:
+    @pytest.mark.asyncio
+    async def test_the_gate_decides_what_is_reported(self) -> None:
+        rows = _session_rows()
+        rows["MATCH (d:Decision"] = _decision_rows()
+
+        def answer(name: str, question: Any, state: Any) -> Any:
+            return {"c0": 0.1, "i0": 0.9, "d0": 0.2, "d1": 0.8}.get(name)
+
+        judge = FakeJudge(answer)
+        assembler = ContextAssembler(FakeClient(rows), FakeEmbedder(), judge)  # type: ignore[arg-type]
+        result = await assembler.assemble("How do I speed up my Docker build?", session_id="s")
+
+        # The question is not about whether the user ever used Docker.
+        assert "## Contradictions in what the user has said" not in result.text
+        assert "that apply to this question. Follow each of them in the answer:" in result.text
+        assert "The user decided to use Bootstrap." in result.text
+        assert "hash passwords with Argon2" not in result.text
+        gate = next(state for state, _ in judge.calls if "instructions" in state)
+        assert gate["contradictions"] == [
+            {
+                "user_said": "The user has never used Docker.",
+                "but_also_said": ["The user deployed with Docker."],
+            }
+        ]
+        # The shape of the question is asked for only on request.
+        assert result.details["judge"]["shape"] == "lookup"
+        assert "shape" not in next(q for state, q in judge.calls if "instructions" in state)
+
+    @pytest.mark.asyncio
+    async def test_a_contradiction_the_question_asks_about_is_reported(self) -> None:
+        judge = FakeJudge(lambda name, *_: 0.9 if name == "c0" else None)
+        assembler = ContextAssembler(FakeClient(_session_rows()), FakeEmbedder(), judge)  # type: ignore[arg-type]
+        result = await assembler.assemble("Have I used Docker?", session_id="s")
+        assert "## Contradictions in what the user has said" in result.text
+        # No instruction applies, so none is repeated at the end.
+        assert "that apply to this question" not in result.text
+
+    @pytest.mark.asyncio
+    async def test_the_judges_ranking_reorders_the_exchanges(self) -> None:
+        def answer(name: str, question: Any, state: Any) -> Any:
+            if name == "needed":
+                return 0.95 if state["exchange"]["user"] == "content 0" else 0.05
+            return None
+
+        judge = FakeJudge(answer)
+        assembler = ContextAssembler(FakeClient(_session_rows()), FakeEmbedder(), judge)  # type: ignore[arg-type]
+        result = await assembler.assemble(
+            "Have I used Docker?", session_id="s", top_k=1, vector_floor=0, recent_pairs=0
+        )
+        # Vector search put #5 first; the judge found what is needed in #1-2.
+        assert [p["messages"] for p in result.details["pairs"]] == [[1, 2]]
+        assert result.details["pairs"][0]["judged"] == 0.95
+        assert result.details["judge"]["pairs_judged"] == 2
+
+    @pytest.mark.asyncio
+    async def test_reranking_can_be_switched_off(self) -> None:
+        judge = FakeJudge()
+        assembler = ContextAssembler(FakeClient(_session_rows()), FakeEmbedder(), judge)  # type: ignore[arg-type]
+        await assembler.assemble("Have I used Docker?", session_id="s", rerank=False)
+        assert not any("exchange" in state for state, _ in judge.calls)
+
+    @pytest.mark.asyncio
+    async def test_the_span_between_two_events_is_worked_out(self) -> None:
+        rows = _session_rows()
+        rows["fact_embedding_idx"] = [
+            {
+                "id": "f1",
+                "text": "The first sprint ends on March 29.",
+                "message_index": 0,
+                "said_at": "2024-03-15",
+                "event_date": "2024-03-29",
+                "score": 0.9,
+            },
+            {
+                "id": "f2",
+                "text": "Analytics are due April 19.",
+                "message_index": 4,
+                "said_at": "2024-03-15",
+                "event_date": "2024-04-19",
+                "score": 0.8,
+            },
+        ]
+        rows["SUPERSEDED_BY|CONTRADICTS"] = []
+
+        def answer(name: str, question: Any, state: Any) -> Any:
+            # The first thing is the sprint's end, the second the deadline.
+            return {"a0": 0.9, "a1": 0.1, "b0": 0.0, "b1": 0.8}.get(name)
+
+        judge = FakeJudge(answer)
+        assembler = ContextAssembler(FakeClient(rows), FakeEmbedder(), judge)  # type: ignore[arg-type]
+        result = await assembler.assemble(
+            "How many days are there between the end of my first sprint and the analytics deadline?",
+            session_id="s",
+        )
+        assert (
+            'Worked out for this question: from 2024-03-29 ("The first sprint ends on '
+            'March 29.") to 2024-04-19 ("Analytics are due April 19.") is 21 days (3 weeks).'
+        ) in result.text
+        assert result.details["judge"]["span"] == {
+            "days": 21,
+            "from": "2024-03-29",
+            "to": "2024-04-19",
+            "probabilities": [0.9, 0.8],
+        }
+
+    @pytest.mark.asyncio
+    async def test_an_unsure_judge_works_out_no_span(self) -> None:
+        rows = _session_rows()
+        rows["fact_embedding_idx"][0]["event_date"] = "2024-03-12"
+
+        def answer(name: str, question: Any, state: Any) -> Any:
+            return 0.3 if name[:1] in ("a", "b") and name[1:].isdigit() else None
+
+        assembler = ContextAssembler(FakeClient(rows), FakeEmbedder(), FakeJudge(answer))  # type: ignore[arg-type]
+        result = await assembler.assemble(
+            "How many days between my first Docker use and the deploy?", session_id="s"
+        )
+        assert "Worked out for this question" not in result.text
+        assert result.details["judge"]["span"] is None
+
+    def test_without_a_span_the_days_between_the_dates_are_listed(self) -> None:
+        facts = [
+            {"id": "a", "text": "Meeting.", "event_date": "2024-03-25", "message_index": 1},
+            {"id": "b", "text": "Accepted.", "event_date": "2024-04-15", "message_index": 5},
+            {"id": "c", "text": "Signed.", "event_date": "2024-05-01", "message_index": 9},
+        ]
+        text = ContextAssembler._render_timeline(facts, {}, None, between=True)
+        assert text.splitlines()[-1] == (
+            "Days between these dates, worked out: "
+            "2024-03-25 to 2024-04-15: 21 days (3 weeks); "
+            "2024-03-25 to 2024-05-01: 37 days (5 weeks and 2 days); "
+            "2024-04-15 to 2024-05-01: 16 days (2 weeks and 2 days)."
+        )
+
+    def test_date_candidates_take_turns_between_the_parts_of_a_question(self) -> None:
+        first = [{"id": "a", "event_date": "2024-03-22"}, {"id": "b", "event_date": "2024-03-25"}]
+        second = [{"id": "c", "event_date": "2024-05-01"}, {"id": "a", "event_date": "2024-03-22"}]
+        decisions = [
+            {"id": "d", "event_date": "2024-06-01", "changed_at": None, "score": 0.8},
+            {"id": "e", "event_date": None, "changed_at": None, "score": 0.9},
+        ]
+        chosen = ContextAssembler._date_candidates([first, second], decisions)
+        assert [c["id"] for c in chosen] == ["a", "c", "b", "d"]
+
+    @pytest.mark.asyncio
+    async def test_a_summary_question_gets_more_exchanges_cut_short(self) -> None:
+        rows = _session_rows()
+        rows["RETURN m.id AS id, m.content AS content"] = [
+            {"id": f"m{i}", "content": "long " * 300} for i in range(8)
+        ]
+
+        def answer(name: str, question: Any, state: Any) -> Any:
+            if name == "shape":
+                return {"lookup": 0.1, "elapsed": 0.0, "order": 0.1, "summary": 0.8}
+            return None
+
+        judge = FakeJudge(answer)
+        assembler = ContextAssembler(FakeClient(rows), FakeEmbedder(), judge)  # type: ignore[arg-type]
+        result = await assembler.assemble(
+            "Summarize how my deployment went.",
+            session_id="s",
+            route=True,
+            broad_message_chars=100,
+        )
+        assert result.details["judge"]["shape"] == "summary"
+        assert "Long messages are cut short, marked [...]." in result.text
+        assert "long long long [...]" in result.text
+        assert ("long " * 30) not in result.text
+
+    @pytest.mark.asyncio
+    async def test_a_judge_that_fails_leaves_the_context_as_without_one(self) -> None:
+        class Broken:
+            name = "broken"
+
+            async def judge(self, state: Any, questions: Any) -> dict[str, Any]:
+                raise RuntimeError("unreachable")
+
+        async def no_sleep(_: float) -> None:
+            return None
+
+        import neo4j_agent_memory.judge as judge_module
+
+        original = judge_module.asyncio.sleep
+        judge_module.asyncio.sleep = no_sleep  # type: ignore[assignment]
+        try:
+            assembler = ContextAssembler(FakeClient(_session_rows()), FakeEmbedder(), Broken())  # type: ignore[arg-type]
+            result = await assembler.assemble("Have I used Docker?", session_id="s")
+        finally:
+            judge_module.asyncio.sleep = original  # type: ignore[assignment]
+        plain = await ContextAssembler(FakeClient(_session_rows()), FakeEmbedder()).assemble(  # type: ignore[arg-type]
+            "Have I used Docker?", session_id="s"
+        )
+        assert result.text == plain.text

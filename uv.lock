@@ -4221,6 +4221,9 @@ strands = [
     { name = "boto3" },
     { name = "strands-agents" },
 ]
+typesafe = [
+    { name = "typesafe-sdk" },
+]
 vertex-ai = [
     { name = "google-cloud-aiplatform" },
     { name = "google-genai" },
@@ -4297,9 +4300,10 @@ requires-dist = [
     { name = "spacy", marker = "extra == 'extraction'", specifier = ">=3.7.0" },
     { name = "spacy", marker = "extra == 'spacy'", specifier = ">=3.7.0" },
     { name = "strands-agents", marker = "extra == 'strands'", specifier = ">=1.52,<2" },
+    { name = "typesafe-sdk", marker = "extra == 'typesafe'", specifier = ">=0.7,<1" },
     { name = "typing-extensions", specifier = ">=4.4" },
 ]
-provides-extras = ["openai", "anthropic", "sentence-transformers", "vertex-ai", "bedrock", "litellm", "instructor", "google", "aws", "strands", "spacy", "gliner2", "gliner", "extraction", "fuzzy", "cli", "opentelemetry", "opik", "observability", "langchain", "langchain-agents", "llamaindex", "pydantic-ai", "crewai", "openai-agents", "microsoft-agent", "mcp", "google-adk", "nams", "all", "full"]
+provides-extras = ["openai", "anthropic", "sentence-transformers", "vertex-ai", "bedrock", "litellm", "instructor", "google", "aws", "strands", "spacy", "gliner2", "gliner", "typesafe", "extraction", "fuzzy", "cli", "opentelemetry", "opik", "observability", "langchain", "langchain-agents", "llamaindex", "pydantic-ai", "crewai", "openai-agents", "microsoft-agent", "mcp", "google-adk", "nams", "all", "full"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -7944,6 +7948,25 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/89/b2/4f2d72b5d234c81caa07dee688cacee2c8dc5bd793e9ae70a573f00d6425/types_s3transfer-0.19.3.tar.gz", hash = "sha256:99422ef028a5f854cd92d1e72cf4208bd0569f68a87936ca02fb9f91a68cdcd3", size = 13780, upload-time = "2026-10-20T02:24:19.016Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f5/98/972fa03c9a6e1cc9184a28ea0354af50a6764bb172fe2d0751798a295f07/types_s3transfer-0.19.3-py3-none-any.whl", hash = "sha256:6843143f3b79e3cb73e58b6f45738e28e88d9f681fd32cc5ef7fa16f0c193356", size = 19476, upload-time = "2026-10-20T02:24:17.682Z" },
+]
+
+[[package]]
+name = "typesafe-sdk"
+version = "0.7.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "httpx2" },
+    { name = "packaging" },
+    { name = "pydantic" },
+    { name = "pydantic-core" },
+    { name = "tenacity" },
+    { name = "truststore", marker = "sys_platform != 'emscripten'" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/26/4d/383aa14f4cfe5fb41023ea1cab52d7f79cc31ab200ee7314317cf89db744/typesafe_sdk-0.7.5.tar.gz", hash = "sha256:1eeeb0dc80a7161d84896db42a5016dc0a7c8872fa16540b70163e5357b6d398", size = 34152, upload-time = "2026-10-14T21:21:42.837Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1c/f6/bee4c3b49570c2d312057c9e37c1446cf37eb1b86bf5872f7a797e803326/typesafe_sdk-0.7.5-py3-none-any.whl", hash = "sha256:967a8b61494d536abb55ee3f3a2b10e81685cb6baad6ccdcab588bdc6c9b86d2", size = 49948, upload-time = "2026-10-14T21:21:41.337Z" },
 ]
 
 [[package]]
