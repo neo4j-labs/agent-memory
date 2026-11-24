@@ -64,6 +64,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Entity-graph options for context assembly**, all off by default:
   `graph_walk="walk"`, `entity_statements`, `enumerate_entities` and
   `judge_entities` on `ContextAssembler.assemble()`.
+- **An outline with a line per exchange.**
+  `summarize_session(detail="exchange")` writes one bullet per exchange,
+  with the position of its message, saying what the user brought up and
+  what the assistant gave in reply. It is stored next to the existing
+  outline (`Summary.detail`); `distill_session(exchange_outline=True)`
+  writes both. `get_context(strategy="hybrid")` shows it to a question that
+  asks for a summary when the session has it (`outline_detail="auto"`, the
+  default; `breadth_of()` recognises such a question) and closes the context
+  with a note on how to summarize from it; other questions get the shorter
+  outline as before. `outline_detail` and `outline_share` choose the outline
+  and its share of the budget outright. An outline entry that does not fit
+  is now cut at the end of a bullet.
+- **Communities** (`client.distillation.detect_communities`,
+  `memory/communities.py`). Entities that come up in the same exchanges are
+  clustered with hierarchical Louvain in Neo4j Graph Data Science
+  (`gds.louvain` with intermediate communities, over a projection weighted by
+  how much two entities' exchanges overlap). Every exchange is given to the
+  community most of its entities belong to, so a community is a thread: a set
+  of exchanges spread over the conversation. An LLM writes a title and
+  bullet points for each, from the exchanges themselves. Stored as
+  `(:Entity)-[:IN_COMMUNITY]->(:Community)`,
+  `(:Community)-[:PARENT_COMMUNITY]->(:Community)` between levels and
+  `(:Conversation)-[:HAS_COMMUNITY]->(:Community)`; the weighted links live
+  in the projection only. `distill_session(communities=True)` runs it with
+  the rest. Needs the Graph Data Science plugin on the server and raises
+  `GraphDataScienceUnavailable` without it; nothing else in the library
+  needs the plugin.
+- **Threads in context assembly**, off by default.
+  `get_context(strategy="hybrid", communities=N)` searches the community
+  summaries by embedding and shows the nearest N as "Threads of the
+  conversation", at most one per line of descent, to a question that asks
+  for a summary (`thread_scope="broad"` adds questions about the order in
+  which things came up, `"all"` every question). The messages the bullets
+  point at join the ranking of excerpts.
+- **More searches for context assembly**, all off by default:
+  - `keyword=True` searches messages, statements and community summaries by
+    keyword as well, through new full-text indexes, and fuses the result
+    with the vector rankings.
+  - `summary_search=N` searches the outline's summaries by embedding (they
+    are now embedded when written) and ranks the exchanges of the nearest N
+    stretches. `distillation.embed_summaries()` embeds summaries written
+    before.
+  - `preference_search=N` lets the source messages of the nearest
+    preferences and instructions join the ranking.
+  - `feedback_entities=N` takes the entities the best exchanges mention
+    most and ranks the other messages that mention them, weighted by how
+    near each entity is to the question; an entity that matches the
+    question closely also brings in the entities of its community.
+- Schema: a uniqueness constraint for `:Community`; vector indexes
+  `summary_embedding_idx` and `community_embedding_idx`; full-text indexes
+  `message_content_fulltext_idx`, `fact_text_fulltext_idx` and
+  `community_summary_fulltext_idx`. `SchemaManager.drop_all()` now also
+  drops objects named `summary_*`, `decision_*` and `community_*`.
 - **OpenAI reasoning models** (the gpt-5 family, o-series) are accepted by
   `OpenAIProvider`: no sampling temperature is sent, an output limit becomes
   `max_completion_tokens` with room for reasoning, and a request is allowed

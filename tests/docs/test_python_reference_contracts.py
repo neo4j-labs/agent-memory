@@ -170,6 +170,12 @@ def test_schema_object_inventory_matches_bolt_schema_manager():
     for node in cls.body:
         if isinstance(node, ast.AnnAssign) and node.target.id == "_MANAGED_VECTOR_INDEXES":
             expected.update(ast.literal_eval(node.value))
+        if isinstance(node, ast.AnnAssign) and node.target.id == "_MANAGED_FULLTEXT_INDEXES":
+            # A full-text index covers several properties; its row leads with the first.
+            expected.update(
+                (name, label, properties[0])
+                for name, label, properties in ast.literal_eval(node.value)
+            )
         if isinstance(node, ast.AsyncFunctionDef) and node.name in {
             "setup_constraints",
             "setup_indexes",

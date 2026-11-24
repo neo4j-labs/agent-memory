@@ -603,7 +603,9 @@ class TestTopics:
             (w["start_index"], w["end_index"]) for w in client.written("MERGE (s:Summary")
         )
         assert spans == [(0, 5), (6, 11)]
-        assert client.written("DETACH DELETE s") == [{"session_id": "s", "starts": [0]}]
+        assert client.written("DETACH DELETE s") == [
+            {"session_id": "s", "starts": [0], "detail": "stretch"}
+        ]
 
     @pytest.mark.asyncio
     async def test_topic_starts_are_judged_once(self) -> None:

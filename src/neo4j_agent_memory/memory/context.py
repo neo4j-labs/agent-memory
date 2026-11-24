@@ -44,6 +44,7 @@ would have been with no judge.
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import re
 from dataclasses import dataclass, field
@@ -51,11 +52,14 @@ from datetime import date
 from typing import TYPE_CHECKING, Any
 
 from neo4j_agent_memory.judge import OneOf, Question, YesNo, judge_safely
+from neo4j_agent_memory.memory.communities import positions_in
 
 if TYPE_CHECKING:
     from neo4j_agent_memory.embeddings.base import Embedder
     from neo4j_agent_memory.graph.client import Neo4jClient
     from neo4j_agent_memory.judge import Judge
+
+logger = logging.getLogger(__name__)
 
 #: Constant of reciprocal rank fusion (Cormack et al., 2009).
 RRF_K = 60
@@ -84,6 +88,29 @@ from its start.
 specifics; the outline shows that course.
 - If the question asks about something from the conversation that the memory does \
 not contain, say that there is no information about it instead of guessing."""
+
+#: What is added to the guidance for a question about a whole thread of the
+#: conversation, by what it asks for. ``{where}`` names the section to go by.
+BROAD_GUIDANCE = {
+    "order": """
+- This question asks for an order. {where} Take the steps that are about what is \
+asked, sort them by message position, and give as many as are asked for, spread from \
+the earliest to the latest and not only from the start. Name each step by what the \
+user brought up in it.""",
+    "summary": """
+- This question asks for a summary. {where} Go through the steps that are about what \
+is asked, in order and to the end, and for each step say what the user raised or \
+decided and what was worked out in reply (the plan and its parts, the advice, the \
+outcome), with its specifics. Do not reduce it to a list of facts about the user.""",
+}
+THREADS_HOLD = (
+    '"Threads of the conversation" follows single topics across the whole conversation, '
+    "each step with the position of its message."
+)
+OUTLINE_HOLDS = (
+    '"Outline of the conversation" has one line per exchange, each with the position of '
+    "its message."
+)
 
 
 @dataclass
@@ -285,6 +312,52 @@ def select_pairs(
     return sorted(chosen.values(), key=lambda e: e["pair"])
 
 
+# fmt: off
+_STOPWORDS = frozenset({
+    "a", "about", "after", "again", "all", "also", "am", "an", "and", "any", "are", "as",
+    "at", "be", "been", "before", "being", "between", "both", "but", "by", "can", "could",
+    "did", "do", "does", "doing", "done", "during", "each", "for", "from", "had", "has",
+    "have", "having", "he", "her", "here", "hers", "him", "his", "how", "i", "if", "in",
+    "into", "is", "it", "its", "just", "like", "me", "more", "most", "my", "no", "nor",
+    "not", "now", "of", "off", "on", "once", "only", "or", "other", "our", "out", "over",
+    "own", "same", "she", "should", "so", "some", "such", "tell", "than", "that", "the",
+    "their", "them", "then", "there", "these", "they", "this", "those", "through", "to",
+    "too", "under", "until", "up", "us", "very", "was", "we", "were", "what", "when",
+    "where", "which", "while", "who", "whom", "why", "will", "with", "would", "you", "your",
+    "yours", "give", "list", "mention", "mentioned", "please", "say", "said",
+})
+# fmt: on
+
+
+def keyword_query(question: str, *, limit: int = 24) -> str:
+    """The question as a full-text (Lucene) query: its content words, any of them.
+
+    Each word is quoted, so that nothing in it is read as query syntax, and
+    the words are alternatives: the index ranks by how many of them a text has
+    and how rare they are. Empty when the question has no content words.
+    """
+    terms: list[str] = []
+    for token in re.findall(r"[^\W_][\w.,'/-]*", question):
+        token = token.strip(".,'/-")
+        if len(token) < 2 or token.lower() in _STOPWORDS:
+            continue
+        if token.lower() not in (t.lower() for t in terms):
+            terms.append(token)
+    return " ".join('"' + term.replace('"', "") + '"' for term in terms[:limit])
+
+
+def interleave(rankings: list[list[int]], *, limit: int) -> list[int]:
+    """One ranking from several, taking the best of each in turn, without repeats."""
+    merged: list[int] = []
+    seen: set[int] = set()
+    for depth in range(max((len(r) for r in rankings), default=0)):
+        for ranking in rankings:
+            if depth < len(ranking) and ranking[depth] not in seen:
+                seen.add(ranking[depth])
+                merged.append(ranking[depth])
+    return merged[:limit]
+
+
 def clauses_of(question: str, *, limit: int = 3) -> list[str]:
     """The parts of a multi-part question, to be searched for one by one.
 
@@ -330,6 +403,35 @@ def asks_to_count_or_list(question: str) -> bool:
     of things.
     """
     return bool(_COUNTING.search(question)) and not asks_for_elapsed_time(question)
+
+
+_ORDER = re.compile(
+    r"\border (?:in which|that|of (?:the |my |our )?\w+)\b|\bin (?:what|which) order\b"
+    r"|\b(?:list|go through|walk me through)\b.{0,20}\bin order\b"
+    r"|\bchronolog\w+|\bsequence of\b",
+    re.IGNORECASE,
+)
+_SUMMARY = re.compile(
+    r"\bsummar(?:y|ies|i[sz]e|i[sz]ing)\b|\brecap\b|\boverview\b"
+    r"|\bhow (?:has|have|did) (?:i|my|our|we|the|this|things)\b.{0,100}?"
+    r"\b(?:progress|evolv|develop|chang|unfold)\w*\b.{0,60}?"
+    r"\b(?:over time|throughout|so far|across)\b",
+    re.IGNORECASE,
+)
+
+
+def breadth_of(question: str) -> str | None:
+    """Whether a question is about a whole thread of the conversation, and how.
+
+    ``"order"``: it asks in what order things came up. ``"summary"``: it asks
+    for a summary of how something went. None: it asks for something in
+    particular, which is the usual case.
+    """
+    if _ORDER.search(question):
+        return "order"
+    if _SUMMARY.search(question):
+        return "summary"
+    return None
 
 
 def describe_span(days: int) -> str:
@@ -454,9 +556,81 @@ RETURN p.id AS id, p.preference AS text, coalesce(p.kind, 'preference') AS kind,
 
 _SUMMARIES = """
 MATCH (s:Summary {session_id: $session_id})
+WHERE coalesce(s.detail, 'stretch') = $detail
 RETURN s.start_index AS start_index, s.end_index AS end_index, s.text AS text,
        toString(s.start_time) AS start_time
 ORDER BY s.start_index ASC
+"""
+
+# Summaries are searched like statements: the stretches of the conversation
+# that are about what the question asks.
+_VECTOR_SUMMARIES = """
+CALL db.index.vector.queryNodes('summary_embedding_idx', $fetch, $embedding)
+YIELD node, score
+WHERE node.session_id = $session_id AND coalesce(node.detail, 'stretch') = $detail
+RETURN node.start_index AS start_index, node.end_index AS end_index, score
+ORDER BY score DESC
+LIMIT $limit
+"""
+
+_VECTOR_COMMUNITIES = """
+CALL db.index.vector.queryNodes('community_embedding_idx', $fetch, $embedding)
+YIELD node, score
+WHERE node.session_id = $session_id AND node.summary IS NOT NULL
+OPTIONAL MATCH (node)-[:PARENT_COMMUNITY*]->(ancestor:Community)
+RETURN node.id AS id, node.level AS level, node.title AS title, node.summary AS summary,
+       node.messages AS messages, node.first_index AS first_index,
+       node.last_index AS last_index, collect(ancestor.id) AS ancestors, score
+ORDER BY score DESC
+LIMIT $limit
+"""
+
+_KEYWORD_COMMUNITIES = """
+CALL db.index.fulltext.queryNodes('community_summary_fulltext_idx', $query, {limit: $fetch})
+YIELD node, score
+WHERE node.session_id = $session_id AND node.summary IS NOT NULL
+OPTIONAL MATCH (node)-[:PARENT_COMMUNITY*]->(ancestor:Community)
+RETURN node.id AS id, node.level AS level, node.title AS title, node.summary AS summary,
+       node.messages AS messages, node.first_index AS first_index,
+       node.last_index AS last_index, collect(ancestor.id) AS ancestors, score
+ORDER BY score DESC
+LIMIT $limit
+"""
+
+# Keyword search: the full-text indexes cover every session, hence $fetch.
+_KEYWORD_MESSAGES = """
+CALL db.index.fulltext.queryNodes('message_content_fulltext_idx', $query, {limit: $fetch})
+YIELD node, score
+MATCH (c:Conversation {session_id: $session_id})-[:HAS_MESSAGE]->(node)
+RETURN node.id AS id, score
+ORDER BY score DESC
+LIMIT $limit
+"""
+
+_KEYWORD_FACTS = """
+CALL db.index.fulltext.queryNodes('fact_text_fulltext_idx', $query, {limit: $fetch})
+YIELD node, score
+WHERE node.session_id = $session_id
+RETURN node.id AS id, node.text AS text, node.message_index AS message_index,
+       node.said_at AS said_at, node.event_date AS event_date, score
+ORDER BY score DESC
+LIMIT $limit
+"""
+
+_MESSAGE_SCORES = """
+MATCH (m:Message) WHERE m.id IN $ids AND m.embedding IS NOT NULL
+RETURN m.id AS id, vector.similarity.cosine(m.embedding, $embedding) AS score
+"""
+
+_ENTITY_SCORES = """
+MATCH (e:Entity) WHERE e.id IN $ids AND e.embedding IS NOT NULL
+RETURN e.id AS id, vector.similarity.cosine(e.embedding, $embedding) AS score
+"""
+
+_COMMUNITY_PEERS = """
+MATCH (e:Entity)-[:IN_COMMUNITY]->(:Community)<-[:IN_COMMUNITY]-(peer:Entity)
+WHERE e.id IN $ids
+RETURN e.id AS entity, peer.id AS peer
 """
 
 _RELATIONS = """
@@ -612,6 +786,16 @@ class ContextAssembler:
         judge_entities: bool = False,
         enumerate_entities: bool = False,
         max_enumerated: int = 60,
+        keyword: bool = False,
+        summary_search: int = 0,
+        preference_search: int = 0,
+        communities: int = 0,
+        thread_scope: str = "summary",
+        outline_detail: str = "auto",
+        outline_share: float | None = None,
+        feedback_entities: int = 0,
+        feedback_pairs: int = 10,
+        near_match: float = 0.9,
     ) -> AssembledContext:
         """Assemble the context for ``query`` from the memory of ``session_id``.
 
@@ -692,6 +876,50 @@ class ContextAssembler:
                 ``max_enumerated``, and those that fit are listed with where
                 they came up.
 
+        Five further options add rankings to the fusion that chooses the
+        excerpts, and one of them a section of its own:
+
+        Args:
+            keyword: Search the messages and the statements by keyword as well
+                (full-text indexes), with the question's content words. Finds
+                the exact name, number or identifier that an embedding blurs.
+            summary_search: When positive, search the summaries of the outline
+                by embedding and rank the exchanges of the nearest this many
+                stretches, those closest to the question first.
+            preference_search: When positive, the source messages of the
+                nearest this many preferences and instructions join the
+                fusion (those similar enough to the question).
+            communities: When positive, search the communities of the session
+                (:meth:`~neo4j_agent_memory.memory.distillation.DistillationMemory.detect_communities`)
+                by embedding, and by keyword with ``keyword``, and show the
+                nearest this many as threads: a title and dated bullet points
+                each. Of a community and its parent only the nearer one is
+                shown. The messages the bullets point at join the fusion.
+            thread_scope: Which questions are shown threads. ``"summary"``:
+                those that ask for a summary of how something went.
+                ``"broad"``: those, and questions about the order in which
+                things came up (:func:`breadth_of`). ``"all"``: every
+                question. For a summary or an order question the context
+                closes with a note on how to answer it from the threads.
+            outline_detail: Which outline to show, of those
+                :meth:`~neo4j_agent_memory.memory.distillation.DistillationMemory.summarize_session`
+                wrote: ``"stretch"`` (a few bullet points per stretch) or
+                ``"exchange"`` (one per exchange, with the assistant's part).
+                ``"auto"`` shows the one per exchange to a question that asks
+                for a summary, when the session has it, and the other
+                otherwise: a summary is asked to tell what happened step by
+                step, and other questions are served as well by the shorter
+                outline, which leaves more room for excerpts.
+            outline_share: The share of the token budget the outline may take.
+                By default a quarter, and half for the outline per exchange.
+            feedback_entities: When positive, take the entities that the best
+                ``feedback_pairs`` exchanges mention most, up to this many, and
+                rank the other messages that mention them. An entity counts in
+                proportion to how near it is to the question; one at
+                ``near_match`` or more (on the scale of
+                ``vector.similarity.cosine``) also brings in the other
+                entities of its community.
+
         Returns:
             The context text and a record of what went into it.
         """
@@ -730,22 +958,37 @@ class ContextAssembler:
                 "limit": max_statements + 2 * CANDIDATES,
             },
         )
-        if clauses:
-            # Statements are also searched for each part of the question, and
-            # the rankings fused, so that each part is represented.
-            rankings_of_facts = [fact_hits]
-            for clause_embedding in embeddings[1:]:
-                rankings_of_facts.append(
-                    await self._client.execute_read(
-                        _VECTOR_FACTS,
-                        {
-                            "embedding": clause_embedding,
-                            "session_id": session_id,
-                            "fetch": CANDIDATES * 4,
-                            "limit": CANDIDATES,
-                        },
-                    )
+        # Statements are also searched for each part of the question, and by
+        # keyword when asked, and the rankings fused, so that each is represented.
+        rankings_of_facts = [fact_hits]
+        for clause_embedding in embeddings[1:]:
+            rankings_of_facts.append(
+                await self._client.execute_read(
+                    _VECTOR_FACTS,
+                    {
+                        "embedding": clause_embedding,
+                        "session_id": session_id,
+                        "fetch": CANDIDATES * 4,
+                        "limit": CANDIDATES,
+                    },
                 )
+            )
+        words = keyword_query(query) if keyword else ""
+        keyword_facts: list[dict[str, Any]] = []
+        if words:
+            keyword_facts = await self._search(
+                _KEYWORD_FACTS,
+                {
+                    "query": words,
+                    "session_id": session_id,
+                    "fetch": CANDIDATES * 8,
+                    "limit": CANDIDATES,
+                },
+                what="keyword search over statements",
+            )
+            if keyword_facts:
+                rankings_of_facts.append(keyword_facts)
+        if len(rankings_of_facts) > 1:
             by_id: dict[str, dict[str, Any]] = {}
             fused_score: dict[str, float] = {}
             for ranking in rankings_of_facts:
@@ -815,11 +1058,22 @@ class ContextAssembler:
                     conflict_probability.get(link["target"], 0.0), link.get("probability", 1.0)
                 )
 
-        summaries = (
-            await self._client.execute_read(_SUMMARIES, {"session_id": session_id})
-            if include_outline
-            else []
-        )
+        breadth = breadth_of(query)
+        detail = "stretch" if outline_detail == "auto" else outline_detail
+        summaries: list[dict[str, Any]] = []
+        if include_outline:
+            if outline_detail == "auto" and breadth == "summary":
+                summaries = await self._client.execute_read(
+                    _SUMMARIES, {"session_id": session_id, "detail": "exchange"}
+                )
+                if summaries:
+                    detail = "exchange"
+            if not summaries:
+                summaries = await self._client.execute_read(
+                    _SUMMARIES, {"session_id": session_id, "detail": detail}
+                )
+        if outline_share is None:
+            outline_share = 0.5 if detail == "exchange" else 0.25
 
         # --- the question's entities ------------------------------------------
         question_entities: dict[str, dict[str, Any]] = {}
@@ -923,15 +1177,122 @@ class ContextAssembler:
             if d["score"] >= 0.72 and 0 <= d["message_index"] < count
         ]
         vector_ranking = to_pair_ranking(vector_positions, session.roles)
+
+        # Messages that have the question's words.
+        keyword_positions: list[int] = []
+        if words:
+            rows = await self._search(
+                _KEYWORD_MESSAGES,
+                {
+                    "query": words,
+                    "session_id": session_id,
+                    "fetch": CANDIDATES * 8,
+                    "limit": CANDIDATES,
+                },
+                what="keyword search over messages",
+            )
+            keyword_positions = [
+                session.position[r["id"]] for r in rows if r["id"] in session.position
+            ]
+
+        # The stretches of the conversation whose summary is nearest the
+        # question, each stretch's exchanges nearest the question first.
+        summary_hits: list[dict[str, Any]] = []
+        summary_positions: list[int] = []
+        if summary_search > 0:
+            summary_hits = await self._search(
+                _VECTOR_SUMMARIES,
+                {
+                    "embedding": embedding,
+                    "session_id": session_id,
+                    "detail": detail,
+                    "fetch": summary_search * 16,
+                    "limit": summary_search,
+                },
+                what="vector search over summaries",
+            )
+            stretches = [
+                [p for p in range(hit["start_index"], hit["end_index"] + 1) if 0 <= p < count]
+                for hit in summary_hits
+            ]
+            nearness_of = await self._message_scores(
+                session, [p for stretch in stretches for p in stretch], embedding
+            )
+            summary_positions = interleave(
+                [
+                    sorted(stretch, key=lambda p: (-nearness_of.get(p, 0.0), p))
+                    for stretch in stretches
+                ],
+                limit=CANDIDATES,
+            )
+
+        # The messages in which the nearest preferences and instructions were given.
+        preference_positions = (
+            [
+                p["message_index"]
+                for p in sorted(preference_rows, key=lambda p: -p["score"])[:preference_search]
+                if p["score"] >= 0.72
+                and p["message_index"] is not None
+                and 0 <= p["message_index"] < count
+            ]
+            if preference_search > 0
+            else []
+        )
+
+        # The threads of the conversation nearest the question, and the
+        # messages their bullet points refer to.
+        threads: list[dict[str, Any]] = []
+        thread_positions: list[int] = []
+        if communities > 0 and (
+            thread_scope == "all"
+            or (thread_scope == "broad" and breadth is not None)
+            or (thread_scope == "summary" and breadth == "summary")
+        ):
+            threads = await self._threads(session_id, embedding, words, communities)
+            thread_positions = interleave(
+                [
+                    [p for p in positions_in(thread["summary"]) if 0 <= p < count]
+                    for thread in threads
+                ],
+                limit=CANDIDATES,
+            )
+
         rankings = {
             "vector": vector_ranking,
             "graph": to_pair_ranking(graph_positions, session.roles),
             "statements": to_pair_ranking(statement_positions, session.roles),
             "decisions": to_pair_ranking(decision_positions, session.roles),
             "entity_statements": to_pair_ranking(entity_statement_positions, session.roles),
+            "keyword": to_pair_ranking(keyword_positions, session.roles),
+            "summaries": to_pair_ranking(summary_positions, session.roles),
+            "preferences": to_pair_ranking(preference_positions, session.roles),
+            "communities": to_pair_ranking(thread_positions, session.roles),
         }
         rankings = {name: r for name, r in rankings.items() if r}
         ranked = fuse_rankings(rankings)
+
+        # Entities that the best exchanges keep mentioning lead to the other
+        # exchanges about the same things: a second pass over the graph, from
+        # what the first pass found and not from what resembles the question.
+        feedback: dict[str, float] = {}
+        if feedback_entities > 0 and ranked:
+            feedback = await self._feedback_entities(
+                session,
+                [entry["pair"] for entry in ranked[:feedback_pairs]],
+                embedding,
+                limit=feedback_entities,
+                near_match=near_match,
+                exclude=set(question_entities),
+            )
+            if feedback:
+                feedback_scores = graph_message_scores(
+                    feedback, {eid: session.entities[eid]["mentions"] for eid in feedback}, count
+                )
+                feedback_positions = sorted(
+                    feedback_scores, key=lambda p: (-feedback_scores[p], p)
+                )[:CANDIDATES]
+                rankings["feedback"] = to_pair_ranking(feedback_positions, session.roles)
+                ranked = fuse_rankings(rankings)
 
         # --- ask the judge ----------------------------------------------------
         # Contradictions that could be reported: those with a statement among
@@ -1085,7 +1446,7 @@ class ContextAssembler:
             self._render_outline(
                 summaries,
                 count,
-                max_chars=0.25 * token_budget * chars_per_token,
+                max_chars=outline_share * token_budget * chars_per_token,
                 # In a conversation too long to outline in full, the stretches
                 # shown are those around what the rankings point at.
                 near=[p for entry in ranked[:CANDIDATES] for p in entry["pair"]]
@@ -1098,9 +1459,25 @@ class ContextAssembler:
             self._render_timeline(timeline_facts, replaced_by, span, between=elapsed),
             self._render_preferences(instructions, preferences),
             self._render_conflicts(shown_facts, reported),
+            # Last of the memory, nearest the question it was chosen for.
+            self._render_threads(threads),
         ]
         if include_guidance:
-            sections.append(GUIDANCE)
+            # A question about a whole thread is told where its steps are: in the
+            # threads when they are shown, else in an outline that has every exchange.
+            where = (
+                THREADS_HOLD
+                if threads
+                else OUTLINE_HOLDS
+                if summaries and detail == "exchange"
+                else None
+            )
+            broad_note = (
+                BROAD_GUIDANCE[breadth].format(where=where)
+                if breadth is not None and where is not None
+                else ""
+            )
+            sections.append(GUIDANCE + broad_note)
         if closest:
             sections.append("\n".join([closing] + [f"- {item['text']}" for item in closest]))
         fixed = "\n\n".join(s for s in sections if s)
@@ -1148,6 +1525,7 @@ class ContextAssembler:
             "decisions": len(decisions),
             "decision_messages": sorted({d["message_index"] + 1 for d in decisions}),
             "summaries": len(summaries),
+            "outline_detail": detail if summaries else None,
             "question_entities": [
                 {
                     "name": session.entities[eid]["name"],
@@ -1159,6 +1537,25 @@ class ContextAssembler:
                 for eid, e in sorted(question_entities.items(), key=lambda kv: -kv[1]["relevance"])
             ],
             "relations": len(relations),
+            "keyword": words,
+            "keyword_statements": len(keyword_facts),
+            "summary_stretches": [
+                [hit["start_index"] + 1, hit["end_index"] + 1] for hit in summary_hits
+            ],
+            "breadth": breadth,
+            "threads": [
+                {
+                    "title": thread["title"],
+                    "level": thread["level"],
+                    "score": round(float(thread["score"]), 4),
+                    "exchanges": len(thread["messages"] or []),
+                    "messages": sorted({p + 1 for p in positions_in(thread["summary"])}),
+                }
+                for thread in threads
+            ],
+            "feedback_entities": {
+                session.entities[eid]["name"]: round(weight, 3) for eid, weight in feedback.items()
+            },
             "graph_walk": graph_walk,
             "entity_statements": {
                 session.entities[eid]["name"]: len(facts) for eid, facts in entity_facts.items()
@@ -1205,6 +1602,147 @@ class ContextAssembler:
                 ),
             }
         return AssembledContext(text=text, details=details)
+
+    # -- searching ------------------------------------------------------------
+
+    async def _search(
+        self, query: str, parameters: dict[str, Any], *, what: str
+    ) -> list[dict[str, Any]]:
+        """Run a search over an index that an older database may not have.
+
+        The keyword, summary and community indexes are newer than the rest of
+        the schema. A search that fails for want of one is done without.
+        """
+        try:
+            return list(await self._client.execute_read(query, parameters))
+        except Exception as exc:  # noqa: BLE001 - a missing index must not fail the context
+            logger.warning("Context assembly skipped %s: %s", what, exc)
+            return []
+
+    async def _message_scores(
+        self, session: _Session, positions: list[int], embedding: list[float]
+    ) -> dict[int, float]:
+        """How near each of the given messages is to the question."""
+        if not positions:
+            return {}
+        rows = await self._client.execute_read(
+            _MESSAGE_SCORES,
+            {"ids": [session.messages[p]["id"] for p in set(positions)], "embedding": embedding},
+        )
+        return {session.position[r["id"]]: float(r["score"]) for r in rows}
+
+    async def _threads(
+        self,
+        session_id: str,
+        embedding: list[float],
+        words: str,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        """The communities nearest the question, at most one per line of descent."""
+        hits = await self._search(
+            _VECTOR_COMMUNITIES,
+            {
+                "embedding": embedding,
+                "session_id": session_id,
+                "fetch": max(limit * 8, 40),
+                "limit": max(limit * 4, 12),
+            },
+            what="vector search over communities",
+        )
+        if words:
+            by_keyword = await self._search(
+                _KEYWORD_COMMUNITIES,
+                {
+                    "query": words,
+                    "session_id": session_id,
+                    "fetch": max(limit * 8, 40),
+                    "limit": max(limit * 4, 12),
+                },
+                what="keyword search over communities",
+            )
+            if by_keyword:
+                fused: dict[str, float] = {}
+                rows: dict[str, dict[str, Any]] = {}
+                for ranking in (hits, by_keyword):
+                    for rank, row in enumerate(ranking, start=1):
+                        rows.setdefault(row["id"], row)
+                        fused[row["id"]] = fused.get(row["id"], 0.0) + 1.0 / (RRF_K + rank)
+                hits = sorted(rows.values(), key=lambda r: -fused[r["id"]])
+        chosen: list[dict[str, Any]] = []
+        lines_taken: set[str] = set()
+        for hit in hits:
+            line = {hit["id"], *hit["ancestors"]}
+            # A community is skipped when its parent, or one of its children,
+            # is already shown: they tell the same story at another scale.
+            if hit["id"] in lines_taken or any(c["id"] in line for c in chosen):
+                continue
+            chosen.append(hit)
+            lines_taken.update(hit["ancestors"])
+            if len(chosen) >= limit:
+                break
+        return chosen
+
+    async def _feedback_entities(
+        self,
+        session: _Session,
+        pairs: list[tuple[int, int]],
+        embedding: list[float],
+        *,
+        limit: int,
+        near_match: float,
+        exclude: set[str],
+        max_share: float = 0.4,
+    ) -> dict[str, float]:
+        """The entities the given exchanges mention most, weighted by nearness to the question.
+
+        Entities mentioned in more than ``max_share`` of the conversation are
+        left out: they lead everywhere. An entity at ``near_match`` or more
+        also brings in the entities of its community, at half its weight.
+        """
+        count = len(session.messages)
+        shown = {p for first, last in pairs for p in range(first, last + 1)}
+        counts: dict[str, int] = {}
+        for entity_id, entity in session.entities.items():
+            mentions = entity["mentions"]
+            if entity_id in exclude or not mentions or len(mentions) > max_share * count:
+                continue
+            hits = len(mentions & shown)
+            # An entity that only these exchanges mention leads nowhere new.
+            if hits and len(mentions) > hits:
+                counts[entity_id] = hits
+        candidates = sorted(counts, key=lambda e: (-counts[e], e))[: limit * 3]
+        if not candidates:
+            return {}
+        rows = await self._client.execute_read(
+            _ENTITY_SCORES, {"ids": candidates, "embedding": embedding}
+        )
+        nearness = {r["id"]: float(r["score"]) for r in rows}
+        weights = {e: counts[e] * nearness.get(e, 0.5) for e in candidates}
+        chosen = dict(sorted(weights.items(), key=lambda kv: (-kv[1], kv[0]))[:limit])
+        near = [e for e in chosen if nearness.get(e, 0.0) >= near_match]
+        if near:
+            rows = await self._client.execute_read(_COMMUNITY_PEERS, {"ids": near})
+            for row in rows:
+                peer = row["peer"]
+                if peer in session.entities and peer not in chosen and peer not in exclude:
+                    if len(session.entities[peer]["mentions"]) <= max_share * count:
+                        chosen[peer] = 0.5 * chosen[row["entity"]]
+        return chosen
+
+    @staticmethod
+    def _render_threads(threads: list[dict[str, Any]]) -> str:
+        if not threads:
+            return ""
+        lines = [
+            "## Threads of the conversation",
+            "What the user brought up about one topic each, across the whole conversation, "
+            "in the order it came up. #n is the message where a point first came up.",
+        ]
+        for thread in threads:
+            span = f"messages #{thread['first_index'] + 1} to #{thread['last_index'] + 2}"
+            lines.append(f"### {thread['title']} ({span})")
+            lines.append(thread["summary"])
+        return "\n".join(lines)
 
     # -- judging --------------------------------------------------------------
 
@@ -1818,7 +2356,12 @@ class ContextAssembler:
             if summary.get("start_time"):
                 header += f" ({summary['start_time'][:10]})"
             lines.append(f"{header}:")
-            lines.append(summary["text"][:per_summary])
+            text = summary["text"]
+            if len(text) > per_summary:
+                # Whole bullets only: a bullet cut in the middle misleads.
+                cut = text.rfind("\n", 0, per_summary)
+                text = text[:cut] if cut > 0 else text[:per_summary]
+            lines.append(text)
         return "\n".join(lines)
 
     async def _render_excerpts(

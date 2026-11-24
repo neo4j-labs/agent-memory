@@ -931,3 +931,409 @@ class TestEntityOptions:
         )
         assert "## Conversation excerpts" in result.text
         assert result.details["enumerated"] is None
+
+
+# --- keyword, summary and community search ---------------------------------
+
+
+class RecordingClient(FakeClient):
+    """A fake client that also keeps the parameters of each read."""
+
+    def __init__(self, rows: dict[str, list[dict[str, Any]]]) -> None:
+        super().__init__(rows)
+        self.parameters: list[tuple[str, dict[str, Any]]] = []
+
+    async def execute_read(self, query: str, parameters: dict[str, Any] | None = None, **_: Any):
+        self.parameters.append((query, parameters or {}))
+        return await super().execute_read(query, parameters)
+
+    def asked(self, marker: str) -> list[dict[str, Any]]:
+        return [params for query, params in self.parameters if marker in query]
+
+
+def _thread(identifier: str, title: str, summary: str, score: float, **more: Any) -> dict[str, Any]:
+    return {
+        "id": identifier,
+        "level": 0,
+        "title": title,
+        "summary": summary,
+        "messages": [0, 2, 6],
+        "first_index": 0,
+        "last_index": 6,
+        "ancestors": [],
+        "score": score,
+        **more,
+    }
+
+
+class TestKeywordQuery:
+    def test_content_words_are_quoted_and_the_rest_dropped(self) -> None:
+        query = ctx.keyword_query('What did I say about "Paddington 2" and the $85,000 budget?')
+        assert query == '"Paddington" "85,000" "budget"'
+
+    def test_a_word_is_taken_once(self) -> None:
+        assert ctx.keyword_query("Docker or docker, which Docker?") == '"Docker"'
+
+    def test_nothing_in_a_word_is_read_as_query_syntax(self) -> None:
+        # Version numbers and paths keep their punctuation inside the quotes.
+        assert ctx.keyword_query("Flask v2.3.1 on src/app") == '"Flask" "v2.3.1" "src/app"'
+
+    def test_a_question_without_content_words_gives_no_query(self) -> None:
+        assert ctx.keyword_query("What did I do?") == ""
+
+
+class TestInterleave:
+    def test_rankings_take_turns_and_repeats_are_dropped(self) -> None:
+        assert ctx.interleave([[1, 2, 3], [2, 9], [7]], limit=5) == [1, 2, 7, 9, 3]
+
+    def test_the_limit_holds(self) -> None:
+        assert ctx.interleave([[1, 2, 3], [4, 5, 6]], limit=3) == [1, 4, 2]
+
+
+class TestBreadth:
+    @pytest.mark.parametrize(
+        ("question", "expected"),
+        [
+            ("Can you list the order in which I brought up the parts of my project?", "order"),
+            ("Walk me through the order in which I raised these ideas.", "order"),
+            ("Can you list in order how I brought up my writing projects?", "order"),
+            ("Can you give me a summary of how I planned the family events?", "summary"),
+            ("Can you summarize how my resume developed over the past months?", "summary"),
+            ("How has my estate plan changed over time?", "summary"),
+            ("What is the deadline for the pilot episode?", None),
+            ("How can I best sequence my resume updates?", None),
+            ("How did you recommend keeping steady progress throughout the weeks?", None),
+        ],
+    )
+    def test_questions_about_a_whole_thread_are_recognised(
+        self, question: str, expected: str | None
+    ) -> None:
+        assert ctx.breadth_of(question) == expected
+
+
+class TestSearchOptions:
+    @pytest.mark.asyncio
+    async def test_keyword_search_ranks_messages_and_statements(self) -> None:
+        rows = _session_rows()
+        rows["message_content_fulltext_idx"] = [{"id": "m2", "score": 3.1}]
+        rows["fact_text_fulltext_idx"] = [
+            {
+                "id": "f7",
+                "text": "The user set the budget at $85,000.",
+                "message_index": 2,
+                "said_at": "2024-03-15",
+                "event_date": None,
+                "score": 4.0,
+            }
+        ]
+        client = RecordingClient(rows)
+        assembler = ContextAssembler(client, FakeEmbedder())  # type: ignore[arg-type]
+        result = await assembler.assemble(
+            "What was the $85,000 budget for?", session_id="s", keyword=True
+        )
+        assert result.details["keyword"] == '"85,000" "budget"'
+        assert result.details["keyword_statements"] == 1
+        assert "The user set the budget at $85,000." in result.text
+        ranks = {tuple(p["messages"]): p["ranks"] for p in result.details["pairs"]}
+        assert ranks[(3, 4)]["keyword"] == 1
+        assert client.asked("message_content_fulltext_idx")[0]["query"] == '"85,000" "budget"'
+
+    @pytest.mark.asyncio
+    async def test_keyword_search_is_off_by_default(self) -> None:
+        client = RecordingClient(_session_rows())
+        assembler = ContextAssembler(client, FakeEmbedder())  # type: ignore[arg-type]
+        result = await assembler.assemble("What was the $85,000 budget for?", session_id="s")
+        assert result.details["keyword"] == ""
+        assert not client.asked("fulltext")
+
+    @pytest.mark.asyncio
+    async def test_summary_search_ranks_the_exchanges_of_the_nearest_stretches(self) -> None:
+        rows = _session_rows()
+        rows["summary_embedding_idx"] = [{"start_index": 2, "end_index": 3, "score": 0.9}]
+        rows["vector.similarity.cosine(m.embedding"] = [
+            {"id": "m2", "score": 0.4},
+            {"id": "m3", "score": 0.7},
+        ]
+        client = RecordingClient(rows)
+        assembler = ContextAssembler(client, FakeEmbedder())  # type: ignore[arg-type]
+        result = await assembler.assemble("Docker?", session_id="s", summary_search=2)
+        assert result.details["summary_stretches"] == [[3, 4]]
+        ranks = {tuple(p["messages"]): p["ranks"] for p in result.details["pairs"]}
+        assert ranks[(3, 4)] == {"summaries": 1}
+        assert client.asked("summary_embedding_idx")[0]["detail"] == "stretch"
+
+    @pytest.mark.asyncio
+    async def test_the_nearest_preferences_rank_their_messages(self) -> None:
+        rows = _session_rows()
+        rows["MATCH (p:Preference"] = [
+            {
+                "id": "p1",
+                "text": "The user prefers few dependencies.",
+                "kind": "preference",
+                "message_index": 2,
+                "score": 0.9,
+            },
+            {
+                "id": "p2",
+                "text": "The user likes tea.",
+                "kind": "preference",
+                "message_index": 6,
+                "score": 0.3,  # too far from the question to rank its message
+            },
+        ]
+        assembler = ContextAssembler(FakeClient(rows), FakeEmbedder())  # type: ignore[arg-type]
+        result = await assembler.assemble("Which library?", session_id="s", preference_search=5)
+        ranks = {tuple(p["messages"]): p["ranks"] for p in result.details["pairs"]}
+        assert ranks[(3, 4)] == {"preferences": 1}
+        assert "preferences" not in ranks[(7, 8)]
+
+    @pytest.mark.asyncio
+    async def test_a_search_over_a_missing_index_is_done_without(self) -> None:
+        class NoKeywordIndex(FakeClient):
+            async def execute_read(self, query: str, parameters: Any = None, **_: Any):
+                if "fulltext" in query:
+                    raise RuntimeError("There is no such fulltext schema index")
+                return await super().execute_read(query, parameters)
+
+        assembler = ContextAssembler(NoKeywordIndex(_session_rows()), FakeEmbedder())  # type: ignore[arg-type]
+        result = await assembler.assemble("What about Docker?", session_id="s", keyword=True)
+        assert "## Conversation excerpts" in result.text
+        assert result.details["keyword_statements"] == 0
+
+    @pytest.mark.asyncio
+    async def test_the_outline_can_be_the_one_with_every_exchange(self) -> None:
+        client = RecordingClient(_session_rows())
+        assembler = ContextAssembler(client, FakeEmbedder())  # type: ignore[arg-type]
+        result = await assembler.assemble(
+            "Can you summarize how my Docker setup went?",
+            session_id="s",
+            outline_detail="exchange",
+        )
+        assert client.asked("MATCH (s:Summary")[0]["detail"] == "exchange"
+        # A summary question is pointed at the outline when no threads are shown.
+        assert '"Outline of the conversation" has one line per exchange' in result.text
+
+    @pytest.mark.asyncio
+    async def test_a_summary_question_is_shown_the_outline_per_exchange_when_there_is_one(
+        self,
+    ) -> None:
+        class TwoOutlines(RecordingClient):
+            async def execute_read(self, query: str, parameters: Any = None, **_: Any):
+                if "MATCH (s:Summary" in query and (parameters or {}).get("detail") == "exchange":
+                    self.parameters.append((query, parameters or {}))
+                    return [
+                        {
+                            "start_index": 0,
+                            "end_index": 7,
+                            "text": "- #1: Asked about Docker; the assistant gave three steps.",
+                            "start_time": None,
+                        }
+                    ]
+                return await super().execute_read(query, parameters)
+
+        client = TwoOutlines(_session_rows())
+        assembler = ContextAssembler(client, FakeEmbedder())  # type: ignore[arg-type]
+        summary = await assembler.assemble(
+            "Can you summarize how my Docker setup went?", session_id="s"
+        )
+        assert "the assistant gave three steps" in summary.text
+        assert summary.details["outline_detail"] == "exchange"
+        assert "This question asks for a summary." in summary.text
+
+        other = await assembler.assemble("Have I used Docker?", session_id="s")
+        assert "- Docker deployment." in other.text
+        assert other.details["outline_detail"] == "stretch"
+        assert "This question asks for a summary." not in other.text
+
+    @pytest.mark.asyncio
+    async def test_without_an_outline_per_exchange_a_summary_question_gets_the_other(
+        self,
+    ) -> None:
+        client = RecordingClient(_session_rows())
+        assembler = ContextAssembler(client, FakeEmbedder())  # type: ignore[arg-type]
+
+        # The canned rows answer every summary read alike; tell the two apart by detail.
+        async def only_stretch(query: str, parameters: Any = None, **_: Any):
+            if "MATCH (s:Summary" in query and (parameters or {}).get("detail") == "exchange":
+                return []
+            return await RecordingClient.execute_read(client, query, parameters)
+
+        client.execute_read = only_stretch  # type: ignore[method-assign]
+        result = await assembler.assemble(
+            "Can you summarize how my Docker setup went?", session_id="s"
+        )
+        assert result.details["outline_detail"] == "stretch"
+        assert "- Docker deployment." in result.text
+
+    def test_an_outline_entry_is_cut_at_the_end_of_a_bullet(self) -> None:
+        summaries = [
+            {
+                "start_index": i * 10,
+                "end_index": i * 10 + 9,
+                "text": "- " + "a" * 150 + "\n- " + "b" * 150,
+                "start_time": None,
+            }
+            for i in range(2)
+        ]
+        text = ContextAssembler._render_outline(summaries, 20, max_chars=520)
+        assert "a" * 150 in text
+        assert "bbb" not in text
+
+
+class TestThreads:
+    SUMMARY_QUESTION = "Can you give me a summary of how my pilot episode went?"
+
+    def _rows(self) -> dict[str, list[dict[str, Any]]]:
+        rows = _session_rows()
+        rows["community_embedding_idx"] = [
+            _thread(
+                "c1",
+                "Pilot episode planning",
+                "- #1: Asked for a plan; the assistant laid out three phases.\n"
+                "- #7: Pushed delivery back to July 15.",
+                0.9,
+            ),
+            _thread("c2", "Pilot episode and editing", "- #3: Chose an editor.", 0.8),
+            _thread("c3", "Family plans", "- #5: Planned a weekend.", 0.5),
+        ]
+        return rows
+
+    @pytest.mark.asyncio
+    async def test_a_summary_question_is_shown_the_nearest_threads(self) -> None:
+        assembler = ContextAssembler(FakeClient(self._rows()), FakeEmbedder())  # type: ignore[arg-type]
+        result = await assembler.assemble(self.SUMMARY_QUESTION, session_id="s", communities=2)
+        section = result.text.split("## Threads of the conversation")[1].split("\n## ")[0]
+        assert "### Pilot episode planning (messages #1 to #8)" in section
+        assert "the assistant laid out three phases" in section
+        assert "Family plans" not in section
+        assert result.details["breadth"] == "summary"
+        assert [t["title"] for t in result.details["threads"]] == [
+            "Pilot episode planning",
+            "Pilot episode and editing",
+        ]
+        assert result.details["threads"][0]["messages"] == [1, 7]
+        # The threads come last of the memory, and the guidance says how to use them.
+        assert result.text.index("## Threads of the conversation") > result.text.index(
+            "## What the user has said"
+        )
+        assert "This question asks for a summary." in result.text
+        # The messages the bullets point at are ranked.
+        ranks = {tuple(p["messages"]): p["ranks"] for p in result.details["pairs"]}
+        assert ranks[(1, 2)]["communities"] == 1
+        assert ranks[(3, 4)]["communities"] == 2
+
+    @pytest.mark.asyncio
+    async def test_a_question_about_one_thing_is_not(self) -> None:
+        client = RecordingClient(self._rows())
+        assembler = ContextAssembler(client, FakeEmbedder())  # type: ignore[arg-type]
+        result = await assembler.assemble(
+            "What is the pilot's deadline?", session_id="s", communities=2
+        )
+        assert "## Threads of the conversation" not in result.text
+        assert result.details["threads"] == []
+        assert not client.asked("community_embedding_idx")
+
+    @pytest.mark.asyncio
+    async def test_threads_can_be_shown_for_every_question(self) -> None:
+        assembler = ContextAssembler(FakeClient(self._rows()), FakeEmbedder())  # type: ignore[arg-type]
+        result = await assembler.assemble(
+            "What is the pilot's deadline?", session_id="s", communities=1, thread_scope="all"
+        )
+        assert "### Pilot episode planning" in result.text
+        assert "This question asks for" not in result.text
+
+    @pytest.mark.asyncio
+    async def test_an_order_question_gets_its_own_guidance(self) -> None:
+        assembler = ContextAssembler(FakeClient(self._rows()), FakeEmbedder())  # type: ignore[arg-type]
+        result = await assembler.assemble(
+            "Can you list the order in which I brought up the parts of the pilot?",
+            session_id="s",
+            communities=1,
+            thread_scope="broad",
+        )
+        assert "This question asks for an order." in result.text
+
+    @pytest.mark.asyncio
+    async def test_an_order_question_is_not_shown_threads_unless_asked(self) -> None:
+        assembler = ContextAssembler(FakeClient(self._rows()), FakeEmbedder())  # type: ignore[arg-type]
+        result = await assembler.assemble(
+            "Can you list the order in which I brought up the parts of the pilot?",
+            session_id="s",
+            communities=1,
+        )
+        assert result.details["breadth"] == "order"
+        assert "## Threads of the conversation" not in result.text
+
+    @pytest.mark.asyncio
+    async def test_a_community_and_its_parent_are_not_both_shown(self) -> None:
+        rows = self._rows()
+        rows["community_embedding_idx"] = [
+            _thread("c1", "Pilot planning", "- #1: A plan.", 0.9, ancestors=["p1"]),
+            _thread("p1", "Pilot episode", "- #1: Everything.", 0.85, level=1),
+            _thread("c2", "Pilot editing", "- #3: An editor.", 0.8, ancestors=["p1"]),
+            _thread("c3", "Family plans", "- #5: A weekend.", 0.5),
+        ]
+        assembler = ContextAssembler(FakeClient(rows), FakeEmbedder())  # type: ignore[arg-type]
+        result = await assembler.assemble(self.SUMMARY_QUESTION, session_id="s", communities=3)
+        # The parent is skipped for its child; the sibling is another line of the story.
+        assert [t["title"] for t in result.details["threads"]] == [
+            "Pilot planning",
+            "Pilot editing",
+            "Family plans",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_threads_are_off_by_default(self) -> None:
+        assembler = ContextAssembler(FakeClient(self._rows()), FakeEmbedder())  # type: ignore[arg-type]
+        result = await assembler.assemble(self.SUMMARY_QUESTION, session_id="s")
+        assert "## Threads of the conversation" not in result.text
+
+    @pytest.mark.asyncio
+    async def test_keyword_search_joins_the_search_for_threads(self) -> None:
+        rows = self._rows()
+        rows["community_summary_fulltext_idx"] = [
+            _thread("c3", "Family plans", "- #5: Planned a weekend.", 7.0),
+            _thread("c1", "Pilot episode planning", "- #1: A plan.", 5.0),
+        ]
+        assembler = ContextAssembler(FakeClient(rows), FakeEmbedder())  # type: ignore[arg-type]
+        result = await assembler.assemble(
+            self.SUMMARY_QUESTION, session_id="s", communities=1, keyword=True
+        )
+        # First by embedding and second by keyword beats third and first.
+        assert [t["title"] for t in result.details["threads"]] == ["Pilot episode planning"]
+
+
+class TestFeedbackEntities:
+    @pytest.mark.asyncio
+    async def test_entities_of_the_best_exchanges_lead_to_other_exchanges(self) -> None:
+        rows = _typed_rows()
+        rows["entity_embedding_idx"] = []
+        rows["vector.similarity.cosine(e.embedding"] = [{"id": "e1", "score": 0.7}]
+        assembler = ContextAssembler(FakeClient(rows), FakeEmbedder())  # type: ignore[arg-type]
+        # The best exchange (#5) mentions Todoist, which message #1 mentions too.
+        result = await assembler.assemble(
+            "What about the budget?", session_id="s", feedback_entities=3, feedback_pairs=1
+        )
+        assert result.details["feedback_entities"] == {"Todoist": 0.7}
+        ranks = {tuple(p["messages"]): p["ranks"] for p in result.details["pairs"]}
+        assert "feedback" in ranks[(1, 2)]
+
+    @pytest.mark.asyncio
+    async def test_an_entity_only_the_best_exchanges_mention_leads_nowhere(self) -> None:
+        rows = _typed_rows()
+        rows["entity_embedding_idx"] = []
+        assembler = ContextAssembler(FakeClient(rows), FakeEmbedder())  # type: ignore[arg-type]
+        # The two best exchanges (#1 and #5) hold every mention of Todoist, so it
+        # points nowhere new; Joshua is also mentioned in #3.
+        result = await assembler.assemble(
+            "What about the budget?", session_id="s", feedback_entities=3, feedback_pairs=2
+        )
+        assert set(result.details["feedback_entities"]) == {"Joshua"}
+        ranks = {tuple(p["messages"]): p["ranks"] for p in result.details["pairs"]}
+        assert "feedback" in ranks[(3, 4)]
+
+    @pytest.mark.asyncio
+    async def test_the_option_is_off_by_default(self) -> None:
+        assembler = ContextAssembler(FakeClient(_typed_rows()), FakeEmbedder())  # type: ignore[arg-type]
+        result = await assembler.assemble("What about the budget?", session_id="s")
+        assert result.details["feedback_entities"] == {}

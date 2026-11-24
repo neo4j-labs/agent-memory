@@ -63,6 +63,7 @@ from neo4j_agent_memory.judge import (
     judge_safely,
 )
 from neo4j_agent_memory.llm.types import ChatMessage
+from neo4j_agent_memory.memory.communities import CommunityDetector
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
@@ -335,6 +336,22 @@ One line per bullet, each starting with "- " and at most 25 words long. No headi
 and no closing remark.
 """
 
+EXCHANGE_SUMMARY_PROMPT = """\
+You are keeping the outline of a long conversation between a user and an AI \
+assistant. Between the <transcript> tags is one stretch of it; each message is \
+marked with its position (#n). Do not continue the conversation and do not answer \
+the user: describe what happened in it.
+
+Write one bullet point per exchange (a user message and the reply to it), in \
+order. Each bullet starts with the position of the user's message, like \
+"- #12: ...", and says two things: what the user brought up, asked for or decided, \
+in words the user would recognise and with its specifics (names, numbers, dates, \
+versions, choices made), and what the assistant gave in reply (the plan and its \
+phases, the options compared, the advice, the fix), in a clause.
+
+One line per bullet, at most 45 words. No heading and no closing remark.
+"""
+
 
 # --- Cypher -----------------------------------------------------------------
 
@@ -355,13 +372,20 @@ MATCH (m:Message {id: row.id})
 SET m.topic_start = row.probability
 """
 
-_EXISTING_SUMMARY_SPANS = """
+# Summaries written before there were two levels of detail are of the first.
+_MARK_SUMMARY_DETAIL = """
 MATCH (s:Summary {session_id: $session_id})
+WHERE s.detail IS NULL
+SET s.detail = 'stretch'
+"""
+
+_EXISTING_SUMMARY_SPANS = """
+MATCH (s:Summary {session_id: $session_id, detail: $detail})
 RETURN s.start_index AS start_index, s.end_index AS end_index
 """
 
 _DELETE_SUMMARIES_AT = """
-MATCH (s:Summary {session_id: $session_id})
+MATCH (s:Summary {session_id: $session_id, detail: $detail})
 WHERE s.start_index IN $starts
 DETACH DELETE s
 """
@@ -685,17 +709,30 @@ RETURN count(*) AS superseded
 """
 
 _EXISTING_SUMMARY_STARTS = """
-MATCH (s:Summary {session_id: $session_id})
+MATCH (s:Summary {session_id: $session_id, detail: $detail})
 RETURN s.start_index AS start_index
 """
 
 _STORE_SUMMARY = """
 MATCH (c:Conversation {session_id: $session_id})
 WITH c ORDER BY c.created_at DESC LIMIT 1
-MERGE (s:Summary {session_id: $session_id, start_index: $start_index})
+MERGE (s:Summary {session_id: $session_id, start_index: $start_index, detail: $detail})
 ON CREATE SET s.id = $id, s.created_at = datetime()
-SET s.end_index = $end_index, s.text = $text, s.start_time = $start_time
+SET s.end_index = $end_index, s.text = $text, s.start_time = $start_time,
+    s.embedding = $embedding
 MERGE (c)-[:HAS_SUMMARY]->(s)
+"""
+
+_SUMMARIES_WITHOUT_EMBEDDING = """
+MATCH (s:Summary {session_id: $session_id})
+WHERE s.embedding IS NULL AND s.text IS NOT NULL
+RETURN s.id AS id, s.text AS text
+"""
+
+_SET_SUMMARY_EMBEDDINGS = """
+UNWIND $rows AS row
+MATCH (s:Summary {id: row.id})
+SET s.embedding = row.embedding
 """
 
 
@@ -2105,6 +2142,7 @@ class DistillationMemory:
         session_id: str,
         *,
         span: int = 10,
+        detail: Literal["stretch", "exchange"] = "stretch",
         by_topic: bool = False,
         topic_threshold: float = 0.5,
         skip_existing: bool = True,
@@ -2118,6 +2156,14 @@ class DistillationMemory:
         stretch shorter than ``span`` is summarized too; run the job again
         after more messages arrive and that last summary is rewritten.
 
+        ``detail`` sets how much a summary holds. ``"stretch"``: three or four
+        bullet points for the stretch, mostly what the user brought up.
+        ``"exchange"``: one bullet point per exchange, each saying what the
+        user brought up and what the assistant gave in reply, with the
+        position of the message. The two are stored side by side
+        (``Summary.detail``), and ``get_context(outline_detail=...)`` chooses
+        which one to show.
+
         With ``by_topic`` and a judge, the stretches follow the conversation
         instead: a stretch starts where a user message opens a new topic
         (``topic_start`` at ``topic_threshold`` or more, see
@@ -2130,6 +2176,7 @@ class DistillationMemory:
         """
         llm = self._require_llm()
         stats = {"summaries": 0, "failures": 0}
+        await self._client.execute_write(_MARK_SUMMARY_DETAIL, {"session_id": session_id})
         if by_topic and self._judge is not None:
             await self.mark_topic_starts(session_id, max_concurrency=max_concurrency)
             messages = await self._session_messages(session_id)
@@ -2143,14 +2190,15 @@ class DistillationMemory:
             existing_spans = {
                 (row["start_index"], row["end_index"])
                 for row in await self._client.execute_read(
-                    _EXISTING_SUMMARY_SPANS, {"session_id": session_id}
+                    _EXISTING_SUMMARY_SPANS, {"session_id": session_id, "detail": detail}
                 )
             }
             wanted = set(spans)
             stale = sorted({start for start, end in existing_spans if (start, end) not in wanted})
             if stale:
                 await self._client.execute_write(
-                    _DELETE_SUMMARIES_AT, {"session_id": session_id, "starts": stale}
+                    _DELETE_SUMMARIES_AT,
+                    {"session_id": session_id, "starts": stale, "detail": detail},
                 )
             # The last stretch may still grow, so it is always rewritten.
             existing = {start for start, end in existing_spans & wanted if end != len(messages) - 1}
@@ -2160,7 +2208,7 @@ class DistillationMemory:
             existing = {
                 row["start_index"]
                 for row in await self._client.execute_read(
-                    _EXISTING_SUMMARY_STARTS, {"session_id": session_id}
+                    _EXISTING_SUMMARY_STARTS, {"session_id": session_id, "detail": detail}
                 )
                 # A trailing stretch shorter than the span is rewritten.
                 if row["start_index"] + span <= len(messages)
@@ -2172,23 +2220,35 @@ class DistillationMemory:
                 return
             # A long stretch is shown evenly cut, so that its end is not lost.
             chars = max(600, min(max_message_chars, int(span * max_message_chars / len(stretch))))
+            by_exchange = detail == "exchange"
             transcript = (
                 "<transcript>\n"
-                + "\n\n".join(f"{m['role'].upper()}: {m['content'][:chars]}" for m in stretch)
+                + "\n\n".join(
+                    (f"[#{m['position'] + 1}] " if by_exchange else "")
+                    + f"{m['role'].upper()}: {m['content'][:chars]}"
+                    for m in stretch
+                )
                 + "\n</transcript>\n\nWrite the outline bullets for this stretch."
             )
             prompt = [
-                ChatMessage(role="system", content=SUMMARY_PROMPT),
+                ChatMessage(
+                    role="system",
+                    content=EXCHANGE_SUMMARY_PROMPT if by_exchange else SUMMARY_PROMPT,
+                ),
                 ChatMessage(role="user", content=transcript),
             ]
+            # An exchange is two messages, and its bullet takes about 70 tokens.
+            room = 120 + 40 * len(stretch) if by_exchange else 260
             completion = await self._with_retries(
-                lambda: llm.complete(prompt, temperature=0.0, max_tokens=260),
+                lambda: llm.complete(prompt, temperature=0.0, max_tokens=room),
                 f"summary (messages {start + 1}-{stretch[-1]['position'] + 1})",
             )
             text = completion.content.strip() if completion is not None else ""
             if not text:
                 stats["failures"] += 1
                 return
+            # Embedded, so that the stretches a question is about can be searched for.
+            embedding = await self._embedder.embed(text) if self._embedder is not None else None
             await self._client.execute_write(
                 _STORE_SUMMARY,
                 {
@@ -2198,11 +2258,100 @@ class DistillationMemory:
                     "end_index": stretch[-1]["position"],
                     "start_time": stretch[0]["timestamp"],
                     "text": text,
+                    "embedding": embedding,
+                    "detail": detail,
                 },
             )
             stats["summaries"] += 1
 
         await self._gather([partial(one, s) for s in stretches], max_concurrency, on_progress)
+        return stats
+
+    async def embed_summaries(self, session_id: str) -> int:
+        """Embed the summaries of a session that have no embedding yet.
+
+        Summaries written before they were embedded are not found by
+        ``summary_search``; this brings them up to date. Returns how many
+        were embedded.
+        """
+        if self._embedder is None:
+            return 0
+        rows = await self._client.execute_read(
+            _SUMMARIES_WITHOUT_EMBEDDING, {"session_id": session_id}
+        )
+        if not rows:
+            return 0
+        embeddings = await self._embedder.embed_batch([row["text"] for row in rows])
+        await self._client.execute_write(
+            _SET_SUMMARY_EMBEDDINGS,
+            {
+                "rows": [
+                    {"id": row["id"], "embedding": embedding}
+                    for row, embedding in zip(rows, embeddings, strict=True)
+                ]
+            },
+        )
+        return len(rows)
+
+    # -- communities ----------------------------------------------------------
+
+    async def detect_communities(
+        self,
+        session_id: str,
+        *,
+        summarize: bool = True,
+        summary_source: str = "exchanges",
+        max_levels: int = 4,
+        min_units: int = 2,
+        max_share: float = 0.4,
+        min_statements: int = 3,
+        max_concurrency: int = 8,
+    ) -> dict[str, int]:
+        """Group the session's entities into communities and summarize each as a thread.
+
+        Entities that occur in the same exchanges are clustered with
+        hierarchical Louvain in Neo4j Graph Data Science, every exchange is
+        given to the community most of its entities belong to, and an LLM
+        writes a title and dated bullet points for each community from the
+        statements of its exchanges (see
+        :mod:`neo4j_agent_memory.memory.communities`). Run it after
+        :meth:`extract_statements`; running it again replaces the communities.
+
+        Args:
+            session_id: The session to cluster.
+            summarize: Write and embed the summaries. Without them the
+                communities are stored but ``get_context`` cannot search them.
+            summary_source: ``"exchanges"`` writes each summary from the
+                thread's exchanges, so that it says what the user brought up
+                and what the assistant gave in reply; ``"statements"`` writes
+                it from the user's statements alone.
+            max_levels: Levels of the hierarchy at most.
+            min_units: Entities in fewer exchanges than this are left out.
+            max_share: Entities in more than this share of the exchanges are
+                left out.
+            min_statements: Communities with fewer statements get no summary.
+
+        Returns:
+            ``entities``, ``links``, ``communities`` and ``levels``, and with
+            ``summarize`` also ``summaries``, ``skipped`` and ``failures``.
+
+        Raises:
+            GraphDataScienceUnavailable: The Graph Data Science plugin is not
+                installed on the server.
+        """
+        detector = CommunityDetector(self._client, self._embedder, self._llm, retries=self._retries)
+        stats = await detector.detect(
+            session_id, max_levels=max_levels, min_units=min_units, max_share=max_share
+        )
+        if summarize and stats["communities"]:
+            stats.update(
+                await detector.summarize(
+                    session_id,
+                    source=summary_source,
+                    min_statements=min_statements,
+                    max_concurrency=max_concurrency,
+                )
+            )
         return stats
 
     # -- all three ------------------------------------------------------------
@@ -2217,13 +2366,22 @@ class DistillationMemory:
         verify: bool = True,
         complete: bool = True,
         topic_summaries: bool = False,
+        exchange_outline: bool = False,
+        communities: bool = False,
         max_concurrency: int = 8,
     ) -> dict[str, dict[str, int]]:
         """Extract statements, reconcile them and summarize the session.
 
         ``reply_context``, ``decisions``, ``verify`` and ``complete`` are those of
         :meth:`extract_statements`; ``topic_summaries`` is that of
-        :meth:`summarize_session`.
+        :meth:`summarize_session`. ``exchange_outline`` also writes the outline
+        with a line per exchange (``summarize_session(detail="exchange")``),
+        which ``get_context`` shows to a question that asks for a summary.
+        ``communities`` also runs
+        :meth:`detect_communities`, which needs the Neo4j Graph Data Science
+        plugin on the server and raises
+        :class:`~neo4j_agent_memory.memory.communities.GraphDataScienceUnavailable`
+        without it.
         """
         statements = await self.extract_statements(
             session_id,
@@ -2237,8 +2395,17 @@ class DistillationMemory:
         summaries = await self.summarize_session(
             session_id, span=summary_span, by_topic=topic_summaries, max_concurrency=max_concurrency
         )
-        return {
+        result = {
             "statements": statements,
             "reconciliation": reconciliation,
             "summaries": summaries,
         }
+        if exchange_outline:
+            result["exchange_outline"] = await self.summarize_session(
+                session_id, span=summary_span, detail="exchange", max_concurrency=max_concurrency
+            )
+        if communities:
+            result["communities"] = await self.detect_communities(
+                session_id, max_concurrency=max_concurrency
+            )
+        return result

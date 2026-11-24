@@ -1,10 +1,10 @@
 = Schema objects reference
 :page-pagination:
-:description: Inventory of the constraints, regular indexes, text indexes, vector indexes, and point indexes that the bolt backend attempts to create on connection. NAMS...
+:description: Inventory of the constraints, regular indexes, text indexes, vector indexes, full-text indexes, and point indexes that the bolt backend attempts to create on connection. NAMS...
 :page-product: agent-memory
 :toclevels: 2
 
-Inventory of the constraints, regular indexes, text indexes, vector indexes, and point indexes that the bolt backend attempts to create on connection. NAMS manages its schema on the service; `client.schema` is not supported there.
+Inventory of the constraints, regular indexes, text indexes, vector indexes, full-text indexes, and point indexes that the bolt backend attempts to create on connection. NAMS manages its schema on the service; `client.schema` is not supported there.
 Use this page to answer "what schema changes will this library make to
 my Neo4j database?" before deploying.
 
@@ -34,6 +34,7 @@ file for the complete current inventory used in deployments.
 | `fact_id`               | `Fact`               | `id`         | Unique fact identifier.
 | `summary_id`            | `Summary`            | `id`         | Unique identifier of a conversation-outline summary (session distillation).
 | `decision_id`           | `Decision`           | `id`         | Unique decision identifier (session distillation).
+| `community_id`          | `Community`          | `id`         | Unique identifier of a community of entities (session distillation).
 | `reasoning_trace_id`    | `ReasoningTrace`     | `id`         | Unique reasoning-trace identifier.
 | `reasoning_step_id`     | `ReasoningStep`      | `id`         | Unique reasoning-step identifier.
 | `tool_name`             | `Tool`               | `name`       | One `Tool` node per unique tool name (used for aggregated stats).
@@ -102,8 +103,25 @@ After setup, MemoryClient validates the dimensions of existing managed vector in
 | `preference_embedding_idx`  | `Preference`      | `embedding`      | Semantic search over preferences.
 | `fact_embedding_idx`        | `Fact`            | `embedding`      | Semantic search over facts.
 | `decision_embedding_idx`    | `Decision`        | `embedding`      | Semantic search over decisions.
+| `summary_embedding_idx`     | `Summary`         | `embedding`      | Semantic search over the summaries of a conversation outline.
+| `community_embedding_idx`   | `Community`       | `embedding`      | Semantic search over community (thread) summaries.
 | `task_embedding_idx`        | `ReasoningTrace`  | `task_embedding` | Search past reasoning traces by task similarity.
 | `step_embedding_idx`        | `ReasoningStep`   | `embedding`      | Semantic search over individual reasoning steps (used by `search_steps`).
+|===
+
+== Full-text indexes
+
+Created for keyword search during hybrid context assembly
+(`get_context(strategy="hybrid", keyword=True)`). A failure to create one is
+logged as a warning and does not stop setup: keyword search is then skipped.
+
+[cols="4,3,3,3"]
+|===
+| Name | Label | Properties | Purpose
+
+| `message_content_fulltext_idx`   | `Message`   | `content`          | Keyword search over message text.
+| `fact_text_fulltext_idx`         | `Fact`      | `text`             | Keyword search over distilled statements.
+| `community_summary_fulltext_idx` | `Community` | `title`, `summary` | Keyword search over community (thread) summaries.
 |===
 
 == Point indexes
@@ -121,8 +139,9 @@ Created for geospatial queries on Location entities.
 
 `SchemaManager.drop_all()` removes every constraint and index whose name
 starts with one of `conversation_`, `message_`, `entity_`,
-`preference_`, `fact_`, `reasoning_`, `trace_`, `tool_`, `task_`,
-`step_`, `user_`, `consolidation_`, `memory_read_`, or `ontology_`. It does not delete data, but its prefix matching can also remove application-owned schema objects using those prefixes. Inspect the current inventory before deliberately calling it.
+`preference_`, `fact_`, `summary_`, `decision_`, `community_`,
+`reasoning_`, `trace_`, `tool_`, `task_`, `step_`, `user_`,
+`consolidation_`, `memory_read_`, or `ontology_`. It does not delete data, but its prefix matching can also remove application-owned schema objects using those prefixes. Inspect the current inventory before deliberately calling it.
 
 [source,python]
 ----

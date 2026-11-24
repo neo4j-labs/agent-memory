@@ -421,3 +421,78 @@ class TestSummaries:
             "s", span=2
         )
         assert stats == {"summaries": 0, "failures": 1}
+
+    @pytest.mark.asyncio
+    async def test_a_summary_is_embedded_and_marked_with_its_detail(self) -> None:
+        client = FakeClient({"statements_extracted": _messages(2)})
+        llm = FakeLLM(text="- The user asked about sprints.")
+        await DistillationMemory(client, FakeEmbedder(), llm).summarize_session("s", span=2)  # type: ignore[arg-type]
+        stored = client.written("MERGE (s:Summary")[0]
+        assert stored["embedding"] == [float(len("- The user asked about sprints."))]
+        assert stored["detail"] == "stretch"
+        # Summaries written before there were two levels are marked as the first.
+        assert client.written("SET s.detail = 'stretch'") == [{"session_id": "s"}]
+
+    @pytest.mark.asyncio
+    async def test_the_outline_can_have_a_line_per_exchange(self) -> None:
+        client = FakeClient(
+            {
+                "statements_extracted": _messages(4),
+                # The stretch outline is already there; this is another outline.
+                "detail: $detail": [],
+            }
+        )
+        llm = FakeLLM(text="- #1: Asked for a plan; got three phases.")
+        stats = await DistillationMemory(client, FakeEmbedder(), llm).summarize_session(  # type: ignore[arg-type]
+            "s", span=4, detail="exchange"
+        )
+        assert stats == {"summaries": 1, "failures": 0}
+        assert client.written("MERGE (s:Summary")[0]["detail"] == "exchange"
+        # The messages are numbered, so that a bullet can say where it is from.
+        assert llm.prompts[0].startswith("<transcript>\n[#1] USER: message 0")
+        assert "[#4] ASSISTANT: message 3" in llm.prompts[0]
+
+    @pytest.mark.asyncio
+    async def test_summaries_without_an_embedding_are_embedded(self) -> None:
+        client = FakeClient(
+            {
+                "s.embedding IS NULL": [
+                    {"id": "s1", "text": "- One."},
+                    {"id": "s2", "text": "- Two!"},
+                ]
+            }
+        )
+        embedded = await DistillationMemory(client, FakeEmbedder(), None).embed_summaries("s")  # type: ignore[arg-type]
+        assert embedded == 2
+        assert client.written("SET s.embedding = row.embedding")[0]["rows"] == [
+            {"id": "s1", "embedding": [6.0]},
+            {"id": "s2", "embedding": [6.0]},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_nothing_to_embed_writes_nothing(self) -> None:
+        client = FakeClient()
+        assert await DistillationMemory(client, FakeEmbedder(), None).embed_summaries("s") == 0  # type: ignore[arg-type]
+        assert not client.writes
+
+
+class TestDistillSession:
+    @pytest.mark.asyncio
+    async def test_the_outline_per_exchange_is_written_when_asked_for(self) -> None:
+        client = FakeClient()
+        llm = FakeLLM(text="- #1: Asked for a plan; got three phases.")
+        memory = DistillationMemory(client, FakeEmbedder(), llm)  # type: ignore[arg-type]
+        plain = await memory.distill_session("s")
+        assert "exchange_outline" not in plain
+        both = await memory.distill_session("s", exchange_outline=True)
+        assert both["exchange_outline"] == {"summaries": 0, "failures": 0}
+
+
+class TestCommunities:
+    @pytest.mark.asyncio
+    async def test_detection_needs_the_graph_data_science_plugin(self) -> None:
+        from neo4j_agent_memory.memory.communities import GraphDataScienceUnavailable
+
+        memory = DistillationMemory(FakeClient(), FakeEmbedder(), FakeLLM())  # type: ignore[arg-type]
+        with pytest.raises(GraphDataScienceUnavailable):
+            await memory.detect_communities("s")
