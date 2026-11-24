@@ -51,6 +51,16 @@ class TestGraphToCluster:
         }
         assert cooccurrence(occurrences, unit_count=10, max_share=0.4) == [("a", "b", 1.0)]
 
+    def test_a_relationship_stated_often_counts_up_to_three_times(self) -> None:
+        occurrences = {"a": {0, 2}, "b": {4, 6}}
+        links = cooccurrence(occurrences, unit_count=10, related=[("a", "b", 7)])
+        assert links == [("a", "b", 1.5)]
+
+    def test_entities_can_be_linked_by_relationships_alone(self) -> None:
+        occurrences = {"a": {0, 2}, "b": {0, 2}, "c": {4, 6}}
+        links = cooccurrence(occurrences, unit_count=10, related=[("a", "c", 1)], shared_weight=0.0)
+        assert links == [("a", "c", 0.5)]
+
     def test_a_relationship_adds_to_a_link_and_can_make_one(self) -> None:
         occurrences = {"a": {0, 2}, "b": {0, 2}, "c": {4, 6}}
         links = cooccurrence(
@@ -223,6 +233,40 @@ class TestDetect:
         assert sorted(link["entity"] for link in links) == ["e1", "e2", "e3", "e4"]
 
     @pytest.mark.asyncio
+    async def test_relationships_weigh_in_when_asked_to(self) -> None:
+        rows = _session()
+        rows["a.name AS source"] = [
+            {
+                "a": "e2",
+                "b": "e3",
+                "source": "casting",
+                "type": "KNOWS",
+                "target": "Stephen",
+                "support": 1,
+            }
+        ]
+        client = FakeClient(rows)
+        await CommunityDetector(client, None, None).detect("s", links="both")  # type: ignore[arg-type]
+        both = [(p["a"], p["b"]) for p in client.written("gds.graph.project")[0]["pairs"]]
+        assert ("e2", "e3") in both
+
+        client = FakeClient(rows)
+        await CommunityDetector(client, None, None).detect("s", links="cooccurrence")  # type: ignore[arg-type]
+        shared = [(p["a"], p["b"]) for p in client.written("gds.graph.project")[0]["pairs"]]
+        assert ("e2", "e3") not in shared
+
+        client = FakeClient(rows)
+        await CommunityDetector(client, None, None).detect("s", links="relations")  # type: ignore[arg-type]
+        related = [(p["a"], p["b"]) for p in client.written("gds.graph.project")[0]["pairs"]]
+        assert related == [("e2", "e3")]
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_kind_of_link_is_refused(self) -> None:
+        detector = CommunityDetector(FakeClient(_session()), None, None)  # type: ignore[arg-type]
+        with pytest.raises(ValueError, match="links must be"):
+            await detector.detect("s", links="everything")
+
+    @pytest.mark.asyncio
     async def test_a_session_with_nothing_to_link_has_no_communities(self) -> None:
         rows = _session()
         rows["collect(DISTINCT m.id) AS message_ids"] = [
@@ -241,7 +285,29 @@ class TestSummarize:
         rows["RETURN m.id AS id, m.role AS role, m.content AS content"] = rows.pop(
             "RETURN m.id AS id, m.role AS role"
         )
-        rows["MATCH (c:Community {session_id: $session_id})"] = [
+        rows["collect(DISTINCT e.id) AS entities"] = [
+            {"id": "c1", "entities": ["e1", "e2"]},
+            {"id": "c2", "entities": ["e3"]},
+        ]
+        rows["a.name AS source"] = [
+            {
+                "a": "e1",
+                "b": "e2",
+                "source": "script",
+                "type": "NEEDS",
+                "target": "casting",
+                "support": 2,
+            },
+            {
+                "a": "e1",
+                "b": "e3",
+                "source": "script",
+                "type": "KNOWS",
+                "target": "Stephen",
+                "support": 1,
+            },
+        ]
+        rows["RETURN c.id AS id, c.level AS level"] = [
             {
                 "id": "c1",
                 "level": 0,
@@ -271,6 +337,9 @@ class TestSummarize:
         assert "[#1 | 2024-03-15]\nUSER: message 0" in llm.prompts[0]
         assert "ASSISTANT: message 3" in llm.prompts[0]
         assert "what the assistant gave in reply" in llm.systems[0]
+        # The relationship inside the community is given; the one that leaves it is not.
+        assert "How they are related: script -[NEEDS]-> casting." in llm.prompts[0]
+        assert "Stephen" not in llm.prompts[0].split("<exchanges>")[0]
         written = client.written("SET c.title = $title")[0]
         assert written["id"] == "c1"
         assert written["title"] == "Pilot planning"
@@ -319,7 +388,7 @@ class TestSummarize:
     @pytest.mark.asyncio
     async def test_a_summarized_thread_is_left_alone(self) -> None:
         rows = self._rows()
-        rows["MATCH (c:Community {session_id: $session_id})"][0]["summary"] = "- #1: Done."
+        rows["RETURN c.id AS id, c.level AS level"][0]["summary"] = "- #1: Done."
         client = FakeClient(rows)
         llm = FakeLLM("Title\n- #1: A step.")
         stats = await CommunityDetector(client, FakeEmbedder(), llm).summarize("s")  # type: ignore[arg-type]

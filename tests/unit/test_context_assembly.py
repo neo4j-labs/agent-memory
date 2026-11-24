@@ -1337,3 +1337,143 @@ class TestFeedbackEntities:
         assembler = ContextAssembler(FakeClient(_typed_rows()), FakeEmbedder())  # type: ignore[arg-type]
         result = await assembler.assemble("What about the budget?", session_id="s")
         assert result.details["feedback_entities"] == {}
+
+
+# --- the graph around the retrieved exchanges and the question's entities ----
+
+
+def _related_rows() -> dict[str, list[dict[str, Any]]]:
+    """The typed session, with relationships between its entities."""
+    rows = _typed_rows()
+    rows["coalesce(r.source_message_ids, []) AS message_ids"] = [
+        {"a": "e4", "b": "e1", "type": "USES", "support": 3, "message_ids": ["m2"]},
+        {"a": "e1", "b": "e2", "type": "REPLACES", "support": 1, "message_ids": ["m6"]},
+        {"a": "e5", "b": "e3", "type": "USES", "support": 1, "message_ids": []},
+    ]
+    return rows
+
+
+class TestExpandEntities:
+    RELATIONS = [
+        {"a": "a", "b": "b", "type": "USES", "support": 2},
+        {"a": "b", "b": "c", "type": "PART_OF", "support": 1},
+        {"a": "d", "b": "a", "type": "KNOWS", "support": 1},
+    ]
+
+    def test_an_entity_is_followed_as_far_as_its_hops_allow(self) -> None:
+        entities, walked = ctx.expand_entities({"a": 1}, self.RELATIONS)
+        assert entities == ["a", "b", "d"]
+        assert [(r["a"], r["type"], r["b"]) for r in walked] == [
+            ("a", "USES", "b"),
+            ("d", "KNOWS", "a"),
+        ]
+        entities, walked = ctx.expand_entities({"a": 2}, self.RELATIONS)
+        assert entities == ["a", "b", "d", "c"]
+        assert ("b", "PART_OF", "c") in [(r["a"], r["type"], r["b"]) for r in walked]
+
+    def test_an_entity_with_no_hops_is_kept_alone(self) -> None:
+        assert ctx.expand_entities({"a": 0}, self.RELATIONS) == (["a"], [])
+
+    def test_a_relationship_reached_twice_is_walked_once(self) -> None:
+        _, walked = ctx.expand_entities({"a": 1, "b": 1}, self.RELATIONS)
+        assert len(walked) == 3
+
+    def test_the_paths_of_an_entity_are_limited(self) -> None:
+        _, walked = ctx.expand_entities({"a": 1}, self.RELATIONS, one_hop_paths=1)
+        # The better supported relationship is the one kept.
+        assert [(r["a"], r["b"]) for r in walked] == [("a", "b")]
+
+
+class TestGraphAroundTheExcerpts:
+    @pytest.mark.asyncio
+    async def test_entities_of_the_best_exchanges_are_shown_with_their_relationships(
+        self,
+    ) -> None:
+        rows = _related_rows()
+        rows["entity_embedding_idx"] = []
+        rows["vector.similarity.cosine(e.embedding"] = [
+            {"id": "e1", "score": 0.95},  # matches the question: two relationships out
+            {"id": "e4", "score": 0.6},
+        ]
+        assembler = ContextAssembler(FakeClient(rows), FakeEmbedder())  # type: ignore[arg-type]
+        result = await assembler.assemble(
+            "What about the budget?", session_id="s", chunk_entities=10, feedback_pairs=1
+        )
+        section = result.text.split("## How the things in the excerpts are related")[1].split(
+            "\n## "
+        )[0]
+        # The best exchange (#5) mentions Todoist; from it, one and two relationships out.
+        assert "- Joshua (person) -[USES]-> Todoist (software)" in section
+        assert "- Todoist (software) -[REPLACES]-> Asana (software)" in section
+        assert "Excel" not in section
+        assert result.details["graph_relations"] == 2
+        # The messages the relationships were taken from are ranked.
+        ranks = {tuple(p["messages"]): p["ranks"] for p in result.details["pairs"]}
+        assert "relations" in ranks[(3, 4)]
+
+    @pytest.mark.asyncio
+    async def test_an_entity_far_from_the_question_is_not_followed(self) -> None:
+        rows = _related_rows()
+        rows["entity_embedding_idx"] = []
+        rows["vector.similarity.cosine(e.embedding"] = [{"id": "e1", "score": 0.1}]
+        assembler = ContextAssembler(FakeClient(rows), FakeEmbedder())  # type: ignore[arg-type]
+        result = await assembler.assemble(
+            "What about the budget?", session_id="s", chunk_entities=10, feedback_pairs=1
+        )
+        assert "## How the things in the excerpts are related" not in result.text
+        assert result.details["graph_relations"] == 0
+
+    @pytest.mark.asyncio
+    async def test_the_option_is_off_by_default(self) -> None:
+        assembler = ContextAssembler(FakeClient(_related_rows()), FakeEmbedder())  # type: ignore[arg-type]
+        result = await assembler.assemble("What about the budget?", session_id="s")
+        assert "## How the things in the excerpts are related" not in result.text
+
+
+class TestAroundTheQuestionsEntities:
+    @pytest.mark.asyncio
+    async def test_the_most_connected_entities_are_named_with_what_connects_them(self) -> None:
+        rows = _related_rows()
+        rows["entity_embedding_idx"] = [{"id": "e1", "score": 0.9}]
+        assembler = ContextAssembler(FakeClient(rows), FakeEmbedder())  # type: ignore[arg-type]
+        result = await assembler.assemble(
+            "What do I use Todoist for?", session_id="s", entity_neighbours=5
+        )
+        section = result.text.split("## Entities the question mentions")[1].split("\n## ")[0]
+        assert "Most connected to them: Asana (software), Joshua (person)." in section
+        assert "- Joshua -[USES]-> Todoist" in section
+        assert "- Todoist -[REPLACES]-> Asana" in section
+        assert result.details["entity_neighbours"] == ["Asana", "Joshua"]
+
+    @pytest.mark.asyncio
+    async def test_the_communities_of_the_questions_entities_are_shown_as_threads(self) -> None:
+        rows = _related_rows()
+        rows["entity_embedding_idx"] = [{"id": "e1", "score": 0.9}]
+        rows["count(DISTINCT e) AS members"] = [
+            _thread("c9", "Task tools", "- #1: Moved plans into Todoist.", 1.0, members=1)
+        ]
+        client = RecordingClient(rows)
+        assembler = ContextAssembler(client, FakeEmbedder())  # type: ignore[arg-type]
+        # Not a summary question: these threads come through the entities.
+        result = await assembler.assemble(
+            "What do I use Todoist for?", session_id="s", entity_communities=3
+        )
+        assert "### Task tools (messages #1 to #8)" in result.text
+        assert [t["title"] for t in result.details["threads"]] == ["Task tools"]
+        assert client.asked("count(DISTINCT e) AS members")[0]["ids"] == ["e1"]
+
+    @pytest.mark.asyncio
+    async def test_a_thread_found_both_ways_is_shown_once(self) -> None:
+        rows = _related_rows()
+        rows["entity_embedding_idx"] = [{"id": "e1", "score": 0.9}]
+        thread = _thread("c9", "Task tools", "- #1: Moved plans into Todoist.", 0.9)
+        rows["community_embedding_idx"] = [thread]
+        rows["count(DISTINCT e) AS members"] = [dict(thread, members=1)]
+        assembler = ContextAssembler(FakeClient(rows), FakeEmbedder())  # type: ignore[arg-type]
+        result = await assembler.assemble(
+            "Can you summarize how I used Todoist?",
+            session_id="s",
+            communities=2,
+            entity_communities=2,
+        )
+        assert [t["title"] for t in result.details["threads"]] == ["Task tools"]

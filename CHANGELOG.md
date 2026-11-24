@@ -91,6 +91,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the rest. Needs the Graph Data Science plugin on the server and raises
   `GraphDataScienceUnavailable` without it; nothing else in the library
   needs the plugin.
+- **The graph around what was retrieved**, off by default.
+  `get_context(chunk_entities=N)` takes the entities that the best exchanges
+  mention, those in most of them first, and walks the relationships out from
+  each: two out from an entity that matches the question closely, one from
+  an entity that is related to it, none from the rest. The relationships
+  reached are shown, and the messages they were taken from join the ranking
+  of excerpts. `entity_neighbours=N` names the entities most connected to
+  the question's own and what connects them, and `entity_communities=N`
+  shows the communities those entities belong to as threads, for any
+  question. `detect_communities(links=...)` chooses what links two entities:
+  sharing exchanges, a relationship between them, or both (the default), and
+  a community's summary is now written knowing how its entities are related.
 - **Threads in context assembly**, off by default.
   `get_context(strategy="hybrid", communities=N)` searches the community
   summaries by embedding and shows the nearest N as "Threads of the

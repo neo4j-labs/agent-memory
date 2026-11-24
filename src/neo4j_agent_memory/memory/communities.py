@@ -121,11 +121,21 @@ WHERE (s:Fact OR s:Decision OR s:Preference) AND s.session_id = $session_id
 RETURN e.id AS id, e.name AS name, collect(DISTINCT s.message_index) AS positions
 """
 
+# Each relationship once, however many of the session's messages mention its source.
 _RELATIONS = """
 MATCH (c:Conversation {session_id: $session_id})-[:HAS_MESSAGE]->(:Message)
-      -[:MENTIONS]->(a:Entity)-[:RELATED_TO]-(b:Entity)
-WHERE a.id < b.id
-RETURN DISTINCT a.id AS a, b.id AS b
+      -[:MENTIONS]->(a:Entity)
+WITH DISTINCT a
+MATCH (a)-[r:RELATED_TO]->(b:Entity)
+RETURN a.id AS a, b.id AS b, a.name AS source, r.type AS type, b.name AS target,
+       coalesce(r.support, 1) AS support
+"""
+
+# The entities of each community: its own at the finest level, its children's above.
+_COMMUNITY_ENTITIES = """
+MATCH (c:Community {session_id: $session_id})<-[:PARENT_COMMUNITY*0..]-(:Community)
+      <-[:IN_COMMUNITY]-(e:Entity)
+RETURN c.id AS id, collect(DISTINCT e.id) AS entities
 """
 
 # The projection lives in the Graph Data Science catalog only: the weighted
@@ -257,8 +267,9 @@ def cooccurrence(
     unit_count: int,
     min_units: int = 2,
     max_share: float = 0.4,
-    related: Iterable[tuple[str, str]] = (),
+    related: Iterable[tuple[str, str] | tuple[str, str, int]] = (),
     relation_weight: float = 0.5,
+    shared_weight: float = 1.0,
 ) -> list[tuple[str, str, float]]:
     """The weighted links between entities that occur in the same units.
 
@@ -269,8 +280,12 @@ def cooccurrence(
             that came up once ties nothing together.
         max_share: Entities in more than this share of the units are left out:
             the subject of the whole conversation belongs to every thread.
-        related: Pairs of entities with a relationship between them.
-        relation_weight: What a relationship adds to the weight of a pair.
+        related: Pairs of entities with a relationship between them, each
+            optionally with how often the relationship was stated.
+        relation_weight: What a relationship adds to the weight of a pair,
+            once for each time it was stated, up to three.
+        shared_weight: What sharing all their units is worth. Zero links only
+            the entities that have a relationship.
 
     Returns:
         ``(a, b, weight)`` with ``a < b``. The weight is the number of shared
@@ -291,15 +306,20 @@ def cooccurrence(
         for i, a in enumerate(entities):
             for b in entities[i + 1 :]:
                 shared[(a, b)] = shared.get((a, b), 0) + 1
-    weights = {
-        pair: count / math.sqrt(len(kept[pair[0]]) * len(kept[pair[1]]))
-        for pair, count in shared.items()
-    }
-    for a, b in related:
+    weights = (
+        {
+            pair: shared_weight * count / math.sqrt(len(kept[pair[0]]) * len(kept[pair[1]]))
+            for pair, count in shared.items()
+        }
+        if shared_weight > 0
+        else {}
+    )
+    for a, b, *stated in related:
         if a in kept and b in kept and a != b:
             pair = (a, b) if a < b else (b, a)
-            weights[pair] = weights.get(pair, 0.0) + relation_weight
-    return sorted((a, b, round(weight, 6)) for (a, b), weight in weights.items())
+            times = min(int(stated[0]), 3) if stated else 1
+            weights[pair] = weights.get(pair, 0.0) + relation_weight * times
+    return sorted((a, b, round(weight, 6)) for (a, b), weight in weights.items() if weight > 0)
 
 
 def community_levels(assignments: dict[str, list[int]]) -> list[dict[str, Any]]:
@@ -463,6 +483,7 @@ class CommunityDetector:
         max_levels: int = 4,
         min_units: int = 2,
         max_share: float = 0.4,
+        links: str = "both",
         relation_weight: float = 0.5,
         min_size: int = 2,
     ) -> dict[str, int]:
@@ -476,8 +497,11 @@ class CommunityDetector:
             min_units: Entities in fewer exchanges than this are left out.
             max_share: Entities in more than this share of the exchanges are
                 left out.
+            links: What links two entities. ``"cooccurrence"``: sharing
+                exchanges. ``"relations"``: a ``RELATED_TO`` relationship
+                between them. ``"both"``: either, the weights added.
             relation_weight: What a ``RELATED_TO`` relationship adds to the
-                weight of a pair.
+                weight of a pair, once for each time it was stated, up to three.
             min_size: Communities with fewer entities than this are not kept.
 
         Returns:
@@ -494,10 +518,15 @@ class CommunityDetector:
             )
         occurrences, names, unit_count = await self._occurrences(session_id)
         occurrences = {e: units for e, units in occurrences.items() if not is_value_like(names[e])}
-        related = [
-            (row["a"], row["b"])
-            for row in await self._client.execute_read(_RELATIONS, {"session_id": session_id})
-        ]
+        if links not in ("cooccurrence", "relations", "both"):
+            raise ValueError(f"links must be 'cooccurrence', 'relations' or 'both', not {links!r}")
+        related: list[tuple[str, str, int]] = []
+        if links != "cooccurrence":
+            stated: dict[tuple[str, str], int] = {}
+            for row in await self._client.execute_read(_RELATIONS, {"session_id": session_id}):
+                pair = (row["a"], row["b"]) if row["a"] < row["b"] else (row["b"], row["a"])
+                stated[pair] = stated.get(pair, 0) + int(row["support"])
+            related = [(a, b, times) for (a, b), times in stated.items()]
         pairs = cooccurrence(
             occurrences,
             unit_count=unit_count,
@@ -505,6 +534,7 @@ class CommunityDetector:
             max_share=max_share,
             related=related,
             relation_weight=relation_weight,
+            shared_weight=0.0 if links == "relations" else 1.0,
         )
         await self._client.execute_write(_DELETE_COMMUNITIES, {"session_id": session_id})
         stats = {"entities": 0, "links": len(pairs), "communities": 0, "levels": 0}
@@ -632,6 +662,26 @@ class CommunityDetector:
         )
         messages = await self._client.execute_read(_SESSION_CONTENT, {"session_id": session_id})
         roles = [row["role"] for row in messages]
+        # How the entities of each community are related, the best supported first.
+        members = {
+            row["id"]: set(row["entities"])
+            for row in await self._client.execute_read(
+                _COMMUNITY_ENTITIES, {"session_id": session_id}
+            )
+        }
+        relations = sorted(
+            await self._client.execute_read(_RELATIONS, {"session_id": session_id}),
+            key=lambda r: (-r["support"], r["source"] or "", r["target"] or ""),
+        )
+
+        def related_lines(community: dict[str, Any], limit: int = 20) -> list[str]:
+            inside = members.get(community["id"], set())
+            return [
+                f"{r['source']} -[{r['type']}]-> {r['target']}"
+                for r in relations
+                if r["a"] in inside and r["b"] in inside
+            ][:limit]
+
         by_unit: dict[int, list[dict[str, Any]]] = {}
         if source == "statements":
             statements = await self._client.execute_read(
@@ -706,6 +756,11 @@ class CommunityDetector:
                     role="user",
                     content="Things the thread is about: "
                     + ", ".join(community["entity_names"] or [])
+                    + (
+                        "\nHow they are related: " + "; ".join(lines) + "."
+                        if (lines := related_lines(community))
+                        else ""
+                    )
                     + "\n\n"
                     + material
                     + "\n\nWrite the title and the bullet points for this thread.",

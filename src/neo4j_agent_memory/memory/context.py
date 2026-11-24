@@ -222,6 +222,64 @@ def walk_message_scores(
     return at_messages
 
 
+def expand_entities(
+    hops: dict[str, int],
+    relations: list[dict[str, Any]],
+    *,
+    one_hop_paths: int = 20,
+    two_hop_paths: int = 40,
+) -> tuple[list[str], list[dict[str, Any]]]:
+    """Walk the relationships out from each seed entity, as far as its hops allow.
+
+    ``hops`` gives each seed 0, 1 or 2: an entity that matches the question
+    closely is followed two relationships out, one that is merely related to
+    it one, and one that has nothing to do with it is shown alone. Each seed
+    takes at most ``one_hop_paths`` relationships (``two_hop_paths`` when it
+    goes two out), the best supported first.
+
+    Returns:
+        The entities reached, seeds first, and the relationships walked, each
+        once, in the order they were walked.
+    """
+    touching: dict[str, list[dict[str, Any]]] = {}
+    for relation in relations:
+        touching.setdefault(relation["a"], []).append(relation)
+        touching.setdefault(relation["b"], []).append(relation)
+    for of_entity in touching.values():
+        of_entity.sort(key=lambda r: (-r.get("support", 1), r["a"], r["b"], r.get("type") or ""))
+
+    def key(relation: dict[str, Any]) -> tuple[str, str, str]:
+        return relation["a"], relation.get("type") or "", relation["b"]
+
+    entities: dict[str, None] = dict.fromkeys(hops)
+    walked: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for seed, depth in hops.items():
+        if depth <= 0:
+            continue
+        budget = two_hop_paths if depth >= 2 else one_hop_paths
+        first = touching.get(seed, [])[:budget]
+        neighbours: list[str] = []
+        for relation in first:
+            walked.setdefault(key(relation), relation)
+            other = relation["b"] if relation["a"] == seed else relation["a"]
+            entities.setdefault(other)
+            neighbours.append(other)
+        budget -= len(first)
+        if depth >= 2:
+            for neighbour in neighbours:
+                for relation in touching.get(neighbour, []):
+                    if budget <= 0:
+                        break
+                    if key(relation) in walked:
+                        continue
+                    walked[key(relation)] = relation
+                    entities.setdefault(
+                        relation["b"] if relation["a"] == neighbour else relation["a"]
+                    )
+                    budget -= 1
+    return list(entities), list(walked.values())
+
+
 def kind_of(label: str) -> str:
     """The name a reader would use for an entity type: ``OBJECT:TECHNOLOGY`` is ``technology``."""
     return label.rsplit(":", 1)[-1].replace("_", " ").lower()
@@ -646,8 +704,22 @@ LIMIT $limit
 
 _SESSION_RELATIONS = """
 MATCH (c:Conversation {session_id: $session_id})-[:HAS_MESSAGE]->(:Message)
-      -[:MENTIONS]->(a:Entity)-[:RELATED_TO]-(b:Entity)
-RETURN DISTINCT a.id AS a, b.id AS b
+      -[:MENTIONS]->(a:Entity)-[r:RELATED_TO]->(b:Entity)
+RETURN DISTINCT a.id AS a, b.id AS b, r.type AS type, coalesce(r.support, 1) AS support,
+       coalesce(r.source_message_ids, []) AS message_ids
+"""
+
+# The communities the given entities belong to, those that hold more of them first.
+_ENTITY_COMMUNITIES = """
+MATCH (e:Entity)-[:IN_COMMUNITY]->(c:Community {session_id: $session_id})
+WHERE e.id IN $ids AND c.summary IS NOT NULL
+OPTIONAL MATCH (c)-[:PARENT_COMMUNITY*]->(ancestor:Community)
+WITH c, count(DISTINCT e) AS members, collect(DISTINCT ancestor.id) AS ancestors
+RETURN c.id AS id, c.level AS level, c.title AS title, c.summary AS summary,
+       c.messages AS messages, c.first_index AS first_index, c.last_index AS last_index,
+       ancestors, members, toFloat(members) AS score
+ORDER BY members DESC, c.weight DESC
+LIMIT $limit
 """
 
 # What the user said about given entities, each statement with how near it is
@@ -692,6 +764,8 @@ class _Session:
     roles: list[str]
     entities: dict[str, dict[str, Any]]
     related: dict[str, set[str]] = field(default_factory=dict)
+    #: Relationships between the session's entities: a, b, type, support, positions.
+    relations: list[dict[str, Any]] = field(default_factory=list)
 
 
 class ContextAssembler:
@@ -726,16 +800,29 @@ class ContextAssembler:
                 "mentions": {position[mid] for mid in row["message_ids"] if mid in position},
             }
         related: dict[str, set[str]] = {}
+        relations: list[dict[str, Any]] = []
         for row in await self._client.execute_read(_SESSION_RELATIONS, {"session_id": session_id}):
             if row["a"] in entities and row["b"] in entities:
                 related.setdefault(row["a"], set()).add(row["b"])
                 related.setdefault(row["b"], set()).add(row["a"])
+                relations.append(
+                    {
+                        "a": row["a"],
+                        "b": row["b"],
+                        "type": row.get("type") or "RELATED_TO",
+                        "support": row.get("support") or 1,
+                        "positions": sorted(
+                            position[m] for m in row.get("message_ids") or [] if m in position
+                        ),
+                    }
+                )
         session = _Session(
             messages=messages,
             position=position,
             roles=[row["role"] for row in messages],
             entities=entities,
             related=related,
+            relations=relations,
         )
         self._sessions[session_id] = session
         return session
@@ -796,6 +883,11 @@ class ContextAssembler:
         feedback_entities: int = 0,
         feedback_pairs: int = 10,
         near_match: float = 0.9,
+        chunk_entities: int = 0,
+        related_match: float = 0.3,
+        max_graph_relations: int = 60,
+        entity_neighbours: int = 0,
+        entity_communities: int = 0,
     ) -> AssembledContext:
         """Assemble the context for ``query`` from the memory of ``session_id``.
 
@@ -919,6 +1011,27 @@ class ContextAssembler:
                 ``near_match`` or more (on the scale of
                 ``vector.similarity.cosine``) also brings in the other
                 entities of its community.
+
+        Three more read the graph around what was retrieved and around the
+        question's entities, and show it:
+
+        Args:
+            chunk_entities: When positive, take the entities that the best
+                ``feedback_pairs`` exchanges mention, those in most of them
+                first and up to this many, and walk the relationships out
+                from each: two out from an entity at ``near_match`` or more
+                (on the scale of ``vector.similarity.cosine``), one from an
+                entity at ``related_match`` or more, none from the rest. The
+                entities and relationships reached are shown, at most
+                ``max_graph_relations`` relationships, and the messages the
+                relationships were taken from join the ranking of excerpts.
+            entity_neighbours: When positive, also show the entities most
+                connected to the question's entities, up to this many, with
+                the relationships that connect them.
+            entity_communities: When positive, show as threads the
+                communities that the question's entities belong to, those
+                that hold more of them first and up to this many, for every
+                question.
 
         Returns:
             The context text and a record of what went into it.
@@ -1077,8 +1190,13 @@ class ContextAssembler:
 
         # --- the question's entities ------------------------------------------
         question_entities: dict[str, dict[str, Any]] = {}
-        entity_rows = await self._client.execute_read(
-            _VECTOR_ENTITIES, {"embedding": embedding, "fetch": max_entities * 3}
+        # A vector query for no neighbours is an error, so none is made.
+        entity_rows = (
+            await self._client.execute_read(
+                _VECTOR_ENTITIES, {"embedding": embedding, "fetch": max_entities * 3}
+            )
+            if max_entities > 0
+            else []
         )
         for row in entity_rows:
             if row["id"] in session.entities and len(question_entities) < max_entities:
@@ -1129,6 +1247,34 @@ class ContextAssembler:
             if question_entities and max_relations > 0
             else []
         )
+        # The entities most connected to the question's, and what connects them.
+        neighbours: list[str] = []
+        if entity_neighbours > 0 and question_entities:
+            ties: dict[str, int] = {}
+            for relation in session.relations:
+                inside = (relation["a"] in question_entities, relation["b"] in question_entities)
+                if inside[0] != inside[1]:
+                    other = relation["b"] if inside[0] else relation["a"]
+                    ties[other] = ties.get(other, 0) + 1
+            neighbours = sorted(ties, key=lambda e: (-ties[e], session.entities[e]["name"]))[
+                :entity_neighbours
+            ]
+            around = set(question_entities) | set(neighbours)
+            listed = {(r["source"], r["type"], r["target"]) for r in relations}
+            for relation in sorted(
+                session.relations, key=lambda r: (-r["support"], r["a"], r["b"], r["type"])
+            ):
+                if relation["a"] in around and relation["b"] in around:
+                    row = {
+                        "source": session.entities[relation["a"]]["name"],
+                        "type": relation["type"],
+                        "target": session.entities[relation["b"]]["name"],
+                        "support": relation["support"],
+                    }
+                    if (row["source"], row["type"], row["target"]) not in listed:
+                        listed.add((row["source"], row["type"], row["target"]))
+                        relations.append(row)
+            relations = relations[: max_relations + 2 * entity_neighbours]
 
         # --- rank the exchanges -----------------------------------------------
         vector_rows = await self._client.execute_read(
@@ -1257,6 +1403,33 @@ class ContextAssembler:
                 limit=CANDIDATES,
             )
 
+        # The communities the question's entities belong to: the local view,
+        # found through the graph and not by what resembles the question.
+        if entity_communities > 0 and question_entities:
+            local = await self._search(
+                _ENTITY_COMMUNITIES,
+                {
+                    "ids": list(question_entities),
+                    "session_id": session_id,
+                    "limit": entity_communities,
+                },
+                what="the communities of the question's entities",
+            )
+            shown_ids = {t["id"] for t in threads}
+            lines_shown = shown_ids | {a for t in threads for a in t["ancestors"]}
+            for hit in local:
+                if hit["id"] in lines_shown or shown_ids & set(hit["ancestors"]):
+                    continue
+                threads.append(hit)
+                shown_ids.add(hit["id"])
+            thread_positions = interleave(
+                [
+                    [p for p in positions_in(thread["summary"]) if 0 <= p < count]
+                    for thread in threads
+                ],
+                limit=CANDIDATES,
+            )
+
         rankings = {
             "vector": vector_ranking,
             "graph": to_pair_ranking(graph_positions, session.roles),
@@ -1292,6 +1465,51 @@ class ContextAssembler:
                     feedback_scores, key=lambda p: (-feedback_scores[p], p)
                 )[:CANDIDATES]
                 rankings["feedback"] = to_pair_ranking(feedback_positions, session.roles)
+                ranked = fuse_rankings(rankings)
+
+        # The graph around what was retrieved: the entities of the best
+        # exchanges, each followed along its relationships as far as it is
+        # near the question.
+        graph_entities: list[str] = []
+        graph_relations: list[dict[str, Any]] = []
+        if chunk_entities > 0 and ranked:
+            shown = {
+                p
+                for entry in ranked[:feedback_pairs]
+                for p in range(entry["pair"][0], entry["pair"][1] + 1)
+            }
+            in_chunks = {
+                entity_id: len(entity["mentions"] & shown)
+                for entity_id, entity in session.entities.items()
+                if entity["mentions"] & shown
+            }
+            seeds = sorted(in_chunks, key=lambda e: (-in_chunks[e], session.entities[e]["name"]))[
+                :chunk_entities
+            ]
+            rows = (
+                await self._client.execute_read(
+                    _ENTITY_SCORES, {"ids": seeds, "embedding": embedding}
+                )
+                if seeds
+                else []
+            )
+            nearness_of_entity = {r["id"]: float(r["score"]) for r in rows}
+            # An entity without an embedding is followed one relationship out.
+            hops = {
+                e: 2
+                if nearness_of_entity.get(e, related_match) >= near_match
+                else 1
+                if nearness_of_entity.get(e, related_match) >= related_match
+                else 0
+                for e in seeds
+            }
+            graph_entities, graph_relations = expand_entities(hops, session.relations)
+            graph_relations = graph_relations[:max_graph_relations]
+            relation_positions = interleave(
+                [r["positions"] for r in graph_relations if r["positions"]], limit=CANDIDATES
+            )
+            if relation_positions:
+                rankings["relations"] = to_pair_ranking(relation_positions, session.roles)
                 ranked = fuse_rankings(rankings)
 
         # --- ask the judge ----------------------------------------------------
@@ -1441,7 +1659,8 @@ class ContextAssembler:
         # The excerpts come first and the distilled memory after them, closest
         # to the question: what must not be missed goes last.
         sections = [
-            self._render_entities(session, question_entities, relations),
+            self._render_entities(session, question_entities, relations, neighbours),
+            self._render_graph(session, graph_entities, graph_relations),
             self._render_enumeration(enumerated),
             self._render_outline(
                 summaries,
@@ -1553,6 +1772,9 @@ class ContextAssembler:
                 }
                 for thread in threads
             ],
+            "graph_entities": len(graph_entities),
+            "graph_relations": len(graph_relations),
+            "entity_neighbours": [session.entities[e]["name"] for e in neighbours],
             "feedback_entities": {
                 session.entities[eid]["name"]: round(weight, 3) for eid, weight in feedback.items()
             },
@@ -1644,7 +1866,8 @@ class ContextAssembler:
             {
                 "embedding": embedding,
                 "session_id": session_id,
-                "fetch": max(limit * 8, 40),
+                # The index covers every session, and a session has few communities.
+                "fetch": max(limit * 8, 200),
                 "limit": max(limit * 4, 12),
             },
             what="vector search over communities",
@@ -1655,7 +1878,7 @@ class ContextAssembler:
                 {
                     "query": words,
                     "session_id": session_id,
-                    "fetch": max(limit * 8, 40),
+                    "fetch": max(limit * 8, 200),
                     "limit": max(limit * 4, 12),
                 },
                 what="keyword search over communities",
@@ -2280,10 +2503,35 @@ class ContextAssembler:
         return "\n".join(lines)
 
     @staticmethod
+    def _render_graph(
+        session: _Session, entity_ids: list[str], relations: list[dict[str, Any]]
+    ) -> str:
+        """The entities of the retrieved exchanges and the relationships walked from them."""
+        if not relations:
+            return ""
+
+        def named(entity_id: str) -> str:
+            entity = session.entities[entity_id]
+            return f"{entity['name']} ({kind_of(entity['type'])})"
+
+        in_relations = {r["a"] for r in relations} | {r["b"] for r in relations}
+        lines = [
+            "## How the things in the excerpts are related",
+            "From the memory's graph: the things the excerpts above mention and what the "
+            "conversation says connects them.",
+        ]
+        lines += [f"- {named(r['a'])} -[{r['type']}]-> {named(r['b'])}" for r in relations]
+        alone = [e for e in entity_ids if e not in in_relations][:20]
+        if alone:
+            lines.append("Also mentioned: " + ", ".join(named(e) for e in alone) + ".")
+        return "\n".join(lines)
+
+    @staticmethod
     def _render_entities(
         session: _Session,
         question_entities: dict[str, dict[str, Any]],
         relations: list[dict[str, Any]],
+        neighbours: list[str] | None = None,
     ) -> str:
         if not question_entities:
             return ""
@@ -2296,6 +2544,15 @@ class ContextAssembler:
             lines.append(
                 f"- {entity['name']} ({entity['type']}): mentioned in {len(mentions)} "
                 f"messages, first #{mentions[0] + 1}, last #{mentions[-1] + 1}"
+            )
+        if neighbours:
+            lines.append(
+                "Most connected to them: "
+                + ", ".join(
+                    f"{session.entities[e]['name']} ({kind_of(session.entities[e]['type'])})"
+                    for e in neighbours
+                )
+                + "."
             )
         for row in relations:
             lines.append(f"- {row['source']} -[{row['type']}]-> {row['target']}")

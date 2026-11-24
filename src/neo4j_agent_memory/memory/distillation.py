@@ -2301,6 +2301,8 @@ class DistillationMemory:
         *,
         summarize: bool = True,
         summary_source: str = "exchanges",
+        links: str = "both",
+        relation_weight: float = 0.5,
         max_levels: int = 4,
         min_units: int = 2,
         max_share: float = 0.4,
@@ -2325,6 +2327,10 @@ class DistillationMemory:
                 thread's exchanges, so that it says what the user brought up
                 and what the assistant gave in reply; ``"statements"`` writes
                 it from the user's statements alone.
+            links: What links two entities: ``"cooccurrence"`` (sharing
+                exchanges), ``"relations"`` (a relationship between them) or
+                ``"both"``.
+            relation_weight: What a relationship adds to the weight of a pair.
             max_levels: Levels of the hierarchy at most.
             min_units: Entities in fewer exchanges than this are left out.
             max_share: Entities in more than this share of the exchanges are
@@ -2341,7 +2347,12 @@ class DistillationMemory:
         """
         detector = CommunityDetector(self._client, self._embedder, self._llm, retries=self._retries)
         stats = await detector.detect(
-            session_id, max_levels=max_levels, min_units=min_units, max_share=max_share
+            session_id,
+            max_levels=max_levels,
+            min_units=min_units,
+            max_share=max_share,
+            links=links,
+            relation_weight=relation_weight,
         )
         if summarize and stats["communities"]:
             stats.update(

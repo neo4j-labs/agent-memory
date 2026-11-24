@@ -251,3 +251,80 @@ class TestCommunities:
             "Who booked the restaurant?", session_id=session_id, communities=2
         )
         assert "## Threads of the conversation" not in narrow.text
+
+    async def test_the_communities_of_the_questions_entities_are_shown_for_any_question(
+        self, clean_memory_client: Any, mock_embedder: Any, session_id: str, gds: None
+    ) -> None:
+        await self._prepare(clean_memory_client, session_id)
+        distillation = DistillationMemory(
+            clean_memory_client._client,
+            mock_embedder,
+            ScriptedLLM("Anniversary plans\n- #7: Stephen booked a restaurant."),  # type: ignore[arg-type]
+        )
+        await distillation.detect_communities(session_id)
+        result = await clean_memory_client.assemble_context(
+            "Who is Stephen?", session_id=session_id, entity_communities=1
+        )
+        assert "## Threads of the conversation" in result.text
+        assert len(result.details["threads"]) == 1
+
+    async def test_relationships_link_entities_that_share_no_exchange(
+        self, clean_memory_client: Any, mock_embedder: Any, session_id: str, gds: None
+    ) -> None:
+        await self._prepare(clean_memory_client, session_id)
+        client = clean_memory_client._client
+        await client.execute_write(
+            "MATCH (a:Entity {name: 'casting'}), (b:Entity {name: 'Stephen'}) "
+            "CREATE (a)-[:RELATED_TO {type: 'LED_BY', support: 3}]->(b)"
+        )
+        distillation = DistillationMemory(client, mock_embedder, None)
+        apart = await distillation.detect_communities(
+            session_id, summarize=False, links="cooccurrence"
+        )
+        joined = await distillation.detect_communities(
+            session_id, summarize=False, links="relations"
+        )
+        assert apart["links"] == 4
+        # Only the one relationship links anything: one community of its two entities.
+        assert joined["links"] == 1
+        assert joined["communities"] == 1
+
+
+class TestGraphAroundTheExcerpts:
+    async def test_relationships_of_the_retrieved_entities_are_shown(
+        self, clean_memory_client: Any, session_id: str
+    ) -> None:
+        ids = await _store(clean_memory_client, session_id)
+        await _mention(
+            clean_memory_client,
+            {"pilot": [ids[0], ids[4]], "script": [ids[4]], "Stephen": [ids[6], ids[10]]},
+        )
+        await clean_memory_client._client.execute_write(
+            "MATCH (a:Entity {name: 'pilot'}), (b:Entity {name: 'script'}) "
+            "CREATE (a)-[:RELATED_TO {type: 'HAS_PART', support: 2, source_message_ids: $ids}]->(b)",
+            {"ids": [ids[4]]},
+        )
+        result = await clean_memory_client.assemble_context(
+            "How is the pilot episode going?",
+            session_id=session_id,
+            chunk_entities=10,
+            related_match=0.0,
+        )
+        assert "## How the things in the excerpts are related" in result.text
+        assert "- pilot (object) -[HAS_PART]-> script (object)" in result.text
+        assert result.details["graph_relations"] == 1
+
+    async def test_the_most_connected_entities_are_named(
+        self, clean_memory_client: Any, session_id: str
+    ) -> None:
+        ids = await _store(clean_memory_client, session_id)
+        await _mention(clean_memory_client, {"pilot": [ids[0]], "script": [ids[4]]})
+        await clean_memory_client._client.execute_write(
+            "MATCH (a:Entity {name: 'pilot'}), (b:Entity {name: 'script'}) "
+            "CREATE (a)-[:RELATED_TO {type: 'HAS_PART', support: 1}]->(b)"
+        )
+        result = await clean_memory_client.assemble_context(
+            "What about the pilot?", session_id=session_id, entity_neighbours=3, max_entities=0
+        )
+        assert result.details["entity_neighbours"] == ["script"]
+        assert "- pilot -[HAS_PART]-> script" in result.text
