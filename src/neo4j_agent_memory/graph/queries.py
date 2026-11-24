@@ -1833,6 +1833,27 @@ def create_vector_index_query(
     """
 
 
+def create_fulltext_index_query(
+    index_name: str, label: str, property_names: tuple[str, ...]
+) -> str:
+    """Generate CREATE FULLTEXT INDEX query for keyword search.
+
+    Args:
+        index_name: Name of the full-text index
+        label: Node label to index
+        property_names: Text properties the index covers
+
+    Returns:
+        Cypher query string
+    """
+    properties = ", ".join(f"n.{name}" for name in property_names)
+    return f"""
+    CREATE FULLTEXT INDEX {index_name} IF NOT EXISTS
+    FOR (n:{label})
+    ON EACH [{properties}]
+    """
+
+
 def create_point_index_query(index_name: str, label: str, property_name: str) -> str:
     """Generate CREATE POINT INDEX query for geospatial queries.
 

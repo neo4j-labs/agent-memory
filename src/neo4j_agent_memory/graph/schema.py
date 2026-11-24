@@ -98,6 +98,7 @@ class SchemaManager:
         await self._backfill_relation_type()
         await self._backfill_entity_keys()
         await self.setup_vector_indexes()
+        await self.setup_fulltext_indexes()
         await self.setup_point_indexes()
 
     async def setup_constraints(self) -> None:
@@ -114,6 +115,8 @@ class SchemaManager:
             ("summary_id", "Summary", "id"),
             # Session distillation: the choices the user made
             ("decision_id", "Decision", "id"),
+            # Session distillation: groups of entities that occur together
+            ("community_id", "Community", "id"),
             # Reasoning memory
             ("reasoning_trace_id", "ReasoningTrace", "id"),
             ("reasoning_step_id", "ReasoningStep", "id"),
@@ -183,6 +186,8 @@ class SchemaManager:
         ("preference_embedding_idx", "Preference", "embedding"),
         ("fact_embedding_idx", "Fact", "embedding"),
         ("decision_embedding_idx", "Decision", "embedding"),
+        ("summary_embedding_idx", "Summary", "embedding"),
+        ("community_embedding_idx", "Community", "embedding"),
         ("task_embedding_idx", "ReasoningTrace", "task_embedding"),
         ("step_embedding_idx", "ReasoningStep", "embedding"),
     )
@@ -191,6 +196,18 @@ class SchemaManager:
         """Create vector indexes for semantic search."""
         for index_name, label, property_name in self._MANAGED_VECTOR_INDEXES:
             await self._create_vector_index(index_name, label, property_name)
+
+    # Full-text (keyword) indexes the library manages: name, label, properties.
+    _MANAGED_FULLTEXT_INDEXES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+        ("message_content_fulltext_idx", "Message", ("content",)),
+        ("fact_text_fulltext_idx", "Fact", ("text",)),
+        ("community_summary_fulltext_idx", "Community", ("title", "summary")),
+    )
+
+    async def setup_fulltext_indexes(self) -> None:
+        """Create full-text indexes for keyword search."""
+        for index_name, label, property_names in self._MANAGED_FULLTEXT_INDEXES:
+            await self._create_fulltext_index(index_name, label, property_names)
 
     async def validate_vector_index_dimensions(self, expected: int) -> None:
         """Verify existing vector indexes match ``expected`` dimensions.
@@ -420,6 +437,24 @@ class SchemaManager:
             # as the package can still work without vector search
             pass
 
+    async def _create_fulltext_index(
+        self,
+        index_name: str,
+        label: str,
+        property_names: tuple[str, ...],
+    ) -> None:
+        """Create a full-text index if it doesn't exist."""
+        try:
+            exists = await self._client.check_index_exists(index_name)
+            if exists:
+                return
+
+            query = queries.create_fulltext_index_query(index_name, label, property_names)
+            await self._client.execute_write(query)
+        except Exception:
+            # Keyword search is an optional ranking: the package works without it.
+            logger.warning("Could not create full-text index %s", index_name, exc_info=True)
+
     async def _create_point_index(
         self,
         index_name: str,
@@ -462,6 +497,9 @@ class SchemaManager:
             "entity_",
             "preference_",
             "fact_",
+            "summary_",
+            "decision_",
+            "community_",
             "reasoning_",
             "trace_",
             "tool_",
